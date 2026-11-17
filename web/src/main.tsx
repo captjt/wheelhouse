@@ -93,6 +93,10 @@ function App() {
   );
   useEffect(() => {
     document.title = urgent > 0 ? `(${urgent}) Wheelhouse` : "Wheelhouse";
+    // The installed app's Dock or Home Screen badge: what needs you.
+    const nav = navigator as Navigator & { setAppBadge?: (n?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+    if (urgent > 0) nav.setAppBadge?.(urgent).catch(() => {});
+    else nav.clearAppBadge?.().catch(() => {});
   }, [urgent]);
   useEffect(() => setNav(false), [route.join("/")]);
 
