@@ -35,6 +35,7 @@ pub async fn run(shared: Shared) {
                         scan(&shared, &cfg).await;
                     }
                     advance(&shared, &cfg).await;
+                    integrate_next(&shared).await;
                 }
                 Err(e) => say!("review: config: {e:#}"),
             }
@@ -44,6 +45,42 @@ pub async fn run(shared: Shared) {
             _ = tokio::time::sleep(STEP) => {}
             _ = nudge.notified() => { last_scan = None; }
         }
+    }
+}
+
+/// Read what one more PR is for, if any hasn't been: a PR just requested
+/// before its round starts, and every PR from before Wheelhouse did this.
+/// One per step, so a backlog goes by slowly; one that fails waits half an
+/// hour.
+async fn integrate_next(shared: &Shared) {
+    let next = {
+        let core = shared.lock();
+        let tried = &core.review.integrate_tried;
+        super::all(&core).unwrap_or_default().into_iter().find(|p| {
+            p.integrated_at.is_none() && super::docket_of(&core, &p.key()).is_some() && tried.get(&p.key()).is_none_or(|t| t.elapsed() > Duration::from_secs(1800))
+        })
+    };
+    let Some(p) = next else { return };
+    let key = p.key();
+    shared.lock().review.integrate_tried.insert(key.clone(), Instant::now());
+    let lock = super::lock(shared, &key);
+    let _g = lock.lock().await;
+    let done = async {
+        let f = super::links::Facts::fetch(&p.repo, p.pr).await?;
+        super::links::integrate(shared, &key, &f, None).await
+    }
+    .await;
+    match done {
+        Ok(()) => {
+            let mut core = shared.lock();
+            if let Ok(Some(mut e)) = super::get(&core, &key) {
+                e.integrated_at = Some(crate::time::now());
+                if let Err(err) = super::save(&mut core, &mut e) {
+                    say!("review: {key}: {err:#}");
+                }
+            }
+        }
+        Err(err) => say!("review: {key}: linking: {err:#}"),
     }
 }
 

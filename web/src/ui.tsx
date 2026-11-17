@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { renderInline, renderMarkdown } from "./markdown";
 
 // ---- toasts ----
 
@@ -160,63 +161,14 @@ export function Modal({ children, onClose, className }: { children: ReactNode; o
 
 // ---- text ----
 
-/** A little Markdown: paragraphs, lists, code blocks, `code`, **bold**, links. */
+/** Markdown, fully: GFM, and the HTML PRs and issues carry, sanitized. */
 export function Prose({ text }: { text: string }) {
-  const blocks: ReactNode[] = [];
-  const lines = text.replace(/\r/g, "").split("\n");
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (/^\s*(```|~~~)/.test(line)) {
-      const body: string[] = [];
-      i++;
-      while (i < lines.length && !/^\s*(```|~~~)/.test(lines[i])) body.push(lines[i++]);
-      i++;
-      blocks.push(<pre key={blocks.length}>{body.join("\n")}</pre>);
-    } else if (/^\s*([-*+•]|\d+[.)])\s+/.test(line)) {
-      const ordered = /^\s*\d+[.)]/.test(line);
-      const items: string[] = [];
-      while (i < lines.length && /^\s*([-*+•]|\d+[.)])\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*([-*+•]|\d+[.)])\s+/, ""));
-      const kids = items.map((t, k) => <li key={k}>{inline(t)}</li>);
-      blocks.push(ordered ? <ol key={blocks.length}>{kids}</ol> : <ul key={blocks.length}>{kids}</ul>);
-    } else if (/^\s*#{1,6}\s/.test(line)) {
-      blocks.push(
-        <p key={blocks.length} className="prose-h">
-          {inline(line.replace(/^\s*#+\s*/, ""))}
-        </p>,
-      );
-      i++;
-    } else if (line.trim() === "") {
-      i++;
-    } else {
-      // A paragraph always takes its first line, so a line no branch above
-      // claims can never stall the loop.
-      const para: string[] = [lines[i++]];
-      while (i < lines.length && lines[i].trim() !== "" && !/^\s*(```|~~~|[-*+•]\s|\d+[.)]\s|#{1,6}\s)/.test(lines[i])) para.push(lines[i++]);
-      blocks.push(<p key={blocks.length}>{inline(para.join(" "))}</p>);
-    }
-  }
-  return <div className="prose">{blocks}</div>;
+  const html = useMemo(() => renderMarkdown(text), [text]);
+  return <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-function inline(s: string): ReactNode[] {
-  const out: ReactNode[] = [];
-  const re = /(`[^`]+`|\*\*[^*]+\*\*|https?:\/\/[^\s)]+)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s))) {
-    if (m.index > last) out.push(s.slice(last, m.index));
-    const t = m[0];
-    if (t.startsWith("`")) out.push(<code key={out.length}>{t.slice(1, -1)}</code>);
-    else if (t.startsWith("**")) out.push(<strong key={out.length}>{t.slice(2, -2)}</strong>);
-    else
-      out.push(
-        <a key={out.length} href={t} target="_blank" rel="noreferrer">
-          {t}
-        </a>,
-      );
-    last = m.index + t.length;
-  }
-  if (last < s.length) out.push(s.slice(last));
-  return out;
+/** One line of Markdown, inline: for summaries and rows. */
+export function InlineMd({ text, links = true, className }: { text: string; links?: boolean; className?: string }) {
+  const html = useMemo(() => renderInline(text, links), [text, links]);
+  return <span className={`md-inline${className ? ` ${className}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }

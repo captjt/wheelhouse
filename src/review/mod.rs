@@ -10,6 +10,7 @@ pub mod agentcli;
 pub mod briefs;
 pub mod config;
 pub mod github;
+pub mod links;
 pub mod lua;
 pub mod panes;
 pub mod post;
@@ -101,6 +102,8 @@ pub struct Hub {
     /// Review panes by label (the review session's labels are unique):
     /// their docket and role, for the tracker.
     pub panes: BTreeMap<String, (String, String)>,
+    /// When the hub last tried to read what each PR is for.
+    pub integrate_tried: HashMap<String, std::time::Instant>,
 }
 
 // ---- Settings ----

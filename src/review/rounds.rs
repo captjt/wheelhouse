@@ -350,6 +350,15 @@ pub async fn prep(shared: &Shared, key: &str) -> Result<()> {
     let primary = PathBuf::from(rs.first().and_then(|r| r.worktree.clone()).ok_or_else(|| anyhow!("no reviewers"))?);
     let ctx = primary.join(format!(".tmp/context/round-{round}"));
     github::fetch_context(&e.repo, e.pr, &ctx).await?;
+    // What the PR is for: its Linear issues (and `linear.md` for the
+    // reviewers) and the docket's intent. A failure here doesn't stop the
+    // round.
+    if let Some(f) = super::links::Facts::from_context(&ctx) {
+        match super::links::integrate(shared, key, &f, Some(&ctx)).await {
+            Ok(()) => e.integrated_at = Some(crate::time::now()),
+            Err(err) => say!("review: {key}: linking: {err:#}"),
+        }
+    }
     if let Some(p) = read_json(&ctx.join("pr.json")) {
         if let Some(b) = p["baseRefName"].as_str() {
             if b != base {

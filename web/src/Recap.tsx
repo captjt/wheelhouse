@@ -3,7 +3,7 @@ import { get } from "./api";
 import { AppAvatar, IconChart, IconClipboard, IconExternal, StatusIcon } from "./icons";
 import { ago, useHub } from "./live";
 import { RiskChip } from "./Reviews";
-import { useToast } from "./ui";
+import { InlineMd, useToast } from "./ui";
 
 type PrRecap = {
   key: string;
@@ -156,7 +156,7 @@ function PrItem({ p, kind }: { p: PrRecap; kind: "merged" | "open" | "closed" })
             </span>
           )}
         </span>
-        {p.implementation && <span className="rc-pr-impl">{p.implementation}</span>}
+        {p.implementation && <InlineMd className="rc-pr-impl" text={p.implementation} links={false} />}
       </span>
     </a>
   );
@@ -320,7 +320,7 @@ export function RecapView() {
                     <span className="rc-pr-meta">
                       {d.turns} turn{d.turns === 1 ? "" : "s"} {meta.words}
                     </span>
-                    {d.summary && <span className="rc-pr-impl">{d.summary}</span>}
+                    {d.summary && <InlineMd className="rc-pr-impl" text={d.summary} links={false} />}
                   </span>
                 </a>
               ))}

@@ -20,8 +20,12 @@ fn endpoint() -> String {
     std::env::var("WH_LINEAR_ENDPOINT").unwrap_or_else(|_| "https://api.linear.app/graphql".into())
 }
 
-/// The API key: `WH_LINEAR_KEY` or `LINEAR_API_KEY`, else the Keychain.
+/// The API key: `WH_LINEAR_KEY` or `LINEAR_API_KEY`, else the Keychain
+/// (none with `WH_LINEAR_OFF`).
 pub fn key() -> Option<String> {
+    if std::env::var_os("WH_LINEAR_OFF").is_some() {
+        return None;
+    }
     for var in ["WH_LINEAR_KEY", "LINEAR_API_KEY"] {
         if let Ok(k) = std::env::var(var)
             && !k.trim().is_empty()
@@ -205,6 +209,14 @@ pub fn link(core: &mut crate::hub::Core, docket: &str, i: &Issue, by: &Who) -> R
     for c in &i.comments {
         comment(core, docket, i, c)?;
     }
+    Ok(())
+}
+
+/// What Linear says of an issue the hub linked for a Review: its state and
+/// description, without its comments so far (only new ones come in).
+pub fn observe(core: &mut crate::hub::Core, docket: &str, i: &Issue) -> Result<()> {
+    let seen = i.comments.iter().map(|c| c.created_at.as_str()).max();
+    core.append(docket, "observed", &Who::Hub, None, json!({ "what": "linear", "source": "linear", "issue": snapshot(i), "description": i.description, "comments_seen_at": seen }))?;
     Ok(())
 }
 

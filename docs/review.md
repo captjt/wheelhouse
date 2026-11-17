@@ -29,6 +29,31 @@ becomes one **Review docket** for its whole life. Each round:
 Everything that happens goes on the docket's record. Each PR's working
 state is in the `review_prs` table.
 
+## What the PR is for
+
+When a review kicks off (a PR is first requested, and again at each
+round's prep), the hub reads what the PR is for (`src/review/links.rs`):
+
+- **The Linear issues it addresses**, surest first: Linear's own link on
+  the PR (its linkback comment, which also carries the issue's title, link
+  and description), Linear's closing words (`Closes GRD-12`), its other
+  magic words (`Part of GRD-12`, `Refs GRD-12`), the branch name, and the
+  title. A bare mention in the description doesn't count. A key found only
+  in the branch or title needs a team Linear has shown before, so
+  `fix/utf-8-names` isn't an issue. Each one is linked on the docket; the
+  first is the one the hub follows in Linear (with a key from `wh
+  setup-linear`, which also says how the issue stands, and drops keys
+  Linear doesn't know).
+- **The docket's intent**: the PR, its author, the issues it addresses,
+  the author's own summary (quoted), and what the review holds it to: its
+  part of each issue's acceptance criteria. The intent follows the PR while
+  it's Wheelhouse's; once you edit it, it's yours.
+- **`linear.md`** in the round's context, for the reviewers and the merge
+  risk check: each issue, how it's linked, and its description.
+
+PRs from before this were read once, one every few seconds, when the hub
+started.
+
 ## Config
 
 `~/.config/wheelhouse/review.lua`, a Lua file that returns a table, read

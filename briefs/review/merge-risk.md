@@ -17,9 +17,10 @@ author submitted it: the description, the diff, its tests, and its CI.
   `issue-comments.json`: what other reviewers raised.
 - The code at this head, in this worktree, and the base branch's with
   `git show origin/{{BASE}}:<path>`.
-- If the description links an issue and you have read-only access to its
-  tracker, read it to judge Alignment. If you can't, judge against the
-  description alone and say so in that category's gaps.
+- `{{CONTEXT}}/linear.md`, when it's there: the Linear issues the PR
+  addresses, with their descriptions. Judge Alignment against them. When
+  it isn't there and the description links an issue you can't read, judge
+  against the description alone and say so in that category's gaps.
 
 ## Rules
 

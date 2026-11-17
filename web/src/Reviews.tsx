@@ -1,8 +1,8 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { post, type Docket, type ReviewPr, type ReviewStatus } from "./api";
-import { IconChevronDown, IconExternal, IconPause, IconPlay, IconPR, IconRefresh, LiveIcon } from "./icons";
+import { IconChevronDown, IconExternal, IconIssue, IconPause, IconPlay, IconPR, IconRefresh, LiveIcon } from "./icons";
 import { ago, agoLong, stamp, useHub } from "./live";
-import { Modal, Prose, useToast } from "./ui";
+import { InlineMd, Modal, Prose, useToast } from "./ui";
 
 
 export const verdictWord = (v?: string | null) =>
@@ -229,7 +229,7 @@ export function ReviewPanel({ d }: { d: Docket }) {
           <ReviewActions p={p} small />
         </div>
       )}
-      {p.implementation && <div className="rv-impl">{p.implementation}</div>}
+      {p.implementation && <div className="rv-impl"><InlineMd text={p.implementation} /></div>}
       {p.history.length > 0 && <History p={p} />}
     </section>
   );
@@ -412,6 +412,7 @@ export function ReviewsView() {
 
 function ReviewRow({ p, paused }: { p: ReviewPr; paused: boolean }) {
   const last = p.history[0];
+  const issue = useHub().byId.get(p.docket ?? "")?.linear;
   return (
     <a className="row rv-row" href={p.docket ? `#/d/${p.docket}` : p.url || undefined} target={p.docket ? undefined : "_blank"} rel="noreferrer">
       <span className="row-live" title={phaseText(p, paused)}>
@@ -428,6 +429,12 @@ function ReviewRow({ p, paused }: { p: ReviewPr; paused: boolean }) {
         <span className="rv-author muted">{p.author}</span>
       ) : null}
       <span className="row-end">
+        {issue && (
+          <span className="rv-issue" title={`${issue.key}${issue.title ? `: ${issue.title}` : ""}`}>
+            <IconIssue size={12} />
+            {issue.key}
+          </span>
+        )}
         {p.attention?.kind === "ready" && (
           <span className="rv-row-actions" onClick={(e) => e.preventDefault()}>
             <ReviewActions p={p} small />

@@ -110,6 +110,10 @@ pub struct Pr {
     pub start_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_failed_epoch: Option<i64>,
+    /// When the hub last read what the PR is for (its Linear issues and
+    /// the docket's intent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrated_at: Option<String>,
     #[serde(default, deserialize_with = "list")]
     pub history: Vec<Value>,
     /// Fields this version doesn't know, kept as they were.

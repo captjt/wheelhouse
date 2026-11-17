@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { post, type BuildTask, type Docket } from "./api";
 import { IconBuild, IconChevronDown, IconExternal, IconPause, IconPlay, LiveIcon } from "./icons";
 import { ago, useHub } from "./live";
-import { useMenu, useToast } from "./ui";
+import { InlineMd, useMenu, useToast } from "./ui";
 
 /** What a Build is doing, in a few words. */
 export function buildPhase(t: BuildTask): string {
@@ -130,7 +130,7 @@ export function BuildPanel({ d }: { d: Docket }) {
       </div>
       {c && (
         <div className="rv-impl">
-          <strong>Check {c.n}:</strong> {c.verdict === "pass" ? "passed" : "found problems"}. {c.summary}
+          <strong>Check {c.n}:</strong> {c.verdict === "pass" ? "passed" : "found problems"}. {c.summary && <InlineMd text={c.summary} />}
           {(c.findings ?? []).length > 0 && <span className="muted"> ({(c.findings ?? []).length} finding{(c.findings ?? []).length === 1 ? "" : "s"})</span>}
         </div>
       )}
