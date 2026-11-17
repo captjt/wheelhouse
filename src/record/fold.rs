@@ -46,6 +46,9 @@ pub struct DocketState {
     /// The Linear issue linked to the docket, as Linear last said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linear: Option<LinearRef>,
+    /// Other issues linked beside it: a PR can address more than one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linear_also: Vec<IssueLink>,
     /// The PR a Review docket is about, as rex-reviewer last said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewRef>,
@@ -89,6 +92,15 @@ pub struct IntentRef {
     pub by: String,
     pub at: String,
     pub seq: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct IssueLink {
+    pub key: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -201,6 +213,12 @@ impl DocketState {
                 self.intent = Some(IntentRef { body: e.body.clone().unwrap_or_default(), source, by: e.actor.id.clone(), at: e.at.clone(), seq });
                 self.intent_versions += 1;
             }
+            "link" if d["kind"].as_str() == Some("linear") && d["also"].as_bool() == Some(true) && self.linear.as_ref().is_some_and(|l| Some(l.key.as_str()) != d["key"].as_str()) => {
+                let key = s(&d["key"]).unwrap_or_default();
+                if !self.linear_also.iter().any(|l| l.key == key) {
+                    self.linear_also.push(IssueLink { key, url: s(&d["url"]), title: s(&d["title"]) });
+                }
+            }
             "link" if d["kind"].as_str() == Some("linear") => {
                 let mut l = self.linear.take().unwrap_or_default();
                 l.key = s(&d["key"]).unwrap_or_default();
@@ -226,6 +244,11 @@ impl DocketState {
                 l.updated_at = s(&i["updated_at"]);
                 if d.get("description").is_some() {
                     l.description = s(&d["description"]);
+                }
+                // Comments already there when the hub linked it, left unread.
+                let seen = s(&d["comments_seen_at"]);
+                if seen > l.comments_seen_at {
+                    l.comments_seen_at = seen;
                 }
                 self.linear = Some(l);
             }

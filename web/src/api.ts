@@ -49,6 +49,8 @@ export type Docket = {
   intent?: { body: string; source: string; by: string; at: string; seq: number };
   intent_versions?: number;
   linear?: LinearRef;
+  /** Other issues linked beside it: a PR can address more than one. */
+  linear_also?: { key: string; url?: string | null; title?: string | null }[];
   review?: ReviewRef;
 };
 

@@ -45,8 +45,12 @@ pub fn subscribe(shared: &Shared, sub: &Value, agent: Option<&str>) -> Result<()
     shared.lock().store.push_subscribe(endpoint, p256dh, auth, agent)
 }
 
-/// Push what needs you to every subscribed device.
+/// Push what needs you to every subscribed device (none with
+/// `WH_NOTIFY=off`, as for Mac notifications).
 pub async fn run(shared: Shared) {
+    if std::env::var("WH_NOTIFY").is_ok_and(|v| v == "off" || v == "0") {
+        return;
+    }
     let mut rx = shared.lock().events.subscribe();
     loop {
         let ev = match rx.recv().await {

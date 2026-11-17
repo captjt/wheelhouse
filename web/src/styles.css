@@ -1053,23 +1053,78 @@ code {
 .prose {
   color: var(--text-2);
   overflow-wrap: anywhere;
+  min-width: 0;
 }
-.prose p {
-  margin: 0 0 8px;
+.prose > :first-child {
+  margin-top: 0;
 }
-.prose p:last-child,
-.prose ul:last-child,
-.prose ol:last-child,
-.prose pre:last-child {
+.prose > :last-child,
+.prose li > :last-child,
+.prose blockquote > :last-child,
+.prose details > :last-child {
   margin-bottom: 0;
+}
+.prose p,
+.prose ul,
+.prose ol,
+.prose pre,
+.prose blockquote,
+.prose .prose-table,
+.prose details,
+.prose hr {
+  margin: 0 0 8px;
 }
 .prose ul,
 .prose ol {
-  margin: 0 0 8px;
   padding-left: 20px;
 }
 .prose li {
   margin: 2px 0;
+}
+.prose li > ul,
+.prose li > ol {
+  margin: 2px 0 0;
+}
+.prose li > p {
+  margin: 0 0 4px;
+}
+.prose li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -18px;
+}
+.prose input[type="checkbox"] {
+  margin: 0 6px 0 0;
+  vertical-align: -2px;
+  accent-color: var(--accent);
+}
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 14px 0 6px;
+  letter-spacing: -0.005em;
+}
+.prose h1 {
+  font-size: 1.22em;
+}
+.prose h2 {
+  font-size: 1.12em;
+}
+.prose h3 {
+  font-size: 1.04em;
+}
+.prose h4,
+.prose h5,
+.prose h6 {
+  font-size: 1em;
+}
+.prose h6 {
+  color: var(--muted);
 }
 .prose pre {
   font: 12px/1.5 var(--mono);
@@ -1078,18 +1133,92 @@ code {
   border-radius: 6px;
   padding: 8px 10px;
   overflow-x: auto;
-  margin: 0 0 8px;
+  overflow-wrap: normal;
+  white-space: pre;
 }
-.prose-h {
-  font-weight: 600;
-  color: var(--text);
+.prose pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  border-radius: 0;
+}
+.prose blockquote {
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--line-2);
+  color: var(--muted);
+}
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
 }
 .prose strong {
   color: var(--text);
   font-weight: 600;
 }
+.prose del {
+  color: var(--muted);
+}
 .prose a {
   color: var(--link);
+  text-decoration: none;
+}
+.prose a:hover {
+  text-decoration: underline;
+}
+.prose a.docket-ref {
+  font-weight: 500;
+}
+.prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.prose kbd {
+  font: 11px var(--mono);
+  padding: 1px 5px;
+  border: 1px solid var(--line-2);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+}
+.prose .prose-table {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.prose table {
+  border-collapse: collapse;
+  font-size: 0.94em;
+  overflow-wrap: normal;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--line);
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+  min-width: 64px;
+}
+.prose td code,
+.prose th code {
+  white-space: nowrap;
+}
+.prose th {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--hover);
+}
+.prose details {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.prose details[open] > summary {
+  margin-bottom: 6px;
+}
+.prose summary {
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 500;
 }
 .clamp.clamped .clamp-body {
   max-height: 240px;
@@ -1156,6 +1285,12 @@ code {
   flex: 1;
   min-width: 0;
   display: flex;
+}
+.prop-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  min-width: 0;
 }
 .prop-btn,
 .prop-val {
@@ -1382,13 +1517,15 @@ code {
 }
 .intent-body .prose p,
 .intent-body .prose ul,
-.intent-body .prose ol {
+.intent-body .prose ol,
+.intent-body .prose blockquote {
   margin-bottom: 10px;
 }
-.intent-body .prose-h {
-  margin-top: 14px;
-  font-size: 13px;
-  text-transform: none;
+.intent-body .prose h1,
+.intent-body .prose h2,
+.intent-body .prose h3 {
+  margin-top: 16px;
+  font-size: 14px;
 }
 .intent-empty {
   display: block;
@@ -2304,6 +2441,15 @@ code {
   font-size: 11px;
   color: var(--faint);
 }
+.rv-issue {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
 .rv-row-actions {
   display: flex;
 }
@@ -2475,6 +2621,7 @@ code {
 }
 @media (max-width: 760px) {
   .rv-key-cell,
+  .rv-issue,
   .rv-author,
   .rv-round,
   .rv-hist-found,

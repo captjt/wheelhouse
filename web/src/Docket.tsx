@@ -185,7 +185,18 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
           )}
           <Prop label="Linear">
             {d.linear ? (
-              <LinearChip l={d.linear} />
+              <span className="prop-issues">
+                <LinearChip l={d.linear} />
+                {(d.linear_also ?? []).map((l) => (
+                  <a key={l.key} className="prop-btn" href={l.url || "#"} target="_blank" rel="noreferrer" title={`${l.key}${l.title ? `: ${l.title}` : ""} (open in Linear)`}>
+                    <IconIssue size={14} />
+                    <span className="prop-text">
+                      {l.key}
+                      <IconExternal size={11} />
+                    </span>
+                  </a>
+                ))}
+              </span>
             ) : (
               <button className="prop-btn muted" onClick={() => setLinking("")} title="Link a Linear issue to this docket">
                 <IconIssue size={14} /> Link issue
@@ -396,12 +407,25 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
       const by =
         data.source === "linear" ? (
           <><b>Linear</b> set the intent from {data.key}'s description{data.taken_by ? " (taken by you)" : ""}</>
+        ) : data.source === "review" ? (
+          <><b>Wheelhouse</b> wrote the intent from the PR{data.linear?.length ? <> and {data.linear.join(", ")}</> : null}</>
         ) : (
           <><b>{e.actor.type === "person" ? "You" : e.actor.type === "agent" ? appName(writer) : "Wheelhouse"}</b> {e.actor.type === "person" ? "updated" : "proposed"} the intent</>
         );
-      return sys(data.source === "linear" ? <IconIssue size={16} /> : e.actor.type === "person" ? you : <AppAvatar app={writer} size={18} />, by, "intent");
+      return sys(data.source === "linear" ? <IconIssue size={16} /> : e.actor.type === "person" ? you : data.source === "review" ? hubA : <AppAvatar app={writer} size={18} />, by, "intent");
     }
     case "link":
+      if (data.kind === "linear" && e.actor.type !== "person") {
+        const how: Record<string, string> = { linkback: "Linear links it to the PR", closes: "the PR closes it", refs: "the PR is part of it", branch: "named in the branch", title: "named in the PR's title" };
+        return sys(
+          <IconIssue size={16} />,
+          <>
+            <b>Wheelhouse</b> linked {data.url ? <a className="act-link" href={data.url} target="_blank" rel="noreferrer">{data.key}</a> : data.key}
+            {data.title ? <> · {data.title}</> : null}
+            {how[data.how] ? <span className="muted">: {how[data.how]}</span> : null}
+          </>,
+        );
+      }
       if (data.kind === "linear")
         return sys(
           you,

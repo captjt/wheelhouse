@@ -5,7 +5,7 @@ import { MessageCard, msgFrom, msgTitle } from "./Messages";
 import { DocketScreen } from "./Docket";
 import { AppAvatar, IconInbox, IconPR, LiveIcon, TitleText } from "./icons";
 import { ago, go, lastList, useHub } from "./live";
-import { useKeys, useMenu } from "./ui";
+import { InlineMd, useKeys, useMenu } from "./ui";
 import { rowMenu } from "./views";
 import { AnswerButtons, usePane } from "./Pane";
 
@@ -146,7 +146,7 @@ export function InboxView() {
                   <span className="inbox-line">
                     <span className="row-id">{it.d.id}</span>
                     {it.kind === "blocked" ? (it.d.live?.kind ? `${it.d.live.kind}: ` : "Needs you: ") : it.kind === "error" ? "Failed: " : ""}
-                    {it.line}
+                    <InlineMd text={it.line} links={false} />
                   </span>
                   {it.p?.attention?.kind === "ready" && (
                     <span className="inbox-actions">

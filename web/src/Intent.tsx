@@ -7,6 +7,7 @@ import { Kbd, Modal, Prose, useToast } from "./ui";
 /** Who wrote an intent version, in words. */
 function author(e: { actor: EntryView["actor"]; data: EntryView["data"] }, d: Docket) {
   if (e.data?.source === "linear") return e.data?.taken_by ? `Linear (${e.data.key}), taken by you` : `Linear (${e.data?.key ?? d.linear?.key ?? "issue"})`;
+  if (e.data?.source === "review") return "Wheelhouse, from the PR";
   if (e.actor.type === "person") return "You";
   if (e.actor.type === "agent") return appName(String(e.actor.id).split("@")[0]);
   return "Wheelhouse";
@@ -27,7 +28,8 @@ export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: Ent
   const current = versions[versions.length - 1];
   const intent = d.intent;
   // Linear's description moved on while the intent was edited here.
-  const linearAhead = !!d.linear?.description && intent?.source !== "linear" && d.linear.description.trim() !== (intent?.body ?? "").trim() && !!intent;
+  // A Review's intent comes from its PR, not the issue's description.
+  const linearAhead = d.protocol !== "review" && !!d.linear?.description && intent?.source !== "linear" && d.linear.description.trim() !== (intent?.body ?? "").trim() && !!intent;
 
   const edit = () => {
     setText(intent?.body ?? "");

@@ -7,7 +7,8 @@ has re-requested review.
 - Refreshed context: `{{CONTEXT}}/`. `delta.diff` and `delta-commits.txt`
   cover {{PREV_HEAD_SHORT}}..{{HEAD_SHORT}}. `threads.json` and
   `review-comments.json` hold the author's replies, and `pr.diff` and
-  `ci.json` are current.
+  `ci.json` are current. `linear.md`, when it's there, is the Linear issue
+  the PR addresses.
 - Your last round's output: `.tmp/rounds/{{PREV_ROUND}}/`
 - Your output folder: `{{OUT}}/`
 
