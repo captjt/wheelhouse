@@ -18,6 +18,7 @@ mod hub;
 mod mirror;
 mod paths;
 mod preview;
+mod recap;
 mod review;
 mod push;
 mod record;
@@ -142,6 +143,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// What happened: today, this week (the default), or 30 days; as Markdown.
+    Recap { period: Option<String> },
     /// The agents' skill for Wheelhouse: show, install, or remove.
     Skill { action: Option<String> },
     /// Store a Linear API key in the Keychain.
@@ -223,6 +226,10 @@ fn main() {
                 .map(|v| println!("{} started in {}: wheelhouse/{}", if codex { "Codex" } else { "Claude Code" }, v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?")))
         }
         Some(Cmd::Skill { action }) => skill(action.as_deref()),
+        Some(Cmd::Recap { period }) => {
+            let p = period.as_deref().unwrap_or("week");
+            client::json("GET", &format!("/api/recap?period={p}"), None).map(|v| print!("{}", v["markdown"].as_str().unwrap_or("")))
+        }
         Some(Cmd::Review { action, args, force, json }) => review_cmd(action.as_deref().unwrap_or("status"), &args, force, json),
         Some(Cmd::Share { port, title, ask, options, stop }) => {
             let block = std::env::var("REX_BLOCK").ok();
