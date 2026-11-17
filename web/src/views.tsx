@@ -1,0 +1,411 @@
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { appName, type Docket } from "./api";
+import { AppAvatar, IconBoard, IconChevronDown, IconEye, SessionChip, SessionIcon, TitleText, shortPath, IconCopy, IconDisplay, IconList, IconTerminal, LiveIcon, StatusIcon, liveWord } from "./icons";
+import { ago, go, lastList, store, useHub } from "./live";
+import { useKeys, useMenu, type MenuItem } from "./ui";
+import { onThisMac, usePane } from "./Pane";
+
+export const STATUSES: { key: Docket["status"]; label: string }[] = [
+  { key: "todo", label: "To do" },
+  { key: "in_progress", label: "In progress" },
+  { key: "done", label: "Done" },
+  { key: "dropped", label: "Dropped" },
+];
+
+export function statusItems(d: Docket, set: (s: Docket["status"]) => void): MenuItem[] {
+  return STATUSES.map((s, i) => ({
+    key: s.key,
+    label: s.label,
+    icon: <StatusIcon status={s.key} />,
+    hint: String(i + 1),
+    checked: d.status === s.key,
+    onPick: () => d.status !== s.key && set(s.key),
+  }));
+}
+
+export function rowMenu(d: Docket, hub: ReturnType<typeof useHub>, pane: ReturnType<typeof usePane>): MenuItem[] {
+  const items: MenuItem[] = [
+    { key: "open", label: "Open", hint: "↩", onPick: () => go(`/d/${d.id}`) },
+  ];
+  if (d.live) {
+    if (onThisMac()) items.push({ key: "rex", label: "Show pane in Rex", icon: <IconTerminal size={14} />, hint: "O", onPick: () => hub.openInRex(d.id) });
+    items.push({ key: "peek", label: onThisMac() ? "Peek at pane" : "View pane", icon: <IconEye size={14} />, hint: onThisMac() ? undefined : "O", onPick: () => pane.view(d.id) });
+    if (d.live.answerable) {
+      items.push({ key: "approve", label: <>Approve <span className="menu-sub">{d.live.msg}</span></>, onPick: () => hub.answer(d, true) });
+      items.push({ key: "deny", label: "Deny", onPick: () => hub.answer(d, false) });
+    }
+  }
+  items.push(
+    ...statusItems(d, (s) => hub.setStatus(d.id, s)).map((i) => ({ ...i, key: `s-${i.key}`, hint: undefined })),
+    { key: "copy", label: "Copy ID", icon: <IconCopy size={14} />, onPick: () => navigator.clipboard?.writeText(d.id) },
+  );
+  return items;
+}
+
+// ---- grouping ----
+
+export type GroupBy = "attention" | "status" | "session";
+
+type Group = { key: string; label: string; icon: ReactNode; items: Docket[] };
+
+const ATTENTION: { key: string; label: string; icon: ReactNode; test: (d: Docket) => boolean }[] = [
+  { key: "blocked", label: "Needs you", icon: <LiveIcon state="blocked" />, test: (d) => d.live?.state === "blocked" },
+  { key: "error", label: "Failed", icon: <LiveIcon state="error" />, test: (d) => d.live?.state === "error" },
+  { key: "working", label: "Working", icon: <LiveIcon state="working" />, test: (d) => d.live?.state === "working" || d.live?.state === "starting" },
+  { key: "done", label: "Finished, your move", icon: <LiveIcon state="done" />, test: (d) => d.live?.state === "done" },
+  { key: "idle", label: "Idle", icon: <LiveIcon state="idle" />, test: (d) => !!d.live },
+  { key: "todo", label: "To do", icon: <StatusIcon status="todo" />, test: (d) => d.status === "todo" || d.status === "in_progress" },
+  { key: "closed", label: "Done", icon: <StatusIcon status="done" />, test: (d) => d.status === "done" },
+  { key: "dropped", label: "Dropped", icon: <StatusIcon status="dropped" />, test: () => true },
+];
+
+export function groupDockets(list: Docket[], by: GroupBy): Group[] {
+  if (by === "status")
+    return [
+      ...["in_progress", "todo", "done", "dropped"].map((s) => ({
+        key: s,
+        label: STATUSES.find((x) => x.key === s)!.label,
+        icon: <StatusIcon status={s} />,
+        items: list.filter((d) => d.status === s),
+      })),
+    ].filter((g) => g.items.length > 0);
+  if (by === "session") {
+    const m = new Map<string, Docket[]>();
+    for (const d of list) {
+      const k = d.agent?.rex_session || "By hand";
+      m.set(k, [...(m.get(k) ?? []), d]);
+    }
+    return [...m.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([k, items]) => ({ key: k, label: k, icon: <SessionIcon name={k} size={14} />, items }));
+  }
+  const groups: Group[] = ATTENTION.map((a) => ({ key: a.key, label: a.label, icon: a.icon, items: [] as Docket[] }));
+  for (const d of list) {
+    const i = ATTENTION.findIndex((a) => a.test(d));
+    groups[i].items.push(d);
+  }
+  return groups.filter((g) => g.items.length > 0);
+}
+
+// ---- a list view ----
+
+export function DocketListView({
+  path,
+  title,
+  icon,
+  filter,
+  defaultGroup,
+  empty,
+}: {
+  path: string;
+  title: string;
+  icon: ReactNode;
+  filter: (d: Docket) => boolean;
+  defaultGroup: GroupBy;
+  empty: ReactNode;
+}) {
+  const hub = useHub();
+  const pane = usePane();
+  const [savedGroup, saveGroup] = store<GroupBy>(`group:${path}`, defaultGroup);
+  const [savedLayout, saveLayout] = store<"list" | "board">(`layout:${path}`, "list");
+  const [group, setGroup] = useState<GroupBy>(savedGroup);
+  const [layout, setLayout] = useState(savedLayout);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [sel, setSel] = useState<string | null>(null);
+  const menu = useMenu();
+
+  const list = useMemo(() => (hub.state?.dockets ?? []).filter(filter), [hub.state, filter]);
+  const groups = useMemo(() => groupDockets(list, group), [list, group]);
+  const visible = useMemo(() => groups.flatMap((g) => (collapsed.has(g.key) ? [] : g.items)), [groups, collapsed]);
+  const idch = Math.max(3, ...list.map((d) => d.id.length));
+
+  useEffect(() => {
+    lastList.path = path;
+    lastList.title = title;
+    lastList.ids = visible.map((d) => d.id);
+  }, [visible, path, title]);
+
+  const move = (delta: number) => {
+    if (visible.length === 0) return;
+    const i = sel ? visible.findIndex((d) => d.id === sel) : -1;
+    const next = visible[Math.max(0, Math.min(visible.length - 1, i < 0 ? 0 : i + delta))];
+    setSel(next.id);
+    document.querySelector(`[data-id="${next.id}"]`)?.scrollIntoView({ block: "nearest" });
+  };
+  const current = sel ? hub.byId.get(sel) : undefined;
+  useKeys({
+    j: () => move(1),
+    ArrowDown: () => move(1),
+    k: () => move(-1),
+    ArrowUp: () => move(-1),
+    Enter: () => current && go(`/d/${current.id}`),
+    o: () => current?.live && pane.act(current.id),
+    s: () => {
+      if (!current) return;
+      const el = document.querySelector<HTMLElement>(`[data-id="${current.id}"] .row-status`);
+      if (el) menu.open(el, statusItems(current, (s) => hub.setStatus(current.id, s)), "Change status");
+    },
+  });
+
+  const displayMenu = (el: HTMLElement) =>
+    menu.open(
+      el,
+      [
+        { key: "attention", label: "Group by attention", checked: group === "attention", onPick: () => (setGroup("attention"), saveGroup("attention")) },
+        { key: "status", label: "Group by status", checked: group === "status", onPick: () => (setGroup("status"), saveGroup("status")) },
+        { key: "session", label: "Group by Rex session", checked: group === "session", onPick: () => (setGroup("session"), saveGroup("session")) },
+      ],
+      "Display",
+    );
+
+  return (
+    <div className="view">
+      <header className="view-head">
+        <span className="view-title">
+          {icon}
+          {title}
+          <span className="view-count">{list.length}</span>
+        </span>
+        <span className="spacer" />
+        <div className="seg">
+          <button className={layout === "list" ? "on" : ""} title="List" onClick={() => (setLayout("list"), saveLayout("list"))}>
+            <IconList size={14} />
+          </button>
+          <button className={layout === "board" ? "on" : ""} title="Board" onClick={() => (setLayout("board"), saveLayout("board"))}>
+            <IconBoard size={14} />
+          </button>
+        </div>
+        <button className="btn btn-ghost" onClick={(e) => displayMenu(e.currentTarget)}>
+          <IconDisplay size={14} /> Display
+        </button>
+      </header>
+
+      {!hub.state ? (
+        <div className="view-empty">{hub.error ? `Can't reach the hub: ${hub.error}` : ""}</div>
+      ) : list.length === 0 ? (
+        <div className="view-empty">{empty}</div>
+      ) : layout === "board" ? (
+        <div className="board">
+          {groups.map((g) => (
+            <div className="board-col" key={g.key}>
+              <div className="board-col-head">
+                {g.icon}
+                <span>{g.label}</span>
+                <span className="view-count">{g.items.length}</span>
+              </div>
+              <div className="board-cards">
+                {g.items.map((d) => (
+                  <Card key={d.id} d={d} onMenu={(e) => (e.preventDefault(), menu.open({ x: e.clientX, y: e.clientY }, rowMenu(d, hub, pane)))} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="list" style={{ ["--idch" as string]: idch }}>
+          {groups.map((g) => (
+            <div key={g.key}>
+              <button
+                className="group-head"
+                onClick={() =>
+                  setCollapsed((c) => {
+                    const n = new Set(c);
+                    if (n.has(g.key)) n.delete(g.key);
+                    else n.add(g.key);
+                    return n;
+                  })
+                }
+              >
+                <span className={`caret${collapsed.has(g.key) ? " closed" : ""}`}>
+                  <IconChevronDown size={12} />
+                </span>
+                {g.icon}
+                <span className="group-label">{g.label}</span>
+                <span className="view-count">{g.items.length}</span>
+              </button>
+              {!collapsed.has(g.key) &&
+                g.items.map((d) => (
+                  <Row
+                    key={d.id}
+                    d={d}
+                    selected={sel === d.id}
+                    onHover={() => setSel(d.id)}
+                    onStatus={(el) => menu.open(el, statusItems(d, (s) => hub.setStatus(d.id, s)), "Change status")}
+                    onMenu={(e) => {
+                      e.preventDefault();
+                      setSel(d.id);
+                      menu.open({ x: e.clientX, y: e.clientY }, rowMenu(d, hub, pane));
+                    }}
+                  />
+                ))}
+            </div>
+          ))}
+        </div>
+      )}
+      {menu.node}
+    </div>
+  );
+}
+
+export function Row({
+  d,
+  selected,
+  onHover,
+  onStatus,
+  onMenu,
+}: {
+  d: Docket;
+  selected?: boolean;
+  onHover?: () => void;
+  onStatus?: (el: HTMLElement) => void;
+  onMenu?: (e: React.MouseEvent) => void;
+}) {
+  const where = d.agent?.rex_session;
+  const statusRef = useRef<HTMLButtonElement>(null);
+  return (
+    <a className={`row${selected ? " sel" : ""}`} href={`#/d/${d.id}`} data-id={d.id} onMouseMove={onHover} onContextMenu={onMenu}>
+      <span className="row-live" title={liveWord(d.live?.state)}>
+        <LiveIcon state={d.live?.state} />
+      </span>
+      <span className="row-id">{d.id}</span>
+      <button
+        ref={statusRef}
+        className="row-status"
+        title="Change status (S)"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (statusRef.current) onStatus?.(statusRef.current);
+        }}
+      >
+        <StatusIcon status={d.status} />
+      </button>
+      <span className="row-title">
+        <TitleText d={d} />
+      </span>
+      {d.live?.state === "blocked" && d.live.msg && <span className="row-note">{d.live.msg}</span>}
+      <span className="spacer" />
+      <span className="row-end">
+        {d.turns > 0 && (
+          <span className="chip-mini" title={`${d.prompts} prompts, ${d.turns} turns`}>
+            {d.turns} turn{d.turns === 1 ? "" : "s"}
+          </span>
+        )}
+        {where && <SessionChip name={where} />}
+        {d.agent ? <AppAvatar app={d.agent.app} /> : <span className="avatar avatar-none" />}
+        <span className="row-age" title={d.updated_at}>
+          {ago(d.updated_at)}
+        </span>
+      </span>
+    </a>
+  );
+}
+
+function Card({ d, onMenu }: { d: Docket; onMenu: (e: React.MouseEvent) => void }) {
+  return (
+    <a className="card" href={`#/d/${d.id}`} onContextMenu={onMenu}>
+      <div className="card-top">
+        <span className="row-id">{d.id}</span>
+        <span className="spacer" />
+        {d.agent && <AppAvatar app={d.agent.app} size={16} />}
+      </div>
+      <div className="card-title">
+        <TitleText d={d} />
+      </div>
+      <div className="card-foot">
+        <StatusIcon status={d.status} size={13} />
+        {d.live && (
+          <span className="card-live">
+            <LiveIcon state={d.live.state} size={12} />
+            {liveWord(d.live.state)}
+          </span>
+        )}
+        <span className="spacer" />
+        {d.agent?.rex_session && <SessionChip name={d.agent.rex_session} />}
+      </div>
+    </a>
+  );
+}
+
+// ---- agents ----
+
+export function AgentsView() {
+  const hub = useHub();
+  const pane = usePane();
+  const menu = useMenu();
+  const groups = useMemo(() => {
+    const m = new Map<string, NonNullable<typeof hub.state>["agents"]>();
+    for (const a of hub.state?.agents ?? []) m.set(a.rex_session || "—", [...(m.get(a.rex_session || "—") ?? []), a]);
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [hub.state]);
+  const total = hub.state?.agents.length ?? 0;
+  return (
+    <div className="view">
+      <header className="view-head">
+        <span className="view-title">
+          <IconTerminal size={15} /> Agents <span className="view-count">{total}</span>
+        </span>
+        <span className="spacer" />
+        <span className="muted small">Every Claude Code and Codex pane in Rex, live</span>
+      </header>
+      {total === 0 ? (
+        <div className="view-empty">No agents running in Rex.</div>
+      ) : (
+        <div className="list" style={{ ["--idch" as string]: Math.max(3, ...(hub.state?.agents ?? []).map((a) => (a.docket || "").length)) }}>
+          {groups.map(([session, list]) => (
+            <div key={session}>
+              <div className="group-head static">
+                <SessionIcon name={session} size={14} />
+                <span className="group-label">{session}</span>
+                <span className="view-count">{list.length}</span>
+              </div>
+              {list.map((a) => {
+                const d = a.docket ? hub.byId.get(a.docket) : undefined;
+                return (
+                  <a
+                    key={a.block}
+                    className="row agent-row"
+                    href={a.docket ? `#/d/${a.docket}` : undefined}
+                    onContextMenu={(e) => {
+                      if (!d) return;
+                      e.preventDefault();
+                      menu.open({ x: e.clientX, y: e.clientY }, rowMenu(d, hub, pane));
+                    }}
+                  >
+                    <span className="row-live">
+                      <LiveIcon state={a.state} />
+                    </span>
+                    <span className="row-id">{a.docket || "—"}</span>
+                    <AppAvatar app={a.app} />
+                    <span className="row-title">{d ? <TitleText d={d} /> : appName(a.app)}</span>
+                    <span className={`agent-state state-${a.state}`} title={a.msg || ""}>
+                      {a.state === "blocked" && a.msg ? a.msg : liveWord(a.state)}
+                    </span>
+                    <span className="agent-pane" title={`Pane ${a.pane}`}>
+                      {a.pane || "pane"}
+                    </span>
+                    <span className="row-path" title={a.cwd || ""}>
+                      {shortPath(a.cwd)}
+                    </span>
+                    <button
+                      className="icon-btn"
+                      title={onThisMac() ? "Show pane in Rex" : "View pane"}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (a.docket) pane.act(a.docket);
+                      }}
+                    >
+                      {onThisMac() ? <IconTerminal size={14} /> : <IconEye size={14} />}
+                    </button>
+                  </a>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+      {menu.node}
+    </div>
+  );
+}
+

@@ -1,0 +1,469 @@
+//! The hub's HTTP API and the web app, on localhost (TCP) and on a unix
+//! socket for the CLI and the agents' hooks.
+//!
+//! - `GET /api/state`: dockets, what needs you, agents.
+//! - `GET /api/dockets/{id}`: one docket, its entries, and its check.
+//! - `POST /api/dockets`, `/api/dockets/{id}/note`, `/set`, `/open`.
+//! - `GET /api/dockets/{id}/export`: JSON lines, checkable without the hub.
+//! - `POST /api/hook`: from `wh hook`.
+//! - `GET /api/events`: server-sent events when anything changes.
+
+use anyhow::{Context, Result};
+use axum::extract::{Path, Request, State};
+use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
+use axum::middleware::{self, Next};
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use include_dir::{Dir, include_dir};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::time::Duration;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
+
+use crate::agents;
+use crate::hub::{Shared, Who};
+use crate::record::{self, DocketState, mark};
+
+static WEB: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
+
+pub fn http_addr() -> Option<std::net::SocketAddr> {
+    let v = std::env::var("WH_HTTP").unwrap_or_else(|_| "127.0.0.1:7500".into());
+    if v == "off" { None } else { v.parse().ok() }
+}
+
+pub fn router(shared: Shared) -> Router {
+    Router::new()
+        .route("/api/state", get(state))
+        .route("/api/dockets", post(new_docket))
+        .route("/api/dockets/{id}", get(docket))
+        .route("/api/dockets/{id}/note", post(note))
+        .route("/api/dockets/{id}/set", post(set))
+        .route("/api/dockets/{id}/open", post(open_in_rex))
+        .route("/api/dockets/{id}/screen", get(screen))
+        .route("/api/dockets/{id}/send", post(send))
+        .route("/api/dockets/{id}/approve", post(approve))
+        .route("/api/dockets/{id}/deny", post(deny))
+        .route("/api/dockets/{id}/export", get(export))
+        .route("/api/verify", get(verify_all))
+        .route("/api/hook", post(hook))
+        .route("/api/events", get(events))
+        .fallback(asset)
+        .layer(middleware::from_fn(guard))
+        .with_state(shared)
+}
+
+pub async fn serve(shared: Shared) -> Result<()> {
+    let sock = crate::paths::socket();
+    let _ = std::fs::remove_file(&sock);
+    let unix = tokio::net::UnixListener::bind(&sock).with_context(|| format!("binding {}", sock.display()))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600));
+    }
+    let app = router(shared);
+    let on_unix = axum::serve(unix, app.clone());
+    match http_addr() {
+        Some(addr) => {
+            let tcp = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("binding {addr}"))?;
+            say!("Wheelhouse on http://{addr}");
+            tokio::try_join!(async { on_unix.await.context("socket") }, async { axum::serve(tcp, app).await.context("http") })?;
+        }
+        None => on_unix.await?,
+    }
+    Ok(())
+}
+
+// ---- the guard ----
+
+/// Our own host names only (DNS rebinding), and no cross-site writes.
+async fn guard(req: Request, next: Next) -> Response {
+    let h = req.headers();
+    if !host_ok(h) {
+        return (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response();
+    }
+    if req.method() != Method::GET && req.method() != Method::HEAD && !same_site(h) {
+        return (StatusCode::FORBIDDEN, "cross-site request refused").into_response();
+    }
+    next.run(req).await
+}
+
+/// Loopback, or a name on the tailnet (`tailscale serve`, a shared preview).
+fn host_ok(h: &HeaderMap) -> bool {
+    let host = h.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let name = match host.rsplit_once(':') {
+        Some((n, port)) if port.chars().all(|c| c.is_ascii_digit()) => n,
+        _ => host,
+    };
+    matches!(name, "127.0.0.1" | "localhost" | "[::1]") || name.ends_with(".ts.net")
+}
+
+/// A write must carry our header (which forces a CORS preflight that's never
+/// answered), and its Origin, when sent, must be this host.
+fn same_site(h: &HeaderMap) -> bool {
+    if h.get("x-wheelhouse").is_none() {
+        return false;
+    }
+    let Some(origin) = h.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else { return true };
+    let host = h.get("x-forwarded-host").or_else(|| h.get(header::HOST)).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let origin_host = origin.split_once("://").map_or(origin, |(_, rest)| rest);
+    origin_host.eq_ignore_ascii_case(host)
+}
+
+// ---- handlers ----
+
+type ApiResult = std::result::Result<Json<Value>, (StatusCode, Json<Value>)>;
+
+fn fail(status: StatusCode, msg: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
+    (status, Json(json!({ "error": msg.to_string() })))
+}
+
+fn internal(e: anyhow::Error) -> (StatusCode, Json<Value>) {
+    fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+}
+
+/// A docket as the apps show it: its state, plus what its agent is doing now.
+fn view(core: &crate::hub::Core, st: &DocketState) -> Value {
+    let block = st.agent.as_ref().map(|a| a.block.as_str());
+    let tracked = block.is_some_and(|b| agents::docket_of(core, b).as_deref() == Some(st.id.as_str()));
+    let live = if tracked { block.and_then(|b| agents::live(core, b)) } else { None };
+    let quick = !st.is_open()
+        && st.protocol == "agent"
+        && st.prompts <= 1
+        && st.ended_at.as_deref().and_then(|e| {
+            let start = crate::time::parse(&st.created_at)?;
+            let end = crate::time::parse(e)?;
+            Some((end - start).whole_seconds() < 300)
+        }) == Some(true);
+    let mut v = serde_json::to_value(st).unwrap_or_default();
+    v["live"] = json!(live);
+    v["quick"] = json!(quick);
+    v["short_head"] = json!(st.short_head());
+    v
+}
+
+async fn state(State(shared): State<Shared>) -> ApiResult {
+    let core = shared.lock();
+    let states = core.store.states().map_err(internal)?;
+    let dockets: Vec<Value> = states.iter().map(|st| view(&core, st)).collect();
+
+    // What needs you: a blocked or failed agent. One that finished its turn
+    // shows as finished on its docket's row, not here.
+    let mut asks = Vec::new();
+    for (block, t) in &core.agents.by_block {
+        let Some(l) = agents::live(&core, block) else { continue };
+        let what = match l.state.as_str() {
+            "blocked" => "blocked",
+            "error" => "failed",
+            _ => continue,
+        };
+        let st = states.iter().find(|s| s.id == t.docket);
+        asks.push(json!({
+            "docket": t.docket,
+            "title": st.map(|s| s.title.clone()),
+            "what": what,
+            "kind": l.kind,
+            "msg": l.msg,
+            "since": l.since,
+            "app": l.app,
+        }));
+    }
+    asks.sort_by_key(|a| a["what"] != "blocked");
+
+    let agents_now: Vec<Value> = core
+        .mirror
+        .panes
+        .values()
+        .filter(|p| p.is_agent())
+        .filter_map(|p| {
+            let mut v = serde_json::to_value(agents::live(&core, &p.block_id)?).ok()?;
+            v["docket"] = json!(agents::docket_of(&core, &p.block_id));
+            Some(v)
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "owner": core.owner,
+        "hooks": crate::hooks::claude_installed(),
+        "rex": { "connected": core.mirror.connected, "error": core.mirror.error },
+        "dockets": dockets,
+        "asks": asks,
+        "agents": agents_now,
+    })))
+}
+
+async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let core = shared.lock();
+    let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+    let keys: std::collections::BTreeMap<String, String> = core.store.keys().map_err(internal)?.into_iter().collect();
+    let mut entries = Vec::new();
+    for s in core.store.entries(&id).map_err(internal)? {
+        let e = s.entry().map_err(internal)?;
+        let keyid = s.keyid();
+        entries.push(json!({
+            "seq": s.seq,
+            "id": s.id,
+            "chain": s.chain,
+            "kind": e.kind,
+            "at": e.at,
+            "actor": e.actor,
+            "body": e.body,
+            "data": e.data,
+            "mark": mark(&e),
+            "key": keyid.as_ref().and_then(|k| keys.get(k)),
+        }));
+    }
+    let report = core.verify(&id).map_err(internal)?;
+    Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report })))
+}
+
+#[derive(Deserialize)]
+struct NewDocket {
+    title: String,
+}
+
+async fn new_docket(State(shared): State<Shared>, Json(req): Json<NewDocket>) -> ApiResult {
+    let title = req.title.trim();
+    if title.is_empty() {
+        return Err(fail(StatusCode::BAD_REQUEST, "a docket needs a title"));
+    }
+    let mut core = shared.lock();
+    let id = core.open(&Who::Owner, title, json!({ "protocol": "none", "title_source": "person" })).map_err(internal)?;
+    Ok(Json(json!({ "docket": id })))
+}
+
+#[derive(Deserialize)]
+struct Note {
+    body: String,
+    /// The pane `wh note` ran in, if any: an agent's pane makes it the agent's.
+    #[serde(default)]
+    block: Option<String>,
+}
+
+async fn note(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<Note>) -> ApiResult {
+    let body = req.body.trim();
+    if body.is_empty() {
+        return Err(fail(StatusCode::BAD_REQUEST, "an empty note"));
+    }
+    let mut core = shared.lock();
+    if core.store.state(&id).map_err(internal)?.is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
+    }
+    let who = match req.block.as_deref().and_then(|b| core.mirror.panes.get(b)).filter(|p| p.is_agent()) {
+        Some(p) => Who::Agent {
+            app: p.app().unwrap_or("agent").to_string(),
+            block: p.block_id.clone(),
+            session: core.agents.by_block.get(&p.block_id).and_then(|t| t.session.clone()),
+        },
+        None => Who::Owner,
+    };
+    let s = core.append(&id, "note", &who, Some(body.to_string()), Value::Null).map_err(internal)?;
+    Ok(Json(json!({ "seq": s.seq, "id": s.id })))
+}
+
+#[derive(Deserialize)]
+struct Set {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+}
+
+async fn set(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<Set>) -> ApiResult {
+    let mut data = json!({});
+    if let Some(t) = req.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        data["title"] = json!(t);
+        data["title_source"] = json!("person");
+    }
+    if let Some(s) = req.status.as_deref() {
+        if !matches!(s, "todo" | "in_progress" | "done" | "dropped") {
+            return Err(fail(StatusCode::BAD_REQUEST, format!("status is todo, in_progress, done or dropped, not {s}")));
+        }
+        data["status"] = json!(s);
+    }
+    if data.as_object().is_some_and(|o| o.is_empty()) {
+        return Err(fail(StatusCode::BAD_REQUEST, "nothing to set"));
+    }
+    let mut core = shared.lock();
+    if core.store.state(&id).map_err(internal)?.is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
+    }
+    let s = core.append(&id, "set", &Who::Owner, None, data).map_err(internal)?;
+    Ok(Json(json!({ "seq": s.seq })))
+}
+
+async fn open_in_rex(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let target = {
+        let core = shared.lock();
+        let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+        st.agent.and_then(|a| core.mirror.panes.get(&a.block).map(|p| (p.session_id.clone(), p.block_id.clone(), p.window_id.clone())))
+    };
+    let Some((session, block, window)) = target else {
+        return Err(fail(StatusCode::CONFLICT, format!("{id} has no pane open in Rex")));
+    };
+    crate::rex::Rex.focus(&session, &block, window.as_deref()).await.map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// The docket's pane, if it's open in Rex now: `(session, block)`.
+fn pane_of(core: &crate::hub::Core, id: &str) -> std::result::Result<(String, String), (StatusCode, Json<Value>)> {
+    let st = core.store.state(id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+    st.agent
+        .and_then(|a| core.mirror.panes.get(&a.block).map(|p| (p.session_id.clone(), p.block_id.clone())))
+        .ok_or_else(|| fail(StatusCode::CONFLICT, format!("{id} has no pane open in Rex")))
+}
+
+/// The pane's screen and recent scrollback, as text, for a phone or any
+/// screen that isn't next to Rex.
+async fn screen(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let (session, block, live) = {
+        let core = shared.lock();
+        let (s, b) = pane_of(&core, &id)?;
+        let live = agents::live(&core, &b);
+        (s, b, live)
+    };
+    let text = crate::rex::Rex.capture(&session, &block, 400).await.map_err(internal)?;
+    Ok(Json(json!({ "text": text, "live": live, "at": crate::time::now_ms() })))
+}
+
+#[derive(Deserialize)]
+struct SendReq {
+    text: String,
+}
+
+/// Type a message into the docket's agent and press Enter, if it's between
+/// turns (see `agents::can_send`).
+async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<SendReq>) -> ApiResult {
+    let text = req.text.trim_end().to_string();
+    if text.trim().is_empty() {
+        return Err(fail(StatusCode::BAD_REQUEST, "an empty message"));
+    }
+    if text.len() > 16_000 {
+        return Err(fail(StatusCode::BAD_REQUEST, "that's too long to paste into a pane"));
+    }
+    let (session, block, app, agent_session) = {
+        let core = shared.lock();
+        let (s, b) = pane_of(&core, &id)?;
+        let pane = core.mirror.panes.get(&b).ok_or_else(|| fail(StatusCode::CONFLICT, "the pane closed"))?;
+        agents::can_send(pane).map_err(|why| fail(StatusCode::CONFLICT, why))?;
+        let session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
+        (s, b, pane.app().unwrap_or("agent").to_string(), session)
+    };
+    let rex = crate::rex::Rex;
+    rex.paste(&session, &block, &text).await.map_err(internal)?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    rex.send_keys(&session, &block, &["enter"]).await.map_err(internal)?;
+    // Claude Code's prompt hook records it when installed; otherwise the hub does.
+    if !(app == "claude-code" && crate::hooks::claude_installed()) {
+        let mut core = shared.lock();
+        agents::note_prompt(&mut core, &id, &text, agent_session.as_deref(), Some("wheelhouse")).map_err(internal)?;
+    }
+    shared.lock().live_changed();
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn approve(State(shared): State<Shared>, Path(id): Path<String>, Json(seen): Json<crate::approve::Seen>) -> ApiResult {
+    crate::approve::answer(&shared, &id, true, &seen).await.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
+}
+
+async fn deny(State(shared): State<Shared>, Path(id): Path<String>, Json(seen): Json<crate::approve::Seen>) -> ApiResult {
+    crate::approve::answer(&shared, &id, false, &seen).await.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
+}
+
+async fn export(State(shared): State<Shared>, Path(id): Path<String>) -> Response {
+    let core = shared.lock();
+    match export_lines(&core, &id) {
+        Ok(text) => ([(header::CONTENT_TYPE, "application/x-ndjson")], text).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, format!("{e:#}")).into_response(),
+    }
+}
+
+/// A docket as JSON lines: a header with the keys it uses, then each entry.
+pub fn export_lines(core: &crate::hub::Core, id: &str) -> Result<String> {
+    let entries = core.store.entries(id)?;
+    anyhow::ensure!(!entries.is_empty(), "no docket {id}");
+    let names: std::collections::BTreeMap<String, String> = core.store.keys()?.into_iter().collect();
+    let used: std::collections::BTreeSet<String> = entries.iter().filter_map(record::Stored::keyid).collect();
+    let keys: Vec<Value> = used.iter().map(|k| json!({ "keyid": k, "name": names.get(k) })).collect();
+    let mut out = json!({ "wheelhouse": "record/v1", "docket": id, "keys": keys }).to_string();
+    out.push('\n');
+    for s in entries {
+        out.push_str(&json!({ "seq": s.seq, "id": s.id, "chain": s.chain, "envelope": s.envelope }).to_string());
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+async fn verify_all(State(shared): State<Shared>) -> ApiResult {
+    let core = shared.lock();
+    let mut reports = Vec::new();
+    for id in core.store.docket_ids().map_err(internal)? {
+        reports.push(core.verify(&id).map_err(internal)?);
+    }
+    reports.sort_by_key(|r| r.docket.trim_start_matches("D-").parse::<i64>().unwrap_or(0));
+    Ok(Json(json!({ "ok": reports.iter().all(|r| r.ok), "dockets": reports })))
+}
+
+#[derive(Deserialize)]
+struct Hook {
+    event: String,
+    agent: String,
+    block: String,
+    #[serde(default)]
+    payload: Value,
+}
+
+async fn hook(State(shared): State<Shared>, Json(req): Json<Hook>) -> ApiResult {
+    let mut core = shared.lock();
+    let v = agents::hook(&mut core, &req.event, &req.agent, &req.block, &req.payload).map_err(internal)?;
+    Ok(Json(v))
+}
+
+async fn events(State(shared): State<Shared>) -> impl IntoResponse {
+    let rx = shared.lock().events.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|r| r.ok()).map(|ev| Event::default().json_data(ev));
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(20)))
+}
+
+// ---- the web app ----
+
+async fn asset(uri: Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    if path.starts_with("api/") {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    // WH_WEB_DIR serves a built app from disk (web/dist), so a change to the
+    // app shows on reload without rebuilding the hub.
+    if let Some(dir) = std::env::var_os("WH_WEB_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        let safe = !path.split('/').any(|p| p == ".." || p.starts_with('.'));
+        let file = if safe && !path.is_empty() && dir.join(path).is_file() { dir.join(path) } else { dir.join("index.html") };
+        return match tokio::fs::read(&file).await {
+            Ok(bytes) => ([(header::CONTENT_TYPE, mime_of(&file.to_string_lossy())), (header::CACHE_CONTROL, "no-cache")], bytes).into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {e}", file.display())).into_response(),
+        };
+    }
+    // Anything that isn't a file is a page of the app.
+    let file = WEB.get_file(path).or_else(|| WEB.get_file("index.html"));
+    let Some(file) = file else { return (StatusCode::NOT_FOUND, "not found").into_response() };
+    let name = file.path().to_string_lossy();
+    // Built assets have hashed names and never change; the page always might.
+    let cache = if name.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-cache" };
+    ([(header::CONTENT_TYPE, mime_of(&name)), (header::CACHE_CONTROL, cache)], file.contents()).into_response()
+}
+
+fn mime_of(name: &str) -> &'static str {
+    match name.rsplit('.').next() {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("json" | "webmanifest") => "application/json",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        _ => "application/octet-stream",
+    }
+}
