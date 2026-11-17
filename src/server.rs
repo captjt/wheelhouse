@@ -69,6 +69,10 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/push/unsubscribe", post(push_unsubscribe))
         .route("/api/push/test", post(push_test))
         .route("/api/recap", get(recap))
+        .route("/api/build", get(build_status))
+        .route("/api/build/start", post(build_start))
+        .route("/api/build/settings", post(build_settings))
+        .route("/api/build/discard", post(build_discard))
         .route("/api/review", get(review_status))
         .route("/api/review/check", post(review_check))
         .route("/api/import/rex-reviewer", post(import_rex_reviewer))
@@ -253,6 +257,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
 
     drop(core);
     let review = crate::review::watch::status(&shared);
+    let build = crate::build::watch::status(&shared);
     let core = shared.lock();
 
     let messages: Vec<Value> = core
@@ -264,6 +269,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         .collect();
     Ok(Json(json!({
         "review": review,
+        "build": build,
         "messages": messages,
         "owner": core.owner,
         "hooks": crate::hooks::claude_installed(),
@@ -803,6 +809,58 @@ async fn push_test(State(shared): State<Shared>) -> ApiResult {
     let note = json!({ "title": "Wheelhouse", "body": "Notifications work. You'll hear when an agent needs you.", "tag": "test", "url": "/" });
     let sent = crate::push::send_all(&shared, &note).await.map_err(internal)?;
     Ok(Json(json!({ "sent": sent })))
+}
+
+// ---- Build ----
+
+async fn build_status(State(shared): State<Shared>) -> ApiResult {
+    let _ = crate::build::config(&shared);
+    Ok(Json(crate::build::watch::status(&shared)))
+}
+
+#[derive(Deserialize)]
+struct BuildStart {
+    /// `D-12`, `owner/name#45`, a GitHub issue URL, or `GRD-142`.
+    from: String,
+    #[serde(default)]
+    repo: Option<String>,
+}
+
+async fn build_start(State(shared): State<Shared>, Json(req): Json<BuildStart>) -> ApiResult {
+    crate::build::steps::start_from(&shared, &req.from, req.repo.as_deref()).await.map(Json).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))
+}
+
+#[derive(Deserialize)]
+struct BuildSettings {
+    #[serde(default)]
+    paused: Option<bool>,
+}
+
+async fn build_settings(State(shared): State<Shared>, Json(req): Json<BuildSettings>) -> ApiResult {
+    if let Some(p) = req.paused {
+        shared.lock().store.meta_set("build.paused", if p { "1" } else { "0" }).map_err(internal)?;
+    }
+    shared.lock().build.check_now.notify_one();
+    Ok(Json(crate::build::watch::status(&shared)))
+}
+
+#[derive(Deserialize)]
+struct BuildDiscard {
+    docket: String,
+    #[serde(default)]
+    why: Option<String>,
+}
+
+async fn build_discard(State(shared): State<Shared>, Json(req): Json<BuildDiscard>) -> ApiResult {
+    let lock = crate::build::lock(&shared, &req.docket);
+    let _g = lock.lock().await;
+    let mut t = crate::build::get(&shared.lock(), &req.docket).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{} has no Build", req.docket)))?;
+    if t.finished() {
+        return Err(fail(StatusCode::CONFLICT, format!("{}'s Build is {} already", req.docket, t.state)));
+    }
+    crate::build::steps::discard(&shared, &mut t, req.why.as_deref().unwrap_or("you discarded it")).await.map_err(internal)?;
+    crate::build::save(&mut shared.lock(), &mut t).map_err(internal)?;
+    Ok(Json(json!({ "docket": t.docket, "state": t.state })))
 }
 
 // ---- Recap ----

@@ -6,6 +6,7 @@ macro_rules! say {
 }
 
 mod agents;
+mod build;
 mod brief;
 mod linear;
 mod messages;
@@ -149,6 +150,16 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// Build: `start D-12|owner/name#45|GRD-142 [--repo owner/name]`,
+    /// `discard D-12`, `pause`, `resume`, or the list.
+    Build {
+        action: Option<String>,
+        args: Vec<String>,
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// What happened: today, this week (the default), or 30 days; as Markdown.
     Recap { period: Option<String> },
     /// The agents' skill for Wheelhouse: show, install, or remove.
@@ -241,6 +252,7 @@ fn main() {
             }),
             other => Err(anyhow::anyhow!("wh import takes rex-reviewer, not {other}")),
         },
+        Some(Cmd::Build { action, args, repo, json: as_json }) => build_cmd(action.as_deref().unwrap_or("status"), &args, repo, as_json),
         Some(Cmd::Recap { period }) => {
             let p = period.as_deref().unwrap_or("week");
             client::json("GET", &format!("/api/recap?period={p}"), None).map(|v| print!("{}", v["markdown"].as_str().unwrap_or("")))
@@ -322,11 +334,51 @@ fn serve() -> Result<()> {
         tokio::spawn(push::run(shared.clone()));
         tokio::spawn(preview::sweep(shared.clone()));
         tokio::spawn(review::watch::run(shared.clone()));
+        tokio::spawn(build::watch::run(shared.clone()));
         server::serve(shared).await
     })
 }
 
 const SKILL: &str = include_str!("../skills/wheelhouse/SKILL.md");
+
+fn build_cmd(action: &str, args: &[String], repo: Option<String>, as_json: bool) -> Result<()> {
+    let v = match action {
+        "status" => client::json("GET", "/api/build", None)?,
+        "start" => {
+            let from = args.first().ok_or_else(|| anyhow::anyhow!("start what? wh build start D-12 (or owner/name#45, or GRD-142)"))?;
+            let v = client::json("POST", "/api/build/start", Some(&json!({ "from": from, "repo": repo })))?;
+            if !as_json {
+                println!("{}: Build of {} into {} is {}", v["docket"].as_str().unwrap_or("?"), v["key"].as_str().unwrap_or("?"), v["repo"].as_str().unwrap_or("?"), v["state"].as_str().unwrap_or("?"));
+                return Ok(());
+            }
+            v
+        }
+        "discard" => client::json("POST", "/api/build/discard", Some(&json!({ "docket": args.first().ok_or_else(|| anyhow::anyhow!("discard which? wh build discard D-12"))? })))?,
+        "pause" => client::json("POST", "/api/build/settings", Some(&json!({ "paused": true })))?,
+        "resume" => client::json("POST", "/api/build/settings", Some(&json!({ "paused": false })))?,
+        other => bail!("wh build takes start, discard, pause or resume, not {other}"),
+    };
+    if as_json || action != "status" {
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+    if let Some(e) = v["config_error"].as_str() {
+        println!("config   {e}");
+    }
+    println!("Build    {}{}", if v["paused"] == true { "paused" } else { "on" }, v["doing"].as_str().map(|d| format!(" · {d}")).unwrap_or_default());
+    for t in v["tasks"].as_array().into_iter().flatten() {
+        println!(
+            "  {:<6} {:<22} {:<10} {}{}{}",
+            t["docket"].as_str().unwrap_or(""),
+            t["key"].as_str().unwrap_or(""),
+            t["state"].as_str().unwrap_or(""),
+            t["phase"].as_str().unwrap_or(""),
+            t["pr_url"].as_str().map(|u| format!(" · {u}")).unwrap_or_default(),
+            t["attention"]["text"].as_str().map(|a| format!("  ⚑ {a}")).unwrap_or_default()
+        );
+    }
+    Ok(())
+}
 
 /// `OWNER/NAME N` or `OWNER/NAME#N` → `OWNER/NAME#N`.
 fn pr_key(args: &[String]) -> Result<String> {

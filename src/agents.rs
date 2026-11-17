@@ -92,7 +92,7 @@ fn reconcile_one(core: &mut Core, block: &str) -> Result<()> {
     match (pane, tracked) {
         (Some(p), false) => {
             let a = agent_ref(core, &p);
-            if let Some((docket, role)) = crate::review::pane_docket(core, &p) {
+            if let Some((docket, role)) = crate::review::pane_docket(core, &p).or_else(|| crate::build::pane_docket(core, &p).map(|(d, r)| (d, format!("Build {r}")))) {
                 adopt(core, &docket, &a, None);
                 core.append(&docket, "claim", &Who::Hub, None, json!({ "source": "wheelhouse", "role": role, "agent": a }))?;
                 return status(core, &p);
@@ -275,8 +275,8 @@ fn release(core: &mut Core, block: &str, reason: &str) -> Result<()> {
     core.append(&t.docket, "release", &Who::Hub, None, json!({ "reason": reason, "block": block }))?;
     // A Review docket outlives any one of its panes: it ends when the PR's
     // review is over and no pane of it is left.
-    // A Review docket's status is the Review protocol's to set.
-    let done = core.store.state(&t.docket)?.is_none_or(|s| s.protocol != "review");
+    // A Review's or a Build's docket status is its protocol's to set.
+    let done = core.store.state(&t.docket)?.is_none_or(|s| s.protocol != "review") && core.store.build_task(&t.docket)?.is_none();
     if done {
         core.append(&t.docket, "set", &Who::Hub, None, json!({ "status": "done" }))?;
     }

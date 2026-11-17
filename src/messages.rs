@@ -20,6 +20,8 @@ use crate::mirror::{Pane, app_name};
 use crate::store::Message;
 
 pub const ME: &str = "me";
+/// Wheelhouse itself, as the sender of a protocol's asks (Build's gates).
+pub const HUB: &str = "wheelhouse";
 const MAX_OPTIONS: usize = 6;
 /// How long an agent must sit between turns before a message goes in, so a
 /// message doesn't land on top of someone who just finished typing.
@@ -158,6 +160,41 @@ pub fn send(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, b
     Ok(m)
 }
 
+/// An ask from Wheelhouse itself, on a docket: a question to you with its
+/// options as buttons. Your reply comes back to the hub, which reads it off
+/// the record (`replies_to`).
+pub fn ask(core: &mut Core, docket: &str, subject: &str, body: &str, options: Vec<String>, data: Value) -> Result<Message> {
+    let mut m = Message {
+        from_addr: HUB.into(),
+        to_addr: ME.into(),
+        subject: Some(subject.chars().take(140).collect()),
+        body: body.trim_end().to_string(),
+        options,
+        status: "open".into(),
+        created_at: crate::time::now_ms(),
+        ..Default::default()
+    };
+    m.id = core.store.insert_message(&m)?;
+    let mut d = json!({ "message": m.id, "from": HUB, "to": ME, "subject": m.subject, "options": m.options });
+    if let (Some(o), Some(extra)) = (d.as_object_mut(), data.as_object()) {
+        for (k, v) in extra {
+            o.insert(k.clone(), v.clone());
+        }
+    }
+    let kind = if m.options.is_empty() { "note" } else { "question" };
+    let s = core.append(docket, kind, &Who::Hub, Some(m.body.clone()), d)?;
+    m.docket = Some(docket.to_string());
+    m.seq = Some(s.seq);
+    core.store.set_message_place(m.id, docket, s.seq)?;
+    let _ = core.events.send(json!({ "type": "message", "id": m.id, "to": ME }));
+    Ok(m)
+}
+
+/// The latest reply to a message, if any.
+pub fn answer_to(core: &Core, id: i64) -> Option<Message> {
+    core.store.messages_where("reply_to = ?1", rusqlite::params![id]).ok()?.into_iter().last()
+}
+
 /// Answer a message: with words, an option, or both. Your answer to an
 /// agent goes to its pane; an agent's answer to you is open in your inbox.
 pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option<&str>) -> Result<Message> {
@@ -188,7 +225,8 @@ pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option
         options: Vec::new(),
         reply_to: Some(id),
         choice: choice.clone(),
-        status: if to.0 == ME { "open".into() } else { "queued".into() },
+        // The hub reads a reply to its ask off the record; nothing to deliver.
+        status: if to.0 == ME { "open".into() } else if to.0 == HUB { "done".into() } else { "queued".into() },
         created_at: crate::time::now_ms(),
         ..Default::default()
     };

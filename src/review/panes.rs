@@ -11,8 +11,13 @@ use crate::rex::{Created, Rex};
 
 /// The review session's id, if it's open.
 pub fn session(shared: &Shared) -> Option<String> {
+    session_named(shared, &session_name())
+}
+
+/// A Rex session's id by its label, if it's open.
+pub fn session_named(shared: &Shared, name: &str) -> Option<String> {
     let core = shared.lock();
-    core.mirror.sessions.values().find(|s| s.label == session_name()).map(|s| s.session_id.clone())
+    core.mirror.sessions.values().find(|s| s.label == name).map(|s| s.session_id.clone())
 }
 
 /// A pane's root state and when it last changed, or `None` if it's gone.
@@ -27,10 +32,15 @@ pub fn state(shared: &Shared, block: &str) -> Option<(String, Option<String>)> {
 
 /// The block of the pane labelled `label` in `session` (or the review session).
 pub fn find(shared: &Shared, session: Option<&str>, label: &str) -> Option<String> {
+    find_in(shared, session, &session_name(), label)
+}
+
+/// The block labelled `label` in `session`, or else in the session named `name`.
+pub fn find_in(shared: &Shared, session: Option<&str>, name: &str, label: &str) -> Option<String> {
     let core = shared.lock();
     let sid = match session {
         Some(s) => s.to_string(),
-        None => core.mirror.sessions.values().find(|s| s.label == session_name())?.session_id.clone(),
+        None => core.mirror.sessions.values().find(|s| s.label == name)?.session_id.clone(),
     };
     core.mirror.panes.values().find(|p| p.session_id == sid && p.label == label).map(|p| p.block_id.clone())
 }
@@ -43,8 +53,13 @@ pub enum Place<'a> {
 /// Open `argv` in a pane labelled `label`, in the review session (made
 /// with this pane if it isn't open).
 pub async fn open(shared: &Shared, label: &str, cwd: &str, argv: &[String], place: Place<'_>) -> Result<Created> {
+    open_in(shared, &session_name(), label, cwd, argv, place).await
+}
+
+/// Open a pane in the session named `name` (made with it if it isn't open).
+pub async fn open_in(shared: &Shared, name: &str, label: &str, cwd: &str, argv: &[String], place: Place<'_>) -> Result<Created> {
     let rex = Rex;
-    match session(shared) {
+    match session_named(shared, name) {
         Some(sid) => {
             let split = match place {
                 Place::Tab => None,
@@ -54,11 +69,11 @@ pub async fn open(shared: &Shared, label: &str, cwd: &str, argv: &[String], plac
         }
         None => {
             let a: Vec<&str> = argv.iter().map(String::as_str).collect();
-            let c = rex.start(None, &session_name(), label, cwd, &a).await?;
+            let c = rex.start(None, name, label, cwd, &a).await?;
             // Wait for the mirror to see the new session, so the next pane
             // goes in it.
             let t = Instant::now();
-            while session(shared).is_none() && t.elapsed() < Duration::from_secs(10) {
+            while session_named(shared, name).is_none() && t.elapsed() < Duration::from_secs(10) {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
             Ok(c)

@@ -87,6 +87,11 @@ CREATE TABLE IF NOT EXISTS review_prs (  -- the Review protocol's working state 
   body TEXT NOT NULL,        -- JSON
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS build_tasks (  -- Build's working state per docket; the story is on the docket
+  docket TEXT PRIMARY KEY,
+  body TEXT NOT NULL,        -- JSON
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS keys (
   keyid TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -152,6 +157,24 @@ impl Store {
             "INSERT INTO review_prs (key, repo, pr, docket, body, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (key) DO UPDATE SET docket = COALESCE(?4, docket), body = ?5, updated_at = ?6",
             params![key, repo, pr, docket, body, crate::time::now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn build_tasks(&self) -> Result<Vec<String>> {
+        let mut st = self.conn.prepare("SELECT body FROM build_tasks ORDER BY docket")?;
+        let rows = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    pub fn build_task(&self, docket: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT body FROM build_tasks WHERE docket = ?1", params![docket], |r| r.get(0)).optional()?)
+    }
+
+    pub fn put_build_task(&mut self, docket: &str, body: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO build_tasks (docket, body, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT (docket) DO UPDATE SET body = ?2, updated_at = ?3",
+            params![docket, body, crate::time::now()],
         )?;
         Ok(())
     }
