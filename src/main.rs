@@ -8,6 +8,7 @@ macro_rules! say {
 mod agents;
 mod brief;
 mod linear;
+mod messages;
 mod approve;
 mod client;
 mod follow;
@@ -58,6 +59,48 @@ enum Cmd {
     Intent { docket: String, text: Option<String> },
     /// What an agent reads to work on a docket (its own, from its pane).
     Brief { docket: Option<String> },
+    /// Message an agent's pane, or you (`--to me`), with options as buttons.
+    Send {
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        subject: Option<String>,
+        #[arg(long = "option")]
+        options: Vec<String>,
+        /// The message, or - for stdin.
+        text: Option<String>,
+    },
+    /// Answer message N: words, an option (--choice), or both.
+    Reply {
+        n: i64,
+        #[arg(long)]
+        choice: Option<String>,
+        text: Option<String>,
+    },
+    /// Messages to this pane (or to you, from a shell) not read yet.
+    Inbox {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read message N.
+    Read {
+        n: i64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait for a message to this pane (or a reply in --thread N).
+    Wait {
+        #[arg(long)]
+        thread: Option<i64>,
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Name this pane, so others can message it by that name.
+    Name { name: String },
+    /// This pane's address and docket.
+    Whoami,
     /// Store a Linear API key in the Keychain.
     SetupLinear,
     /// Add a note to a docket. From an agent's pane, the note is the agent's.
@@ -127,6 +170,20 @@ fn main() {
         Some(Cmd::Intent { docket, text }) => intent(&normalize(&docket), text),
         Some(Cmd::Brief { docket }) => brief(docket.as_deref().map(normalize)),
         Some(Cmd::SetupLinear) => linear::setup(),
+        Some(Cmd::Send { to, subject, options, text }) => msg_send(&to, subject, options, text),
+        Some(Cmd::Reply { n, choice, text }) => msg_reply(n, choice, text),
+        Some(Cmd::Inbox { json }) => msg_inbox(json),
+        Some(Cmd::Read { n, json }) => msg_read(n, json),
+        Some(Cmd::Wait { thread, timeout, json }) => msg_wait(thread, timeout, json),
+        Some(Cmd::Name { name }) => {
+            let block = std::env::var("REX_BLOCK").map_err(|_| anyhow::anyhow!("run this in a Rex pane"));
+            block.and_then(|b| client::json("POST", "/api/panes/name", Some(&json!({ "block": b, "name": name })))).map(|v| {
+                println!("this pane is {}", v["addr"].as_str().unwrap_or("?"));
+            })
+        }
+        Some(Cmd::Whoami) => client::json("GET", &format!("/api/whoami{}", block_q("?")), None).map(|v| {
+            println!("{}{}", v["addr"].as_str().unwrap_or("?"), v["docket"].as_str().map(|d| format!(" on {d}")).unwrap_or_default());
+        }),
         Some(Cmd::Note { docket, text }) => {
             let block = std::env::var("REX_BLOCK").ok();
             let d = normalize(&docket);
@@ -171,8 +228,115 @@ fn serve() -> Result<()> {
         tokio::spawn(follow::run(shared.clone()));
         tokio::spawn(tailnet::watch(shared.clone()));
         tokio::spawn(linear::follow(shared.clone()));
+        tokio::spawn(messages::deliver_loop(shared.clone()));
         server::serve(shared).await
     })
+}
+
+fn block_q(sep: &str) -> String {
+    std::env::var("REX_BLOCK").map(|b| format!("{sep}block={b}")).unwrap_or_default()
+}
+
+fn text_or_stdin(t: Option<String>) -> Result<String> {
+    match t.as_deref() {
+        Some("-") | None if !std::io::IsTerminal::is_terminal(&std::io::stdin()) || t.is_some() => {
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+            Ok(s)
+        }
+        Some(t) => Ok(t.to_string()),
+        None => Ok(String::new()),
+    }
+}
+
+fn msg_line(v: &Value) -> String {
+    let opts: Vec<&str> = v["options"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    format!(
+        "#{:<4} from {}{}{}: {}{}",
+        v["id"],
+        v["from"].as_str().unwrap_or("?"),
+        v["docket"].as_str().map(|d| format!(" ({d})")).unwrap_or_default(),
+        v["subject"].as_str().map(|s| format!(" · {s}")).unwrap_or_default(),
+        v["body"].as_str().unwrap_or_default().lines().next().unwrap_or_default(),
+        if opts.is_empty() { String::new() } else { format!("  [{}]", opts.join(" · ")) }
+    )
+}
+
+fn msg_send(to: &str, subject: Option<String>, options: Vec<String>, text: Option<String>) -> Result<()> {
+    let body = text_or_stdin(text)?;
+    let block = std::env::var("REX_BLOCK").ok();
+    let v = client::json("POST", "/api/messages", Some(&json!({ "to": to, "subject": subject, "options": options, "body": body, "block": block })))?;
+    let state = if v["status"] == "open" { "in your inbox" } else { "queued: it goes in when that agent is between turns" };
+    println!("#{} to {}: {state}", v["id"], v["to"].as_str().unwrap_or(to));
+    Ok(())
+}
+
+fn msg_reply(n: i64, choice: Option<String>, text: Option<String>) -> Result<()> {
+    let body = text_or_stdin(text)?;
+    let block = std::env::var("REX_BLOCK").ok();
+    let v = client::json("POST", &format!("/api/messages/{n}/reply"), Some(&json!({ "body": body, "choice": choice, "block": block })))?;
+    println!("#{} to {}{}", v["id"], v["to"].as_str().unwrap_or("?"), v["choice"].as_str().map(|c| format!(" (chose {c})")).unwrap_or_default());
+    Ok(())
+}
+
+fn msg_inbox(as_json: bool) -> Result<()> {
+    let v = client::json("GET", &format!("/api/messages{}", block_q("?")), None)?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&v)?);
+        return Ok(());
+    }
+    let list = v.as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        println!("No messages.");
+    }
+    for m in &list {
+        println!("{}", msg_line(m));
+    }
+    Ok(())
+}
+
+fn print_msg(v: &Value, as_json: bool) -> Result<()> {
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(v)?);
+        return Ok(());
+    }
+    println!("#{} from {} to {}{}", v["id"], v["from"].as_str().unwrap_or("?"), v["to"].as_str().unwrap_or("?"), v["docket"].as_str().map(|d| format!(" ({d})")).unwrap_or_default());
+    if let Some(s) = v["subject"].as_str() {
+        println!("Subject: {s}");
+    }
+    if let Some(c) = v["choice"].as_str() {
+        println!("Chose: {c}");
+    }
+    println!("
+{}", v["body"].as_str().unwrap_or_default());
+    let opts: Vec<&str> = v["options"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if !opts.is_empty() {
+        println!("
+Options: {}", opts.join(" · "));
+    }
+    Ok(())
+}
+
+fn msg_read(n: i64, as_json: bool) -> Result<()> {
+    let v = client::json("GET", &format!("/api/messages/{n}{}", block_q("?")), None)?;
+    print_msg(&v, as_json)
+}
+
+fn msg_wait(thread: Option<i64>, timeout: u64, as_json: bool) -> Result<()> {
+    let mut q = format!("/api/messages/wait?timeout={timeout}");
+    if let Some(t) = thread {
+        q.push_str(&format!("&thread={t}"));
+    }
+    q.push_str(&block_q("&"));
+    let (status, bytes) = client::call("GET", &q, None, std::time::Duration::from_secs(timeout + 15))?;
+    let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    if status == 408 {
+        bail!("nothing came within {timeout}s");
+    }
+    if !(200..300).contains(&status) {
+        bail!("{}", v["error"].as_str().unwrap_or("wait failed"));
+    }
+    print_msg(&v, as_json)
 }
 
 fn new_docket(title: Option<String>, linear: Option<String>) -> Result<()> {

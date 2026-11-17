@@ -327,7 +327,7 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
                 claim(core, block, s, "startup")?;
             }
             let docket = core.agents.by_block[block].docket.clone();
-            if prompt.starts_with("[rex-inbox]") {
+            if prompt.starts_with("[rex-inbox]") || prompt.starts_with("[wheelhouse]") {
                 core.append(&docket, "note", &Who::Hub, Some(prompt.to_string()), json!({ "via": "message" }))?;
             } else {
                 note_prompt(core, &docket, prompt, session, None)?;

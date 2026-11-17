@@ -92,7 +92,23 @@ export type Ask = {
   app: string;
 };
 
+export type Msg = {
+  id: number;
+  docket?: string | null;
+  from: string;
+  from_app?: string | null;
+  to: string;
+  subject?: string | null;
+  body: string;
+  options: string[];
+  reply_to?: number | null;
+  choice?: string | null;
+  status: string;
+  created_at: string;
+};
+
 export type HubState = {
+  messages: Msg[];
   owner: string;
   hooks: boolean;
   linear: boolean;

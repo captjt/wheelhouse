@@ -85,8 +85,11 @@ function App() {
   const [nav, setNav] = useState(false);
   const page = route[0] || "view";
 
-  const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? []).length, [hub.state]);
-  const urgent = useMemo(() => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length, [hub.state]);
+  const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? []).length, [hub.state]);
+  const urgent = useMemo(
+    () => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length + (hub.state?.messages.length ?? 0),
+    [hub.state],
+  );
   useEffect(() => {
     document.title = urgent > 0 ? `(${urgent}) Wheelhouse` : "Wheelhouse";
   }, [urgent]);

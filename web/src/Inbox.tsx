@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { appName, type Docket } from "./api";
+import { appName, type Docket, type Msg } from "./api";
+import { MessageCard, msgFrom, msgTitle } from "./Messages";
 import { DocketScreen } from "./Docket";
 import { AppAvatar, IconInbox, LiveIcon, TitleText } from "./icons";
 import { ago, go, lastList, useHub } from "./live";
@@ -7,19 +8,24 @@ import { useKeys, useMenu } from "./ui";
 import { rowMenu } from "./views";
 import { AnswerButtons, usePane } from "./Pane";
 
-type Item = { d: Docket; kind: "blocked" | "error" | "done"; line: string; at?: string | null };
+type Item = { d: Docket; kind: "blocked" | "error" | "done" | "message"; line: string; at?: string | null; m?: Msg; key: string };
 
 /** What needs you, newest worry first: waiting on you, failed, then agents
  * that finished a turn and wait for your next word. */
-export function inboxItems(dockets: Docket[]): Item[] {
+export function inboxItems(dockets: Docket[], messages: Msg[] = []): Item[] {
   const items: Item[] = [];
+  const byId = new Map(dockets.map((d) => [d.id, d]));
+  for (const m of messages) {
+    const d = (m.docket && byId.get(m.docket)) || ({ id: m.docket || `#${m.id}`, title: msgTitle(m), title_source: "person", status: "in_progress", protocol: "none", prompts: 0, turns: 0, notes: 0, created_at: m.created_at, updated_at: m.created_at, entries: 0, head: "", short_head: "", live: null, quick: false } as Docket);
+    items.push({ d, kind: "message", m, line: `${msgFrom(m)}: ${msgTitle(m)}`, at: m.created_at, key: `m${m.id}` });
+  }
   for (const d of dockets) {
     const s = d.live?.state;
-    if (s === "blocked") items.push({ d, kind: "blocked", line: d.live?.msg || `${appName(d.agent?.app)} needs you`, at: d.live?.since });
-    else if (s === "error") items.push({ d, kind: "error", line: d.live?.msg || "Failed", at: d.live?.since });
-    else if (s === "done") items.push({ d, kind: "done", line: firstLine(d.last_turn) || "Finished its turn", at: d.live?.since || d.updated_at });
+    if (s === "blocked") items.push({ d, kind: "blocked", line: d.live?.msg || `${appName(d.agent?.app)} needs you`, at: d.live?.since, key: d.id });
+    else if (s === "error") items.push({ d, kind: "error", line: d.live?.msg || "Failed", at: d.live?.since, key: d.id });
+    else if (s === "done") items.push({ d, kind: "done", line: firstLine(d.last_turn) || "Finished its turn", at: d.live?.since || d.updated_at, key: d.id });
   }
-  const rank = { blocked: 0, error: 1, done: 2 };
+  const rank = { blocked: 0, message: 1, error: 2, done: 3 };
   return items.sort((a, b) => rank[a.kind] - rank[b.kind] || (b.at || "").localeCompare(a.at || ""));
 }
 
@@ -33,10 +39,10 @@ function firstLine(s?: string) {
 export function InboxView() {
   const hub = useHub();
   const pane = usePane();
-  const items = useMemo(() => inboxItems(hub.state?.dockets ?? []), [hub.state]);
+  const items = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? []), [hub.state]);
   const [sel, setSel] = useState<string | null>(null);
   const menu = useMenu();
-  const current = items.find((i) => i.d.id === sel) ?? items[0];
+  const current = items.find((i) => i.key === sel) ?? items[0];
 
   useEffect(() => {
     lastList.path = "/inbox";
@@ -46,10 +52,10 @@ export function InboxView() {
 
   const move = (delta: number) => {
     if (!items.length) return;
-    const i = Math.max(0, items.findIndex((x) => x.d.id === current?.d.id));
+    const i = Math.max(0, items.findIndex((x) => x.key === current?.key));
     const next = items[Math.max(0, Math.min(items.length - 1, i + delta))];
-    setSel(next.d.id);
-    document.querySelector(`[data-inbox="${next.d.id}"]`)?.scrollIntoView({ block: "nearest" });
+    setSel(next.key);
+    document.querySelector(`[data-inbox="${next.key}"]`)?.scrollIntoView({ block: "nearest" });
   };
   useKeys({
     j: () => move(1),
@@ -83,15 +89,15 @@ export function InboxView() {
           <div className="split-list">
             {items.map((it) => (
               <a
-                key={it.d.id}
-                data-inbox={it.d.id}
-                className={`inbox-item${current?.d.id === it.d.id ? " sel" : ""} kind-${it.kind}`}
+                key={it.key}
+                data-inbox={it.key}
+                className={`inbox-item${current?.key === it.key ? " sel" : ""} kind-${it.kind}`}
                 href={`#/d/${it.d.id}`}
                 onClick={(e) => {
                   e.preventDefault();
                   // A phone has no room for the detail beside the list: open the docket.
-                  if (window.matchMedia("(max-width: 760px)").matches) go(`/d/${it.d.id}`);
-                  else setSel(it.d.id);
+                  if (window.matchMedia("(max-width: 760px)").matches && it.d.entries) go(`/d/${it.d.id}`);
+                  else setSel(it.key);
                 }}
                 onDoubleClick={() => go(`/d/${it.d.id}`)}
                 onContextMenu={(e) => {
@@ -102,7 +108,7 @@ export function InboxView() {
                 <span className="inbox-avatar">
                   <AppAvatar app={it.d.agent?.app} size={22} />
                   <span className="inbox-badge">
-                    <LiveIcon state={it.kind} size={11} />
+                    <LiveIcon state={it.kind === "message" ? "blocked" : it.kind} size={11} />
                   </span>
                 </span>
                 <span className="inbox-main">
@@ -117,7 +123,12 @@ export function InboxView() {
                     {it.kind === "blocked" ? (it.d.live?.kind ? `${it.d.live.kind}: ` : "Needs you: ") : it.kind === "error" ? "Failed: " : ""}
                     {it.line}
                   </span>
-                  {it.d.live?.answerable && (
+                  {it.m && it.m.options.length > 0 && (
+                    <span className="inbox-actions">
+                      <MessageCard m={it.m} compact />
+                    </span>
+                  )}
+                  {it.kind !== "message" && it.d.live?.answerable && (
                     <span className="inbox-actions">
                       <AnswerButtons d={it.d} small />
                     </span>
@@ -126,7 +137,19 @@ export function InboxView() {
               </a>
             ))}
           </div>
-          <div className="split-detail">{current && <DocketScreen key={current.d.id} id={current.d.id} embedded />}</div>
+          <div className="split-detail">
+            {current && current.d.entries > 0 ? (
+              <DocketScreen key={current.d.id} id={current.d.id} embedded />
+            ) : current?.m ? (
+              <div className="docket embedded">
+                <div className="docket-main">
+                  <div className="docket-col">
+                    <MessageCard m={current.m} />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
       )}
       {menu.node}

@@ -1618,6 +1618,76 @@ code {
   font-size: 12px;
 }
 
+/* ---- messages ---- */
+
+.msg-card {
+  margin-top: 14px;
+  border: 1px solid color-mix(in oklch, var(--blocked) 35%, var(--line));
+  background: var(--warning-tint);
+  border-radius: 10px;
+  padding: 10px 14px 12px;
+}
+.inbox-actions .msg-card {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.inbox-actions .msg-head {
+  display: none;
+}
+.msg-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+}
+.msg-head strong {
+  font-weight: 500;
+}
+.msg-subject {
+  color: var(--text-2);
+}
+.msg-body {
+  margin: 8px 0 4px;
+}
+.msg-body .prose {
+  color: var(--text);
+}
+.msg-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.msg-reply {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 10px;
+}
+.msg-reply textarea {
+  flex: 1;
+  resize: none;
+  font: inherit;
+  color: var(--text);
+  background: var(--control);
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  padding: 5px 9px;
+  outline: none;
+  min-height: 28px;
+}
+.msg-reply textarea:focus {
+  border-color: color-mix(in oklch, var(--focus) 55%, var(--line-2));
+}
+.kind-message .inbox-line {
+  color: var(--text-2);
+}
+.tone-ask .act-card {
+  border-color: color-mix(in oklch, var(--blocked) 30%, var(--line));
+}
+
 /* ---- answering prompts ---- */
 
 .btn-approve {

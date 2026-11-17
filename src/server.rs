@@ -55,6 +55,13 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/from-linear", post(from_linear))
         .route("/api/linear/search", get(linear_search))
         .route("/api/brief", get(brief_of_pane))
+        .route("/api/messages", get(messages_list).post(messages_send))
+        .route("/api/messages/wait", get(messages_wait))
+        .route("/api/messages/{n}", get(messages_read))
+        .route("/api/messages/{n}/reply", post(messages_reply))
+        .route("/api/messages/{n}/done", post(messages_done))
+        .route("/api/panes/name", post(pane_name))
+        .route("/api/whoami", get(whoami))
         .route("/api/hook", post(hook))
         .route("/api/events", get(events))
         .fallback(asset)
@@ -218,7 +225,15 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         })
         .collect();
 
+    let messages: Vec<Value> = core
+        .store
+        .messages_where("to_addr = 'me' AND status = 'open'", [])
+        .map_err(internal)?
+        .iter()
+        .map(|m| crate::messages::view(&core, m))
+        .collect();
     Ok(Json(json!({
+        "messages": messages,
         "owner": core.owner,
         "hooks": crate::hooks::claude_installed(),
         "linear": core.linear_ready,
@@ -558,6 +573,142 @@ async fn brief_of_pane(State(shared): State<Shared>, axum::extract::Query(q): ax
         Ok(t) => ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], t).into_response(),
         Err(e) => (StatusCode::NOT_FOUND, format!("{e:#}")).into_response(),
     }
+}
+
+// ---- messages ----
+
+#[derive(Deserialize)]
+struct SendMsg {
+    to: String,
+    body: String,
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    options: Vec<String>,
+    #[serde(default)]
+    block: Option<String>,
+}
+
+fn bad(e: anyhow::Error) -> (StatusCode, Json<Value>) {
+    fail(StatusCode::BAD_REQUEST, format!("{e:#}"))
+}
+
+async fn messages_send(State(shared): State<Shared>, Json(req): Json<SendMsg>) -> ApiResult {
+    let mut core = shared.lock();
+    let from = crate::messages::caller(&core, req.block.as_deref());
+    let m = crate::messages::send(&mut core, &from, &req.to, req.subject, &req.body, req.options).map_err(bad)?;
+    Ok(Json(crate::messages::view(&core, &m)))
+}
+
+#[derive(Deserialize)]
+struct ReplyMsg {
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    choice: Option<String>,
+    #[serde(default)]
+    block: Option<String>,
+}
+
+async fn messages_reply(State(shared): State<Shared>, Path(n): Path<i64>, Json(req): Json<ReplyMsg>) -> ApiResult {
+    let mut core = shared.lock();
+    let from = crate::messages::caller(&core, req.block.as_deref());
+    let m = crate::messages::reply(&mut core, &from, n, &req.body, req.choice.as_deref()).map_err(bad)?;
+    Ok(Json(crate::messages::view(&core, &m)))
+}
+
+#[derive(Deserialize)]
+struct PaneQuery {
+    #[serde(default)]
+    block: Option<String>,
+}
+
+async fn messages_list(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<PaneQuery>) -> ApiResult {
+    let core = shared.lock();
+    let who = crate::messages::caller(&core, q.block.as_deref());
+    let list = crate::messages::inbox(&core, &who).map_err(internal)?;
+    Ok(Json(json!(list.iter().map(|m| crate::messages::view(&core, m)).collect::<Vec<_>>())))
+}
+
+async fn messages_read(State(shared): State<Shared>, Path(n): Path<i64>, axum::extract::Query(q): axum::extract::Query<PaneQuery>) -> ApiResult {
+    let mut core = shared.lock();
+    let who = crate::messages::caller(&core, q.block.as_deref());
+    let m = crate::messages::read(&mut core, &who, n).map_err(bad)?;
+    Ok(Json(crate::messages::view(&core, &m)))
+}
+
+async fn messages_done(State(shared): State<Shared>, Path(n): Path<i64>) -> ApiResult {
+    let mut core = shared.lock();
+    core.store.set_message_status(n, "done", None).map_err(internal)?;
+    core.live_changed();
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct WaitQ {
+    #[serde(default)]
+    block: Option<String>,
+    #[serde(default)]
+    thread: Option<i64>,
+    #[serde(default)]
+    timeout: Option<u64>,
+}
+
+/// Wait for a message to this pane (or a reply in one thread), up to a timeout.
+async fn messages_wait(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<WaitQ>) -> ApiResult {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(q.timeout.unwrap_or(300).min(900));
+    let mut rx = shared.lock().events.subscribe();
+    let pending = |core: &crate::hub::Core| -> Option<crate::store::Message> {
+        let who = crate::messages::caller(core, q.block.as_deref());
+        let list = crate::messages::inbox(core, &who).ok()?;
+        list.into_iter().find(|m| q.thread.is_none_or(|t| m.reply_to == Some(t) || m.id == t))
+    };
+    loop {
+        {
+            let mut core = shared.lock();
+            if let Some(m) = pending(&core) {
+                let who = crate::messages::caller(&core, q.block.as_deref());
+                let m = crate::messages::read(&mut core, &who, m.id).map_err(bad)?;
+                return Ok(Json(crate::messages::view(&core, &m)));
+            }
+        }
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Err(_) => return Err(fail(StatusCode::REQUEST_TIMEOUT, "nothing came before the timeout")),
+            Ok(_) => continue,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct NameReq {
+    block: String,
+    name: String,
+}
+
+/// Name a pane, so others can reach it by that name.
+async fn pane_name(State(shared): State<Shared>, Json(req): Json<NameReq>) -> ApiResult {
+    let name = req.name.trim().to_string();
+    if name.is_empty() || name.contains(['/', ' ', ':']) {
+        return Err(fail(StatusCode::BAD_REQUEST, "a name is one word, without / or :"));
+    }
+    let session = {
+        let core = shared.lock();
+        core.mirror.panes.get(&req.block).map(|p| p.session_id.clone()).ok_or_else(|| fail(StatusCode::NOT_FOUND, "that pane isn't in Rex"))?
+    };
+    crate::rex::Rex.rename_block(&session, &req.block, &name).await.map_err(internal)?;
+    let mut core = shared.lock();
+    if let Some(p) = core.mirror.panes.get_mut(&req.block) {
+        p.label = name.clone();
+    }
+    let addr = core.mirror.panes.get(&req.block).map(|p| crate::messages::addr_of(&core, p)).unwrap_or(name);
+    Ok(Json(json!({ "addr": addr })))
+}
+
+async fn whoami(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<PaneQuery>) -> ApiResult {
+    let core = shared.lock();
+    let who = crate::messages::caller(&core, q.block.as_deref());
+    let docket = who.block.as_deref().and_then(|b| agents::docket_of(&core, b));
+    Ok(Json(json!({ "addr": who.addr, "docket": docket, "agent": who.block.is_some() })))
 }
 
 async fn verify_all(State(shared): State<Shared>) -> ApiResult {

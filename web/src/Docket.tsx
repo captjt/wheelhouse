@@ -5,6 +5,7 @@ import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
 import { Kbd, Prose, useKeys, useMenu } from "./ui";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { IntentSection } from "./Intent";
+import { MessageCard } from "./Messages";
 import { LinearChip, LinearModal } from "./Linear";
 import { post } from "./api";
 import { IconIssue } from "./icons";
@@ -118,6 +119,12 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </div>
             </div>
           )}
+
+          {(hub.state?.messages ?? [])
+            .filter((m) => m.docket === d.id)
+            .map((m) => (
+              <MessageCard key={m.id} m={m} />
+            ))}
 
           <IntentSection d={d} entries={entries} onSaved={reload} />
 
@@ -325,7 +332,16 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
         src === "resume" ? <><b>{agent}</b> resumed session {s}</> : src === "clear" ? <><b>{agent}</b> cleared into session {s}</> : <><b>{agent}</b> started session {s}</>,
       );
     }
+    case "question":
+      return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, e.actor.type === "agent" ? appName(String(e.actor.id).split("@")[0]) : "You", `asked ${data.to === "me" ? "you" : data.to}${data.subject ? ` · ${data.subject}` : ""} (#${data.message})`, `${e.body || ""}\n\nOptions: ${(data.options || []).join(" · ")}`, "ask");
+    case "decision":
+      return comment(e.actor.type === "person" ? you : <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} />, e.actor.type === "person" ? "You" : appName(String(e.actor.id).split("@")[0]), `chose “${data.choice}” (#${data.replies_to})`, e.body && e.body !== data.choice ? e.body : `**${data.choice}**`, e.actor.type === "person" ? "you" : "");
     case "note":
+      if (data.message) {
+        const writer = e.actor.type === "agent" ? appName(String(e.actor.id).split("@")[0]) : "You";
+        const verb = data.replies_to ? `replied to #${data.replies_to}` : data.to === "me" ? `wrote to you${data.subject ? ` · ${data.subject}` : ""}` : `wrote to ${data.to}`;
+        return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, writer, verb, e.body || "", e.actor.type === "person" ? "you" : "");
+      }
       if (data.via === "prompt") return comment(you, "You", `asked ${agent}`, e.body || "", "you");
       if (data.via === "message") return comment(hubA, "rex-inbox", "delivered a message", e.body || "");
       if (e.actor.type === "agent") return comment(app, agent, "noted", e.body || "");

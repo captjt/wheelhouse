@@ -14,8 +14,9 @@ run today. `[x]` is built and checked; `[ ]` is next.
 - [ ] The app on your tailnet, answering only you (`wh web`)
 - [ ] Notifications on the Mac: what needs you, failures, messages
 - [ ] Start an agent from the app or `wh start`, on a docket
-- [ ] Messages: `wh send --to me|PANE`, `reply`, `inbox`, `read`,
-      `wait`, `name`, options as buttons, delivered between turns
+- [x] Messages: `wh send --to me|PANE`, `reply`, `inbox`, `read`,
+      `wait`, `name`, `whoami`, options as buttons, delivered between turns,
+      each on the record (questions, decisions, notes on the thread)
 - [ ] The `wheelhouse` agent skill, and the global agent instructions
 - [ ] Web Push on the phone
 - [ ] Previews: `wh share PORT`

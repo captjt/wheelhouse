@@ -74,6 +74,8 @@ type Hub = {
   note: (id: string, body: string) => Promise<void>;
   openInRex: (id: string) => Promise<void>;
   answer: (d: Docket, approve: boolean) => Promise<void>;
+  replyTo: (id: number, body: string, choice?: string) => Promise<void>;
+  fileMessage: (id: number) => Promise<void>;
   create: (title: string, note?: string) => Promise<string>;
 };
 
@@ -123,6 +125,15 @@ export function HubProvider({ children }: { children: ReactNode }) {
         },
       );
     },
+    replyTo: (id, body, choice) =>
+      post<{ to: string; choice?: string }>(`/api/messages/${id}/reply`, { body, choice }).then(
+        (r) => {
+          toast(`${choice ? `Chose ${choice}` : "Replied"} · it goes to ${r.to} between turns`);
+          reload();
+        },
+        fail,
+      ),
+    fileMessage: (id) => post(`/api/messages/${id}/done`).then(reload, fail),
     create: async (title, note) => {
       const r = await post<{ docket: string }>("/api/dockets", { title }).catch(fail);
       if (note?.trim()) await post(`/api/dockets/${r.docket}/note`, { body: note }).catch(fail);

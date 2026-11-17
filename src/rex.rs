@@ -109,6 +109,11 @@ impl Rex {
         self.api(Some(session), "block.event", &params).await.map(|_| ())
     }
 
+    /// `rex block rename -s SESSION BLOCK NAME`.
+    pub async fn rename_block(&self, session: &str, block: &str, name: &str) -> Result<()> {
+        self.run(&["block", "rename", "-s", session, block, name], None).await.map(|_| ())
+    }
+
     /// `rex send-key -s SESSION -b BLOCK KEY...`.
     pub async fn send_keys(&self, session: &str, block: &str, keys: &[&str]) -> Result<()> {
         let mut args = vec!["send-key", "-s", session, "-b", block];

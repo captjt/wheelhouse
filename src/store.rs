@@ -7,6 +7,26 @@ use std::path::Path;
 
 use crate::record::{DocketState, Stored, chain, hex};
 
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct Message {
+    pub id: i64,
+    pub docket: Option<String>,
+    pub seq: Option<i64>,
+    pub from_addr: String,
+    pub from_block: Option<String>,
+    pub to_addr: String,
+    pub to_block: Option<String>,
+    pub subject: Option<String>,
+    pub body: String,
+    pub options: Vec<String>,
+    pub reply_to: Option<i64>,
+    pub choice: Option<String>,
+    pub status: String,
+    pub why: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 pub struct Store {
     conn: Connection,
 }
@@ -28,6 +48,24 @@ CREATE TABLE IF NOT EXISTS dockets (  -- derived
   id TEXT PRIMARY KEY,
   n INTEGER NOT NULL,
   state TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS messages (  -- numbering and delivery; the content is also on the record
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  docket TEXT,
+  seq INTEGER,
+  from_addr TEXT NOT NULL,
+  from_block TEXT,
+  to_addr TEXT NOT NULL,
+  to_block TEXT,
+  subject TEXT,
+  body TEXT NOT NULL,
+  options TEXT NOT NULL DEFAULT '[]',
+  reply_to INTEGER,
+  choice TEXT,
+  status TEXT NOT NULL,   -- open (to you) | queued | delivered | read | answered | done | failed
+  why TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS keys (
   keyid TEXT PRIMARY KEY,
@@ -128,6 +166,58 @@ impl Store {
         let mut st = self.conn.prepare("SELECT DISTINCT docket FROM entries")?;
         let rows = st.query_map([], |r| r.get::<_, String>(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn insert_message(&mut self, m: &Message) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO messages (docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+            params![m.docket, m.seq, m.from_addr, m.from_block, m.to_addr, m.to_block, m.subject, m.body, serde_json::to_string(&m.options)?, m.reply_to, m.choice, m.status, m.created_at],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn message(&self, id: i64) -> Result<Option<Message>> {
+        Ok(self.messages_where("id = ?1", params![id])?.into_iter().next())
+    }
+
+    pub fn messages_where(&self, cond: &str, args: impl rusqlite::Params) -> Result<Vec<Message>> {
+        let sql = format!(
+            "SELECT id, docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, why, created_at, updated_at
+             FROM messages WHERE {cond} ORDER BY id"
+        );
+        let mut st = self.conn.prepare(&sql)?;
+        let rows = st.query_map(args, |r| {
+            Ok(Message {
+                id: r.get(0)?,
+                docket: r.get(1)?,
+                seq: r.get(2)?,
+                from_addr: r.get(3)?,
+                from_block: r.get(4)?,
+                to_addr: r.get(5)?,
+                to_block: r.get(6)?,
+                subject: r.get(7)?,
+                body: r.get(8)?,
+                options: serde_json::from_str(&r.get::<_, String>(9)?).unwrap_or_default(),
+                reply_to: r.get(10)?,
+                choice: r.get(11)?,
+                status: r.get(12)?,
+                why: r.get(13)?,
+                created_at: r.get(14)?,
+                updated_at: r.get(15)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_message_place(&mut self, id: i64, docket: &str, seq: i64) -> Result<()> {
+        self.conn.execute("UPDATE messages SET docket = ?2, seq = ?3 WHERE id = ?1", params![id, docket, seq])?;
+        Ok(())
+    }
+
+    pub fn set_message_status(&mut self, id: i64, status: &str, why: Option<&str>) -> Result<()> {
+        self.conn.execute("UPDATE messages SET status = ?2, why = ?3, updated_at = ?4 WHERE id = ?1", params![id, status, why, crate::time::now_ms()])?;
+        Ok(())
     }
 
     pub fn put_key(&mut self, keyid: &str, name: &str, at: &str) -> Result<()> {
