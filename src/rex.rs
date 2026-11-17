@@ -28,6 +28,14 @@ pub fn rex_bin() -> PathBuf {
     crate::paths::home().join(APP_REX)
 }
 
+/// A new agent's pane, as Rex made it.
+#[derive(Debug)]
+pub struct Created {
+    pub session_id: String,
+    pub window_id: Option<String>,
+    pub block_id: String,
+}
+
 /// The local Rex server. Other hosts come later.
 #[derive(Clone, Debug, Default)]
 pub struct Rex;
@@ -107,6 +115,41 @@ impl Rex {
     pub async fn paste(&self, session: &str, block: &str, text: &str) -> Result<()> {
         let params = serde_json::json!({ "block_id": block, "event": { "type": "paste", "payload": { "text": text } } });
         self.api(Some(session), "block.event", &params).await.map(|_| ())
+    }
+
+    /// Start `argv` in a new tab of a session, named `label`, in `cwd`,
+    /// without taking focus. With no session id, make the session named
+    /// `name` first. (From rex-inbox.)
+    pub async fn start(&self, session: Option<&str>, name: &str, label: &str, cwd: &str, argv: &[&str]) -> Result<Created> {
+        let created = match session {
+            Some(sid) => {
+                let mut args = vec!["run", "-s", sid, "--label", label, "-c", cwd, "--focus=false", "--json", "--"];
+                args.extend_from_slice(argv);
+                let v = self.run_json(&args, None).await?;
+                Created {
+                    session_id: sid.to_string(),
+                    window_id: v["window_id"].as_str().map(str::to_string),
+                    block_id: v["block_ids"][0].as_str().context("rex run: no block")?.to_string(),
+                }
+            }
+            None => {
+                let mut args = vec!["new", name, "-c", cwd, "--window", label, "--json", "--"];
+                args.extend_from_slice(argv);
+                let v = self.run_json(&args, None).await?;
+                let w = &v["initial_windows"][0];
+                let c = Created {
+                    session_id: v["session_id"].as_str().context("rex new: no session")?.to_string(),
+                    window_id: w["window_id"].as_str().map(str::to_string),
+                    block_id: w["block_ids"][0].as_str().context("rex new: no block")?.to_string(),
+                };
+                self.run(&["block", "rename", "-s", &c.session_id, &c.block_id, label], None).await?;
+                c
+            }
+        };
+        if let Some(w) = &created.window_id {
+            let _ = self.run(&["window", "rename", "-s", &created.session_id, w, label], None).await;
+        }
+        Ok(created)
     }
 
     /// `rex block rename -s SESSION BLOCK NAME`.

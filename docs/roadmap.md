@@ -10,19 +10,23 @@ run today. `[x]` is built and checked; `[ ]` is next.
 - [x] The app: Inbox, lists, board, docket pages, ⌘K, Cloudflare theme
 - [x] The pane from any device; messages to an agent between turns
 - [x] Guarded approve and deny for Claude Code's permission prompts
-- [ ] The hub as a LaunchAgent: `wh up`, `down`, `logs`, `status`
-- [ ] The app on your tailnet, answering only you (`wh web`)
-- [ ] Notifications on the Mac: what needs you, failures, messages
-- [ ] Start an agent from the app or `wh start`, on a docket
+- [x] The hub as a LaunchAgent: `wh up`, `down`, `logs`, `status`
+- [x] The app on your tailnet, answering only you (`wh web --publish`)
+- [x] Notifications on the Mac: what needs you, failures, messages
+      (quiet for prompts and failures while rex-inbox runs)
+- [x] Start an agent from the app or `wh start`, on a docket
 - [x] Messages: `wh send --to me|PANE`, `reply`, `inbox`, `read`,
       `wait`, `name`, `whoami`, options as buttons, delivered between turns,
       each on the record (questions, decisions, notes on the thread)
-- [ ] The `wheelhouse` agent skill, and the global agent instructions
+- [x] The `wheelhouse` agent skill (`wh skill install`)
+- [ ] The global agent instructions point at Wheelhouse (at switch-over)
 - [ ] Web Push on the phone
 - [ ] Previews: `wh share PORT`
 - [ ] Other Rex hosts
 - [ ] Codex's prompt keys
 - [ ] `wh import`: history from rex-inbox, rex-reviewer, rex-develop
+- [ ] A bridge to rex-reviewer until Review lands: its "ready to post"
+      reviews in the Inbox with Post and Dismiss, as rex-inbox does
 - [ ] Switch over: rex-inbox down, its hook and skill removed
 
 ## Dockets as the living source of truth

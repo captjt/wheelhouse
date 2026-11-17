@@ -62,6 +62,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/messages/{n}/done", post(messages_done))
         .route("/api/panes/name", post(pane_name))
         .route("/api/whoami", get(whoami))
+        .route("/api/agents/start", post(start_agent))
         .route("/api/hook", post(hook))
         .route("/api/events", get(events))
         .fallback(asset)
@@ -709,6 +710,22 @@ async fn whoami(State(shared): State<Shared>, axum::extract::Query(q): axum::ext
     let who = crate::messages::caller(&core, q.block.as_deref());
     let docket = who.block.as_deref().and_then(|b| agents::docket_of(&core, b));
     Ok(Json(json!({ "addr": who.addr, "docket": docket, "agent": who.block.is_some() })))
+}
+
+#[derive(Deserialize)]
+struct StartReq {
+    #[serde(default)]
+    app: String,
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+async fn start_agent(State(shared): State<Shared>, Json(req): Json<StartReq>) -> ApiResult {
+    crate::start::start(&shared, &req.app, &req.cwd, req.prompt.as_deref(), req.title.as_deref()).await.map(Json).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))
 }
 
 async fn verify_all(State(shared): State<Shared>) -> ApiResult {

@@ -81,7 +81,7 @@ function App() {
   const hub = useHub();
   const route = useRoute();
   const [palette, setPalette] = useState(false);
-  const [creating, setCreating] = useState<false | "blank" | "linear">(false);
+  const [creating, setCreating] = useState<false | "blank" | "linear" | "agent">(false);
   const [nav, setNav] = useState(false);
   const page = route[0] || "view";
 
@@ -127,6 +127,7 @@ function App() {
   const closePalette = useCallback(() => setPalette(false), []);
   const openNew = useCallback(() => setCreating("blank"), []);
   const openNewLinear = useCallback(() => setCreating("linear"), []);
+  const openNewAgent = useCallback(() => setCreating("agent"), []);
 
   const sessions = useMemo(() => {
     const m = new Map<string, number>();
@@ -232,8 +233,8 @@ function App() {
         </button>
         {main}
       </main>
-      {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} context={context} />}
-      {creating && <NewDocket linear={creating === "linear"} onClose={() => setCreating(false)} />}
+      {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} onNewAgent={openNewAgent} context={context} />}
+      {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} onClose={() => setCreating(false)} />}
     </div>
   );
 }

@@ -41,6 +41,9 @@ pub struct Tracked {
     /// The blocked record already written, by its report time.
     blocked_seen: Option<String>,
     missing_since: Option<Instant>,
+    /// A prompt Wheelhouse already recorded (one it started the agent with):
+    /// the agent's own hook reports it again, once.
+    pending_prompt: Option<String>,
 }
 
 struct PendingTurn {
@@ -67,6 +70,7 @@ pub fn load(core: &mut Core) -> Result<()> {
             root: None,
             blocked_seen: None,
             missing_since: None,
+            pending_prompt: None,
         });
     }
     Ok(())
@@ -171,9 +175,27 @@ fn open_for(core: &mut Core, a: AgentRef, session: Option<&str>, source: Option<
             root: None,
             blocked_seen: None,
             missing_since: None,
+            pending_prompt: None,
         },
     );
     Ok(id)
+}
+
+/// Track a pane Wheelhouse started on a docket it already opened.
+pub fn adopt(core: &mut Core, docket: &str, a: &AgentRef, prompt: Option<&str>) {
+    core.agents.by_block.insert(
+        a.block.clone(),
+        Tracked {
+            docket: docket.to_string(),
+            app: a.app.clone(),
+            session: None,
+            state: None,
+            root: None,
+            blocked_seen: None,
+            missing_since: None,
+            pending_prompt: prompt.map(str::to_string),
+        },
+    );
 }
 
 /// Write what changed in a tracked pane's program status.
@@ -188,6 +210,7 @@ fn status(core: &mut Core, p: &Pane) -> Result<()> {
         if state != t.state || seen != t.blocked_seen {
             let data = json!({ "what": h.state, "kind": h.kind, "record": h.id, "title": h.title });
             core.append(&t.docket, "observed", &Who::Hub, h.msg.clone(), data)?;
+            let _ = core.events.send(json!({ "type": "needs", "docket": t.docket, "block": p.block_id, "what": h.state, "updated_at": h.updated_at }));
             if let Some(tt) = core.agents.by_block.get_mut(&p.block_id) {
                 tt.blocked_seen = seen;
             }
@@ -327,6 +350,12 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
                 claim(core, block, s, "startup")?;
             }
             let docket = core.agents.by_block[block].docket.clone();
+            if let Some(t) = core.agents.by_block.get_mut(block)
+                && t.pending_prompt.as_deref() == Some(prompt)
+            {
+                t.pending_prompt = None;
+                return Ok(json!({ "docket": docket }));
+            }
             if prompt.starts_with("[rex-inbox]") || prompt.starts_with("[wheelhouse]") {
                 core.append(&docket, "note", &Who::Hub, Some(prompt.to_string()), json!({ "via": "message" }))?;
             } else {

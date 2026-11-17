@@ -1612,6 +1612,39 @@ code {
   font-weight: 500;
   margin-bottom: 2px;
 }
+.nd-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+.nd-label {
+  width: 52px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.nd-input {
+  flex: 1;
+  font: 13px var(--mono);
+  color: var(--text);
+  background: var(--control);
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  padding: 6px 9px;
+  outline: none;
+}
+.nd-input:focus {
+  border-color: color-mix(in oklch, var(--focus) 55%, var(--line-2));
+}
+.nd-prompt {
+  font-size: 14px;
+  color: var(--text);
+}
+.nd-row .seg button {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+}
 .new-docket .nd-head .seg button {
   width: auto;
   padding: 0 10px;

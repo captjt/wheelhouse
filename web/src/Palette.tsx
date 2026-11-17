@@ -27,7 +27,19 @@ function score(q: string, text: string): number {
   return -1;
 }
 
-export function Palette({ onClose, onNew, onNewLinear, context }: { onClose: () => void; onNew: () => void; onNewLinear: () => void; context?: Docket }) {
+export function Palette({
+  onClose,
+  onNew,
+  onNewLinear,
+  onNewAgent,
+  context,
+}: {
+  onClose: () => void;
+  onNew: () => void;
+  onNewLinear: () => void;
+  onNewAgent: () => void;
+  context?: Docket;
+}) {
   const hub = useHub();
   const pane = usePane();
   const toast = useToast();
@@ -51,6 +63,7 @@ export function Palette({ onClose, onNew, onNewLinear, context }: { onClose: () 
     }
     out.push(
       { id: "new", group: "Create", label: "New docket", icon: <IconPlus size={15} />, hint: <Kbd>C</Kbd>, run: onNew },
+      { id: "new-agent", group: "Create", label: "Start an agent on a new docket", icon: <IconAgents size={15} />, keywords: "claude codex start run", run: () => onNewAgent() },
       { id: "new-linear", group: "Create", label: "New docket from a Linear issue", icon: <IconIssue size={15} />, keywords: "linear issue import", run: () => onNewLinear() },
       { id: "inbox", group: "Go to", label: "Inbox", icon: <IconInbox size={15} />, hint: <><Kbd>G</Kbd><Kbd>I</Kbd></>, run: () => go("/inbox") },
       { id: "active", group: "Go to", label: "Active dockets", icon: <IconActive size={15} />, hint: <><Kbd>G</Kbd><Kbd>A</Kbd></>, run: () => go("/view/active") },
@@ -86,7 +99,7 @@ export function Palette({ onClose, onNew, onNewLinear, context }: { onClose: () 
         run: () => go(`/d/${d.id}`),
       });
     return out;
-  }, [hub, pane, context, onNew, onNewLinear, toast]);
+  }, [hub, pane, context, onNew, onNewLinear, onNewAgent, toast]);
 
   const shown = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -149,10 +162,13 @@ export function Palette({ onClose, onNew, onNewLinear, context }: { onClose: () 
   );
 }
 
-export function NewDocket({ onClose, linear }: { onClose: () => void; linear?: boolean }) {
+export function NewDocket({ onClose, linear, agent }: { onClose: () => void; linear?: boolean; agent?: boolean }) {
   const hub = useHub();
   const toast = useToast();
-  const [mode, setMode] = useState<"blank" | "linear">(linear ? "linear" : "blank");
+  const [mode, setMode] = useState<"blank" | "linear" | "agent">(agent ? "agent" : linear ? "linear" : "blank");
+  const [cwd, setCwd] = useState("");
+  const [app, setApp] = useState<"claude-code" | "codex">("claude-code");
+  const folders = Array.from(new Set((hub.state?.dockets ?? []).map((d) => d.agent?.cwd).filter((c): c is string => !!c && !c.includes("/.local/share/")))).sort();
   const [opening, setOpening] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
@@ -184,9 +200,71 @@ export function NewDocket({ onClose, linear }: { onClose: () => void; linear?: b
         <button className={mode === "linear" ? "on" : ""} onClick={() => setMode("linear")} title="From a Linear issue">
           From Linear
         </button>
+        <button className={mode === "agent" ? "on" : ""} onClick={() => setMode("agent")} title="Start an agent on a new docket">
+          Agent
+        </button>
       </div>
     </div>
   );
+  if (mode === "agent") {
+    const startIt = () => {
+      if (busy || !cwd.trim()) return;
+      setBusy(true);
+      post<{ docket: string }>("/api/agents/start", { app, cwd: cwd.trim(), prompt: note, title: title || undefined }).then(
+        (r) => {
+          toast(`${r.docket}: ${app === "codex" ? "Codex" : "Claude Code"} started in wheelhouse/${r.docket}`);
+          hub.reload();
+          onClose();
+          go(`/d/${r.docket}`);
+        },
+        (e: Error) => (setBusy(false), toast(e.message, "error")),
+      );
+    };
+    const keys = (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), startIt());
+    };
+    return (
+      <Modal onClose={onClose} className="new-docket">
+        {head}
+        <textarea
+          autoFocus
+          className="nd-note nd-prompt"
+          placeholder="What should the agent do? (its first prompt; the docket is named from it)"
+          value={note}
+          rows={5}
+          onChange={(e) => setNote(e.target.value)}
+          onKeyDown={keys}
+        />
+        <div className="nd-row">
+          <label className="nd-label">Folder</label>
+          <input className="nd-input" list="wh-folders" placeholder="~/git/project" value={cwd} onChange={(e) => setCwd(e.target.value)} onKeyDown={keys} />
+          <datalist id="wh-folders">
+            {folders.map((f) => (
+              <option key={f} value={f} />
+            ))}
+          </datalist>
+        </div>
+        <div className="nd-row">
+          <label className="nd-label">Agent</label>
+          <div className="seg">
+            <button className={app === "claude-code" ? "on" : ""} onClick={() => setApp("claude-code")}>
+              Claude Code
+            </button>
+            <button className={app === "codex" ? "on" : ""} onClick={() => setApp("codex")}>
+              Codex
+            </button>
+          </div>
+        </div>
+        <div className="nd-foot">
+          <span className="muted small">A new tab in Rex's wheelhouse session, named after the docket.</span>
+          <span className="spacer" />
+          <button className="btn btn-primary" disabled={!cwd.trim() || busy} onClick={startIt}>
+            {busy ? "Starting…" : "Start agent"} <Kbd>⌘↩</Kbd>
+          </button>
+        </div>
+      </Modal>
+    );
+  }
   if (mode === "linear")
     return (
       <Modal onClose={onClose} className="new-docket">

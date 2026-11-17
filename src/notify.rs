@@ -1,0 +1,114 @@
+//! Mac notifications for what needs you: an agent waiting on a prompt or
+//! failed, and a message to you. `WH_NOTIFY=off` turns them off.
+//!
+//! Each waits two seconds and is dropped if it resolved meanwhile. While
+//! rex-inbox runs, it already notifies for prompts and failures, so
+//! Wheelhouse notifies only for its own messages. With terminal-notifier on
+//! PATH, a click opens the docket; otherwise osascript posts it.
+
+use serde_json::Value;
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+use crate::hub::Shared;
+
+const GRACE: Duration = Duration::from_secs(2);
+const BURST: usize = 5;
+const WINDOW: Duration = Duration::from_secs(30);
+
+pub async fn run(shared: Shared) {
+    if std::env::var("WH_NOTIFY").is_ok_and(|v| v == "off" || v == "0") {
+        return;
+    }
+    let mut rx = shared.lock().events.subscribe();
+    let mut recent: VecDeque<Instant> = VecDeque::new();
+    loop {
+        let ev = match rx.recv().await {
+            Ok(ev) => ev,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(_) => return,
+        };
+        let kind = ev["type"].as_str().unwrap_or_default();
+        if kind != "needs" && !(kind == "message" && ev["to"] == "me") {
+            continue;
+        }
+        if kind == "needs" && rex_inbox_running() {
+            continue;
+        }
+        let shared = shared.clone();
+        while recent.front().is_some_and(|t| t.elapsed() > WINDOW) {
+            recent.pop_front();
+        }
+        if recent.len() >= BURST {
+            continue;
+        }
+        recent.push_back(Instant::now());
+        tokio::spawn(async move {
+            tokio::time::sleep(GRACE).await;
+            if let Some((title, subtitle, body, url, group)) = still_due(&shared, &ev) {
+                post(&title, &subtitle, &body, &url, &group).await;
+            }
+        });
+    }
+}
+
+/// The notification, if what it's about still needs you.
+fn still_due(shared: &Shared, ev: &Value) -> Option<(String, String, String, String, String)> {
+    let core = shared.lock();
+    let base = format!("http://{}", crate::server::http_addr().map(|a| a.to_string()).unwrap_or_else(|| "127.0.0.1:7500".into()));
+    match ev["type"].as_str()? {
+        "needs" => {
+            let block = ev["block"].as_str()?;
+            let p = core.mirror.panes.get(block)?;
+            let h = p.headline()?;
+            if h.state != ev["what"].as_str()? || h.updated_at.as_deref() != ev["updated_at"].as_str() {
+                return None;
+            }
+            let docket = ev["docket"].as_str()?.to_string();
+            let title = core.store.state(&docket).ok()??.title;
+            let app = crate::mirror::app_name(p.app().unwrap_or("agent")).to_string();
+            let what = if h.state == "error" { "failed".to_string() } else { h.kind.clone().map(|k| format!("waits on you ({k})")).unwrap_or("waits on you".into()) };
+            Some((format!("{app} {what}"), format!("{docket} · {title}"), h.msg.clone().unwrap_or_default(), format!("{base}/#/d/{docket}"), format!("wh-{docket}")))
+        }
+        "message" => {
+            let m = core.store.message(ev["id"].as_i64()?).ok()??;
+            if m.status != "open" {
+                return None;
+            }
+            let from = crate::messages::view(&core, &m)["from_app"].as_str().map(str::to_string).unwrap_or(m.from_addr.clone());
+            let title = if m.options.is_empty() { format!("{from} wrote to you") } else { format!("{from} asks you") };
+            let sub = [m.docket.clone(), m.subject.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            let url = m.docket.as_ref().map(|d| format!("{base}/#/d/{d}")).unwrap_or(format!("{base}/#/inbox"));
+            Some((title, sub, m.body.lines().next().unwrap_or_default().to_string(), url, format!("wh-msg-{}", m.id)))
+        }
+        _ => None,
+    }
+}
+
+fn rex_inbox_running() -> bool {
+    let sock = crate::paths::home().join(".local/state/rex-inbox/hub.sock");
+    std::os::unix::net::UnixStream::connect(sock).is_ok()
+}
+
+fn on_path(bin: &str) -> Option<std::path::PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(bin)).find(|p| p.is_file())
+}
+
+async fn post(title: &str, subtitle: &str, body: &str, url: &str, group: &str) {
+    let r = match on_path("terminal-notifier") {
+        Some(tn) => {
+            tokio::process::Command::new(tn)
+                .args(["-title", title, "-subtitle", subtitle, "-message", if body.is_empty() { " " } else { body }, "-open", url, "-group", group])
+                .output()
+                .await
+        }
+        None => {
+            let q = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+            let script = format!("display notification \"{}\" with title \"{}\" subtitle \"{}\"", q(body), q(title), q(subtitle));
+            tokio::process::Command::new("osascript").args(["-e", &script]).output().await
+        }
+    };
+    if let Err(e) = r {
+        say!("notify: {e}");
+    }
+}

@@ -9,6 +9,7 @@ mod agents;
 mod brief;
 mod linear;
 mod messages;
+mod notify;
 mod approve;
 mod client;
 mod follow;
@@ -20,6 +21,7 @@ mod record;
 mod rex;
 mod server;
 mod service;
+mod start;
 mod tailnet;
 mod store;
 mod time;
@@ -101,6 +103,18 @@ enum Cmd {
     Name { name: String },
     /// This pane's address and docket.
     Whoami,
+    /// Start Claude Code (or Codex) on a new docket, in a folder, with a prompt.
+    Start {
+        #[arg(long)]
+        codex: bool,
+        #[arg(short = 'C', long, default_value = ".")]
+        dir: String,
+        #[arg(long)]
+        title: Option<String>,
+        prompt: Option<String>,
+    },
+    /// The agents' skill for Wheelhouse: show, install, or remove.
+    Skill { action: Option<String> },
     /// Store a Linear API key in the Keychain.
     SetupLinear,
     /// Add a note to a docket. From an agent's pane, the note is the agent's.
@@ -170,6 +184,16 @@ fn main() {
         Some(Cmd::Intent { docket, text }) => intent(&normalize(&docket), text),
         Some(Cmd::Brief { docket }) => brief(docket.as_deref().map(normalize)),
         Some(Cmd::SetupLinear) => linear::setup(),
+        Some(Cmd::Start { codex, dir, title, prompt }) => {
+            let cwd = std::fs::canonicalize(&dir).map(|p| p.to_string_lossy().into_owned()).unwrap_or(dir);
+            let prompt = match prompt.as_deref() {
+                Some("-") => text_or_stdin(prompt.clone()).ok(),
+                _ => prompt,
+            };
+            client::json("POST", "/api/agents/start", Some(&json!({ "app": if codex { "codex" } else { "claude-code" }, "cwd": cwd, "prompt": prompt, "title": title })))
+                .map(|v| println!("{} started in {}: wheelhouse/{}", if codex { "Codex" } else { "Claude Code" }, v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?")))
+        }
+        Some(Cmd::Skill { action }) => skill(action.as_deref()),
         Some(Cmd::Send { to, subject, options, text }) => msg_send(&to, subject, options, text),
         Some(Cmd::Reply { n, choice, text }) => msg_reply(n, choice, text),
         Some(Cmd::Inbox { json }) => msg_inbox(json),
@@ -229,8 +253,32 @@ fn serve() -> Result<()> {
         tokio::spawn(tailnet::watch(shared.clone()));
         tokio::spawn(linear::follow(shared.clone()));
         tokio::spawn(messages::deliver_loop(shared.clone()));
+        tokio::spawn(notify::run(shared.clone()));
         server::serve(shared).await
     })
+}
+
+const SKILL: &str = include_str!("../skills/wheelhouse/SKILL.md");
+
+/// `wh skill [show|install|remove]`: the agents' skill, in ~/.claude/skills.
+fn skill(action: Option<&str>) -> Result<()> {
+    let dir = paths::home().join(".claude/skills/wheelhouse");
+    let file = dir.join("SKILL.md");
+    match action.unwrap_or("show") {
+        "show" => print!("{SKILL}"),
+        "install" => {
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(&file, SKILL)?;
+            println!("installed {}", paths::tilde(&file.to_string_lossy()));
+        }
+        "remove" => {
+            let _ = std::fs::remove_file(&file);
+            let _ = std::fs::remove_dir(&dir);
+            println!("removed {}", paths::tilde(&file.to_string_lossy()));
+        }
+        other => bail!("wh skill takes show, install or remove, not {other}"),
+    }
+    Ok(())
 }
 
 fn block_q(sep: &str) -> String {
