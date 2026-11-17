@@ -4,8 +4,9 @@ import { createRoot } from "react-dom/client";
 import type { Docket } from "./api";
 import { DocketScreen } from "./Docket";
 import { InboxView, inboxItems } from "./Inbox";
-import { IconActive, IconAgents, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconPlus, IconPR, IconSearch, IconSun, Logo, SessionIcon } from "./icons";
+import { IconActive, IconAgents, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSun, Logo, SessionIcon } from "./icons";
 import { ReviewsView } from "./Reviews";
+import { RecapView } from "./Recap";
 import { HubProvider, LiveProvider, go, useHub, useRoute, useTheme, type Theme } from "./live";
 import { NewDocket, Palette } from "./Palette";
 import { PaneProvider } from "./Pane";
@@ -116,7 +117,7 @@ function App() {
       if (pending.current) {
         window.clearTimeout(pending.current);
         pending.current = null;
-        const dest = { i: "/inbox", a: "/view/active", d: "/view/all", n: "/agents", x: "/view/done", r: "/reviews" }[e.key];
+        const dest = { i: "/inbox", a: "/view/active", d: "/view/all", n: "/agents", x: "/view/done", r: "/reviews", p: "/recap" }[e.key];
         if (dest) {
           e.preventDefault();
           go(dest);
@@ -161,6 +162,7 @@ function App() {
   else if (page === "inbox") main = <InboxView />;
   else if (page === "agents") main = <AgentsView />;
   else if (page === "reviews") main = <ReviewsView />;
+  else if (page === "recap") main = <RecapView />;
   else if (page === "session" && route[1]) {
     const s = route[1];
     main = (
@@ -209,6 +211,7 @@ function App() {
           {item("/view/all", "All dockets", <IconLayers size={15} />)}
           {item("/view/done", "Done", <IconDone size={15} />)}
           {item("/agents", "Agents", <IconAgents size={15} />, counts.agents)}
+          {item("/recap", "Recap", <IconChart size={15} />)}
         </nav>
         {sessions.length > 0 && (
           <>

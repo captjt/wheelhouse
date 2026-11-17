@@ -68,6 +68,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/push/unsubscribe", post(push_unsubscribe))
         .route("/api/push/test", post(push_test))
+        .route("/api/recap", get(recap))
         .route("/api/review", get(review_status))
         .route("/api/review/check", post(review_check))
         .route("/api/review/settings", post(review_settings))
@@ -796,6 +797,42 @@ async fn push_test(State(shared): State<Shared>) -> ApiResult {
     let note = json!({ "title": "Wheelhouse", "body": "Notifications work. You'll hear when an agent needs you.", "tag": "test", "url": "/" });
     let sent = crate::push::send_all(&shared, &note).await.map_err(internal)?;
     Ok(Json(json!({ "sent": sent })))
+}
+
+// ---- Recap ----
+
+#[derive(Deserialize)]
+struct RecapQ {
+    /// The period's bounds, from the app (in its time zone).
+    #[serde(default)]
+    since: Option<String>,
+    #[serde(default)]
+    until: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    /// Or `today`, `week`, `30d`, ending now (UTC days), for the CLI.
+    #[serde(default)]
+    period: Option<String>,
+}
+
+async fn recap(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<RecapQ>) -> ApiResult {
+    use time::format_description::well_known::Rfc3339;
+    let now = time::OffsetDateTime::now_utc();
+    let (since, until, label) = match (q.since, q.until) {
+        (Some(s), Some(u)) => (s, u, q.label.unwrap_or_else(|| "this period".into())),
+        _ => {
+            let midnight = now.replace_time(time::Time::MIDNIGHT);
+            let (start, label) = match q.period.as_deref().unwrap_or("week") {
+                "today" => (midnight, "today"),
+                "30d" | "month" => (midnight - time::Duration::days(29), "the last 30 days"),
+                _ => (midnight - time::Duration::days(6), "this week"),
+            };
+            let end = midnight + time::Duration::days(1);
+            (start.format(&Rfc3339).unwrap_or_default(), end.format(&Rfc3339).unwrap_or_default(), label.to_string())
+        }
+    };
+    let core = shared.lock();
+    crate::recap::recap(&core, &since, &until, &label).map(Json).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))
 }
 
 // ---- The Review protocol ----

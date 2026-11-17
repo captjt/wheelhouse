@@ -2585,3 +2585,253 @@ code {
     display: none;
   }
 }
+
+/* ---- Recap ---- */
+.rc-periods {
+  margin-left: 8px;
+}
+.rc-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+.rc {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 20px 28px 48px;
+}
+.rc-tiles {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+.rc-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--elev);
+}
+.rc-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.rc-value {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1.25;
+}
+.rc-sub,
+.rc-delta {
+  font-size: 12px;
+  color: var(--muted);
+}
+.rc-delta.up {
+  color: var(--working);
+}
+.rc-spark {
+  position: relative;
+  margin-top: 8px;
+  height: 28px;
+}
+.rc-spark svg {
+  display: block;
+  overflow: visible;
+}
+.rc-dot {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--elev);
+  pointer-events: none;
+}
+.rc-tip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--popover);
+  box-shadow: var(--shadow);
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+.rc-line {
+  margin: 12px 2px 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.rc-section {
+  margin-top: 28px;
+}
+.rc-section h2 {
+  margin: 0 0 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.rc-empty {
+  margin: 12px 2px;
+  font-size: 13px;
+}
+.rc-group {
+  margin-top: 14px;
+}
+.rc-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 2px 4px;
+  font-size: 11.5px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rc-pr {
+  display: flex;
+  gap: 10px;
+  padding: 9px 8px;
+  margin: 0 -8px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+.rc-pr:hover,
+.rc-decision:hover {
+  background: var(--hover);
+}
+.rc-pr-icon {
+  flex: none;
+  width: 18px;
+  padding-top: 2px;
+  display: flex;
+  justify-content: center;
+}
+.rc-pr-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.rc-pr-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.rc-pr-key {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.rc-pr-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.rc-pr-at {
+  flex: none;
+  font-size: 12px;
+}
+.rc-pr-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rc-diff {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.rc-diff .add {
+  color: var(--working);
+}
+.rc-diff .del {
+  color: var(--error);
+}
+.rc-gh {
+  display: inline-flex;
+  color: var(--faint);
+  cursor: pointer;
+}
+.rc-gh:hover {
+  color: var(--link);
+}
+.rc-pr-impl {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.rc-decision {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 8px;
+  margin: 0 -8px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+.rc-choice {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.rc-decision .rc-pr-at {
+  margin-left: auto;
+}
+@media (max-width: 1100px) {
+  .rc-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .rc {
+    padding: 14px 16px 40px;
+  }
+  .rc-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .rc-periods button {
+    padding: 0 7px;
+  }
+  .rc-diff {
+    display: none;
+  }
+}
+.rc-periods button {
+  white-space: nowrap;
+}
+.rc-short {
+  display: none;
+}
+@media (max-width: 760px) {
+  .rc-long {
+    display: none;
+  }
+  .rc-short {
+    display: inline;
+  }
+}

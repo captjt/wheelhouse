@@ -199,3 +199,5 @@ export const IconPR = glyph("M3.2 3.5a1.3 1.3 0 1 0 2.6 0a1.3 1.3 0 1 0-2.6 0M4.
 export const IconPause = glyph("M5.5 3.5v9M10.5 3.5v9");
 export const IconPlay = glyph("M5 3.6v8.8L12 8 5 3.6Z");
 export const IconRefresh = glyph("M13 8a5 5 0 1 1-1.5-3.6M13 2.8v2.6h-2.6");
+export const IconChart = glyph("M2.5 13h11M4.5 10.5v-3M8 10.5V4.5M11.5 10.5V6.5");
+export const IconClipboard = glyph("M5.5 3.5h-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1M6 2.5h4v2H6v-2Z");

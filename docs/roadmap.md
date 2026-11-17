@@ -49,7 +49,9 @@ run today. `[x]` is built and checked; `[ ]` is next.
       your rex-reviewer config read as it is (LuaJIT); its ledger imported
 - [x] The post and its refusals (post-review, ported and tested); effort; guides; briefs
 - [x] The Reviews view, a review panel on each Review docket, ready reviews in the Inbox
-- [ ] Recap
+- [x] Recap: today, this week or 30 days; reviews and their verdicts, PRs
+      merged, waiting or closed, agents' work, your decisions; Copy as
+      Markdown, and `wh recap`
 - [x] Switch over (2026-11-17): rex-reviewer down, `wh review on`, ask mode
       for the first live rounds
 - [ ] Wheelhouse's own Review, once the port has proven itself on real

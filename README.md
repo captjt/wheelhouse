@@ -84,6 +84,7 @@ from Cloudflare's Kumo design system; the tokens are at the top of
 | `wh set D-4 --title … --status done` | Rename, or set the status. |
 | `wh verify [D-4]` | Check ids, order, chain and signatures. |
 | `wh export D-4 > D-4.jsonl`, `wh verify --file D-4.jsonl` | A record that checks without the hub. |
+| `wh recap [today\|week\|30d]` | What happened, as a Markdown note for a standup. |
 | `wh review` | The Review protocol: every PR it follows, and what each needs. |
 | `wh review on`, `off`, `pause`, `resume`, `check` | Turn it on (importing rex-reviewer's ledger), stop new rounds, check GitHub now. |
 | `wh review post-mode ask\|auto\|config` | Who posts a checked review: you, the checker, or the config's choice. |
