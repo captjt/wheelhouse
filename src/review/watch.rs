@@ -47,10 +47,13 @@ pub async fn run(shared: Shared) {
     }
 }
 
+/// What the loop is doing, for the status line: the app hears only changes.
 fn set_doing(shared: &Shared, what: Option<String>) {
     let mut core = shared.lock();
-    core.review.doing = what;
-    core.live_changed();
+    if core.review.doing != what {
+        core.review.doing = what;
+        core.live_changed();
+    }
 }
 
 /// Check GitHub, and apply what it says to every PR.
@@ -314,8 +317,8 @@ pub fn status(shared: &Shared) -> Value {
         .filter(|p| p.state != "cleaned" || p.history.last().is_some())
         .map(|p| {
             let mut v = super::summary(p);
+            let docket = super::docket_of(&core, &p.key());
             v["full_key"] = json!(p.key());
-            v["docket"] = json!(super::docket_of(&core, &p.key()));
             v["head"] = json!(p.head);
             v["round_head"] = json!(p.round_head);
             v["reviewers_done"] = json!(p.reviewers_done);
@@ -326,8 +329,13 @@ pub fn status(shared: &Shared) -> Value {
             v["attention"] = json!(core.review.attention.get(&p.key()));
             v["posted_at"] = json!(p.posted_at);
             v["updated_at"] = json!(p.updated_at);
-            v["history"] = json!(p.history.iter().rev().collect::<Vec<_>>());
+            // History is for a docket's panel; Recap has its own.
+            v["history"] = if docket.is_some() { json!(p.history.iter().rev().collect::<Vec<_>>()) } else { json!([]) };
             v["draft"] = draft_summary(p);
+            v["docket"] = json!(docket);
+            if p.finished() && docket.is_none() {
+                v["implementation"] = Value::Null;
+            }
             v
         })
         .collect();

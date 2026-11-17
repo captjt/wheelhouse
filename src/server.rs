@@ -196,6 +196,15 @@ fn view(core: &crate::hub::Core, st: &DocketState) -> Value {
             Some((end - start).whole_seconds() < 300)
         }) == Some(true);
     let mut v = serde_json::to_value(st).unwrap_or_default();
+    // The list needs the start of a prompt or turn; the docket's own page
+    // reads the whole of it from the record.
+    for k in ["last_prompt", "last_turn"] {
+        if let Some(t) = v[k].as_str()
+            && t.chars().count() > 600
+        {
+            v[k] = json!(format!("{}…", t.chars().take(600).collect::<String>()));
+        }
+    }
     v["live"] = json!(live);
     v["quick"] = json!(quick);
     v["short_head"] = json!(st.short_head());

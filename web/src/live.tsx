@@ -1,20 +1,20 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { get, post, type Docket, type HubState } from "./api";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { getText, post, type Docket, type HubState } from "./api";
 import { useToast } from "./ui";
 
 // One stream of the hub's events for the whole app. Each event bumps a
 // version; data fetches again when it moves.
-const Version = createContext(0);
+const Version = createContext({ n: 0, tick: 0 });
 
 export function LiveProvider({ children }: { children: ReactNode }) {
-  const [version, setVersion] = useState(0);
+  const [version, setVersion] = useState({ n: 0, tick: 0 });
   useEffect(() => {
     let timer: number | undefined;
     let es: EventSource | null = null;
     let retry: number | undefined;
     const bump = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => setVersion((v) => v + 1), 100);
+      timer = window.setTimeout(() => setVersion((v) => ({ ...v, n: v.n + 1 })), 150);
     };
     const connect = () => {
       es = new EventSource("/api/events");
@@ -27,7 +27,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     };
     connect();
     // Ages ("4m") move on even when nothing happens.
-    const tick = window.setInterval(() => setVersion((v) => v + 1), 30000);
+    const tick = window.setInterval(() => setVersion((v) => ({ n: v.n + 1, tick: v.tick + 1 })), 30000);
     return () => {
       es?.close();
       window.clearTimeout(timer);
@@ -43,17 +43,40 @@ export function useData<T>(path: string | null): { data: T | null; error: string
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
+  // One fetch at a time; what changes meanwhile is fetched once after it.
+  // An answer the same as the last isn't re-rendered, except on the clock's
+  // tick, when ages move on.
+  const flight = useRef<{ busy: boolean; again: boolean; text: string | null; path: string | null }>({ busy: false, again: false, text: null, path: null });
+  const ticked = useRef(0);
   useEffect(() => {
     if (!path) return;
+    const f = flight.current;
+    if (f.path !== path) {
+      f.path = path;
+      f.text = null;
+    }
+    const tick = version.tick !== ticked.current;
+    ticked.current = version.tick;
     let live = true;
-    get<T>(path)
-      .then((d) => {
-        if (live) {
-          setData(d);
-          setError(null);
-        }
-      })
-      .catch((e: Error) => live && setError(e.message));
+    const run = () => {
+      f.busy = true;
+      f.again = false;
+      getText(path)
+        .then((text) => {
+          if (live && f.path === path && (tick || text !== f.text)) {
+            f.text = text;
+            setData(JSON.parse(text) as T);
+          }
+          if (live) setError(null);
+        })
+        .catch((e: Error) => live && setError(e.message))
+        .finally(() => {
+          f.busy = false;
+          if (live && f.again) run();
+        });
+    };
+    if (f.busy) f.again = true;
+    else run();
     return () => {
       live = false;
     };

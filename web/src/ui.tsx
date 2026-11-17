@@ -179,17 +179,19 @@ export function Prose({ text }: { text: string }) {
       while (i < lines.length && /^\s*([-*+•]|\d+[.)])\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*([-*+•]|\d+[.)])\s+/, ""));
       const kids = items.map((t, k) => <li key={k}>{inline(t)}</li>);
       blocks.push(ordered ? <ol key={blocks.length}>{kids}</ol> : <ul key={blocks.length}>{kids}</ul>);
-    } else if (/^#{1,6}\s/.test(line)) {
+    } else if (/^\s*#{1,6}\s/.test(line)) {
       blocks.push(
         <p key={blocks.length} className="prose-h">
-          {inline(line.replace(/^#+\s*/, ""))}
+          {inline(line.replace(/^\s*#+\s*/, ""))}
         </p>,
       );
       i++;
     } else if (line.trim() === "") {
       i++;
     } else {
-      const para: string[] = [];
+      // A paragraph always takes its first line, so a line no branch above
+      // claims can never stall the loop.
+      const para: string[] = [lines[i++]];
       while (i < lines.length && lines[i].trim() !== "" && !/^\s*(```|~~~|[-*+•]\s|\d+[.)]\s|#{1,6}\s)/.test(lines[i])) para.push(lines[i++]);
       blocks.push(<p key={blocks.length}>{inline(para.join(" "))}</p>);
     }

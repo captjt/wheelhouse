@@ -240,6 +240,23 @@ async function handle<T>(res: Response): Promise<T> {
   return body as T;
 }
 
+/** A GET's body as text, so a caller can tell an unchanged answer cheaply. */
+export async function getText(path: string): Promise<string> {
+  const res = await fetch(path, { headers: { Accept: "application/json" } });
+  const text = await res.text();
+  if (!res.ok) {
+    let msg = text;
+    try {
+      const b = JSON.parse(text);
+      if (b && typeof b === "object" && "error" in b) msg = String(b.error);
+    } catch {
+      /* plain text */
+    }
+    throw new Error(msg || `${res.status}`);
+  }
+  return text;
+}
+
 export async function get<T>(path: string): Promise<T> {
   return handle<T>(await fetch(path, { headers: { Accept: "application/json" } }));
 }
