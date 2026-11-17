@@ -389,7 +389,9 @@ fn print_review_status(v: &Value) {
     if let Some(d) = v["doing"].as_str() {
         println!("now      {d}");
     }
-    for p in v["prs"].as_array().into_iter().flatten() {
+    let prs: Vec<&Value> = v["prs"].as_array().into_iter().flatten().collect();
+    let done = prs.iter().filter(|p| matches!(p["state"].as_str(), Some("merged" | "closed" | "cleaned" | "unrequested")) && p["attention"].is_null()).count();
+    for p in prs.iter().filter(|p| !matches!(p["state"].as_str(), Some("merged" | "closed" | "cleaned" | "unrequested")) || !p["attention"].is_null()) {
         let phase = p["phase"].as_str().map(|x| format!("/{x}")).unwrap_or_default();
         let att = p["attention"]["text"].as_str().map(|t| format!("  ⚑ {t}")).unwrap_or_default();
         println!(
@@ -401,6 +403,9 @@ fn print_review_status(v: &Value) {
             p["verdict"].as_str().map(|x| format!(" · {x}")).unwrap_or_default(),
             att
         );
+    }
+    if done > 0 {
+        println!("  … and {done} done this week (wh review --json lists them)");
     }
 }
 

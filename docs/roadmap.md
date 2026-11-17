@@ -50,7 +50,13 @@ run today. `[x]` is built and checked; `[ ]` is next.
 - [x] The post and its refusals (post-review, ported and tested); effort; guides; briefs
 - [x] The Reviews view, a review panel on each Review docket, ready reviews in the Inbox
 - [ ] Recap
-- [ ] Switch over: rex-reviewer down, `wh review on` (needs your go)
+- [x] Switch over (2026-11-17): rex-reviewer down, `wh review on`, ask mode
+      for the first live rounds
+- [ ] Wheelhouse's own Review, once the port has proven itself on real
+      PRs: designed for Wheelhouse rather than carried over from
+      rex-reviewer (its own config instead of rex-reviewer's Lua, briefs
+      and draft format that live on the docket's record, status from the
+      record instead of `.tmp/status.txt`)
 
 ## Replace rex-develop (milestone 3)
 

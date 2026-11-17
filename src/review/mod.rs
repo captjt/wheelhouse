@@ -319,8 +319,12 @@ pub fn rex_reviewer_state_dir() -> PathBuf {
 }
 
 /// Whether rex-reviewer's watcher has run lately (it steps at least every
-/// few minutes, paused or not).
+/// few minutes, paused or not) and wasn't stopped with `rex-reviewer down`.
 pub fn rex_reviewer_running() -> bool {
+    let state: Value = std::fs::read_to_string(rex_reviewer_state_dir().join("state.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    if state["stopped"] == json!(true) {
+        return false;
+    }
     let p = rex_reviewer_state_dir().join("watcher.json");
     let at = std::fs::read_to_string(&p).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()).and_then(|v| v["at"].as_str().map(str::to_string));
     at.and_then(|a| crate::time::secs_since(&a)).is_some_and(|s| s < 600)
