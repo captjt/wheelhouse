@@ -291,21 +291,41 @@ fn serve() -> Result<()> {
 
 const SKILL: &str = include_str!("../skills/wheelhouse/SKILL.md");
 
-/// `wh skill [show|install|remove]`: the agents' skill, in ~/.claude/skills.
+/// `wh skill [show|install|remove]`: the agents' skill. With a shared
+/// `~/.agents/skills`, it goes there and is linked into Claude Code's and
+/// Codex's skills; otherwise it goes in `~/.claude/skills`.
 fn skill(action: Option<&str>) -> Result<()> {
-    let dir = paths::home().join(".claude/skills/wheelhouse");
-    let file = dir.join("SKILL.md");
+    let home = paths::home();
+    let shared = home.join(".agents/skills");
+    let homes: Vec<std::path::PathBuf> = [".claude/skills", ".codex/skills"].iter().map(|d| home.join(d)).filter(|d| d.is_dir()).collect();
+    let source = if shared.is_dir() { shared.join("wheelhouse") } else { home.join(".claude/skills/wheelhouse") };
     match action.unwrap_or("show") {
         "show" => print!("{SKILL}"),
         "install" => {
-            std::fs::create_dir_all(&dir)?;
-            std::fs::write(&file, SKILL)?;
-            println!("installed {}", paths::tilde(&file.to_string_lossy()));
+            std::fs::create_dir_all(&source)?;
+            std::fs::write(source.join("SKILL.md"), SKILL)?;
+            println!("wrote {}", paths::tilde(&source.join("SKILL.md").to_string_lossy()));
+            if shared.is_dir() {
+                for h in &homes {
+                    let link = h.join("wheelhouse");
+                    if link.symlink_metadata().is_err() {
+                        std::os::unix::fs::symlink(&source, &link)?;
+                        println!("linked {}", paths::tilde(&link.to_string_lossy()));
+                    }
+                }
+            }
         }
         "remove" => {
-            let _ = std::fs::remove_file(&file);
-            let _ = std::fs::remove_dir(&dir);
-            println!("removed {}", paths::tilde(&file.to_string_lossy()));
+            for h in &homes {
+                let link = h.join("wheelhouse");
+                if link.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+                    std::fs::remove_file(&link)?;
+                    println!("unlinked {}", paths::tilde(&link.to_string_lossy()));
+                }
+            }
+            let _ = std::fs::remove_file(source.join("SKILL.md"));
+            let _ = std::fs::remove_dir(&source);
+            println!("removed {}", paths::tilde(&source.to_string_lossy()));
         }
         other => bail!("wh skill takes show, install or remove, not {other}"),
     }

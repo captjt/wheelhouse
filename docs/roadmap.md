@@ -19,7 +19,7 @@ run today. `[x]` is built and checked; `[ ]` is next.
       `wait`, `name`, `whoami`, options as buttons, delivered between turns,
       each on the record (questions, decisions, notes on the thread)
 - [x] The `wheelhouse` agent skill (`wh skill install`)
-- [ ] The global agent instructions point at Wheelhouse (at switch-over)
+- [x] The global agent instructions point at Wheelhouse (Claude Code and Codex)
 - [x] Web Push on the phone (Home Screen app, Turn on in the sidebar)
 - [x] Previews: `wh share PORT`, answering only you (each request checked)
 - [ ] Other Rex hosts
@@ -28,7 +28,7 @@ run today. `[x]` is built and checked; `[ ]` is next.
 - [x] A bridge to rex-reviewer until Review lands: one Review docket per
       PR with all its panes, following its round, verdict and merge risk;
       "ready to post" reviews in the Inbox with Post, Preview and Dismiss
-- [ ] Switch over: rex-inbox down, its hook and skill removed
+- [x] Switch over (2026-11-17): rex-inbox down, its hook and skill links removed
 
 ## Dockets as the living source of truth
 
