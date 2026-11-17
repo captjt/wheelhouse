@@ -10,6 +10,9 @@ publish = false
 name = "wh"
 path = "src/main.rs"
 
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"

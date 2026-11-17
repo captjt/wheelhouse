@@ -37,6 +37,7 @@ pub fn http_addr() -> Option<std::net::SocketAddr> {
 pub fn router(shared: Shared) -> Router {
     Router::new()
         .route("/api/state", get(state))
+        .route("/api/status", get(status))
         .route("/api/dockets", post(new_docket))
         .route("/api/dockets/{id}", get(docket))
         .route("/api/dockets/{id}/note", post(note))
@@ -63,25 +64,47 @@ pub async fn serve(shared: Shared) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600));
     }
-    let app = router(shared);
-    let on_unix = axum::serve(unix, app.clone());
-    match http_addr() {
-        Some(addr) => {
-            let tcp = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("binding {addr}"))?;
-            say!("Wheelhouse on http://{addr}");
-            tokio::try_join!(async { on_unix.await.context("socket") }, async { axum::serve(tcp, app).await.context("http") })?;
-        }
-        None => on_unix.await?,
-    }
+    let app = router(shared.clone());
+    let tailnet_app = router(shared.clone()).layer(middleware::from_fn_with_state(shared.clone(), owner_only));
+    let on_unix = async { axum::serve(unix, app.clone()).await.context("socket") };
+    let on_http = async {
+        let Some(addr) = http_addr() else { return std::future::pending::<Result<()>>().await };
+        let tcp = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("binding {addr}"))?;
+        say!("Wheelhouse on http://{addr}");
+        axum::serve(tcp, app.clone()).await.context("http")
+    };
+    let on_tailnet = async {
+        let Some(addr) = crate::tailnet::listen_addr() else { return std::future::pending::<Result<()>>().await };
+        let tcp = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("binding {addr}"))?;
+        say!("tailnet listener on {addr} (wh web publishes it)");
+        axum::serve(tcp, tailnet_app).await.context("tailnet")
+    };
+    tokio::try_join!(on_unix, on_http, on_tailnet)?;
     Ok(())
+}
+
+/// The tailnet listener answers only the Mac's own Tailscale user, as
+/// `tailscale serve` reports them. Nothing else is trusted there.
+async fn owner_only(State(shared): State<Shared>, mut req: Request, next: Next) -> Response {
+    let login = req.headers().get("tailscale-user-login").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let owner = shared.lock().tailnet_owner.clone();
+    match (login, owner) {
+        (Some(l), Some(o)) if l.eq_ignore_ascii_case(&o) => {
+            req.extensions_mut().insert(ViaTailnet);
+            next.run(req).await
+        }
+        (_, None) => (StatusCode::SERVICE_UNAVAILABLE, "Wheelhouse doesn't know its owner yet: is Tailscale running on the Mac?").into_response(),
+        _ => (StatusCode::FORBIDDEN, "Wheelhouse answers only this Mac's Tailscale user").into_response(),
+    }
 }
 
 // ---- the guard ----
 
 /// Our own host names only (DNS rebinding), and no cross-site writes.
 async fn guard(req: Request, next: Next) -> Response {
+    let via_tailnet = req.extensions().get::<ViaTailnet>().is_some();
     let h = req.headers();
-    if !host_ok(h) {
+    if !host_ok(h, via_tailnet) {
         return (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response();
     }
     if req.method() != Method::GET && req.method() != Method::HEAD && !same_site(h) {
@@ -90,14 +113,19 @@ async fn guard(req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-/// Loopback, or a name on the tailnet (`tailscale serve`, a shared preview).
-fn host_ok(h: &HeaderMap) -> bool {
+/// Set on requests that came through the tailnet listener, after the owner check.
+#[derive(Clone, Copy)]
+struct ViaTailnet;
+
+/// Loopback names always; a tailnet name only through the tailnet listener,
+/// which has already checked the caller is the owner (`owner_only`).
+fn host_ok(h: &HeaderMap, via_tailnet: bool) -> bool {
     let host = h.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
     let name = match host.rsplit_once(':') {
         Some((n, port)) if port.chars().all(|c| c.is_ascii_digit()) => n,
         _ => host,
     };
-    matches!(name, "127.0.0.1" | "localhost" | "[::1]") || name.ends_with(".ts.net")
+    matches!(name, "127.0.0.1" | "localhost" | "[::1]") || (via_tailnet && name.ends_with(".ts.net"))
 }
 
 /// A write must carry our header (which forces a CORS preflight that's never
@@ -191,6 +219,22 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         "dockets": dockets,
         "asks": asks,
         "agents": agents_now,
+    })))
+}
+
+async fn status(State(shared): State<Shared>) -> ApiResult {
+    let core = shared.lock();
+    let dockets = core.store.states().map_err(internal)?;
+    Ok(Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
+        "uptime_secs": core.started.elapsed().as_secs(),
+        "rex": { "connected": core.mirror.connected, "error": core.mirror.error },
+        "agents": core.mirror.panes.values().filter(|p| p.is_agent()).count(),
+        "dockets": { "open": dockets.iter().filter(|d| d.is_open()).count(), "all": dockets.len() },
+        "hooks": crate::hooks::claude_installed(),
+        "tailnet": { "owner": core.tailnet_owner, "url": core.tailnet_host.as_ref().map(|h| format!("https://{h}:{}", crate::tailnet::TAILNET_PORT)) },
+        "state_dir": crate::paths::tilde(&crate::paths::state_dir().to_string_lossy()),
     })))
 }
 
@@ -465,5 +509,44 @@ fn mime_of(name: &str) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("woff") => "font/woff",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use tower::ServiceExt;
+
+    fn app(owner: Option<&str>) -> (Router, Router) {
+        let mut core = crate::hub::test_core();
+        core.tailnet_owner = owner.map(str::to_string);
+        let shared = Shared::new(core);
+        let tailnet = router(shared.clone()).layer(middleware::from_fn_with_state(shared.clone(), owner_only));
+        (router(shared), tailnet)
+    }
+
+    async fn get(app: Router, host: &str, login: Option<&str>) -> StatusCode {
+        let mut req = HttpRequest::builder().uri("/api/status").header("host", host);
+        if let Some(l) = login {
+            req = req.header("tailscale-user-login", l);
+        }
+        app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn the_tailnet_answers_only_its_owner() {
+        let (local, tailnet) = app(Some("you@example.com"));
+        assert_eq!(get(local.clone(), "127.0.0.1:7500", None).await, StatusCode::OK);
+        // A tailnet name on the local listener: refused, even with a login.
+        assert_eq!(get(local.clone(), "mac.tail1.ts.net:7500", Some("you@example.com")).await, StatusCode::MISDIRECTED_REQUEST);
+        assert_eq!(get(local, "evil.example", None).await, StatusCode::MISDIRECTED_REQUEST);
+        // The tailnet listener: the owner, and only the owner.
+        assert_eq!(get(tailnet.clone(), "mac.tail1.ts.net:7500", Some("You@Example.com")).await, StatusCode::OK);
+        assert_eq!(get(tailnet.clone(), "mac.tail1.ts.net:7500", Some("someone@else.com")).await, StatusCode::FORBIDDEN);
+        assert_eq!(get(tailnet.clone(), "mac.tail1.ts.net:7500", None).await, StatusCode::FORBIDDEN);
+        let (_, unknown) = app(None);
+        assert_eq!(get(unknown, "mac.tail1.ts.net:7500", Some("you@example.com")).await, StatusCode::SERVICE_UNAVAILABLE);
     }
 }

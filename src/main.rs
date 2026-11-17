@@ -16,6 +16,8 @@ mod paths;
 mod record;
 mod rex;
 mod server;
+mod service;
+mod tailnet;
 mod store;
 mod time;
 
@@ -64,6 +66,22 @@ enum Cmd {
     Export { docket: String },
     /// The agents' hooks: status, install, or remove.
     Hooks { action: Option<String> },
+    /// Run the hub in the background, at login (a LaunchAgent).
+    Up,
+    /// Stop the background hub.
+    Down,
+    /// The background hub's log.
+    Logs {
+        #[arg(short = 'n', default_value_t = 60)]
+        lines: usize,
+    },
+    /// Whether the hub runs, and what it sees.
+    Status,
+    /// The app's address on your tailnet; --publish serves it there.
+    Web {
+        #[arg(long)]
+        publish: bool,
+    },
     /// Run by an agent's hooks.
     #[command(hide = true)]
     Hook {
@@ -79,6 +97,11 @@ fn main() {
         Some(Cmd::Serve) => serve(),
         Some(Cmd::Hook { agent, event }) => hooks::run(&agent, &event),
         Some(Cmd::Hooks { action }) => hooks::cli(action.as_deref()),
+        Some(Cmd::Up) => service::up(),
+        Some(Cmd::Down) => service::down(),
+        Some(Cmd::Logs { lines }) => service::logs(lines),
+        Some(Cmd::Status) => status(),
+        Some(Cmd::Web { publish }) => tailnet::cli(publish),
         Some(Cmd::Ls { all }) => ls(all),
         None => ls(false),
         Some(Cmd::Show { docket }) => show(&normalize(&docket)),
@@ -127,8 +150,27 @@ fn serve() -> Result<()> {
         let shared = hub::Shared::new(core);
         say!("state in {} ({tracked} agent dockets open)", paths::tilde(&dir.to_string_lossy()));
         tokio::spawn(follow::run(shared.clone()));
+        tokio::spawn(tailnet::watch(shared.clone()));
         server::serve(shared).await
     })
+}
+
+fn status() -> Result<()> {
+    let v = client::json("GET", "/api/status", None)?;
+    let up = v["uptime_secs"].as_u64().unwrap_or(0);
+    println!("Wheelhouse {} running for {}m (pid {})", v["version"].as_str().unwrap_or("?"), up / 60, v["pid"]);
+    println!(
+        "  Rex      {}",
+        if v["rex"]["connected"].as_bool() == Some(true) { "following".to_string() } else { format!("not connected: {}", v["rex"]["error"].as_str().unwrap_or("connecting")) }
+    );
+    println!("  agents   {} in Rex · dockets {} open, {} in all", v["agents"], v["dockets"]["open"], v["dockets"]["all"]);
+    println!("  hooks    {}", if v["hooks"].as_bool() == Some(true) { "Claude Code: on" } else { "off: wh hooks install" });
+    match v["tailnet"]["url"].as_str() {
+        Some(u) => println!("  tailnet  {u} (answers {}) · publish with wh web --publish", v["tailnet"]["owner"].as_str().unwrap_or("?")),
+        None => println!("  tailnet  Tailscale not seen"),
+    }
+    println!("  state    {}", v["state_dir"].as_str().unwrap_or("?"));
+    Ok(())
 }
 
 fn ls(all: bool) -> Result<()> {

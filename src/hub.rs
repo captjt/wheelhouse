@@ -21,6 +21,10 @@ pub struct Core {
     pub agents: Tracker,
     pub events: broadcast::Sender<Value>,
     pub owner: String,
+    /// The Mac's Tailscale user: the only one the tailnet listener answers.
+    pub tailnet_owner: Option<String>,
+    pub tailnet_host: Option<String>,
+    pub started: std::time::Instant,
 }
 
 #[derive(Clone)]
@@ -51,7 +55,17 @@ impl Core {
     pub fn new(store: Store, keys: Keyring, owner: &str) -> Result<Self> {
         let (events, _) = broadcast::channel(256);
         let mut core =
-            Core { store, keys, mirror: Mirror::default(), agents: Tracker::default(), events, owner: owner.to_string() };
+            Core {
+                store,
+                keys,
+                mirror: Mirror::default(),
+                agents: Tracker::default(),
+                events,
+                owner: owner.to_string(),
+                tailnet_owner: None,
+                tailnet_host: None,
+                started: std::time::Instant::now(),
+            };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;
         }
