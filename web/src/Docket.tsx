@@ -4,11 +4,18 @@ import { AppAvatar, HubAvatar, IconChevron, IconDown, IconDownload, IconShield, 
 import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
 import { Kbd, Prose, useKeys, useMenu } from "./ui";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
+import { IntentSection } from "./Intent";
+import { LinearChip, LinearModal } from "./Linear";
+import { post } from "./api";
+import { IconIssue } from "./icons";
+import { useToast } from "./ui";
 import { STATUSES, statusItems } from "./views";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
   const hub = useHub();
   const pane = usePane();
+  const toast = useToast();
+  const [linking, setLinking] = useState<string | false>(false);
   const { data, error, reload } = useData<DocketPage>(`/api/dockets/${id}`);
   const menu = useMenu();
   const statusRef = useRef<HTMLButtonElement>(null);
@@ -112,6 +119,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </div>
           )}
 
+          <IntentSection d={d} entries={entries} onSaved={reload} />
+
           <div className="activity-head">
             <span>Activity</span>
             <span className="spacer" />
@@ -134,6 +143,15 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               <StatusIcon status={d.status} />
               {STATUSES.find((s) => s.key === d.status)?.label}
             </button>
+          </Prop>
+          <Prop label="Linear">
+            {d.linear ? (
+              <LinearChip l={d.linear} />
+            ) : (
+              <button className="prop-btn muted" onClick={() => setLinking("")} title="Link a Linear issue to this docket">
+                <IconIssue size={14} /> Link issue
+              </button>
+            )}
           </Prop>
           {d.agent && (
             <>
@@ -221,6 +239,24 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
         </aside>
       </div>
       {menu.node}
+      {linking !== false && (
+        <LinearModal
+          title={`Link a Linear issue to ${d.id}`}
+          busy={linking || null}
+          onClose={() => setLinking(false)}
+          onPick={(i) => {
+            setLinking(i.identifier);
+            post(`/api/dockets/${d.id}/linear`, { key: i.identifier }).then(
+              () => {
+                setLinking(false);
+                toast(`${d.id} linked to ${i.identifier}${d.intent ? "" : ": its description is the intent"}`);
+                reload();
+              },
+              (e: Error) => (setLinking(false), toast(e.message, "error")),
+            );
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -297,7 +333,38 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
     case "turn":
       if (!e.body) return sys(app, <><b>{agent}</b> finished a turn{data.state && data.state !== "done" ? ` (${data.state})` : ""}</>);
       return comment(app, agent, "finished a turn", e.body, "agent");
+    case "intent": {
+      // The agent that wrote it, which may not be the docket's own.
+      const writer = String(e.actor.id).split("@")[0];
+      const by =
+        data.source === "linear" ? (
+          <><b>Linear</b> set the intent from {data.key}'s description{data.taken_by ? " (taken by you)" : ""}</>
+        ) : (
+          <><b>{e.actor.type === "person" ? "You" : e.actor.type === "agent" ? appName(writer) : "Wheelhouse"}</b> {e.actor.type === "person" ? "updated" : "proposed"} the intent</>
+        );
+      return sys(data.source === "linear" ? <IconIssue size={16} /> : e.actor.type === "person" ? you : <AppAvatar app={writer} size={18} />, by, "intent");
+    }
+    case "link":
+      if (data.kind === "linear")
+        return sys(
+          you,
+          <>
+            <b>You</b> linked <a className="act-link" href={data.url} target="_blank" rel="noreferrer">{data.key}</a> {data.title ? <>· {data.title}</> : null}
+          </>,
+        );
+      return sys(hubA, <>Linked {e.body}</>);
     case "observed":
+      if (data.what === "linear-comment") return comment(<IconIssue size={18} />, data.author || "Someone", "commented in Linear", e.body || "", "linear");
+      if (data.what === "linear") {
+        const i = data.issue || {};
+        const changed: string[] = data.changed || [];
+        if (!changed.length)
+          return sys(<IconIssue size={16} />, <><b>Linear</b>: {i.key} is {i.state ?? "open"}{i.assignee ? `, assigned to ${i.assignee}` : ""}</>);
+        const parts = changed.map((c) =>
+          c === "state" ? `${data.from?.state ?? "?"} → ${i.state}` : c === "title" ? `title “${i.title}”` : c === "assignee" ? `assigned to ${i.assignee ?? "no one"}` : c === "priority" ? `priority ${i.priority ?? "none"}` : "description changed",
+        );
+        return sys(<IconIssue size={16} />, <><b>Linear</b> · {i.key}: {parts.join(" · ")}</>);
+      }
       return data.what === "error"
         ? sys(<LiveIcon state="error" size={16} />, <><b>{agent}</b> failed{e.body ? <>: {e.body}</> : null}</>, "error")
         : sys(<LiveIcon state="blocked" size={16} />, <><b>{agent}</b> waited on you{data.kind ? ` (${data.kind})` : ""}{e.body ? <>: {e.body}</> : null}</>, "blocked");

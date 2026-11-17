@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Docket } from "./api";
 import { DocketScreen } from "./Docket";
 import { InboxView, inboxItems } from "./Inbox";
-import { IconActive, IconAgents, IconDone, IconHook, IconInbox, IconLayers, IconMenu, IconMonitor, IconMoon, IconPlus, IconSearch, IconSun, Logo, SessionIcon } from "./icons";
+import { IconActive, IconAgents, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconPlus, IconSearch, IconSun, Logo, SessionIcon } from "./icons";
 import { HubProvider, LiveProvider, go, useHub, useRoute, useTheme, type Theme } from "./live";
 import { NewDocket, Palette } from "./Palette";
 import { PaneProvider } from "./Pane";
@@ -39,6 +39,26 @@ function HooksHint() {
   );
 }
 
+/** Linear isn't connected: one line, and a click copies the setup command. */
+function LinearHint() {
+  const toast = useToast();
+  return (
+    <button
+      className="hint"
+      title="Connect Linear to start dockets from issues and link issues to dockets. Click to copy the command."
+      onClick={() => {
+        navigator.clipboard?.writeText("wh setup-linear");
+        toast("Copied “wh setup-linear”. Run it in a terminal, paste a Linear API key, then restart the hub.");
+      }}
+    >
+      <IconIssue size={14} />
+      <span className="hint-title">Linear off</span>
+      <span className="spacer" />
+      <span className="hint-action">Connect</span>
+    </button>
+  );
+}
+
 function ThemeSwitch() {
   const [theme, setTheme] = useTheme();
   const opts: { t: Theme; label: string; icon: React.ReactNode }[] = [
@@ -61,7 +81,7 @@ function App() {
   const hub = useHub();
   const route = useRoute();
   const [palette, setPalette] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<false | "blank" | "linear">(false);
   const [nav, setNav] = useState(false);
   const page = route[0] || "view";
 
@@ -94,7 +114,7 @@ function App() {
       }
       if (e.key === "g") pending.current = window.setTimeout(() => (pending.current = null), 900);
       else if (e.key === "/") (e.preventDefault(), setPalette(true));
-      else if (e.key === "c") (e.preventDefault(), setCreating(true));
+      else if (e.key === "c") (e.preventDefault(), setCreating("blank"));
     };
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
@@ -102,7 +122,8 @@ function App() {
 
   const context = page === "d" && route[1] ? hub.byId.get(route[1]) : undefined;
   const closePalette = useCallback(() => setPalette(false), []);
-  const openNew = useCallback(() => setCreating(true), []);
+  const openNew = useCallback(() => setCreating("blank"), []);
+  const openNewLinear = useCallback(() => setCreating("linear"), []);
 
   const sessions = useMemo(() => {
     const m = new Map<string, number>();
@@ -164,7 +185,7 @@ function App() {
           <button className="icon-btn" title="Search (⌘K)" onClick={() => setPalette(true)}>
             <IconSearch size={15} />
           </button>
-          <button className="icon-btn new-btn" title="New docket (C)" onClick={() => setCreating(true)}>
+          <button className="icon-btn new-btn" title="New docket (C)" onClick={() => setCreating("blank")}>
             <IconPlus size={15} />
           </button>
         </div>
@@ -192,6 +213,7 @@ function App() {
         <span className="spacer-v" />
         <div className="side-foot">
           {hub.state && !hub.state.hooks && <HooksHint />}
+          {hub.state && !hub.state.linear && <LinearHint />}
           <div className="conn">
             <span className={`conn-dot ${hub.state ? (hub.state.rex.connected ? "on" : "off") : ""}`} />
             {hub.state ? (hub.state.rex.connected ? "Following Rex" : `Rex: ${hub.state.rex.error || "connecting"}`) : hub.error ? "Hub unreachable" : "Connecting…"}
@@ -207,8 +229,8 @@ function App() {
         </button>
         {main}
       </main>
-      {palette && <Palette onClose={closePalette} onNew={openNew} context={context} />}
-      {creating && <NewDocket onClose={() => setCreating(false)} />}
+      {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} context={context} />}
+      {creating && <NewDocket linear={creating === "linear"} onClose={() => setCreating(false)} />}
     </div>
   );
 }

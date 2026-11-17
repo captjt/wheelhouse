@@ -44,7 +44,7 @@ impl Stored {
 /// How an entry is known.
 pub fn mark(entry: &Entry) -> &'static str {
     match entry.actor.typ.as_str() {
-        "hub" if matches!(entry.kind.as_str(), "link") => "checkable",
+        "hub" if entry.kind == "link" || entry.data["source"].as_str() == Some("linear") => "checkable",
         "hub" => "witnessed",
         _ => "said",
     }

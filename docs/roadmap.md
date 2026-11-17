@@ -26,13 +26,14 @@ run today. `[x]` is built and checked; `[ ]` is next.
 
 ## Dockets as the living source of truth
 
-- [ ] Intent on every docket: a versioned Markdown spec at the top of the
+- [x] Intent on every docket: a versioned Markdown spec at the top of the
       page (what it's for, acceptance, out of scope), edited in place,
       with its history on the record; agents read it with `wh brief`
-- [ ] Linear: `wh setup-linear`; a docket from a Linear issue
+- [x] Linear: `wh setup-linear`; a docket from a Linear issue
       (`wh new --linear ENG-142`, or New docket › From Linear); link an
       issue to any docket; the issue's description seeds the intent, and
       changes to it, its state and its comments come in as entries
+      (built and checked against a stand-in for Linear's API; needs your key)
 - [ ] Decisions in force under the intent, with who made each one
 
 ## Replace rex-reviewer (milestone 2)

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { get, type Docket } from "./api";
-import { IconActive, IconAgents, IconDone, IconEye, IconInbox, IconLayers, IconMonitor, IconMoon, IconPlus, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
+import { get, post, type Docket } from "./api";
+import { LinearPicker } from "./Linear";
+import { IconActive, IconAgents, IconDone, IconEye, IconIssue, IconInbox, IconLayers, IconMonitor, IconMoon, IconPlus, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
 import { go, setTheme, useHub } from "./live";
 import { Kbd, Modal, useToast } from "./ui";
 import { onThisMac, usePane } from "./Pane";
@@ -26,7 +27,7 @@ function score(q: string, text: string): number {
   return -1;
 }
 
-export function Palette({ onClose, onNew, context }: { onClose: () => void; onNew: () => void; context?: Docket }) {
+export function Palette({ onClose, onNew, onNewLinear, context }: { onClose: () => void; onNew: () => void; onNewLinear: () => void; context?: Docket }) {
   const hub = useHub();
   const pane = usePane();
   const toast = useToast();
@@ -50,6 +51,7 @@ export function Palette({ onClose, onNew, context }: { onClose: () => void; onNe
     }
     out.push(
       { id: "new", group: "Create", label: "New docket", icon: <IconPlus size={15} />, hint: <Kbd>C</Kbd>, run: onNew },
+      { id: "new-linear", group: "Create", label: "New docket from a Linear issue", icon: <IconIssue size={15} />, keywords: "linear issue import", run: () => onNewLinear() },
       { id: "inbox", group: "Go to", label: "Inbox", icon: <IconInbox size={15} />, hint: <><Kbd>G</Kbd><Kbd>I</Kbd></>, run: () => go("/inbox") },
       { id: "active", group: "Go to", label: "Active dockets", icon: <IconActive size={15} />, hint: <><Kbd>G</Kbd><Kbd>A</Kbd></>, run: () => go("/view/active") },
       { id: "all", group: "Go to", label: "All dockets", icon: <IconLayers size={15} />, hint: <><Kbd>G</Kbd><Kbd>D</Kbd></>, run: () => go("/view/all") },
@@ -84,7 +86,7 @@ export function Palette({ onClose, onNew, context }: { onClose: () => void; onNe
         run: () => go(`/d/${d.id}`),
       });
     return out;
-  }, [hub, pane, context, onNew, toast]);
+  }, [hub, pane, context, onNew, onNewLinear, toast]);
 
   const shown = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -147,8 +149,11 @@ export function Palette({ onClose, onNew, context }: { onClose: () => void; onNe
   );
 }
 
-export function NewDocket({ onClose }: { onClose: () => void }) {
+export function NewDocket({ onClose, linear }: { onClose: () => void; linear?: boolean }) {
   const hub = useHub();
+  const toast = useToast();
+  const [mode, setMode] = useState<"blank" | "linear">(linear ? "linear" : "blank");
+  const [opening, setOpening] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -166,13 +171,46 @@ export function NewDocket({ onClose }: { onClose: () => void }) {
   const keys = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), create());
   };
+  const head = (
+    <div className="nd-head">
+      <span className="chip">Wheelhouse</span>
+      <span className="muted">›</span>
+      <span>New docket</span>
+      <span className="spacer" />
+      <div className="seg">
+        <button className={mode === "blank" ? "on" : ""} onClick={() => setMode("blank")} title="A blank docket">
+          Blank
+        </button>
+        <button className={mode === "linear" ? "on" : ""} onClick={() => setMode("linear")} title="From a Linear issue">
+          From Linear
+        </button>
+      </div>
+    </div>
+  );
+  if (mode === "linear")
+    return (
+      <Modal onClose={onClose} className="new-docket">
+        {head}
+        <LinearPicker
+          busy={opening}
+          onPick={(i) => {
+            setOpening(i.identifier);
+            post<{ docket: string; existing?: boolean }>("/api/dockets/from-linear", { key: i.identifier }).then(
+              (r) => {
+                toast(r.existing ? `${i.identifier} is already ${r.docket}` : `${r.docket} created from ${i.identifier}`);
+                hub.reload();
+                onClose();
+                go(`/d/${r.docket}`);
+              },
+              (e: Error) => (setOpening(null), toast(e.message, "error")),
+            );
+          }}
+        />
+      </Modal>
+    );
   return (
     <Modal onClose={onClose} className="new-docket">
-      <div className="nd-head">
-        <span className="chip">Wheelhouse</span>
-        <span className="muted">›</span>
-        <span>New docket</span>
-      </div>
+      {head}
       <input
         autoFocus
         className="nd-title"

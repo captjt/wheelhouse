@@ -25,6 +25,8 @@ pub struct Core {
     pub tailnet_owner: Option<String>,
     pub tailnet_host: Option<String>,
     pub started: std::time::Instant,
+    /// Whether a Linear key is set up (checked at start and every few minutes).
+    pub linear_ready: bool,
 }
 
 #[derive(Clone)]
@@ -65,6 +67,7 @@ impl Core {
                 tailnet_owner: None,
                 tailnet_host: None,
                 started: std::time::Instant::now(),
+                linear_ready: false,
             };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;

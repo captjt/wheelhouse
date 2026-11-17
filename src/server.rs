@@ -49,6 +49,12 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/deny", post(deny))
         .route("/api/dockets/{id}/export", get(export))
         .route("/api/verify", get(verify_all))
+        .route("/api/dockets/{id}/intent", post(set_intent))
+        .route("/api/dockets/{id}/linear", post(link_linear))
+        .route("/api/dockets/{id}/brief", get(brief_of))
+        .route("/api/dockets/from-linear", post(from_linear))
+        .route("/api/linear/search", get(linear_search))
+        .route("/api/brief", get(brief_of_pane))
         .route("/api/hook", post(hook))
         .route("/api/events", get(events))
         .fallback(asset)
@@ -215,6 +221,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
     Ok(Json(json!({
         "owner": core.owner,
         "hooks": crate::hooks::claude_installed(),
+        "linear": core.linear_ready,
         "rex": { "connected": core.mirror.connected, "error": core.mirror.error },
         "dockets": dockets,
         "asks": asks,
@@ -438,6 +445,119 @@ pub fn export_lines(core: &crate::hub::Core, id: &str) -> Result<String> {
         out.push('\n');
     }
     Ok(out)
+}
+
+#[derive(Deserialize)]
+struct IntentReq {
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    block: Option<String>,
+    /// Take the linked issue's description as the intent again; from then on
+    /// it follows Linear.
+    #[serde(default)]
+    take_linear: bool,
+}
+
+/// A new version of the docket's intent: yours, or an agent's from its pane.
+async fn set_intent(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<IntentReq>) -> ApiResult {
+    let mut core = shared.lock();
+    let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+    if req.take_linear {
+        let l = st.linear.clone().ok_or_else(|| fail(StatusCode::CONFLICT, format!("{id} has no Linear issue")))?;
+        let body = l.description.clone().unwrap_or_default();
+        let owner = core.owner.clone();
+        let s = core
+            .append(&id, "intent", &Who::Hub, Some(body), json!({ "source": "linear", "key": l.key, "updated_at": l.updated_at, "taken_by": owner }))
+            .map_err(internal)?;
+        return Ok(Json(json!({ "seq": s.seq })));
+    }
+    let body = req.body.trim_end().to_string();
+    if st.intent.as_ref().is_some_and(|t| t.body == body) {
+        return Ok(Json(json!({ "unchanged": true })));
+    }
+    let (who, source) = match req.block.as_deref().and_then(|b| core.mirror.panes.get(b)).filter(|p| p.is_agent()) {
+        Some(p) => (
+            Who::Agent { app: p.app().unwrap_or("agent").to_string(), block: p.block_id.clone(), session: core.agents.by_block.get(&p.block_id).and_then(|t| t.session.clone()) },
+            "agent",
+        ),
+        None => (Who::Owner, "person"),
+    };
+    let s = core.append(&id, "intent", &who, Some(body), json!({ "source": source })).map_err(internal)?;
+    Ok(Json(json!({ "seq": s.seq })))
+}
+
+#[derive(Deserialize)]
+struct LinearKey {
+    key: String,
+}
+
+fn linear_error(e: anyhow::Error) -> (StatusCode, Json<Value>) {
+    let msg = format!("{e:#}");
+    let status = if msg.contains("wh setup-linear") { StatusCode::PRECONDITION_REQUIRED } else { StatusCode::BAD_GATEWAY };
+    (status, Json(json!({ "error": msg, "setup": status == StatusCode::PRECONDITION_REQUIRED })))
+}
+
+/// A new docket from a Linear issue: its title, its link, its description as
+/// the intent, and its comments on the thread.
+async fn from_linear(State(shared): State<Shared>, Json(req): Json<LinearKey>) -> ApiResult {
+    let issue = crate::linear::issue(req.key.trim()).await.map_err(linear_error)?;
+    let mut core = shared.lock();
+    if let Some(d) = core.store.states().map_err(internal)?.into_iter().find(|s| s.linear.as_ref().is_some_and(|l| l.key == issue.identifier) && s.is_open()) {
+        return Ok(Json(json!({ "docket": d.id, "existing": true })));
+    }
+    let id = core
+        .open(&Who::Owner, &issue.title, json!({ "protocol": "none", "title_source": "linear", "linear": issue.identifier }))
+        .map_err(internal)?;
+    crate::linear::link(&mut core, &id, &issue, &Who::Owner).map_err(internal)?;
+    Ok(Json(json!({ "docket": id })))
+}
+
+async fn link_linear(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<LinearKey>) -> ApiResult {
+    let issue = crate::linear::issue(req.key.trim()).await.map_err(linear_error)?;
+    let mut core = shared.lock();
+    let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+    if st.linear.as_ref().is_some_and(|l| l.key == issue.identifier) {
+        return Ok(Json(json!({ "unchanged": true })));
+    }
+    crate::linear::link(&mut core, &id, &issue, &Who::Owner).map_err(internal)?;
+    Ok(Json(json!({ "linked": issue.identifier })))
+}
+
+#[derive(Deserialize)]
+struct Search {
+    #[serde(default)]
+    q: String,
+}
+
+async fn linear_search(axum::extract::Query(s): axum::extract::Query<Search>) -> ApiResult {
+    let issues = crate::linear::search(&s.q).await.map_err(linear_error)?;
+    Ok(Json(json!({ "issues": issues })))
+}
+
+async fn brief_of(State(shared): State<Shared>, Path(id): Path<String>) -> Response {
+    let core = shared.lock();
+    match crate::brief::brief(&core, &id) {
+        Ok(t) => ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], t).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, format!("{e:#}")).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct PaneQ {
+    block: String,
+}
+
+/// The brief for the docket a pane is on: what `wh brief` runs from an agent.
+async fn brief_of_pane(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<PaneQ>) -> Response {
+    let core = shared.lock();
+    let Some(id) = agents::docket_of(&core, &q.block) else {
+        return (StatusCode::NOT_FOUND, "this pane isn't on a docket: name one, as wh brief D-12").into_response();
+    };
+    match crate::brief::brief(&core, &id) {
+        Ok(t) => ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], t).into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, format!("{e:#}")).into_response(),
+    }
 }
 
 async fn verify_all(State(shared): State<Shared>) -> ApiResult {

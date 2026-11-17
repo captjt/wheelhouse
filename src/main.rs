@@ -6,6 +6,8 @@ macro_rules! say {
 }
 
 mod agents;
+mod brief;
+mod linear;
 mod approve;
 mod client;
 mod follow;
@@ -44,8 +46,20 @@ enum Cmd {
     },
     /// One docket's record.
     Show { docket: String },
-    /// Open a docket by hand.
-    New { title: String },
+    /// Open a docket by hand, or from a Linear issue (--linear ENG-142).
+    New {
+        title: Option<String>,
+        #[arg(long)]
+        linear: Option<String>,
+    },
+    /// Link a Linear issue to a docket.
+    Link { docket: String, issue: String },
+    /// A docket's intent: print it, or set it (TEXT, or - for stdin).
+    Intent { docket: String, text: Option<String> },
+    /// What an agent reads to work on a docket (its own, from its pane).
+    Brief { docket: Option<String> },
+    /// Store a Linear API key in the Keychain.
+    SetupLinear,
     /// Add a note to a docket. From an agent's pane, the note is the agent's.
     Note { docket: String, text: String },
     /// Rename a docket, or set its status (todo, in_progress, done, dropped).
@@ -105,9 +119,14 @@ fn main() {
         Some(Cmd::Ls { all }) => ls(all),
         None => ls(false),
         Some(Cmd::Show { docket }) => show(&normalize(&docket)),
-        Some(Cmd::New { title }) => client::json("POST", "/api/dockets", Some(&json!({ "title": title }))).map(|v| {
-            println!("{}", v["docket"].as_str().unwrap_or_default());
-        }),
+        Some(Cmd::New { title, linear }) => new_docket(title, linear),
+        Some(Cmd::Link { docket, issue }) => {
+            let d = normalize(&docket);
+            client::json("POST", &format!("/api/dockets/{d}/linear"), Some(&json!({ "key": issue }))).map(|_| println!("{d} linked to {issue}"))
+        }
+        Some(Cmd::Intent { docket, text }) => intent(&normalize(&docket), text),
+        Some(Cmd::Brief { docket }) => brief(docket.as_deref().map(normalize)),
+        Some(Cmd::SetupLinear) => linear::setup(),
         Some(Cmd::Note { docket, text }) => {
             let block = std::env::var("REX_BLOCK").ok();
             let d = normalize(&docket);
@@ -151,8 +170,58 @@ fn serve() -> Result<()> {
         say!("state in {} ({tracked} agent dockets open)", paths::tilde(&dir.to_string_lossy()));
         tokio::spawn(follow::run(shared.clone()));
         tokio::spawn(tailnet::watch(shared.clone()));
+        tokio::spawn(linear::follow(shared.clone()));
         server::serve(shared).await
     })
+}
+
+fn new_docket(title: Option<String>, linear: Option<String>) -> Result<()> {
+    let v = match (linear, title) {
+        (Some(key), _) => client::json("POST", "/api/dockets/from-linear", Some(&json!({ "key": key })))?,
+        (None, Some(title)) => client::json("POST", "/api/dockets", Some(&json!({ "title": title })))?,
+        (None, None) => bail!("give a title, or --linear ENG-142"),
+    };
+    let id = v["docket"].as_str().unwrap_or_default();
+    println!("{id}{}", if v["existing"].as_bool() == Some(true) { " (already open for that issue)" } else { "" });
+    Ok(())
+}
+
+fn intent(d: &str, text: Option<String>) -> Result<()> {
+    match text {
+        None => {
+            let v = client::json("GET", &format!("/api/dockets/{d}"), None)?;
+            match v["docket"]["intent"]["body"].as_str() {
+                Some(b) => println!("{b}"),
+                None => println!("{d} has no intent yet. Set one: wh intent {d} \"...\" (or - to read it from stdin)"),
+            }
+            Ok(())
+        }
+        Some(t) => {
+            let body = if t == "-" {
+                let mut s = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+                s
+            } else {
+                t
+            };
+            let block = std::env::var("REX_BLOCK").ok();
+            let v = client::json("POST", &format!("/api/dockets/{d}/intent"), Some(&json!({ "body": body, "block": block })))?;
+            if v["unchanged"].as_bool() == Some(true) { println!("{d}: the intent is already that") } else { println!("{d} #{}", v["seq"]) }
+            Ok(())
+        }
+    }
+}
+
+fn brief(d: Option<String>) -> Result<()> {
+    let path = match d {
+        Some(d) => format!("/api/dockets/{d}/brief"),
+        None => {
+            let block = std::env::var("REX_BLOCK").map_err(|_| anyhow::anyhow!("name a docket (wh brief D-12), or run this from an agent's pane"))?;
+            format!("/api/brief?block={block}")
+        }
+    };
+    print!("{}", client::text(&path)?);
+    Ok(())
 }
 
 fn status() -> Result<()> {
@@ -242,7 +311,21 @@ fn show(d: &str) -> Result<()> {
             Some("set") => e["data"].to_string(),
             Some("claim") => format!("session {} ({})", e["data"]["session"].as_str().unwrap_or("?"), e["data"]["source"].as_str().unwrap_or("?")),
             Some("release") => e["data"]["reason"].as_str().unwrap_or_default().to_string(),
-            Some("observed") => format!("{}: {body}", e["data"]["what"].as_str().unwrap_or_default()),
+            Some("observed") => match e["data"]["what"].as_str() {
+                Some("linear") => {
+                    let changed: Vec<&str> = e["data"]["changed"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                    let i = &e["data"]["issue"];
+                    if changed.is_empty() {
+                        format!("Linear {}: {}", i["key"].as_str().unwrap_or("?"), i["state"].as_str().unwrap_or("?"))
+                    } else {
+                        format!("Linear {}: {} changed (now {})", i["key"].as_str().unwrap_or("?"), changed.join(", "), i["state"].as_str().unwrap_or("?"))
+                    }
+                }
+                Some("linear-comment") => format!("{} in Linear: {body}", e["data"]["author"].as_str().unwrap_or("someone")),
+                w => format!("{}: {body}", w.unwrap_or_default()),
+            },
+            Some("intent") => format!("({}) {}", e["data"]["source"].as_str().unwrap_or("?"), body.lines().next().unwrap_or_default()),
+            Some("approval") => format!("{} {}", e["data"]["decision"].as_str().unwrap_or("?"), body),
             _ => body.lines().next().unwrap_or_default().to_string(),
         };
         println!(

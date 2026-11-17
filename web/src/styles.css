@@ -1353,6 +1353,271 @@ code {
   width: auto;
 }
 
+/* ---- the intent: the docket's living spec ---- */
+
+.intent {
+  margin-top: 18px;
+  padding: 2px 0 6px;
+}
+.intent-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+.intent-label {
+  font-weight: 500;
+}
+.intent-meta {
+  color: var(--faint);
+  font-size: 12px;
+}
+.intent-body {
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.intent-body .prose {
+  color: var(--text);
+}
+.intent-body .prose p,
+.intent-body .prose ul,
+.intent-body .prose ol {
+  margin-bottom: 10px;
+}
+.intent-body .prose-h {
+  margin-top: 14px;
+  font-size: 13px;
+  text-transform: none;
+}
+.intent-empty {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 14px 16px;
+  text-align: left;
+  color: var(--muted);
+  border: 1px dashed var(--line-2);
+  border-radius: 9px;
+  line-height: 1.55;
+}
+.intent-empty:hover {
+  color: var(--text-2);
+  border-color: var(--faint);
+}
+.intent-editor {
+  margin-top: 6px;
+  border: 1px solid color-mix(in oklch, var(--focus) 55%, var(--line-2));
+  border-radius: 9px;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--elev);
+}
+.intent-editor textarea {
+  display: block;
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.6 var(--mono);
+  padding: 12px 14px;
+}
+.intent-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  border-top: 1px solid var(--line);
+}
+.intent-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.act-sys.tone-intent b {
+  color: var(--text);
+}
+.act-link {
+  color: var(--link);
+}
+.linear-chip .glyph {
+  margin-left: 5px;
+  vertical-align: -1px;
+  color: var(--faint);
+}
+.tone-linear .act-card {
+  border-style: dashed;
+}
+
+/* version history */
+.modal.history-modal {
+  width: min(920px, calc(100vw - 32px));
+}
+.hist {
+  display: flex;
+  height: min(70vh, 640px);
+}
+.hist-list {
+  width: 240px;
+  flex: none;
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  padding: 6px;
+}
+.hist-item {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  gap: 0 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 7px;
+  text-align: left;
+}
+.hist-item.sel,
+.hist-item:hover {
+  background: var(--sel);
+}
+.hist-v {
+  grid-row: span 2;
+  font-weight: 600;
+  color: var(--muted);
+}
+.hist-who {
+  font-weight: 500;
+}
+.hist-at {
+  color: var(--faint);
+  font-size: 12px;
+}
+.hist-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.hist-title {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 500;
+}
+.diff {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 10px 0;
+  font: 12px/1.6 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dl {
+  padding: 0 16px 0 10px;
+  display: flex;
+  gap: 8px;
+}
+.dl-op {
+  width: 10px;
+  flex: none;
+  color: var(--faint);
+}
+.dl-add {
+  background: var(--success-tint);
+}
+.dl-add .dl-op {
+  color: var(--working);
+}
+.dl-del {
+  background: var(--danger-tint);
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklch, var(--error) 50%, transparent);
+}
+.dl-del .dl-op {
+  color: var(--error);
+}
+
+/* the Linear picker */
+.modal.linear-modal {
+  padding: 14px 18px 6px;
+}
+.lp-input {
+  width: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: 15px var(--sans);
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+.lp-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.lp-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 36px;
+  padding: 0 8px;
+  border-radius: 7px;
+  text-align: left;
+}
+.lp-item.sel {
+  background: var(--sel);
+}
+.lp-key {
+  font-size: 12px;
+  color: var(--muted);
+  width: 64px;
+  flex: none;
+}
+.lp-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp-state {
+  font-size: 12px;
+  color: var(--faint);
+  flex: none;
+}
+.lp-empty {
+  padding: 18px 8px;
+  color: var(--muted);
+}
+.lp-setup {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 4px 12px;
+}
+.lp-setup .glyph {
+  color: var(--accent);
+  flex: none;
+}
+.lp-setup-title {
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+.new-docket .nd-head .seg button {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 /* ---- answering prompts ---- */
 
 .btn-approve {

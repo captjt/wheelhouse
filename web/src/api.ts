@@ -46,7 +46,41 @@ export type Docket = {
   short_head: string;
   live: Live | null;
   quick: boolean;
+  intent?: { body: string; source: string; by: string; at: string; seq: number };
+  intent_versions?: number;
+  linear?: LinearRef;
 };
+
+export type LinearRef = {
+  key: string;
+  id?: string | null;
+  url?: string | null;
+  title?: string | null;
+  state?: string | null;
+  state_type?: string | null;
+  priority?: string | null;
+  assignee?: string | null;
+  branch?: string | null;
+  updated_at?: string | null;
+  description?: string | null;
+};
+
+export type LinearIssue = {
+  id: string;
+  identifier: string;
+  title: string;
+  url: string;
+  state?: string | null;
+  state_type?: string | null;
+  priority?: string | null;
+  assignee?: string | null;
+  team?: string | null;
+  updated_at: string;
+};
+
+/** Linear's state type as a docket status, for the icon. */
+export const linearStatus = (t?: string | null) =>
+  t === "started" ? "in_progress" : t === "completed" ? "done" : t === "canceled" ? "dropped" : "todo";
 
 export type Ask = {
   docket: string;
@@ -61,6 +95,7 @@ export type Ask = {
 export type HubState = {
   owner: string;
   hooks: boolean;
+  linear: boolean;
   rex: { connected: boolean; error?: string | null };
   dockets: Docket[];
   asks: Ask[];

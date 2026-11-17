@@ -38,6 +38,53 @@ pub struct DocketState {
     pub entries: i64,
     /// Hex of the last entry's chain value.
     pub head: String,
+    /// The docket's living spec: its newest `intent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<IntentRef>,
+    #[serde(default)]
+    pub intent_versions: u32,
+    /// The Linear issue linked to the docket, as Linear last said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linear: Option<LinearRef>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct IntentRef {
+    pub body: String,
+    /// `person`, `agent`, or `linear`.
+    pub source: String,
+    /// The actor's id.
+    pub by: String,
+    pub at: String,
+    pub seq: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct LinearRef {
+    pub key: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub state_type: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    /// Linear's description as last read, to see when it changes.
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub comments_seen_at: Option<String>,
 }
 
 /// The agent a docket is about, as Rex placed it.
@@ -106,6 +153,47 @@ impl DocketState {
                     self.last_prompt = e.body.clone();
                 } else {
                     self.notes += 1;
+                }
+            }
+            "intent" => {
+                let source = s(&d["source"]).unwrap_or_else(|| e.actor.typ.clone());
+                self.intent = Some(IntentRef { body: e.body.clone().unwrap_or_default(), source, by: e.actor.id.clone(), at: e.at.clone(), seq });
+                self.intent_versions += 1;
+            }
+            "link" if d["kind"].as_str() == Some("linear") => {
+                let mut l = self.linear.take().unwrap_or_default();
+                l.key = s(&d["key"]).unwrap_or_default();
+                l.id = s(&d["id"]).or(l.id);
+                l.url = s(&d["url"]).or(l.url);
+                l.title = s(&d["title"]).or(l.title);
+                self.linear = Some(l);
+            }
+            "observed" if d["what"].as_str() == Some("linear") => {
+                let i = &d["issue"];
+                let mut l = self.linear.take().unwrap_or_default();
+                if let Some(k) = s(&i["key"]) {
+                    l.key = k;
+                }
+                l.id = s(&i["id"]).or(l.id);
+                l.url = s(&i["url"]).or(l.url);
+                l.title = s(&i["title"]).or(l.title);
+                l.state = s(&i["state"]);
+                l.state_type = s(&i["state_type"]);
+                l.priority = s(&i["priority"]);
+                l.assignee = s(&i["assignee"]);
+                l.branch = s(&i["branch"]).or(l.branch);
+                l.updated_at = s(&i["updated_at"]);
+                if d.get("description").is_some() {
+                    l.description = s(&d["description"]);
+                }
+                self.linear = Some(l);
+            }
+            "observed" if d["what"].as_str() == Some("linear-comment") => {
+                if let Some(l) = self.linear.as_mut() {
+                    let at = s(&d["created_at"]);
+                    if at > l.comments_seen_at {
+                        l.comments_seen_at = at;
+                    }
                 }
             }
             "turn" => {
