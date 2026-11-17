@@ -6,7 +6,7 @@ import { Kbd, Prose, useKeys, useMenu } from "./ui";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { IntentSection } from "./Intent";
 import { MessageCard } from "./Messages";
-import { ReviewButtons, ReviewPanel } from "./Reviews";
+import { ReviewPanel } from "./Reviews";
 import { IconExternal } from "./icons";
 import { LinearChip, LinearModal } from "./Linear";
 import { post } from "./api";
@@ -122,19 +122,6 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </div>
           )}
 
-          {(hub.state?.reviews ?? [])
-            .filter((r) => r.docket === d.id)
-            .map((r) => (
-              <div key={r.item} className="callout callout-blocked">
-                <LiveIcon state="blocked" />
-                <div>
-                  <strong>Review ready to post{r.round ? ` · round ${r.round}` : ""}</strong>
-                  {r.msg && <div className="callout-msg">{r.msg}</div>}
-                </div>
-                <span className="spacer" />
-                <ReviewButtons r={r} small />
-              </div>
-            ))}
           {(hub.state?.messages ?? [])
             .filter((m) => m.docket === d.id)
             .map((m) => (

@@ -1,85 +1,9 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { get, post, type Docket, type ReviewPr, type ReviewReady, type ReviewStatus } from "./api";
+import { post, type Docket, type ReviewPr, type ReviewStatus } from "./api";
 import { IconChevronDown, IconExternal, IconPause, IconPlay, IconPR, IconRefresh, LiveIcon } from "./icons";
 import { ago, agoLong, stamp, useHub } from "./live";
 import { Modal, Prose, useToast } from "./ui";
 
-/** Post, Preview and Dismiss for a review rex-reviewer has ready. Nothing is
- * sent unless it's still the review shown; rex-reviewer checks the round too. */
-export function ReviewButtons({ r, small }: { r: ReviewReady; small?: boolean }) {
-  const hub = useHub();
-  const toast = useToast();
-  const [busy, setBusy] = useState<string | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  const cls = small ? "btn btn-small" : "btn";
-  const act = (what: "post" | "dismiss") => (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (busy) return;
-    setBusy(what);
-    post<{ url?: string }>(`/api/reviews/${what}`, { item: r.item, msg: r.msg ?? null, updated_at: r.updated_at ?? null }).then(
-      (res) => {
-        toast(what === "post" ? `Posted the review of ${r.key}${res.url ? "" : ""}` : `Dismissed the review of ${r.key}`);
-        setBusy(null);
-        hub.reload();
-      },
-      (err: Error) => (setBusy(null), toast(err.message, "error"), hub.reload()),
-    );
-  };
-  const show = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setBusy("preview");
-    get<{ preview: string }>(`/api/reviews/preview?item=${encodeURIComponent(r.item)}`).then(
-      (v) => (setBusy(null), setPreview(v.preview)),
-      (err: Error) => (setBusy(null), toast(err.message, "error")),
-    );
-  };
-  return (
-    <span className="btn-pair answer">
-      <button className={`${cls} btn-approve`} disabled={!!busy} onClick={act("post")} title={`Post: ${r.msg ?? ""}`}>
-        {busy === "post" ? "Posting…" : "Post"}
-      </button>
-      <button className={cls} disabled={!!busy} onClick={show}>
-        {busy === "preview" ? "Loading…" : "Preview"}
-      </button>
-      <button className={cls} disabled={!!busy} onClick={act("dismiss")}>
-        {busy === "dismiss" ? "Dismissing…" : "Dismiss"}
-      </button>
-      {preview !== null && (
-        <Modal onClose={() => setPreview(null)} className="preview-modal">
-          <div className="nd-head">
-            <span>
-              Review of {r.key}
-              {r.round ? ` · round ${r.round}` : ""}, as it would post
-            </span>
-            <span className="spacer" />
-            {r.url && (
-              <a className="btn btn-small btn-ghost" href={r.url} target="_blank" rel="noreferrer">
-                PR <IconExternal size={11} />
-              </a>
-            )}
-          </div>
-          <div className="preview-body">
-            <Prose text={preview} />
-          </div>
-          <div className="nd-foot">
-            <span className="muted small">{r.msg}</span>
-            <span className="spacer" />
-            <button className="btn btn-small" onClick={act("dismiss")} disabled={!!busy}>
-              Dismiss
-            </button>
-            <button className="btn btn-primary btn-small" onClick={(e) => (act("post")(e), setPreview(null))} disabled={!!busy}>
-              Post review
-            </button>
-          </div>
-        </Modal>
-      )}
-    </span>
-  );
-}
-
-// ---- The Review protocol (native) ----
 
 export const verdictWord = (v?: string | null) =>
   ({ APPROVED: "Approved", CHANGES_REQUESTED: "Changes requested", DISMISSED: "Dismissed", COMMENTED: "Commented" })[v ?? ""] ?? (v ? v.replace(/_/g, " ").toLowerCase() : "");
@@ -365,8 +289,8 @@ export function ReviewsView() {
   const rv = hub.state?.review;
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(["done"]));
   const set = (body: Record<string, unknown>, done?: string) =>
-    post<ReviewStatus & { imported?: number }>("/api/review/settings", body).then(
-      (st) => (done && toast(st.imported ? `${done}: imported ${st.imported} PR(s) from rex-reviewer` : done), hub.reload()),
+    post<ReviewStatus>("/api/review/settings", body).then(
+      () => (done && toast(done), hub.reload()),
       (e: Error) => toast(e.message, "error"),
     );
   const groups: Group[] = useMemo(() => {
@@ -445,11 +369,11 @@ export function ReviewsView() {
             <strong>Reviews run in Wheelhouse.</strong> Each PR that asks you for a review becomes a Review docket: blind reviewers in Rex, a checker that merges their drafts and rates the merge risk, and a post you approve (or let the checker make).
           </p>
           <p className="muted small">
-            It reads your rex-reviewer config{cfg ? ` (${cfg.path})` : ""} and imports its ledger, so rounds carry on where they are.
+            {cfg ? <>Its settings are in {cfg.path}: repos, reviewers, the checker, and your effort policy.</> : <>Set it up in ~/.config/wheelhouse/review.lua (docs/review.md). Moving from rex-reviewer? <code>wh import rex-reviewer</code> brings its config and history over.</>}
             {rv.rex_reviewer_running ? " rex-reviewer is still running: stop it first with rex-reviewer down." : ""}
           </p>
           {rv.config_error && <p className="rv-err small">{rv.config_error}</p>}
-          <button className="btn btn-primary" disabled={rv.rex_reviewer_running || !!rv.config_error} onClick={() => set({ enabled: true }, "Reviews are on, paused until you resume")}>
+          <button className="btn btn-primary" disabled={rv.rex_reviewer_running || !!rv.config_error || !cfg} onClick={() => set({ enabled: true }, "Reviews are on, paused until you resume")}>
             Turn on reviews
           </button>
         </div>

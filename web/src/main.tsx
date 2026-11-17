@@ -88,10 +88,10 @@ function App() {
   const [nav, setNav] = useState(false);
   const page = route[0] || "view";
 
-  const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.reviews ?? [], hub.state?.review?.prs ?? []).length, [hub.state]);
+  const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.review?.prs ?? []).length, [hub.state]);
   const reviewAlerts = (hub.state?.review?.prs ?? []).filter((p) => p.attention).length;
   const urgent = useMemo(
-    () => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length + (hub.state?.messages.length ?? 0) + (hub.state?.reviews?.length ?? 0) + reviewAlerts,
+    () => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length + (hub.state?.messages.length ?? 0) + reviewAlerts,
     [hub.state, reviewAlerts],
   );
   const reviewCount = (hub.state?.review?.prs ?? []).filter((p) => p.state === "queued" || p.state === "reviewing").length;

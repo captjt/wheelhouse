@@ -69,9 +69,16 @@ fn base_args(cfg: &Config, agent: &str, extra: &[String]) -> Vec<String> {
 }
 
 /// The pane's program: `env` with gh signed out and Cargo's caches shared,
-/// then the agent.
-pub fn env_wrapper(wt: &Path) -> Vec<String> {
-    vec![
+/// then the agent; with `path`, those folders first on its PATH.
+pub fn env_wrapper(wt: &Path, path: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if !path.is_empty() {
+        // The pane's own PATH is the login shell's, which the hub can't
+        // see: prepend in the pane.
+        let dirs = path.iter().map(|d| d.replace('\'', "")).collect::<Vec<_>>().join(":");
+        out.extend(["/bin/sh".into(), "-c".into(), format!("PATH='{dirs}':\"$PATH\" exec \"$@\""), "sh".into()]);
+    }
+    out.extend([
         "env".into(),
         "-u".into(),
         "GH_TOKEN".into(),
@@ -79,7 +86,8 @@ pub fn env_wrapper(wt: &Path) -> Vec<String> {
         "GITHUB_TOKEN".into(),
         format!("GH_CONFIG_DIR={}", wt.join(".tmp/gh-empty").display()),
         format!("CARGO_HOME={}", super::cache_dir().join("cargo").display()),
-    ]
+    ]);
+    out
 }
 
 /// What starts an agent, and the session it will have (Claude Code's is
@@ -103,7 +111,7 @@ pub struct ReviewerLaunch<'a> {
 
 pub fn reviewer(cfg: &Config, l: &ReviewerLaunch) -> Launch {
     let args = with_effort(l.agent, &base_args(cfg, l.agent, l.extra_args), l.effort);
-    let mut argv = env_wrapper(l.worktree);
+    let mut argv = env_wrapper(l.worktree, &cfg.path_dirs);
     argv.push(program(cfg, l.agent));
     if l.agent == "claude" {
         let session = l.resume.map(str::to_string).unwrap_or_else(uuid_v4);
@@ -145,7 +153,7 @@ pub fn checker(cfg: &Config, worktree: &Path, others: &[PathBuf], effort: Option
     }
     extra.extend(cfg.checker_extra_args.iter().cloned());
     let args = with_effort(agent, &base_args(cfg, agent, &extra), effort);
-    let mut argv = env_wrapper(worktree);
+    let mut argv = env_wrapper(worktree, &cfg.path_dirs);
     argv.push(program(cfg, agent));
     if agent == "claude" {
         let session = uuid_v4();

@@ -54,11 +54,11 @@ run today. `[x]` is built and checked; `[ ]` is next.
       Markdown, and `wh recap`
 - [x] Switch over (2026-11-17): rex-reviewer down, `wh review on`, ask mode
       for the first live rounds
-- [ ] Wheelhouse's own Review, once the port has proven itself on real
-      PRs: designed for Wheelhouse rather than carried over from
-      rex-reviewer (its own config instead of rex-reviewer's Lua, briefs
-      and draft format that live on the docket's record, status from the
-      record instead of `.tmp/status.txt`)
+- [x] Review is Wheelhouse's own: its config and guides in
+      `~/.config/wheelhouse` (`wh import rex-reviewer` once), the bridge to
+      rex-reviewer gone; the first live round (guardian#742) ran end to end
+- [ ] Next for Review: drafts and status on the docket's record rather
+      than in `.tmp/`, once a few more live rounds have run
 
 ## Replace rex-develop (milestone 3)
 

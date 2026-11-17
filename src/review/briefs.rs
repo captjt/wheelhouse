@@ -1,6 +1,5 @@
-//! The briefs agents get, copied from rex-reviewer as text. A file of the
-//! same name in `~/.config/wheelhouse/briefs/review/` (or rex-reviewer's
-//! `briefs/`) replaces the built-in one.
+//! The briefs review agents get. A file of the same name in
+//! `~/.config/wheelhouse/briefs/review/` replaces the built-in one.
 
 use std::collections::BTreeMap;
 
@@ -26,10 +25,8 @@ pub const MERGE_RISK: &str = include_str!("../../guides/merge-risk.md");
 
 pub fn brief(name: &str) -> String {
     let home = crate::paths::home();
-    for dir in [home.join(".config/wheelhouse/briefs/review"), home.join(".config/rex-reviewer/briefs")] {
-        if let Ok(s) = std::fs::read_to_string(dir.join(name)) {
-            return s;
-        }
+    if let Ok(s) = std::fs::read_to_string(home.join(".config/wheelhouse/briefs/review").join(name)) {
+        return s;
     }
     BUILT_IN.iter().find(|(n, _)| *n == name).map(|(_, s)| s.to_string()).unwrap_or_else(|| panic!("no brief {name}"))
 }

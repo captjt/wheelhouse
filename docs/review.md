@@ -1,8 +1,7 @@
-# The Review protocol
+# Review
 
-Wheelhouse does what rex-reviewer did, natively. A PR that requests you by
-name, in a repo your review config lists, becomes one **Review docket** for
-its whole life. Each round:
+A PR that requests you by name, in a repo your review config lists,
+becomes one **Review docket** for its whole life. Each round:
 
 1. **Prep.** Fetch the PR's head into `refs/wheelhouse/pr-N/round-R` (over
    HTTPS with your `gh` login, so the hub needs no SSH agent), and the base
@@ -27,19 +26,34 @@ its whole life. Each round:
 6. **End.** Merge or close: tokens counted one last time, panes closed,
    worktrees and refs removed.
 
-Everything that happens goes on the docket's record. The PR's working
-state (rex-reviewer's ledger format, field for field) is in the
-`review_prs` table.
+Everything that happens goes on the docket's record. Each PR's working
+state is in the `review_prs` table.
 
 ## Config
 
-Your rex-reviewer config, read as it is: `~/.config/wheelhouse/review.lua`
-if you make one, else `~/.config/rex-reviewer/config.lua`. LuaJIT reads it,
-so effort functions and guides work as they did; Wheelhouse calls them per
-PR with the same view (`lines`, `files`, `touches`, `round`, `delta_lines`,
-`last_merge_risk`, ...). Briefs are rex-reviewer's, copied as text into
-`briefs/review/`; a file of the same name in
-`~/.config/wheelhouse/briefs/review/` replaces one.
+`~/.config/wheelhouse/review.lua`, a Lua file that returns a table, read
+with LuaJIT so policies can be functions:
+
+| Key | What | Default |
+| --- | --- | --- |
+| `repos["owner/name"]` | `checkout` (required), `notes` for the briefs, `guides`, `effort` | |
+| `reviewers` | one to four: `"claude"`, or `{ name, agent, extra_args, guides, effort }` | `{ "codex" }` |
+| `checker` | `"claude"`, `"codex"`, or `{ agent, extra_args, effort }` | `"claude"` |
+| `post` | `"ask"` (you post) or `"auto"` (the checker posts) | `"ask"` |
+| `max_rounds` | rounds at once (waiting on you doesn't count) | 3 |
+| `poll_seconds` | how often to check GitHub | 180 |
+| `effort` | `{ review = …, check = … }`: a level, or `function(pr)` returning one | the agent's own |
+| `guides` | `review`, `style`, `merge_risk`, `check`: instructions, a file, `"bundled"`, or a function | style and merge risk bundled |
+| `agents` | `claude`/`codex`: `program`, `args`, `extra_args` | |
+| `path` | folders put first on the agents' PATH | |
+| `caches`, `extra_caches` | folders the agents may write (package caches) | Go, npm, pnpm, uv, Playwright, Cargo |
+
+An effort function gets the PR: `repo`, `pr`, `title`, `author`, `round`,
+`additions`, `deletions`, `lines`, `files`, `labels`, `changed_files`,
+`touches(paths)`, and on later rounds `delta_lines`, `last_verdict`,
+`last_blocking`, `last_merge_risk`; the checker's also `drafted` and
+`drafted_blocking`. The briefs are in `briefs/review/`; a file of the same
+name in `~/.config/wheelhouse/briefs/review/` replaces one.
 
 `wh review post-mode ask|auto|config` overrides the config's `post`.
 
@@ -62,16 +76,21 @@ dismiss. Any other agent is refused.
 
 ```sh
 rex-reviewer down        # stop its watcher (pausing isn't enough: it still cleans up)
-wh review on             # import its ledger; starts paused
+wh import rex-reviewer   # its config and guides into ~/.config/wheelhouse; its PRs and rounds
+wh review on             # starts paused
 wh review post-mode ask  # optional: you post the first rounds yourself
 wh review resume
 ```
 
-`wh review on` refuses while rex-reviewer's watcher runs. The import keeps
-each PR's rounds, heads, sessions and worktrees, so a re-request resumes
-where rex-reviewer left off.
+Both refuse while rex-reviewer's watcher runs. The import keeps each PR's
+rounds, heads, sessions and worktrees, so a re-request resumes where
+rex-reviewer left off. After it, nothing of rex-reviewer's is read.
 
-## What's different from rex-reviewer
+## Where it started
+
+Review began as a port of rex-reviewer, and keeps its proven contracts:
+the briefs, the agents' `.tmp/status.txt`, the draft format, and the
+posting refusals. What's changed:
 
 - A PR reopened after cleanup, that asks you again, is reviewed again.
 - A re-request is a new request: the one that started the last round never

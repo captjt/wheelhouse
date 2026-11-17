@@ -27,8 +27,6 @@ pub struct Core {
     pub started: std::time::Instant,
     /// Whether a Linear key is set up (checked at start and every few minutes).
     pub linear_ready: bool,
-    /// rex-reviewer's ledger, while it runs alongside.
-    pub reviewer: crate::reviewer::Ledger,
     /// Previews up now, by their tailnet port.
     pub previews: std::collections::BTreeMap<u16, crate::preview::Live>,
     /// The Review protocol's live state.
@@ -74,7 +72,6 @@ impl Core {
                 tailnet_host: None,
                 started: std::time::Instant::now(),
                 linear_ready: false,
-                reviewer: Default::default(),
                 previews: Default::default(),
                 review: Default::default(),
             };
