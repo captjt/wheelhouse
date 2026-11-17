@@ -106,6 +106,7 @@ export type Msg = {
   choice?: string | null;
   status: string;
   created_at: string;
+  preview?: { url: string; local: string; https_port: number; app_port: number; down?: string } | null;
 };
 
 export type ReviewReady = {

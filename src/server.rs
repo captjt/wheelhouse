@@ -71,6 +71,8 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/reviews/post", post(review_post))
         .route("/api/reviews/dismiss", post(review_dismiss))
         .route("/api/reviews/preview", get(review_preview))
+        .route("/api/share", post(share_start))
+        .route("/api/share/stop", post(share_stop))
         .route("/api/hook", post(hook))
         .route("/api/events", get(events))
         .fallback(asset)
@@ -814,6 +816,41 @@ struct ItemQ {
 async fn review_preview(axum::extract::Query(q): axum::extract::Query<ItemQ>) -> ApiResult {
     let text = crate::reviewer::preview(&q.item).await.map_err(|e| fail(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
     Ok(Json(json!({ "preview": text })))
+}
+
+#[derive(Deserialize)]
+struct ShareReq {
+    port: u16,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    ask: Option<String>,
+    #[serde(default)]
+    options: Vec<String>,
+    #[serde(default)]
+    block: Option<String>,
+}
+
+async fn share_start(State(shared): State<Shared>, Json(req): Json<ShareReq>) -> ApiResult {
+    let from = crate::messages::caller(&shared.lock(), req.block.as_deref());
+    if from.block.is_none() {
+        return Err(fail(StatusCode::BAD_REQUEST, "share from an agent's pane: the preview lives as long as it does"));
+    }
+    crate::preview::share(&shared, &from, req.port, req.title, req.ask, req.options).await.map(Json).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))
+}
+
+#[derive(Deserialize)]
+struct ShareStop {
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    block: Option<String>,
+}
+
+async fn share_stop(State(shared): State<Shared>, Json(req): Json<ShareStop>) -> ApiResult {
+    let from = crate::messages::caller(&shared.lock(), req.block.as_deref());
+    let n = crate::preview::stop(&shared, &from, req.port).await.map_err(internal)?;
+    Ok(Json(json!({ "stopped": n })))
 }
 
 async fn verify_all(State(shared): State<Shared>) -> ApiResult {

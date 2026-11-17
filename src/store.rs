@@ -25,6 +25,9 @@ pub struct Message {
     pub why: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// A preview the message carries: its url, local url, ports, and why
+    /// it came down.
+    pub preview: Option<serde_json::Value>,
 }
 
 pub struct Store {
@@ -83,6 +86,19 @@ CREATE TABLE IF NOT EXISTS keys (
 );
 ";
 
+/// Columns added after a table was first made.
+fn migrate(conn: &Connection) -> Result<()> {
+    let has = |table: &str, col: &str| -> Result<bool> {
+        let mut st = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let cols: Vec<String> = st.query_map([], |r| r.get::<_, String>(1))?.collect::<rusqlite::Result<_>>()?;
+        Ok(cols.iter().any(|c| c == col))
+    };
+    if !has("messages", "preview")? {
+        conn.execute_batch("ALTER TABLE messages ADD COLUMN preview TEXT")?;
+    }
+    Ok(())
+}
+
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent() {
@@ -91,6 +107,7 @@ impl Store {
         let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Store { conn })
     }
 
@@ -98,6 +115,7 @@ impl Store {
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Store { conn })
     }
 
@@ -192,7 +210,7 @@ impl Store {
 
     pub fn messages_where(&self, cond: &str, args: impl rusqlite::Params) -> Result<Vec<Message>> {
         let sql = format!(
-            "SELECT id, docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, why, created_at, updated_at
+            "SELECT id, docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, why, created_at, updated_at, preview
              FROM messages WHERE {cond} ORDER BY id"
         );
         let mut st = self.conn.prepare(&sql)?;
@@ -214,9 +232,22 @@ impl Store {
                 why: r.get(13)?,
                 created_at: r.get(14)?,
                 updated_at: r.get(15)?,
+                preview: r.get::<_, Option<String>>(16)?.and_then(|p| serde_json::from_str(&p).ok()),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_message_preview(&mut self, id: i64, preview: &serde_json::Value) -> Result<()> {
+        self.conn.execute("UPDATE messages SET preview = ?2 WHERE id = ?1", params![id, preview.to_string()])?;
+        Ok(())
+    }
+
+    pub fn set_message_preview_down(&mut self, id: i64, why: &str) -> Result<()> {
+        let Some(m) = self.message(id)? else { return Ok(()) };
+        let mut p = m.preview.unwrap_or_default();
+        p["down"] = serde_json::json!(why);
+        self.set_message_preview(id, &p)
     }
 
     pub fn set_message_place(&mut self, id: i64, docket: &str, seq: i64) -> Result<()> {

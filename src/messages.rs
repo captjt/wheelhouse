@@ -333,7 +333,7 @@ pub fn view(core: &Core, m: &Message) -> Value {
     json!({
         "id": m.id, "docket": m.docket, "from": m.from_addr, "from_app": from_app, "to": m.to_addr,
         "subject": m.subject, "body": m.body, "options": m.options, "reply_to": m.reply_to, "choice": m.choice,
-        "status": m.status, "created_at": m.created_at,
+        "status": m.status, "created_at": m.created_at, "preview": m.preview,
     })
 }
 

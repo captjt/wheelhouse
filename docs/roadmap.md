@@ -21,7 +21,7 @@ run today. `[x]` is built and checked; `[ ]` is next.
 - [x] The `wheelhouse` agent skill (`wh skill install`)
 - [ ] The global agent instructions point at Wheelhouse (at switch-over)
 - [x] Web Push on the phone (Home Screen app, Turn on in the sidebar)
-- [ ] Previews: `wh share PORT`
+- [x] Previews: `wh share PORT`, answering only you (each request checked)
 - [ ] Other Rex hosts
 - [ ] Codex's prompt keys
 - [ ] `wh import`: history from rex-inbox, rex-reviewer, rex-develop

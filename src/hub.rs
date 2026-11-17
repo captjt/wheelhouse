@@ -29,6 +29,8 @@ pub struct Core {
     pub linear_ready: bool,
     /// rex-reviewer's ledger, while it runs alongside.
     pub reviewer: crate::reviewer::Ledger,
+    /// Previews up now, by their tailnet port.
+    pub previews: std::collections::BTreeMap<u16, crate::preview::Live>,
 }
 
 #[derive(Clone)]
@@ -71,6 +73,7 @@ impl Core {
                 started: std::time::Instant::now(),
                 linear_ready: false,
                 reviewer: Default::default(),
+                previews: Default::default(),
             };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;

@@ -17,6 +17,7 @@ mod hooks;
 mod hub;
 mod mirror;
 mod paths;
+mod preview;
 mod push;
 mod record;
 mod reviewer;
@@ -115,6 +116,19 @@ enum Cmd {
         title: Option<String>,
         prompt: Option<String>,
     },
+    /// Show the user an app this pane serves on PORT, on the tailnet, with a
+    /// question and answers as buttons. --stop takes it (or all yours) down.
+    Share {
+        port: Option<u16>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        ask: Option<String>,
+        #[arg(long = "option")]
+        options: Vec<String>,
+        #[arg(long)]
+        stop: bool,
+    },
     /// The agents' skill for Wheelhouse: show, install, or remove.
     Skill { action: Option<String> },
     /// Store a Linear API key in the Keychain.
@@ -196,6 +210,19 @@ fn main() {
                 .map(|v| println!("{} started in {}: wheelhouse/{}", if codex { "Codex" } else { "Claude Code" }, v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?")))
         }
         Some(Cmd::Skill { action }) => skill(action.as_deref()),
+        Some(Cmd::Share { port, title, ask, options, stop }) => {
+            let block = std::env::var("REX_BLOCK").ok();
+            if stop {
+                client::json("POST", "/api/share/stop", Some(&json!({ "port": port, "block": block }))).map(|v| println!("stopped {} preview(s)", v["stopped"]))
+            } else {
+                let port = port.ok_or_else(|| anyhow::anyhow!("which port? wh share 5173"));
+                port.and_then(|p| client::json("POST", "/api/share", Some(&json!({ "port": p, "title": title, "ask": ask, "options": options, "block": block }))))
+                    .map(|v| {
+                        println!("#{} in the user's inbox: {}", v["message"], v["url"].as_str().unwrap_or("?"));
+                        println!("their answer comes back as a reply: wh wait --thread {}", v["message"]);
+                    })
+            }
+        }
         Some(Cmd::Send { to, subject, options, text }) => msg_send(&to, subject, options, text),
         Some(Cmd::Reply { n, choice, text }) => msg_reply(n, choice, text),
         Some(Cmd::Inbox { json }) => msg_inbox(json),
@@ -257,6 +284,7 @@ fn serve() -> Result<()> {
         tokio::spawn(messages::deliver_loop(shared.clone()));
         tokio::spawn(notify::run(shared.clone()));
         tokio::spawn(push::run(shared.clone()));
+        tokio::spawn(preview::sweep(shared.clone()));
         server::serve(shared).await
     })
 }

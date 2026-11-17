@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { appName, type Msg } from "./api";
-import { AppAvatar } from "./icons";
+import { AppAvatar, IconExternal } from "./icons";
+import { onThisMac } from "./Pane";
 import { agoLong, useHub } from "./live";
 import { Kbd, Prose } from "./ui";
 
@@ -29,6 +30,18 @@ export function MessageCard({ m, compact }: { m: Msg; compact?: boolean }) {
       {!compact && (
         <div className="msg-body">
           <Prose text={m.body} />
+        </div>
+      )}
+      {m.preview && (
+        <div className="msg-preview">
+          {m.preview.down ? (
+            <span className="muted small">The preview is down: {m.preview.down}.</span>
+          ) : (
+            <a className="btn btn-small btn-primary" href={onThisMac() ? m.preview.local : m.preview.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+              Open preview <IconExternal size={11} />
+            </a>
+          )}
+          <span className="muted small mono-s">:{m.preview.app_port}</span>
         </div>
       )}
       {m.options.length > 0 && (

@@ -42,6 +42,23 @@ Their answer arrives in your prompt as `[wheelhouse] Message #N`; when they
 pressed a button it says `Chose:`. Not for routine progress, and if the user
 is in the chat, ask there.
 
+## Showing the user something you serve
+
+When you run an app for the user to look at (a dev server, a local stack),
+share it instead of sending a localhost link they can't open from their
+phone:
+
+```sh
+wh share 5173 --title "Checkout form" --ask "Does the new error state read right?" \
+  --option "Looks right" --option "Needs work"
+wh wait --thread <N> --timeout 900     # their answer, as a reply to #N
+wh share --stop 5173                   # when you're done with it
+```
+
+It gets its own address on the user's tailnet, answering only them. It
+comes down when they answer, your pane closes, or the app stops answering.
+Live reload over websockets doesn't pass through yet: reload by hand.
+
 ## Other agents
 
 ```sh
