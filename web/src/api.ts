@@ -109,6 +109,67 @@ export type Msg = {
   preview?: { url: string; local: string; https_port: number; app_port: number; down?: string } | null;
 };
 
+/** One round of a PR's review, as its history records it. */
+export type ReviewRound = {
+  round: number;
+  verdict: string;
+  by?: string;
+  head?: string;
+  at?: string;
+  url?: string | null;
+  blocking?: number;
+  non_blocking?: number;
+  merge_risk?: string | null;
+  checker_effort?: string | null;
+  tokens?: { total?: number } | null;
+  reviewers?: Record<string, { drafted?: number; kept?: number; only?: number; effort?: string | null; tokens?: number }> | null;
+};
+
+/** A PR in the Review protocol. */
+export type ReviewPr = {
+  key: string;
+  full_key: string;
+  repo: string;
+  pr: number;
+  url?: string | null;
+  title?: string | null;
+  author?: string | null;
+  state: string;
+  phase?: string | null;
+  round: number;
+  verdict?: string | null;
+  merge_risk?: string | null;
+  review_url?: string | null;
+  implementation?: string | null;
+  docket?: string | null;
+  head?: string | null;
+  round_head?: string | null;
+  reviewers_done?: number | null;
+  reviewers_total?: number | null;
+  reviewers: { name: string; agent: string; effort?: string | null }[];
+  checker_effort?: string | null;
+  start_error?: string | null;
+  attention?: { kind: string; text: string; round: number } | null;
+  posted_at?: string | null;
+  updated_at?: string | null;
+  history: ReviewRound[];
+  /** The checked review of the round in progress, once it's written. */
+  draft?: { event: string; verdict?: string | null; blocking: number; non_blocking: number; merge_risk?: string | null } | null;
+};
+
+export type ReviewStatus = {
+  enabled: boolean;
+  paused: boolean;
+  post?: "ask" | "auto" | null;
+  config?: { path: string; repos: string[]; reviewers: { name: string; agent: string }[]; checker: string; post: string; max_rounds: number; poll_seconds: number } | null;
+  config_error?: string | null;
+  last_scan_at?: string | null;
+  scan_error?: string | null;
+  doing?: string | null;
+  rex_reviewer_running: boolean;
+  prs: ReviewPr[];
+};
+
 export type ReviewReady = {
   item: string;
   key: string;
@@ -138,6 +199,7 @@ export type ReviewRef = {
 
 export type HubState = {
   reviews: ReviewReady[];
+  review?: ReviewStatus;
   messages: Msg[];
   owner: string;
   hooks: boolean;

@@ -40,3 +40,22 @@ pub fn tilde(path: &str) -> String {
         _ => path.to_string(),
     }
 }
+
+/// `~/x` as a path in the home folder; anything else as it is.
+pub fn expand(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => home().join(rest),
+        None if path == "~" => home(),
+        None => PathBuf::from(path),
+    }
+}
+
+/// A program on PATH, or in the usual places a LaunchAgent's PATH lacks.
+pub fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var("PATH").unwrap_or_default();
+    path.split(':')
+        .map(PathBuf::from)
+        .chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from))
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}

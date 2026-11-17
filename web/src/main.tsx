@@ -4,7 +4,8 @@ import { createRoot } from "react-dom/client";
 import type { Docket } from "./api";
 import { DocketScreen } from "./Docket";
 import { InboxView, inboxItems } from "./Inbox";
-import { IconActive, IconAgents, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconPlus, IconSearch, IconSun, Logo, SessionIcon } from "./icons";
+import { IconActive, IconAgents, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconPlus, IconPR, IconSearch, IconSun, Logo, SessionIcon } from "./icons";
+import { ReviewsView } from "./Reviews";
 import { HubProvider, LiveProvider, go, useHub, useRoute, useTheme, type Theme } from "./live";
 import { NewDocket, Palette } from "./Palette";
 import { PaneProvider } from "./Pane";
@@ -86,11 +87,13 @@ function App() {
   const [nav, setNav] = useState(false);
   const page = route[0] || "view";
 
-  const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.reviews ?? []).length, [hub.state]);
+  const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.reviews ?? [], hub.state?.review?.prs ?? []).length, [hub.state]);
+  const reviewAlerts = (hub.state?.review?.prs ?? []).filter((p) => p.attention).length;
   const urgent = useMemo(
-    () => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length + (hub.state?.messages.length ?? 0) + (hub.state?.reviews?.length ?? 0),
-    [hub.state],
+    () => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length + (hub.state?.messages.length ?? 0) + (hub.state?.reviews?.length ?? 0) + reviewAlerts,
+    [hub.state, reviewAlerts],
   );
+  const reviewCount = (hub.state?.review?.prs ?? []).filter((p) => p.state === "queued" || p.state === "reviewing").length;
   useEffect(() => {
     document.title = urgent > 0 ? `(${urgent}) Wheelhouse` : "Wheelhouse";
     // The installed app's Dock or Home Screen badge: what needs you.
@@ -113,7 +116,7 @@ function App() {
       if (pending.current) {
         window.clearTimeout(pending.current);
         pending.current = null;
-        const dest = { i: "/inbox", a: "/view/active", d: "/view/all", n: "/agents", x: "/view/done" }[e.key];
+        const dest = { i: "/inbox", a: "/view/active", d: "/view/all", n: "/agents", x: "/view/done", r: "/reviews" }[e.key];
         if (dest) {
           e.preventDefault();
           go(dest);
@@ -157,6 +160,7 @@ function App() {
   if (page === "d" && route[1]) main = <DocketScreen key={route[1]} id={route[1]} />;
   else if (page === "inbox") main = <InboxView />;
   else if (page === "agents") main = <AgentsView />;
+  else if (page === "reviews") main = <ReviewsView />;
   else if (page === "session" && route[1]) {
     const s = route[1];
     main = (
@@ -200,6 +204,7 @@ function App() {
         </div>
         <nav className="nav">
           {item("/inbox", "Inbox", <IconInbox size={15} />, inboxCount, urgent > 0)}
+          {item("/reviews", "Reviews", <IconPR size={15} />, reviewAlerts || reviewCount, reviewAlerts > 0)}
           {item("/view/active", "Active", <IconActive size={15} />, counts.active)}
           {item("/view/all", "All dockets", <IconLayers size={15} />)}
           {item("/view/done", "Done", <IconDone size={15} />)}

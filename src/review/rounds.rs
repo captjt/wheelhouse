@@ -1,0 +1,1237 @@
+//! A round: prep, the reviewers, the checker, a moved head, the post, and
+//! cleanup. Ported from rex-reviewer's `rounds.lua`; the caller holds the
+//! PR's lock (`super::lock`).
+
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Value, json};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use super::agentcli::{self, ReviewerLaunch};
+use super::briefs::{Vars, brief, render};
+use super::config::Config;
+use super::panes::{self, Place};
+use super::pr::{Pr, Reviewer};
+use super::{github, rules};
+use crate::hub::{Shared, Who};
+use crate::record::fold::AgentRef;
+
+pub const STALE_WORKING: i64 = 300;
+/// An agent idle this long with its work unfinished has stalled.
+pub const STALLED: i64 = 600;
+
+const REVIEWER_PROMPT: &str = "Read .tmp/ground-rules.md, then .tmp/rounds/{n}/task.md, and do the task.";
+const CHECKER_PROMPT: &str = "Read .tmp/rounds/{n}/check.md and do it.";
+const DELTA_PROMPT: &str = "The PR's head moved while you reviewed. Read .tmp/rounds/{n}/delta-{h}.md and do it.";
+
+fn now() -> String {
+    crate::time::now()
+}
+
+fn epoch() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+fn short(s: &str) -> String {
+    s.chars().take(7).collect()
+}
+
+// ---- git ----
+
+async fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("PATH", github::command_path())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("CDPATH")
+        .current_dir(crate::paths::home())
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .context("running git")?;
+    if !out.status.success() {
+        bail!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Fetch from GitHub over HTTPS with your `gh` login, so it works without
+/// an SSH agent (the hub runs as a LaunchAgent).
+async fn fetch(checkout: &Path, repo: &str, refspecs: &[String]) -> Result<()> {
+    let gh = github::gh_bin();
+    let helper = format!("credential.helper=!'{}' auth git-credential", gh.display());
+    // $WH_GIT_BASE points tests at a local origin.
+    let url = format!("{}/{repo}.git", std::env::var("WH_GIT_BASE").unwrap_or_else(|_| "https://github.com".into()));
+    let mut args: Vec<&str> = vec!["-c", "credential.helper=", "-c", &helper, "fetch", "--no-tags", "--quiet", &url];
+    args.extend(refspecs.iter().map(String::as_str));
+    git(checkout, &args).await.map(|_| ())
+}
+
+fn ref_for(pr: i64, round: i64) -> String {
+    format!("refs/wheelhouse/pr-{pr}/round-{round}")
+}
+
+/// A round's ref: Wheelhouse's, or rex-reviewer's for an imported PR.
+async fn existing_ref(checkout: &Path, pr: i64, round: i64) -> Option<String> {
+    for r in [ref_for(pr, round), format!("refs/rex-reviewer/pr-{pr}/round-{round}")] {
+        if git(checkout, &["rev-parse", "--verify", "--quiet", &r]).await.is_ok() {
+            return Some(r);
+        }
+    }
+    None
+}
+
+// ---- Files in a worktree ----
+
+pub fn status(wt: &Path) -> String {
+    std::fs::read_to_string(wt.join(".tmp/status.txt")).ok().and_then(|s| s.lines().next().map(|l| l.trim().to_string())).unwrap_or_default()
+}
+
+fn set_status(wt: &Path, s: &str) -> Result<()> {
+    super::write_atomic(&wt.join(".tmp/status.txt"), &format!("{s}\n"))
+}
+
+fn status_mtime(wt: &Path) -> Option<i64> {
+    std::fs::metadata(wt.join(".tmp/status.txt")).ok().map(|m| m.mtime())
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let target = to.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            copy_dir(&e.path(), &target)?;
+        } else {
+            std::fs::copy(e.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+fn read_json(p: &Path) -> Option<Value> {
+    std::fs::read_to_string(p).ok().and_then(|s| serde_json::from_str(&s).ok())
+}
+
+// ---- Who reviews, where ----
+
+/// Where a PR's worktrees go: beside its primary's, if it has one (an
+/// imported PR keeps rex-reviewer's, so its sessions resume), else
+/// Wheelhouse's own.
+fn worktree_path(e: &Pr, name: Option<&str>) -> PathBuf {
+    let base = e
+        .worktree
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|w| w.file_name().and_then(|n| n.to_str()) == Some(&format!("pr-{}", e.pr)))
+        .and_then(|w| w.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| super::data_dir().join("worktrees").join(&e.repo));
+    base.join(match name {
+        None => format!("pr-{}", e.pr),
+        Some(n) => format!("pr-{}-{n}", e.pr),
+    })
+}
+
+/// Pane labels: `<prefix>-<pr>`, `-<name>`, `-check`, at most 32 long.
+fn prefix(repo: &str) -> String {
+    let name = repo.rsplit('/').next().unwrap_or(repo).to_lowercase();
+    let p: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '-' }).collect();
+    if p.starts_with(|c: char| c.is_ascii_lowercase()) { p } else { format!("pr-{p}") }
+}
+
+fn label(e: &Pr, cfg: &Config, suffix: Option<&str>) -> String {
+    let longest = cfg.reviewers.iter().map(|r| r.name.len()).chain(std::iter::once("check".len())).max().unwrap_or(5);
+    let room = 32usize.saturating_sub(format!("-{}-", e.pr).len() + longest).max(1);
+    let mut p = prefix(&e.repo);
+    if p.len() > room {
+        p = p[..room].trim_end_matches(['-', '_']).to_string();
+    }
+    match suffix {
+        None => format!("{p}-{}", e.pr),
+        Some(s) => format!("{p}-{}-{s}", e.pr),
+    }
+}
+
+fn port(index: i64, pr: i64) -> i64 {
+    20000 + 10000 * (index.max(1) - 1) + pr % 10000
+}
+
+/// The round's reviewers: the ones it started with while it runs, else the
+/// config's, keeping each one's session when it can resume.
+fn round_reviewers(e: &Pr, cfg: &Config) -> Vec<Reviewer> {
+    if e.state == "reviewing" && !e.round_reviewers.is_empty() {
+        let rs = e.round_reviewer_list();
+        if !rs.is_empty() {
+            return rs;
+        }
+    }
+    let list: Vec<_> = if e.state == "reviewing" { cfg.reviewers.iter().take(1).collect() } else { cfg.reviewers.iter().collect() };
+    list.into_iter()
+        .map(|cr| {
+            let mut r = match e.reviewers.get(&cr.name) {
+                Some(r) if r.agent == cr.agent => r.clone(),
+                _ => Reviewer { agent: cr.agent.clone(), ..Default::default() },
+            };
+            r.name = cr.name.clone();
+            r.index = cr.index as i64;
+            r.primary = cr.index == 1;
+            let wt = worktree_path(e, if r.primary { None } else { Some(&cr.name) }).display().to_string();
+            // A session resumes only in the folder it started in.
+            if r.worktree.as_deref().is_some_and(|w| w != wt) {
+                r.session = None;
+            }
+            r.worktree = Some(wt);
+            r.pane = Some(label(e, cfg, if r.primary { None } else { Some(&cr.name) }));
+            r.block = None;
+            r
+        })
+        .collect()
+}
+
+// ---- What the policy and briefs see ----
+
+fn delta_lines(diff: &str) -> i64 {
+    let mut n = 0;
+    let mut in_hunk = false;
+    for l in diff.lines() {
+        if l.starts_with("diff ") {
+            in_hunk = false;
+        } else if l.starts_with("@@") {
+            in_hunk = true;
+        } else if in_hunk && (l.starts_with('+') || l.starts_with('-')) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// The PR as the effort policy sees it (rex-reviewer's view, field for field).
+pub fn effort_view(e: &Pr, round: i64, drafts: Option<&[Reviewer]>) -> Value {
+    let ctx = e.worktree.as_deref().map(|w| Path::new(w).join(format!(".tmp/context/round-{round}")));
+    let prj = ctx.as_ref().and_then(|c| read_json(&c.join("pr.json"))).unwrap_or_default();
+    let files: Vec<Value> = prj["files"].as_array().into_iter().flatten().filter_map(|f| f["path"].as_str()).map(|p| json!(p)).collect();
+    let labels: Vec<Value> = prj["labels"].as_array().into_iter().flatten().filter_map(|l| l["name"].as_str()).map(|p| json!(p)).collect();
+    let (a, d) = (e.additions.unwrap_or(0), e.deletions.unwrap_or(0));
+    let mut v = json!({
+        "repo": e.repo, "pr": e.pr, "title": e.title, "author": e.author, "round": round,
+        "additions": a, "deletions": d, "lines": a + d,
+        "changed_files": e.changed_files.unwrap_or(files.len() as i64), "files": files, "labels": labels,
+    });
+    if round > 1
+        && let Some(diff) = ctx.as_ref().and_then(|c| std::fs::read_to_string(c.join("delta.diff")).ok())
+    {
+        v["delta_lines"] = json!(delta_lines(&diff));
+    }
+    if let Some(h) = e.history.iter().rev().find(|h| h["by"] != "you") {
+        v["last_verdict"] = h["verdict"].clone();
+        v["last_blocking"] = h["blocking"].clone();
+        v["last_merge_risk"] = h["merge_risk"].clone();
+    }
+    if let Some(rs) = drafts {
+        let (mut n, mut b) = (0, 0);
+        for r in rs {
+            if let Some(d) = r.worktree.as_deref().and_then(|w| read_json(&Path::new(w).join(format!(".tmp/rounds/{round}/review.json")))) {
+                n += d["findings"].as_array().map_or(0, Vec::len);
+                b += super::post::blocking_count(&d);
+            }
+        }
+        v["drafted"] = json!(n);
+        v["drafted_blocking"] = json!(b);
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.retain(|_, x| !x.is_null());
+    }
+    v
+}
+
+fn one_line(s: &str) -> String {
+    s.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// The briefs' placeholders for a round, for one reviewer (or the checker).
+fn vars(cfg: &Config, e: &Pr, round: i64, r: Option<&Reviewer>, rs: &[Reviewer], login: &str, mode: &str) -> Result<Vars> {
+    let entry = serde_json::to_value(e)?;
+    let mut v = Vars::new();
+    v.insert("REPO", e.repo.clone());
+    v.insert("PR", e.pr.to_string());
+    if let Some(t) = &e.title {
+        v.insert("TITLE", t.clone());
+    }
+    if let Some(a) = &e.author {
+        v.insert("AUTHOR", a.clone());
+    }
+    v.insert("LOGIN", login.to_string());
+    v.insert("BASE", e.base.clone().unwrap_or_else(|| "main".into()));
+    v.insert("ROUND", round.to_string());
+    let head = e.round_head.clone().unwrap_or_default();
+    v.insert("HEAD_SHORT", short(&head));
+    v.insert("HEAD", head);
+    v.insert("PREV_ROUND", (round - 1).to_string());
+    v.insert("PREV_HEAD", e.reviewed_head.clone().unwrap_or_else(|| "?".into()));
+    v.insert("PREV_HEAD_SHORT", e.reviewed_head.as_deref().map(short).unwrap_or_else(|| "?".into()));
+    v.insert("CONTEXT", format!(".tmp/context/round-{round}"));
+    v.insert("OUT", format!(".tmp/rounds/{round}"));
+    v.insert("PORT", port(r.map_or(1, |r| r.index), e.pr).to_string());
+    v.insert("DRAFT_SCHEMA", super::draft_schema().display().to_string());
+    let notes = cfg.repos.get(&e.repo).map(|r| r.notes.trim().to_string()).unwrap_or_default();
+    v.insert("REPO_NOTES", if notes.is_empty() { String::new() } else { format!("## Notes for this repo\n\n{notes}\n") });
+    v.insert("N", rs.len().to_string());
+    v.insert("PRIMARY", rs.first().map(|r| r.name.clone()).unwrap_or_default());
+    let review = match cfg.guide(&e.repo, "review", r.map(|r| r.name.as_str()), &entry)? {
+        Some(g) => g,
+        None => one_line(&render(&brief("parts/review-default.md"), &v)),
+    };
+    v.insert("REVIEW_GUIDE", review);
+    v.insert("STYLE_GUIDE", cfg.guide(&e.repo, "style", None, &entry)?.unwrap_or_else(|| "Write for the PR author, plainly and briefly.".into()));
+    let risk = cfg.guide(&e.repo, "merge_risk", None, &entry)?;
+    v.insert("MERGE_RISK_GUIDE", risk.clone().unwrap_or_default());
+    v.insert("CHECK_GUIDE", cfg.guide(&e.repo, "check", None, &entry)?.map(|g| format!("## More instructions\n\n{g}\n")).unwrap_or_default());
+    v.insert("PREVIEW_CMD", format!("wh review preview {} {}", e.repo, e.pr));
+    v.insert("POST_CMD", format!("wh review post {} {}", e.repo, e.pr));
+    let names: Vec<String> = rs.iter().map(|r| format!("\"{}\"", r.name)).collect();
+    v.insert("FOUND_BY_EXAMPLE", format!("`[{}]`", if names.is_empty() { "\"claude\"".to_string() } else { names.join(", ") }));
+    v.insert("THE_REVIEWERS", if rs.len() > 1 { "the reviewers" } else { "the reviewer" }.into());
+    let start = if risk.is_some() { render(&brief("parts/merge-risk-start.md"), &v) } else { String::new() };
+    let add = if risk.is_some() { render(&brief("parts/merge-risk-add.md"), &v) } else { String::new() };
+    let post = render(&brief(if mode == "auto" { "parts/post-auto.md" } else { "parts/post-ask.md" }), &v);
+    let parallel = if rs.len() > 1 { render(&brief("parts/parallel.md"), &v).trim().to_string() } else { String::new() };
+    v.insert("MERGE_RISK_START", start);
+    v.insert("MERGE_RISK_ADD", add);
+    v.insert("POST_STEP", post);
+    v.insert("PARALLEL", parallel);
+    Ok(v)
+}
+
+// ---- Prep ----
+
+/// Fetch the PR's head into the round's ref, put every reviewer's worktree
+/// at it, and write the round's context. Also re-preps the round in
+/// progress when its head moved.
+pub async fn prep(shared: &Shared, key: &str) -> Result<()> {
+    let cfg = super::config(shared)?;
+    let mut e = super::get(&shared.lock(), key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+    if e.finished() {
+        bail!("{key} is {}", e.state);
+    }
+    let round = if e.state == "reviewing" { e.round } else { e.round + 1 };
+    let checkout = cfg.repos.get(&e.repo).map(|r| r.checkout.clone()).ok_or_else(|| anyhow!("{} isn't in the review config", e.repo))?;
+    let rf = ref_for(e.pr, round);
+    fetch(&checkout, &e.repo, &[format!("+refs/pull/{}/head:{rf}", e.pr)]).await?;
+    let base = e.base.clone().unwrap_or_else(|| "main".into());
+    if let Err(err) = fetch(&checkout, &e.repo, &[format!("+refs/heads/{base}:refs/remotes/origin/{base}")]).await {
+        say!("review: {key}: fetching {base}: {err:#}");
+    }
+    let head = git(&checkout, &["rev-parse", &rf]).await?.trim().to_string();
+    let rs = round_reviewers(&e, &cfg);
+    for r in &rs {
+        let wt = PathBuf::from(r.worktree.as_deref().unwrap_or_default());
+        if wt.join(".git").exists() {
+            git(&wt, &["checkout", "--detach", "--quiet", &head]).await?;
+        } else {
+            if let Some(p) = wt.parent() {
+                std::fs::create_dir_all(p)?;
+            }
+            git(&checkout, &["worktree", "add", "--detach", "--quiet", &wt.to_string_lossy(), &head]).await?;
+        }
+        if !r.primary && !e.extra_worktrees.iter().any(|x| Some(x.as_str()) == r.worktree.as_deref()) {
+            e.extra_worktrees.push(r.worktree.clone().unwrap_or_default());
+        }
+    }
+    let primary = PathBuf::from(rs.first().and_then(|r| r.worktree.clone()).ok_or_else(|| anyhow!("no reviewers"))?);
+    let ctx = primary.join(format!(".tmp/context/round-{round}"));
+    github::fetch_context(&e.repo, e.pr, &ctx).await?;
+    if let Some(p) = read_json(&ctx.join("pr.json")) {
+        if let Some(b) = p["baseRefName"].as_str() {
+            if b != base {
+                let _ = fetch(&checkout, &e.repo, &[format!("+refs/heads/{b}:refs/remotes/origin/{b}")]).await;
+            }
+            e.base = Some(b.to_string());
+        }
+        e.additions = p["additions"].as_i64();
+        e.deletions = p["deletions"].as_i64();
+        e.changed_files = p["changedFiles"].as_i64();
+    }
+    if round > 1
+        && let Some(prev) = existing_ref(&checkout, e.pr, round - 1).await
+    {
+        let range = format!("{prev}..{rf}");
+        super::write_atomic(&ctx.join("delta.diff"), &git(&checkout, &["diff", &prev, &rf]).await.unwrap_or_default())?;
+        super::write_atomic(&ctx.join("delta-commits.txt"), &git(&checkout, &["log", "--oneline", &range]).await.unwrap_or_default())?;
+    }
+    if e.state == "reviewing"
+        && let Some(from) = e.round_head.clone().filter(|h| *h != head)
+    {
+        let range = format!("{from}..{head}");
+        super::write_atomic(&ctx.join("delta-head.diff"), &git(&checkout, &["diff", &from, &head]).await.unwrap_or_default())?;
+        super::write_atomic(&ctx.join("delta-head-commits.txt"), &git(&checkout, &["log", "--oneline", &range]).await.unwrap_or_default())?;
+    }
+    for r in rs.iter().skip(1) {
+        let other = PathBuf::from(r.worktree.as_deref().unwrap_or_default()).join(format!(".tmp/context/round-{round}"));
+        let _ = std::fs::remove_dir_all(&other);
+        copy_dir(&ctx, &other)?;
+    }
+    e.worktree = Some(primary.display().to_string());
+    e.round_head = Some(head);
+    e.prepared_round = Some(round);
+    let mut core = shared.lock();
+    super::save(&mut core, &mut e)?;
+    Ok(())
+}
+
+// ---- Panes ----
+
+fn last_lines(s: &str, n: usize) -> String {
+    let l: Vec<&str> = s.lines().collect();
+    l[l.len().saturating_sub(n)..].join("\n")
+}
+
+fn app_of(agent: &str) -> &'static str {
+    if agent == "claude" { "claude-code" } else { "codex" }
+}
+
+/// Tell the tracker a pane is this PR's, before it can be seen as a stray.
+fn expect(shared: &Shared, docket: &str, label: &str, role: &str) {
+    shared.lock().review.panes.insert(label.to_string(), (docket.to_string(), role.to_string()));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn adopt(shared: &Shared, docket: &str, agent: &str, block: &str, label: &str, cwd: &Path, prompt: &str, role: &str, round: i64) {
+    let a = AgentRef {
+        app: app_of(agent).into(),
+        host: "local".into(),
+        block: block.into(),
+        rex_session: super::session_name(),
+        pane: label.into(),
+        cwd: Some(crate::paths::tilde(&cwd.to_string_lossy())),
+    };
+    let mut core = shared.lock();
+    crate::agents::adopt(&mut core, docket, &a, Some(prompt));
+    let _ = core.append(docket, "claim", &Who::Hub, None, json!({ "source": "wheelhouse", "role": role, "round": round, "agent": a }));
+}
+
+/// A PR's pane: by its block, or by label in the session it opened in.
+fn pane_block(shared: &Shared, e: &Pr, block: Option<&str>, label: Option<&str>) -> Option<String> {
+    if let Some(b) = block
+        && panes::state(shared, b).is_some()
+    {
+        return Some(b.to_string());
+    }
+    panes::find(shared, e.session_id.as_deref(), label?)
+}
+
+fn shared_caches(cfg: &Config) -> Vec<PathBuf> {
+    let cargo = super::cache_dir().join("cargo");
+    let _ = std::fs::create_dir_all(&cargo);
+    for d in ["registry", "git", "advisory-dbs"] {
+        let src = crate::paths::home().join(".cargo").join(d);
+        let link = cargo.join(d);
+        if src.exists() && link.symlink_metadata().is_err() {
+            let _ = std::os::unix::fs::symlink(&src, &link);
+        }
+    }
+    let mut out = vec![super::cache_dir()];
+    out.extend(cfg.caches.iter().filter(|c| c.exists()).cloned());
+    out
+}
+
+async fn wait_codex_thread(wt: &Path, since: i64) -> Option<String> {
+    for _ in 0..15 {
+        if let Some(t) = agentcli::codex_thread(wt, since) {
+            return Some(t);
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    None
+}
+
+/// Open one reviewer's pane and hand it `prompt`. Returns its block.
+#[allow(clippy::too_many_arguments)]
+async fn open_reviewer(shared: &Shared, cfg: &Config, e: &Pr, docket: &str, r: &mut Reviewer, resume: bool, place: Place<'_>, prompt: &str, round: i64) -> Result<(String, String)> {
+    let wt = PathBuf::from(r.worktree.as_deref().unwrap_or_default());
+    let checkout = &cfg.repos[&e.repo].checkout;
+    let dirs: Vec<PathBuf> = [checkout.join(".git/worktrees")].into_iter().filter(|d| d.exists()).collect();
+    let caches = shared_caches(cfg);
+    let extra = cfg.reviewer(&r.name).map(|c| c.extra_args.clone()).unwrap_or_default();
+    let title = format!("wheelhouse review {}{}", e.key(), if r.primary { String::new() } else { format!(" {}", r.name) });
+    let l = agentcli::reviewer(
+        cfg,
+        &ReviewerLaunch {
+            agent: &r.agent,
+            extra_args: &extra,
+            resume: if resume { r.session.as_deref() } else { None },
+            worktree: &wt,
+            dirs: &dirs,
+            caches: &caches,
+            effort: r.effort.as_deref(),
+            title: &title,
+        },
+    );
+    let label = r.pane.clone().unwrap_or_else(|| label(e, cfg, None));
+    let role = format!("{} reviewer", r.name);
+    expect(shared, docket, &label, &role);
+    let since = epoch();
+    let created = panes::open(shared, &label, &wt.to_string_lossy(), &l.argv, place).await?;
+    adopt(shared, docket, &r.agent, &created.block_id, &label, &wt, prompt, &role, round);
+    let program = agentcli::program(cfg, &r.agent);
+    let block = created.block_id.clone();
+    let session = created.session_id.clone();
+    let why = match panes::settled(shared, &block, Duration::from_secs(180)).await {
+        Ok(s) if s == "blocked" => Some("it's waiting on a prompt (a trust or permission question?)".to_string()),
+        Ok(_) => None,
+        Err(why) => Some(format!("{why:#}")),
+    };
+    if let Some(why) = why {
+        let tail = panes::tail(&session, &block).await;
+        panes::close(&session, &block).await;
+        if tail.contains("Hooks need review") {
+            bail!("Codex is waiting for its hooks to be trusted. Run codex once, open /hooks, and trust them; the round retries on its own.");
+        }
+        bail!("the {} reviewer ({program}) didn't start: {why}\n{}", r.name, last_lines(&tail, 6));
+    }
+    r.session = if r.agent == "codex" { wait_codex_thread(&wt, since).await.or(l.session) } else { l.session };
+    r.block = Some(block.clone());
+    r.pane = Some(label.clone());
+    if let Err(why) = panes::deliver(shared, &session, &block, prompt).await {
+        panes::close(&session, &block).await;
+        bail!("{label} didn't take its task: {why:#}");
+    }
+    Ok((session, block))
+}
+
+// ---- Start ----
+
+/// Start the round prep made: every reviewer in its own pane, blind to the
+/// others. All or nothing: if one fails, the panes opened are closed and
+/// nothing is saved, so the next try starts clean.
+pub async fn start(shared: &Shared, key: &str) -> Result<()> {
+    let cfg = super::config(shared)?;
+    let (mut e, docket, mode) = {
+        let core = shared.lock();
+        let e = super::get(&core, key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+        let d = super::docket_of(&core, key).ok_or_else(|| anyhow!("{key} has no docket"))?;
+        let mode = super::post_mode(&core, &cfg);
+        (e, d, mode)
+    };
+    if e.state != "queued" {
+        bail!("{key} is {}, not queued", e.state);
+    }
+    let round = e.round + 1;
+    if e.prepared_round != Some(round) || e.worktree.is_none() {
+        bail!("{key}: prep round {round} first");
+    }
+    let login = github::login().await?;
+    let mut rs = round_reviewers(&e, &cfg);
+    for r in &rs {
+        if !Path::new(r.worktree.as_deref().unwrap_or_default()).join(".git").exists() {
+            bail!("{key}: {}'s worktree isn't there; prep again", r.name);
+        }
+    }
+    let view = effort_view(&e, round, None);
+    for r in rs.iter_mut() {
+        r.effort = cfg.effort(&e.repo, "review", &view, Some(&r.name))?;
+    }
+    e.checker_effort = None;
+    e.checker_agent = None;
+    // Panes left from an earlier round with these labels go first.
+    for l in rs.iter().filter_map(|r| r.pane.clone()).chain(std::iter::once(label(&e, &cfg, Some("check")))) {
+        if let (Some(b), Some(s)) = (panes::find(shared, None, &l), panes::session(shared)) {
+            panes::close(&s, &b).await;
+        }
+    }
+    let prompt = REVIEWER_PROMPT.replace("{n}", &round.to_string());
+    let snapshot = rs.clone();
+    let mut opened: Vec<(String, String)> = Vec::new();
+    let mut anchor: Option<String> = None;
+    let mut failure = None;
+    for (i, r) in rs.iter_mut().enumerate() {
+        let wt = PathBuf::from(r.worktree.clone().unwrap_or_default());
+        let run = async {
+            let v = vars(&cfg, &e, round, Some(r), &snapshot, &login, &mode)?;
+            for d in [format!(".tmp/rounds/{round}"), ".tmp/probes".into(), ".tmp/gh-empty".into()] {
+                std::fs::create_dir_all(wt.join(d))?;
+            }
+            super::write_atomic(&wt.join(".tmp/ground-rules.md"), &render(&brief("ground-rules.md"), &v))?;
+            let fresh = round == 1 || r.session.is_none();
+            super::write_atomic(&wt.join(format!(".tmp/rounds/{round}/task.md")), &render(&brief(if fresh { "round-1.md" } else { "round-n.md" }), &v))?;
+            set_status(&wt, &format!("WORKING round {round}"))?;
+            if r.session.is_none() {
+                r.first_round = Some(round);
+                r.tokens_seen = None;
+            }
+            let place = match &anchor {
+                None => Place::Tab,
+                Some(a) => Place::Beside { anchor: a, dir: if i == 1 { "right" } else { "below" } },
+            };
+            open_reviewer(shared, &cfg, &e, &docket, r, !fresh, place, &prompt, round).await
+        };
+        match run.await {
+            Ok((s, b)) => {
+                anchor.get_or_insert(b.clone());
+                opened.push((s, b));
+            }
+            Err(err) => {
+                failure = Some(err);
+                break;
+            }
+        }
+    }
+    if let Some(err) = failure {
+        for (s, b) in &opened {
+            panes::close(s, b).await;
+        }
+        let mut core = shared.lock();
+        let _ = super::load(&mut core);
+        return Err(err);
+    }
+    let session = opened.first().map(|(s, _)| s.clone());
+    let head = e.round_head.clone().unwrap_or_default();
+    for r in &rs {
+        e.reviewers.insert(r.name.clone(), r.clone());
+    }
+    rules::mark_started(&mut e, &head, &now());
+    e.round_reviewers = rs.iter().map(|r| r.name.clone()).collect();
+    e.reviewers_total = Some(rs.len() as i64);
+    e.reviewers_done = Some(0);
+    e.reviewer = rs.first().map(|r| r.agent.clone());
+    e.reviewer_session = rs.first().and_then(|r| r.session.clone());
+    e.pane = rs.first().and_then(|r| r.pane.clone());
+    e.phase = Some("reviewer".into());
+    e.session_id = session;
+    e.checker_pane = None;
+    e.checker_block = None;
+    e.start_error = None;
+    e.start_failed_epoch = None;
+    let effort: serde_json::Map<String, Value> = rs.iter().map(|r| (r.name.clone(), json!(r.effort))).collect();
+    let note = format!(
+        "{} reviewer{}: {}",
+        rs.len(),
+        if rs.len() == 1 { "" } else { "s" },
+        rs.iter().map(|r| format!("{}{}", r.name, r.effort.as_deref().map(|x| format!(" ({x})")).unwrap_or_default())).collect::<Vec<_>>().join(", ")
+    );
+    let mut core = shared.lock();
+    super::save(&mut core, &mut e)?;
+    super::event(&mut core, &e, "started", json!({ "round": round, "head": head, "note": note, "effort": effort }), &Who::Hub)?;
+    Ok(())
+}
+
+// ---- Progress ----
+
+#[derive(Debug, Default)]
+pub struct Progress {
+    pub done: i64,
+    pub total: i64,
+    pub ready: bool,
+    pub blocked: Option<(String, String)>,
+    pub closed: Option<String>,
+    pub stalled: Option<String>,
+    pub stale: Vec<String>,
+}
+
+fn secs_since_rex(at: Option<&str>) -> Option<i64> {
+    let t = time::OffsetDateTime::parse(at?, &time::format_description::well_known::Rfc3339).ok()?;
+    Some((time::OffsetDateTime::now_utc() - t).whole_seconds())
+}
+
+/// Where the round's reviewers are.
+pub fn progress(shared: &Shared, e: &Pr) -> Progress {
+    let rs = e.round_reviewer_list();
+    let mut p = Progress { total: rs.len() as i64, ..Default::default() };
+    for r in &rs {
+        let wt = PathBuf::from(r.worktree.as_deref().unwrap_or_default());
+        let st = status(&wt);
+        let block = pane_block(shared, e, r.block.as_deref(), r.pane.as_deref());
+        let pane = block.as_deref().and_then(|b| panes::state(shared, b));
+        let pstate = pane.as_ref().map(|(s, _)| s.as_str());
+        let since = pane.as_ref().and_then(|(_, at)| secs_since_rex(at.as_deref()));
+        if let Some(why) = st.strip_prefix("BLOCKED") {
+            p.blocked.get_or_insert((r.name.clone(), why.trim_start_matches(':').trim().to_string()));
+        } else if st == "READY_TO_POST" && pstate != Some("working") {
+            p.done += 1;
+        } else if st == "READY_TO_POST" {
+            // Codex can stay "working" after its turn (a background
+            // terminal): done if the status was written after it began
+            // working, a while ago.
+            let mtime = status_mtime(&wt).unwrap_or(0);
+            let began = since.map(|s| epoch() - s).unwrap_or(i64::MAX);
+            if mtime > began && epoch() - mtime >= STALE_WORKING {
+                p.done += 1;
+                p.stale.push(r.name.clone());
+            }
+        } else if st.starts_with("WORKING") && pane.is_none() {
+            p.closed.get_or_insert(r.name.clone());
+        } else if st.starts_with("WORKING") && matches!(pstate, Some("idle" | "done")) && since.is_some_and(|s| s >= STALLED) {
+            p.stalled.get_or_insert(r.name.clone());
+        }
+    }
+    p.ready = p.total > 0 && p.done == p.total;
+    p
+}
+
+// ---- The checker ----
+
+/// Every reviewer is done and the head hasn't moved: start the checker in
+/// the primary's worktree, beside its pane.
+pub async fn start_checker(shared: &Shared, key: &str) -> Result<()> {
+    let cfg = super::config(shared)?;
+    let (mut e, docket, mode) = {
+        let core = shared.lock();
+        let e = super::get(&core, key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+        let d = super::docket_of(&core, key).ok_or_else(|| anyhow!("{key} has no docket"))?;
+        let mode = super::post_mode(&core, &cfg);
+        (e, d, mode)
+    };
+    let round = e.round;
+    let rs = e.round_reviewer_list();
+    let primary = PathBuf::from(e.worktree.clone().ok_or_else(|| anyhow!("{key} has no worktree"))?);
+    let out = format!(".tmp/rounds/{round}");
+    let mut others = Vec::new();
+    for r in rs.iter().skip(1) {
+        let wt = PathBuf::from(r.worktree.as_deref().unwrap_or_default());
+        let dest = primary.join(format!("{out}/reviewers/{}", r.name));
+        std::fs::create_dir_all(&dest)?;
+        for f in ["review.json", "report.md"] {
+            let src = wt.join(format!("{out}/{f}"));
+            if src.exists() {
+                std::fs::copy(&src, dest.join(f))?;
+            }
+        }
+        others.push(wt);
+    }
+    let view = effort_view(&e, round, Some(&rs));
+    e.checker_effort = cfg.effort(&e.repo, "check", &view, None)?;
+    let login = github::login().await?;
+    let mut v = vars(&cfg, &e, round, None, &rs, &login, &mode)?;
+    let head = e.round_head.clone().unwrap_or_default();
+    let program = |a: &str| agentcli::program(&cfg, a);
+    if rs.len() <= 1 {
+        v.insert("DRAFTS", format!("A reviewer reviewed head {head} in this worktree and drafted `{out}/review.json` and `{out}/report.md`."));
+        v.insert("DRAFT_FILES", format!("`{out}/review.json`, `{out}/report.md`"));
+        v.insert("MERGE_DRAFTS", String::new());
+    } else {
+        let mut d = format!("{} reviewers reviewed head {head}, each on its own in its own worktree, and each drafted a review:\n\n", rs.len());
+        for r in &rs {
+            if r.primary || Some(&r.name) == rs.first().map(|x| &x.name) {
+                d.push_str(&format!("- `{}` ({}), in this worktree: `{out}/review.json` and `{out}/report.md`.\n", r.name, program(&r.agent)));
+            } else {
+                d.push_str(&format!(
+                    "- `{}` ({}), in `{}`: copied to `{out}/reviewers/{}/review.json` and `report.md`. Its probes and builds are in its worktree.\n",
+                    r.name,
+                    program(&r.agent),
+                    r.worktree.as_deref().unwrap_or_default(),
+                    r.name
+                ));
+            }
+        }
+        v.insert("DRAFTS", d.trim_end().to_string());
+        v.insert("DRAFT_FILES", "each draft and report above".into());
+        let md = render(&brief("parts/merge-drafts.md"), &v);
+        v.insert("MERGE_DRAFTS", md);
+    }
+    super::write_atomic(&primary.join(format!("{out}/check.md")), &render(&brief("check.md"), &v))?;
+    if cfg.merge_risk_enabled(&e.repo, &serde_json::to_value(&e)?) {
+        super::write_atomic(&primary.join(format!("{out}/merge-risk.md")), &render(&brief("merge-risk.md"), &v))?;
+    }
+    set_status(&primary, &format!("VERIFYING round {round}"))?;
+    let check_label = label(&e, &cfg, Some("check"));
+    if let (Some(b), Some(s)) = (pane_block(shared, &e, e.checker_block.as_deref(), Some(&check_label)), e.session_id.clone().or_else(|| panes::session(shared))) {
+        panes::close(&s, &b).await;
+    }
+    let title = format!("wheelhouse review {} round {round} check", e.key());
+    let l = agentcli::checker(&cfg, &primary, &others, e.checker_effort.as_deref(), mode == "auto", &title);
+    let primary_block = rs.first().and_then(|r| pane_block(shared, &e, r.block.as_deref(), r.pane.as_deref()));
+    let place = match &primary_block {
+        Some(b) => Place::Beside { anchor: b, dir: "left" },
+        None => Place::Tab,
+    };
+    expect(shared, &docket, &check_label, "checker");
+    let since = epoch();
+    let created = panes::open(shared, &check_label, &primary.to_string_lossy(), &l.argv, place).await?;
+    let prompt = CHECKER_PROMPT.replace("{n}", &round.to_string());
+    adopt(shared, &docket, &cfg.checker, &created.block_id, &check_label, &primary, &prompt, "checker", round);
+    let ok = match panes::settled(shared, &created.block_id, Duration::from_secs(120)).await {
+        Ok(s) if s == "blocked" => Err(anyhow!("it's waiting on a prompt")),
+        Ok(_) => panes::deliver(shared, &created.session_id, &created.block_id, &prompt).await,
+        Err(e) => Err(e),
+    };
+    if let Err(why) = ok {
+        let tail = panes::tail(&created.session_id, &created.block_id).await;
+        panes::close(&created.session_id, &created.block_id).await;
+        bail!("the checker ({}) didn't start: {why:#}\n{}", program(&cfg.checker), last_lines(&tail, 6));
+    }
+    let session = if cfg.checker == "codex" { wait_codex_thread(&primary, since).await } else { l.session };
+    if cfg.checker == "codex"
+        && let Some(t) = &session
+    {
+        e.checker_threads.push(t.clone());
+    }
+    e.checker_session = session;
+    e.checker_agent = Some(cfg.checker.clone());
+    e.phase = Some("checking".into());
+    e.checker_pane = Some(check_label);
+    e.checker_block = Some(created.block_id);
+    e.reviewers_done = Some(rs.len() as i64);
+    let mut core = shared.lock();
+    super::save(&mut core, &mut e)?;
+    super::event(&mut core, &e, "checking", json!({ "round": round, "head": head, "effort": e.checker_effort }), &Who::Hub)?;
+    Ok(())
+}
+
+// ---- A head that moved mid-round ----
+
+/// The PR's own diff (against where it branched from the base), without
+/// index lines, so a merge of the base into it compares equal.
+async fn pr_diff(checkout: &Path, base: &str, sha: &str) -> Result<String> {
+    let mb = git(checkout, &["merge-base", &format!("origin/{base}"), sha]).await?;
+    let d = git(checkout, &["diff", mb.trim(), sha]).await?;
+    Ok(d.lines().filter(|l| !l.starts_with("index ")).collect::<Vec<_>>().join("\n"))
+}
+
+/// The head moved during the round: if the PR's own changes are the same
+/// (the base was merged in), the checker checks again at the new head;
+/// otherwise the reviewers review the new commits in the same round.
+pub async fn follow_head(shared: &Shared, key: &str, new: &str) -> Result<&'static str> {
+    let cfg = super::config(shared)?;
+    let e = super::get(&shared.lock(), key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+    let old = e.round_head.clone().unwrap_or_default();
+    let checkout = cfg.repos.get(&e.repo).map(|r| r.checkout.clone()).ok_or_else(|| anyhow!("{} isn't in the review config", e.repo))?;
+    let base = e.base.clone().unwrap_or_else(|| "main".into());
+    let _ = fetch(&checkout, &e.repo, &[format!("+refs/heads/{base}:refs/remotes/origin/{base}"), new.to_string()]).await;
+    let same = match (pr_diff(&checkout, &base, &old).await, pr_diff(&checkout, &base, new).await) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    prep(shared, key).await?;
+    let mut e = super::get(&shared.lock(), key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+    let head = e.round_head.clone().unwrap_or_default();
+    if same {
+        {
+            let mut core = shared.lock();
+            super::event(&mut core, &e, "repointed", json!({ "round": e.round, "head": head, "from": old }), &Who::Hub)?;
+        }
+        start_checker(shared, key).await?;
+        return Ok("repointed");
+    }
+    if let (Some(b), Some(s)) = (pane_block(shared, &e, e.checker_block.as_deref(), e.checker_pane.as_deref()), e.session_id.clone()) {
+        panes::close(&s, &b).await;
+    }
+    e.checker_pane = None;
+    e.checker_block = None;
+    let (docket, mode) = {
+        let core = shared.lock();
+        (super::docket_of(&core, key).unwrap_or_default(), super::post_mode(&core, &cfg))
+    };
+    let login = github::login().await?;
+    let round = e.round;
+    let h7 = short(&head);
+    let prompt = DELTA_PROMPT.replace("{n}", &round.to_string()).replace("{h}", &h7);
+    let rs = e.round_reviewer_list();
+    let mut anchor: Option<String> = None;
+    for mut r in rs.clone() {
+        let wt = PathBuf::from(r.worktree.clone().unwrap_or_default());
+        let mut v = vars(&cfg, &e, round, Some(&r), &rs, &login, &mode)?;
+        v.insert("MOVED_FROM", old.clone());
+        v.insert("MOVED_FROM_SHORT", short(&old));
+        super::write_atomic(&wt.join(format!(".tmp/rounds/{round}/delta-{h7}.md")), &render(&brief("delta.md"), &v))?;
+        set_status(&wt, &format!("WORKING round {round} delta"))?;
+        match pane_block(shared, &e, r.block.as_deref(), r.pane.as_deref()) {
+            Some(b) => {
+                let s = e.session_id.clone().unwrap_or_default();
+                panes::deliver(shared, &s, &b, &prompt).await?;
+                anchor.get_or_insert(b);
+            }
+            None => {
+                let place = match &anchor {
+                    None => Place::Tab,
+                    Some(a) => Place::Beside { anchor: a, dir: "right" },
+                };
+                let resume = r.session.is_some();
+                let (_, b) = open_reviewer(shared, &cfg, &e, &docket, &mut r, resume, place, &prompt, round).await?;
+                anchor.get_or_insert(b);
+                e.reviewers.insert(r.name.clone(), r);
+            }
+        }
+    }
+    e.reviewers_done = Some(0);
+    e.phase = Some("reviewer".into());
+    let mut core = shared.lock();
+    super::save(&mut core, &mut e)?;
+    super::event(&mut core, &e, "delta", json!({ "round": round, "head": head, "from": old }), &Who::Hub)?;
+    Ok("delta")
+}
+
+// ---- Post, dismiss ----
+
+/// Who asks to post.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Asker {
+    /// You: the app, or `wh` outside an agent's pane.
+    Owner,
+    /// This PR's checker, from its pane.
+    Checker,
+    /// Any other agent.
+    Agent(String),
+}
+
+fn worktree_tokens(e: &Pr) -> (Vec<(String, Value)>, Value) {
+    let mut by = Vec::new();
+    let mut sum = json!({ "total": 0 });
+    for w in e.worktrees() {
+        let t = agentcli::tokens(Path::new(&w));
+        sum = agentcli::add_tokens(&sum, &t);
+        by.push((w, t));
+    }
+    (by, sum)
+}
+
+/// Each reviewer's part in the round: findings drafted, kept, found only
+/// by it, effort, tokens.
+fn scoreboard(e: &mut Pr, verified: Option<&Value>, by_wt: &[(String, Value)]) -> Value {
+    let round = e.round;
+    let mut out = serde_json::Map::new();
+    for name in e.round_reviewers.clone() {
+        let Some(r) = e.reviewers.get_mut(&name) else { continue };
+        let wt = PathBuf::from(r.worktree.as_deref().unwrap_or_default());
+        let mut s = serde_json::Map::new();
+        if let Some(d) = read_json(&wt.join(format!(".tmp/rounds/{round}/review.json"))) {
+            s.insert("drafted".into(), json!(d["findings"].as_array().map_or(0, Vec::len)));
+        }
+        let effort = agentcli::session_effort(&r.agent, &wt, r.session.as_deref()).or_else(|| r.effort.clone());
+        s.insert("effort".into(), json!(effort));
+        if let Some(v) = verified {
+            let fs = v["findings"].as_array().cloned().unwrap_or_default();
+            let has = |f: &Value| f["found_by"].as_array().is_some_and(|a| a.iter().any(|x| x == name.as_str()));
+            s.insert("kept".into(), json!(fs.iter().filter(|f| has(f)).count()));
+            s.insert("only".into(), json!(fs.iter().filter(|f| f["found_by"].as_array().is_some_and(|a| a.len() == 1 && a[0] == name.as_str())).count()));
+        }
+        let agent_key = r.agent.clone();
+        if let Some((_, t)) = by_wt.iter().find(|(w, _)| Some(w.as_str()) == r.worktree.as_deref()) {
+            let total = t[&agent_key]["total"].as_i64().unwrap_or(0);
+            let spent = if r.first_round == Some(round) { total } else { total - r.tokens_seen.unwrap_or(0) };
+            s.insert("tokens".into(), json!(spent.max(0)));
+            r.tokens_seen = Some(total);
+        }
+        out.insert(name, Value::Object(s));
+    }
+    Value::Object(out)
+}
+
+fn draft_path(e: &Pr, file: &str) -> Option<PathBuf> {
+    e.worktree.as_deref().map(|w| Path::new(w).join(format!(".tmp/rounds/{}/{file}", e.round)))
+}
+
+/// Preview (`dry`) or post the round's checked review.
+pub async fn post(shared: &Shared, key: &str, dry: bool, asker: Asker) -> Result<Value> {
+    let cfg = super::config(shared)?;
+    let (mut e, mode) = {
+        let core = shared.lock();
+        (super::get(&core, key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?, super::post_mode(&core, &cfg))
+    };
+    if e.state != "reviewing" {
+        bail!("{} has no round in progress", e.short());
+    }
+    if !dry {
+        match &asker {
+            Asker::Agent(_) => bail!("only {}'s checker, or you, can post its review", e.short()),
+            Asker::Checker if mode != "auto" => bail!("post = \"ask\": {} posts this review, not the checker; preview it and stop", github::login().await.unwrap_or_else(|_| "the user".into())),
+            _ => {}
+        }
+        if mode != "auto" && e.phase() != "awaiting" {
+            bail!("{} round {} isn't waiting for you (post = \"ask\" and its phase is {}); nothing was posted", e.short(), e.round, e.phase());
+        }
+    }
+    let path = draft_path(&e, "review.verified.json").ok_or_else(|| anyhow!("{key} has no worktree"))?;
+    let text = std::fs::read_to_string(&path).map_err(|_| anyhow!("write {} first: the checked review, in the format of {}", path.display(), super::draft_schema().display()))?;
+    let draft: Value = serde_json::from_str(&text).map_err(|err| anyhow!("{} isn't valid JSON: {err}", path.display()))?;
+    let primary = PathBuf::from(e.worktree.clone().unwrap_or_default());
+    let names: Vec<String> = e
+        .round_reviewer_list()
+        .iter()
+        .map(|r| agentcli::display_name(&r.agent, Path::new(r.worktree.as_deref().unwrap_or_default()), r.session.as_deref()))
+        .collect();
+    let by = agentcli::byline(&names);
+    let checked_by = e.checker_agent.as_deref().map(|a| agentcli::display_name(a, &primary, e.checker_session.as_deref()));
+    let head = e.round_head.clone();
+    let marker = format!("round={} head={}", e.round, head.as_deref().unwrap_or(""));
+    let require_risk = cfg.merge_risk_enabled(&e.repo, &serde_json::to_value(&e)?);
+    if !dry && asker == Asker::Owner {
+        let mut core = shared.lock();
+        if let Some(d) = super::docket_of(&core, key) {
+            core.append(&d, "approval", &Who::Owner, None, json!({ "what": "post-review", "round": e.round, "head": head }))?;
+        }
+    }
+    let args = super::post::Args {
+        repo: &e.repo,
+        pr: e.pr,
+        head: head.as_deref(),
+        by: &by,
+        checked_by: checked_by.as_deref(),
+        marker: Some(&marker),
+        require_risk,
+        dry,
+    };
+    let res = super::post::run(&args, &draft).await.map_err(|r| match r {
+        super::post::Refusal::HeadMoved(_) => anyhow!("{} moved since this round started at {}; review the new commits first", e.short(), short(head.as_deref().unwrap_or(""))),
+        other => anyhow!("{other}"),
+    })?;
+    if dry {
+        let p = primary.join(format!(".tmp/rounds/{}/preview.md", e.round));
+        super::write_atomic(&p, res["preview"].as_str().unwrap_or(""))?;
+        return Ok(json!({ "dry_run": true, "preview": res["preview"], "preview_path": p, "warning": res["warning"] }));
+    }
+    let blocking = super::post::blocking_count(&draft) as i64;
+    let total = draft["findings"].as_array().map_or(0, Vec::len) as i64;
+    let (by_wt, tokens) = worktree_tokens(&e);
+    let reviewers = scoreboard(&mut e, Some(&draft), &by_wt);
+    let checker_effort = e.checker_agent.as_deref().and_then(|a| agentcli::session_effort(a, &primary, e.checker_session.as_deref())).or(e.checker_effort.clone());
+    let implementation = draft["implementation"].as_str().map(one_line);
+    let verdict = res["state"].as_str().unwrap_or("COMMENTED").to_string();
+    let risk = res["merge_risk"].as_str().map(str::to_string);
+    rules::mark_posted(
+        &mut e,
+        rules::Ended {
+            head: head.clone(),
+            verdict: verdict.clone(),
+            review_id: Some(res["review_id"].clone()),
+            url: res["url"].as_str().map(str::to_string),
+            by: None,
+            blocking: Some(blocking),
+            non_blocking: Some(total - blocking),
+            merge_risk: risk.clone(),
+            implementation,
+            tokens: Some(tokens),
+            reviewers: Some(reviewers),
+            checker_effort,
+        },
+        &now(),
+    );
+    e.merge_risk = risk.clone();
+    let _ = set_status(&primary, &format!("POSTED {}", res["url"].as_str().unwrap_or("")));
+    let mut core = shared.lock();
+    super::save(&mut core, &mut e)?;
+    let note = format!("{blocking} blocking, {} non-blocking{}", total - blocking, risk.as_deref().map(|r| format!(", merge risk {r}")).unwrap_or_default());
+    super::event(&mut core, &e, "posted", json!({ "round": e.round, "head": head, "verdict": verdict, "review_id": res["review_id"], "note": note, "by": if asker == Asker::Owner { "you" } else { "checker" } }), &Who::Hub)?;
+    if let (Some(d), Some(url)) = (super::docket_of(&core, key), res["url"].as_str()) {
+        core.append(&d, "link", &Who::Hub, None, json!({ "kind": "github-review", "url": url, "round": e.round, "review_id": res["review_id"] }))?;
+    }
+    core.review.attention.remove(key);
+    core.review.check_now.notify_one();
+    Ok(res)
+}
+
+/// Drop the round's review: nothing goes to GitHub.
+pub async fn dismiss(shared: &Shared, key: &str) -> Result<Value> {
+    let mut e = super::get(&shared.lock(), key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+    if e.state != "reviewing" {
+        bail!("{} has no round in progress", e.short());
+    }
+    let d = draft_path(&e, "review.verified.json").and_then(|p| read_json(&p)).or_else(|| draft_path(&e, "review.json").and_then(|p| read_json(&p)));
+    let checking = matches!(e.phase(), "checking" | "awaiting");
+    let (by_wt, tokens) = worktree_tokens(&e);
+    let verified = draft_path(&e, "review.verified.json").and_then(|p| read_json(&p));
+    let reviewers = scoreboard(&mut e, verified.as_ref(), &by_wt);
+    let primary = PathBuf::from(e.worktree.clone().unwrap_or_default());
+    let checker_effort = if checking { e.checker_agent.as_deref().and_then(|a| agentcli::session_effort(a, &primary, e.checker_session.as_deref())).or(e.checker_effort.clone()) } else { None };
+    let head = e.round_head.clone();
+    rules::mark_posted(
+        &mut e,
+        rules::Ended {
+            head: head.clone(),
+            verdict: "DISMISSED".into(),
+            by: Some("you".into()),
+            implementation: d.as_ref().and_then(|d| d["implementation"].as_str()).map(one_line),
+            tokens: Some(tokens),
+            reviewers: Some(reviewers),
+            checker_effort,
+            ..Default::default()
+        },
+        &now(),
+    );
+    let _ = set_status(&primary, "DISMISSED");
+    let mut core = shared.lock();
+    super::save(&mut core, &mut e)?;
+    super::event(&mut core, &e, "dismissed", json!({ "round": e.round, "head": head }), &Who::Owner)?;
+    core.review.attention.remove(key);
+    core.review.check_now.notify_one();
+    Ok(json!({ "dismissed": true, "round": e.round }))
+}
+
+/// Close a PR's panes (its round is over). Worktrees and sessions stay for
+/// later rounds.
+pub async fn close_panes(shared: &Shared, key: &str) -> Result<()> {
+    let mut e = super::get(&shared.lock(), key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+    let session = e.session_id.clone().or_else(|| panes::session(shared));
+    let mut blocks = Vec::new();
+    if let Some(b) = pane_block(shared, &e, e.checker_block.as_deref(), e.checker_pane.as_deref()) {
+        blocks.push(b);
+    }
+    for r in e.reviewers.values() {
+        if let Some(b) = pane_block(shared, &e, r.block.as_deref(), r.pane.as_deref())
+            && !blocks.contains(&b)
+        {
+            blocks.push(b);
+        }
+    }
+    if let Some(s) = &session {
+        for b in &blocks {
+            panes::close(s, b).await;
+        }
+    }
+    e.pane = None;
+    e.checker_pane = None;
+    e.checker_block = None;
+    e.phase = None;
+    for r in e.reviewers.values_mut() {
+        r.block = None;
+    }
+    let mut core = shared.lock();
+    super::save(&mut core, &mut e)?;
+    Ok(())
+}
+
+/// Merged or closed: count the tokens one last time, then remove the
+/// panes, worktrees and refs.
+pub async fn cleanup(shared: &Shared, key: &str) -> Result<()> {
+    let cfg = super::config(shared)?;
+    {
+        let mut e = super::get(&shared.lock(), key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+        let (_, tokens) = worktree_tokens(&e);
+        if tokens["total"].as_i64().unwrap_or(0) > 0 {
+            e.tokens = Some(tokens);
+        }
+        super::save(&mut shared.lock(), &mut e)?;
+    }
+    close_panes(shared, key).await?;
+    let mut e = super::get(&shared.lock(), key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+    if let Some(checkout) = cfg.repos.get(&e.repo).map(|r| r.checkout.clone()) {
+        let list = git(&checkout, &["worktree", "list", "--porcelain"]).await.unwrap_or_default();
+        let all: Vec<String> = list.lines().filter_map(|l| l.strip_prefix("worktree ")).map(str::to_string).collect();
+        let uid = std::fs::metadata(crate::paths::home()).map(|m| m.uid()).unwrap_or(501);
+        for wt in e.worktrees() {
+            if !Path::new(&wt).join(".git").exists() {
+                continue;
+            }
+            for nested in all.iter().filter(|w| w.starts_with(&format!("{wt}/"))) {
+                let _ = git(&checkout, &["worktree", "remove", "--force", nested]).await;
+            }
+            if let Err(err) = git(&checkout, &["worktree", "remove", "--force", &wt]).await {
+                say!("review: {key}: {err:#}");
+            }
+            let scratch: String = wt.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+            let _ = std::fs::remove_dir_all(format!("/private/tmp/claude-{uid}/{scratch}"));
+        }
+        let _ = git(&checkout, &["worktree", "prune"]).await;
+        for ns in ["wheelhouse", "rex-reviewer"] {
+            let refs = git(&checkout, &["for-each-ref", "--format=%(refname)", &format!("refs/{ns}/pr-{}/", e.pr)]).await.unwrap_or_default();
+            for r in refs.lines().filter(|l| !l.is_empty()) {
+                let _ = git(&checkout, &["update-ref", "-d", r]).await;
+            }
+        }
+    }
+    let threads: Vec<String> = e.reviewers.values().filter(|r| r.agent == "codex").filter_map(|r| r.session.clone()).chain(e.checker_threads.iter().cloned()).collect();
+    for t in threads {
+        let _ = tokio::process::Command::new(agentcli::program(&cfg, "codex")).args(["archive", &t]).env("PATH", github::command_path()).output().await;
+    }
+    e.state = "cleaned".into();
+    e.pane = None;
+    e.checker_pane = None;
+    e.phase = None;
+    e.cleaned_at = Some(now());
+    let mut core = shared.lock();
+    super::save(&mut core, &mut e)?;
+    super::event(&mut core, &e, "cleaned", json!({}), &Who::Hub)?;
+    core.review.attention.remove(key);
+    Ok(())
+}
+
+/// Review a PR that didn't ask you: you picked it up.
+pub async fn pickup(shared: &Shared, repo: &str, n: i64) -> Result<Value> {
+    let cfg = super::config(shared)?;
+    if !cfg.repos.contains_key(repo) {
+        bail!("{repo} isn't in the review config ({})", cfg.repo_list().join(", "));
+    }
+    let key = format!("{repo}#{n}");
+    if let Some(e) = super::get(&shared.lock(), &key)?
+        && matches!(e.state.as_str(), "queued" | "reviewing")
+    {
+        return Ok(json!({ "key": key, "state": e.state, "note": format!("already {}", e.state) }));
+    }
+    let v = github::pr_view(repo, n, "number,title,url,state,headRefOid,baseRefName,author").await?;
+    let state = v["state"].as_str().unwrap_or("");
+    if state != "OPEN" {
+        bail!("{repo}#{n} is {state}");
+    }
+    let mut core = shared.lock();
+    let mut e = super::get(&core, &key)?.unwrap_or_else(|| {
+        let mut p = Pr::new(repo, n);
+        p.created_at = Some(now());
+        p
+    });
+    e.state = "queued".into();
+    e.trigger = Some("manual".into());
+    e.requested_at = Some(now());
+    e.head = v["headRefOid"].as_str().map(str::to_string);
+    e.title = v["title"].as_str().map(str::to_string);
+    e.url = v["url"].as_str().map(str::to_string);
+    e.author = v["author"]["login"].as_str().map(str::to_string);
+    e.outcome = None;
+    e.ended_at = None;
+    super::save(&mut core, &mut e)?;
+    super::event(&mut core, &e, "pickup", json!({ "round": e.round + 1, "head": e.head }), &Who::Owner)?;
+    core.review.check_now.notify_one();
+    Ok(json!({ "key": key, "state": "queued" }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_fit_and_ports_follow_the_reviewer() {
+        let raw = json!({ "repos": { "eqtylab/guardian-infrastructure-and-more-things": { "checkout": "/r" } }, "reviewers": ["claude", { "name": "claude-2", "agent": "claude" }] });
+        let cfg = super::super::config::from_value("/x".into(), raw).unwrap();
+        let e = Pr::new("eqtylab/guardian-infrastructure-and-more-things", 1234);
+        let l = label(&e, &cfg, Some("claude-2"));
+        assert!(l.len() <= 32, "{l}");
+        assert!(l.ends_with("-1234-claude-2") && !l.contains("--"), "{l}");
+        assert!(label(&e, &cfg, Some("check")).len() <= 32);
+        let e = Pr::new("o/9lives", 7);
+        assert_eq!(label(&e, &cfg, None), "pr-9lives-7");
+        assert_eq!((port(1, 632), port(2, 632), port(1, 10632)), (20632, 30632, 20632));
+    }
+
+    #[test]
+    fn worktrees_stay_where_an_imported_pr_had_them() {
+        let mut e = Pr::new("o/api", 7);
+        assert!(worktree_path(&e, None).ends_with("worktrees/o/api/pr-7"));
+        e.worktree = Some("/old/rex-reviewer/worktrees/o/api/pr-7".into());
+        assert_eq!(worktree_path(&e, Some("claude-2")), PathBuf::from("/old/rex-reviewer/worktrees/o/api/pr-7-claude-2"));
+    }
+
+    #[test]
+    fn a_reviewer_moved_to_another_folder_starts_fresh() {
+        let raw = json!({ "repos": { "o/api": { "checkout": "/r" } }, "reviewers": ["claude", { "name": "claude-2", "agent": "claude" }] });
+        let cfg = super::super::config::from_value("/x".into(), raw).unwrap();
+        let mut e = Pr::new("o/api", 7);
+        e.state = "posted".into();
+        e.worktree = Some("/w/o/api/pr-7".into());
+        // Was a second reviewer beside Codex; now it's the primary.
+        e.reviewers.insert("claude".into(), Reviewer { name: "claude".into(), agent: "claude".into(), index: 2, worktree: Some("/w/o/api/pr-7-claude".into()), session: Some("s1".into()), ..Default::default() });
+        e.reviewers.insert("claude-2".into(), Reviewer { name: "claude-2".into(), agent: "claude".into(), index: 2, worktree: Some("/w/o/api/pr-7-claude-2".into()), session: Some("s2".into()), ..Default::default() });
+        let rs = round_reviewers(&e, &cfg);
+        assert_eq!(rs[0].worktree.as_deref(), Some("/w/o/api/pr-7"));
+        assert_eq!(rs[0].session, None, "can't resume in another folder");
+        assert_eq!(rs[1].session.as_deref(), Some("s2"));
+        assert_eq!(rs[0].pane.as_deref(), Some("api-7"));
+        assert_eq!(rs[1].pane.as_deref(), Some("api-7-claude-2"));
+    }
+
+    #[test]
+    fn delta_lines_count_only_hunk_lines() {
+        let d = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-a\n+b\n c\n";
+        assert_eq!(delta_lines(d), 2);
+    }
+}

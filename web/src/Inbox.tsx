@@ -1,24 +1,39 @@
 import { useEffect, useMemo, useState } from "react";
-import { appName, type Docket, type Msg, type ReviewReady } from "./api";
-import { ReviewButtons } from "./Reviews";
+import { appName, type Docket, type Msg, type ReviewPr, type ReviewReady } from "./api";
+import { ReviewActions, ReviewButtons, draftLine } from "./Reviews";
 import { MessageCard, msgFrom, msgTitle } from "./Messages";
 import { DocketScreen } from "./Docket";
-import { AppAvatar, IconInbox, LiveIcon, TitleText } from "./icons";
+import { AppAvatar, IconInbox, IconPR, LiveIcon, TitleText } from "./icons";
 import { ago, go, lastList, useHub } from "./live";
 import { useKeys, useMenu } from "./ui";
 import { rowMenu } from "./views";
 import { AnswerButtons, usePane } from "./Pane";
 
-type Item = { d: Docket; kind: "blocked" | "error" | "done" | "message" | "review"; line: string; at?: string | null; m?: Msg; r?: ReviewReady; key: string };
+type Item = { d: Docket; kind: "blocked" | "error" | "done" | "message" | "review"; line: string; at?: string | null; m?: Msg; r?: ReviewReady; p?: ReviewPr; key: string };
+
+const ATTENTION: Record<string, string> = {
+  ready: "Ready to post",
+  blocked: "Blocked",
+  "start-failed": "Didn't start",
+  stalled: "Stalled",
+  "pane-closed": "Pane closed",
+  error: "Failed",
+};
 
 /** What needs you, newest worry first: waiting on you, failed, then agents
  * that finished a turn and wait for your next word. */
 const placeholder = (id: string, title: string, at: string): Docket =>
   ({ id, title, title_source: "person", status: "in_progress", protocol: "none", prompts: 0, turns: 0, notes: 0, created_at: at, updated_at: at, entries: 0, head: "", short_head: "", live: null, quick: false }) as Docket;
 
-export function inboxItems(dockets: Docket[], messages: Msg[] = [], reviews: ReviewReady[] = []): Item[] {
+export function inboxItems(dockets: Docket[], messages: Msg[] = [], reviews: ReviewReady[] = [], prs: ReviewPr[] = []): Item[] {
   const items: Item[] = [];
   const byId = new Map(dockets.map((d) => [d.id, d]));
+  for (const p of prs) {
+    if (!p.attention) continue;
+    const d = (p.docket && byId.get(p.docket)) || placeholder(p.key, `Review ${p.key}${p.title ? `: ${p.title}` : ""}`, p.updated_at || "");
+    const what = p.attention.kind === "ready" ? draftLine(p) ?? p.attention.text : p.attention.text;
+    items.push({ d, kind: "review", p, line: `${ATTENTION[p.attention.kind] ?? "Needs you"} (round ${p.attention.round}): ${what}`, at: p.updated_at, key: `rv:${p.full_key}` });
+  }
   for (const r of reviews) {
     const d = (r.docket && byId.get(r.docket)) || placeholder(r.key, `Review ${r.key}${r.title ? `: ${r.title}` : ""}`, r.updated_at || "");
     items.push({ d, kind: "review", r, line: `Review ready${r.round ? ` (round ${r.round})` : ""}: ${r.msg ?? ""}`, at: r.updated_at, key: `r:${r.item}` });
@@ -47,7 +62,7 @@ function firstLine(s?: string) {
 export function InboxView() {
   const hub = useHub();
   const pane = usePane();
-  const items = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.reviews ?? []), [hub.state]);
+  const items = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.reviews ?? [], hub.state?.review?.prs ?? []), [hub.state]);
   const [sel, setSel] = useState<string | null>(null);
   const menu = useMenu();
   const current = items.find((i) => i.key === sel) ?? items[0];
@@ -114,7 +129,13 @@ export function InboxView() {
                 }}
               >
                 <span className="inbox-avatar">
-                  <AppAvatar app={it.d.agent?.app} size={22} />
+                  {it.p || it.r ? (
+                    <span className="inbox-pr">
+                      <IconPR size={14} />
+                    </span>
+                  ) : (
+                    <AppAvatar app={it.d.agent?.app} size={22} />
+                  )}
                   <span className="inbox-badge">
                     <LiveIcon state={it.kind === "message" || it.kind === "review" ? "blocked" : it.kind} size={11} />
                   </span>
@@ -134,6 +155,11 @@ export function InboxView() {
                   {it.r && (
                     <span className="inbox-actions">
                       <ReviewButtons r={it.r} small />
+                    </span>
+                  )}
+                  {it.p?.attention?.kind === "ready" && (
+                    <span className="inbox-actions">
+                      <ReviewActions p={it.p} small />
                     </span>
                   )}
                   {it.m && it.m.options.length > 0 && (

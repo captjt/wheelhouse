@@ -31,6 +31,8 @@ pub struct Core {
     pub reviewer: crate::reviewer::Ledger,
     /// Previews up now, by their tailnet port.
     pub previews: std::collections::BTreeMap<u16, crate::preview::Live>,
+    /// The Review protocol's live state.
+    pub review: crate::review::Hub,
 }
 
 #[derive(Clone)]
@@ -74,6 +76,7 @@ impl Core {
                 linear_ready: false,
                 reviewer: Default::default(),
                 previews: Default::default(),
+                review: Default::default(),
             };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;

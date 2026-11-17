@@ -68,6 +68,13 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/push/unsubscribe", post(push_unsubscribe))
         .route("/api/push/test", post(push_test))
+        .route("/api/review", get(review_status))
+        .route("/api/review/check", post(review_check))
+        .route("/api/review/settings", post(review_settings))
+        .route("/api/review/pickup", post(review_pickup))
+        .route("/api/review/preview", post(review_native_preview))
+        .route("/api/review/post", post(review_native_post))
+        .route("/api/review/dismiss", post(review_native_dismiss))
         .route("/api/reviews/post", post(review_post))
         .route("/api/reviews/dismiss", post(review_dismiss))
         .route("/api/reviews/preview", get(review_preview))
@@ -237,8 +244,9 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         .collect();
 
     drop(core);
+    let review = crate::review::watch::status(&shared);
     let mut core = shared.lock();
-    let reviews = crate::reviewer::ready(&mut core);
+    let reviews = if crate::review::enabled(&core) { Vec::new() } else { crate::reviewer::ready(&mut core) };
     let messages: Vec<Value> = core
         .store
         .messages_where("to_addr = 'me' AND status = 'open'", [])
@@ -248,6 +256,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         .collect();
     Ok(Json(json!({
         "reviews": reviews,
+        "review": review,
         "messages": messages,
         "owner": core.owner,
         "hooks": crate::hooks::claude_installed(),
@@ -787,6 +796,136 @@ async fn push_test(State(shared): State<Shared>) -> ApiResult {
     let note = json!({ "title": "Wheelhouse", "body": "Notifications work. You'll hear when an agent needs you.", "tag": "test", "url": "/" });
     let sent = crate::push::send_all(&shared, &note).await.map_err(internal)?;
     Ok(Json(json!({ "sent": sent })))
+}
+
+// ---- The Review protocol ----
+
+async fn review_status(State(shared): State<Shared>) -> ApiResult {
+    let _ = crate::review::config(&shared);
+    Ok(Json(crate::review::watch::status(&shared)))
+}
+
+async fn review_check(State(shared): State<Shared>) -> ApiResult {
+    shared.lock().review.check_now.notify_one();
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct ReviewSettings {
+    /// Turn the protocol on (importing rex-reviewer's ledger) or off.
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    paused: Option<bool>,
+    /// `ask`, `auto`, or `config` (the config's own).
+    #[serde(default)]
+    post: Option<String>,
+    /// Turn on even though rex-reviewer still runs.
+    #[serde(default)]
+    force: bool,
+}
+
+async fn review_settings(State(shared): State<Shared>, Json(req): Json<ReviewSettings>) -> ApiResult {
+    let mut out = json!({});
+    if req.enabled == Some(true) {
+        if crate::review::rex_reviewer_running() && !req.force {
+            return Err(fail(StatusCode::CONFLICT, "rex-reviewer's watcher is still running (paused or not): stop it first with rex-reviewer down, so two tools don't review the same PRs"));
+        }
+        crate::review::config(&shared).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
+    }
+    let mut core = shared.lock();
+    if let Some(on) = req.enabled {
+        if on {
+            let n = crate::review::import(&mut core).map_err(internal)?;
+            out["imported"] = json!(n);
+        }
+        core.store.meta_set("review.enabled", if on { "1" } else { "0" }).map_err(internal)?;
+    }
+    if let Some(p) = req.paused {
+        core.store.meta_set("review.paused", if p { "1" } else { "0" }).map_err(internal)?;
+    }
+    match req.post.as_deref() {
+        Some("ask" | "auto") => core.store.meta_set("review.post", req.post.as_deref().unwrap_or_default()).map_err(internal)?,
+        Some("config") => core.store.meta_set("review.post", "").map_err(internal)?,
+        Some(other) => return Err(fail(StatusCode::BAD_REQUEST, format!("post is ask, auto or config, not {other}"))),
+        None => {}
+    }
+    core.review.check_now.notify_one();
+    core.live_changed();
+    drop(core);
+    let mut st = crate::review::watch::status(&shared);
+    st["imported"] = out["imported"].clone();
+    Ok(Json(st))
+}
+
+#[derive(Deserialize)]
+struct PickupReq {
+    repo: String,
+    pr: i64,
+}
+
+async fn review_pickup(State(shared): State<Shared>, Json(req): Json<PickupReq>) -> ApiResult {
+    crate::review::rounds::pickup(&shared, &req.repo, req.pr).await.map(Json).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))
+}
+
+#[derive(Deserialize)]
+struct ReviewAct {
+    /// `owner/name#n`.
+    key: String,
+    /// The pane asking, from `wh` (`$REX_BLOCK`); none from the app.
+    #[serde(default)]
+    block: Option<String>,
+}
+
+/// Who's asking to post: you, the PR's checker, or another agent.
+fn asker(shared: &Shared, key: &str, block: Option<&str>) -> crate::review::rounds::Asker {
+    use crate::review::rounds::Asker;
+    let Some(b) = block else { return Asker::Owner };
+    let core = shared.lock();
+    let e = crate::review::get(&core, key).ok().flatten();
+    let pane = core.mirror.panes.get(b);
+    let is_checker = e.as_ref().is_some_and(|e| {
+        e.checker_block.as_deref() == Some(b)
+            || pane.is_some_and(|p| Some(p.label.as_str()) == e.checker_pane.as_deref() && Some(p.session_id.as_str()) == e.session_id.as_deref())
+    });
+    if is_checker {
+        return Asker::Checker;
+    }
+    if core.agents.by_block.contains_key(b) || pane.is_some_and(|p| p.is_agent()) {
+        return Asker::Agent(b.to_string());
+    }
+    Asker::Owner
+}
+
+async fn review_act(shared: Shared, req: ReviewAct, what: &str) -> ApiResult {
+    let key = req.key.trim().to_string();
+    if crate::review::pr::parse_key(&key).is_none() {
+        return Err(fail(StatusCode::BAD_REQUEST, format!("{key}: give the PR as owner/name#n")));
+    }
+    let who = asker(&shared, &key, req.block.as_deref());
+    if what == "dismiss" && who != crate::review::rounds::Asker::Owner {
+        return Err(fail(StatusCode::FORBIDDEN, "only you can dismiss a review"));
+    }
+    let lock = crate::review::lock(&shared, &key);
+    let _g = lock.lock().await;
+    let r = match what {
+        "preview" => crate::review::rounds::post(&shared, &key, true, who).await,
+        "post" => crate::review::rounds::post(&shared, &key, false, who).await,
+        _ => crate::review::rounds::dismiss(&shared, &key).await,
+    };
+    r.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
+}
+
+async fn review_native_preview(State(shared): State<Shared>, Json(req): Json<ReviewAct>) -> ApiResult {
+    review_act(shared, req, "preview").await
+}
+
+async fn review_native_post(State(shared): State<Shared>, Json(req): Json<ReviewAct>) -> ApiResult {
+    review_act(shared, req, "post").await
+}
+
+async fn review_native_dismiss(State(shared): State<Shared>, Json(req): Json<ReviewAct>) -> ApiResult {
+    review_act(shared, req, "dismiss").await
 }
 
 // ---- rex-reviewer's reviews ----

@@ -6,11 +6,11 @@ import { Kbd, Prose, useKeys, useMenu } from "./ui";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { IntentSection } from "./Intent";
 import { MessageCard } from "./Messages";
-import { ReviewButtons } from "./Reviews";
+import { ReviewButtons, ReviewPanel } from "./Reviews";
 import { IconExternal } from "./icons";
 import { LinearChip, LinearModal } from "./Linear";
 import { post } from "./api";
-import { IconIssue } from "./icons";
+import { IconIssue, IconPR } from "./icons";
 import { useToast } from "./ui";
 import { STATUSES, statusItems } from "./views";
 
@@ -141,6 +141,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               <MessageCard key={m.id} m={m} />
             ))}
 
+          <ReviewPanel d={d} />
           <IntentSection d={d} entries={entries} onSaved={reload} />
 
           <div className="activity-head">
@@ -190,7 +191,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </button>
             )}
           </Prop>
-          {d.agent && (
+          {d.agent && d.protocol !== "review" && (
             <>
               <Prop label="Agent">
                 <span className="prop-val">
@@ -238,13 +239,13 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </>
           )}
           <Prop label="Protocol">
-            <span className="prop-val">{d.protocol === "agent" ? "Agent" : "By hand"}</span>
+            <span className="prop-val">{d.protocol === "agent" ? "Agent" : d.protocol === "review" ? "Review" : "By hand"}</span>
           </Prop>
-          <Prop label="Work">
+          {d.protocol !== "review" && <Prop label="Work">
             <span className="prop-val">
               {d.prompts} prompt{d.prompts === 1 ? "" : "s"} · {d.turns} turn{d.turns === 1 ? "" : "s"}
             </span>
-          </Prop>
+          </Prop>}
           <Prop label="Created">
             <span className="prop-val" title={d.created_at}>
               {stamp(d.created_at)}
@@ -351,12 +352,18 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
 
   switch (e.kind) {
     case "open":
+      if (data.protocol === "review")
+        return sys(<IconPR size={16} />, <><b>Wheelhouse</b> opened this Review docket{data.review?.key ? <> for {data.review.key}</> : null}</>);
       return data.protocol === "agent"
         ? sys(hubA, <><b>Wheelhouse</b> picked up {agent}{d.agent?.cwd ? <> in <span className="act-path" title={d.agent.cwd}>{shortPath(d.agent.cwd)}</span></> : null}</>)
-        : sys(you, <><b>You</b> opened this docket</>);
+        : e.actor.type === "person"
+          ? sys(you, <><b>You</b> opened this docket</>)
+          : sys(hubA, <><b>Wheelhouse</b> opened this docket</>);
     case "claim": {
       if (data.source === "rex-reviewer")
         return sys(hubA, <><b>rex-reviewer</b> started its {data.role}{data.round ? ` for round ${data.round}` : ""}</>);
+      if (data.source === "wheelhouse" && data.role)
+        return sys(hubA, <><b>Wheelhouse</b> {data.round ? "started" : "found"} the {data.role}{data.round ? ` for round ${data.round}` : ""}</>);
       if (data.source === "wheelhouse") return sys(hubA, <><b>Wheelhouse</b> started {agent} in Rex's wheelhouse session</>);
       const s = <span className="mono-s">{String(data.session || "").slice(0, 8)}</span>;
       const src = data.source;
@@ -401,8 +408,19 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
             <b>You</b> linked <a className="act-link" href={data.url} target="_blank" rel="noreferrer">{data.key}</a> {data.title ? <>· {data.title}</> : null}
           </>,
         );
+      if (data.kind === "github-pr")
+        return sys(<IconPR size={16} />, <>Following <a className="act-link" href={data.url} target="_blank" rel="noreferrer">{data.key}</a> on GitHub</>);
+      if (data.kind === "github-review")
+        return sys(<IconPR size={16} />, <>Round {data.round}'s review is <a className="act-link" href={data.url} target="_blank" rel="noreferrer">on GitHub</a></>, "approved");
       return sys(hubA, <>Linked {e.body}</>);
     case "observed":
+      if (data.what === "review" && data.source === "wheelhouse") return null;
+      if (data.what === "review-event") {
+        const tone = data.event === "posted" ? "approved" : data.event === "dismissed" ? "denied" : data.event === "merged" ? "approved" : undefined;
+        return sys(<IconPR size={16} />, <>{e.body}</>, tone);
+      }
+      if (data.what === "review-attention")
+        return sys(<LiveIcon state={data.kind === "ready" || data.kind === "blocked" ? "blocked" : "error"} size={16} />, <>{e.body}</>, data.kind === "ready" || data.kind === "blocked" ? "blocked" : "error");
       if (data.what === "review") {
         const r = data.review || {};
         const bits = [r.round && `round ${r.round}`, r.phase && r.state === "reviewing" ? r.phase : r.state, r.verdict && r.verdict.replace("_", " ").toLowerCase(), r.merge_risk && `risk ${r.merge_risk}`].filter(Boolean);
@@ -438,6 +456,7 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
       return sys(e.actor.type === "person" ? you : hubA, <><b>{who}</b> {parts.reduce<ReactNode[]>((a, p, i) => (i ? [...a, " and ", p] : [p]), [])}</>);
     }
     case "approval": {
+      if (data.what === "post-review") return sys(you, <><b>You</b> approved posting round {data.round}'s review</>, "approved");
       if (data.kind === "review")
         return sys(you, <><b>You</b> {data.decision === "post" ? "posted" : "dismissed"} the review{e.body ? <>: {e.body}</> : null}{data.url ? <> · <a className="act-link" href={data.url} target="_blank" rel="noreferrer">on GitHub</a></> : null}</>, data.decision === "post" ? "approved" : "denied");
       const ok = data.decision === "approve";
