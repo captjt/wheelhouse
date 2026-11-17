@@ -18,6 +18,7 @@ mod hub;
 mod mirror;
 mod paths;
 mod preview;
+mod review;
 mod push;
 mod record;
 mod reviewer;
@@ -129,6 +130,18 @@ enum Cmd {
         #[arg(long)]
         stop: bool,
     },
+    /// The Review protocol: status, on, off, pause, resume, check,
+    /// post-mode ask|auto|config, pickup, preview, post, dismiss.
+    /// A PR is OWNER/NAME N (or OWNER/NAME#N).
+    Review {
+        action: Option<String>,
+        args: Vec<String>,
+        /// With `on`: even though rex-reviewer still runs.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// The agents' skill for Wheelhouse: show, install, or remove.
     Skill { action: Option<String> },
     /// Store a Linear API key in the Keychain.
@@ -210,6 +223,7 @@ fn main() {
                 .map(|v| println!("{} started in {}: wheelhouse/{}", if codex { "Codex" } else { "Claude Code" }, v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?")))
         }
         Some(Cmd::Skill { action }) => skill(action.as_deref()),
+        Some(Cmd::Review { action, args, force, json }) => review_cmd(action.as_deref().unwrap_or("status"), &args, force, json),
         Some(Cmd::Share { port, title, ask, options, stop }) => {
             let block = std::env::var("REX_BLOCK").ok();
             if stop {
@@ -285,11 +299,110 @@ fn serve() -> Result<()> {
         tokio::spawn(notify::run(shared.clone()));
         tokio::spawn(push::run(shared.clone()));
         tokio::spawn(preview::sweep(shared.clone()));
+        tokio::spawn(review::watch::run(shared.clone()));
         server::serve(shared).await
     })
 }
 
 const SKILL: &str = include_str!("../skills/wheelhouse/SKILL.md");
+
+/// `OWNER/NAME N` or `OWNER/NAME#N` → `OWNER/NAME#N`.
+fn pr_key(args: &[String]) -> Result<String> {
+    let joined = args.join(" ");
+    let key = match args {
+        [one] => one.clone(),
+        [repo, n] => format!("{repo}#{}", n.trim_start_matches('#')),
+        _ => joined,
+    };
+    review::pr::parse_key(&key).map(|(r, n)| format!("{r}#{n}")).ok_or_else(|| anyhow::anyhow!("give the PR as OWNER/NAME N, such as: acme/api 632"))
+}
+
+fn review_cmd(action: &str, args: &[String], force: bool, as_json: bool) -> Result<()> {
+    let block = std::env::var("REX_BLOCK").ok();
+    let settings = |body: Value| client::json("POST", "/api/review/settings", Some(&body));
+    let out = match action {
+        "status" => client::json("GET", "/api/review", None)?,
+        "on" => settings(json!({ "enabled": true, "force": force }))?,
+        "off" => settings(json!({ "enabled": false }))?,
+        "pause" => settings(json!({ "paused": true }))?,
+        "resume" => settings(json!({ "paused": false }))?,
+        "post-mode" => settings(json!({ "post": args.first().map(String::as_str).unwrap_or("config") }))?,
+        "check" => client::json("POST", "/api/review/check", Some(&json!({})))?,
+        "pickup" => {
+            let key = pr_key(args)?;
+            let (repo, pr) = review::pr::parse_key(&key).expect("checked");
+            client::json("POST", "/api/review/pickup", Some(&json!({ "repo": repo, "pr": pr })))?
+        }
+        "preview" | "post" | "dismiss" => {
+            let key = pr_key(args)?;
+            let v = client::json("POST", &format!("/api/review/{action}"), Some(&json!({ "key": key, "block": block })))?;
+            if !as_json {
+                match action {
+                    "preview" => {
+                        if let Some(w) = v["warning"].as_str() {
+                            eprintln!("{w}");
+                        }
+                        println!("{}", v["preview"].as_str().unwrap_or_default());
+                    }
+                    "post" => println!("posted {} ({} inline, {} replies): {}", v["state"].as_str().unwrap_or("?"), v["inline"], v["replies"], v["url"].as_str().unwrap_or("?")),
+                    _ => println!("dismissed round {}; nothing was posted", v["round"]),
+                }
+                return Ok(());
+            }
+            v
+        }
+        other => bail!("wh review takes status, on, off, pause, resume, check, post-mode, pickup, preview, post or dismiss, not {other}"),
+    };
+    if as_json || !matches!(action, "status" | "on" | "off" | "pause" | "resume" | "post-mode") {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+    print_review_status(&out);
+    Ok(())
+}
+
+fn print_review_status(v: &Value) {
+    let on = v["enabled"].as_bool() == Some(true);
+    let paused = v["paused"].as_bool() == Some(true);
+    println!(
+        "Review   {}{}",
+        if on { "on" } else { "off (wh review on: imports rex-reviewer's PRs and takes over)" },
+        if on && paused { " · paused: no new rounds start (wh review resume)" } else { "" }
+    );
+    if let Some(n) = v["imported"].as_u64() {
+        println!("         imported {n} PR(s) from rex-reviewer");
+    }
+    if let Some(e) = v["config_error"].as_str() {
+        println!("config   {e}");
+    } else if let Some(c) = v["config"].as_object() {
+        let rs: Vec<String> = c["reviewers"].as_array().into_iter().flatten().map(|r| r["name"].as_str().unwrap_or("?").to_string()).collect();
+        println!("config   {} · {} · reviewers {} · checker {} · post {}", c["path"].as_str().unwrap_or("?"), c["repos"].as_array().map_or(0, Vec::len).to_string() + " repos", rs.join(", "), c["checker"].as_str().unwrap_or("?"), v["post"].as_str().unwrap_or("?"));
+    }
+    if v["rex_reviewer_running"].as_bool() == Some(true) {
+        println!("         rex-reviewer's watcher is running too (rex-reviewer down stops it)");
+    }
+    if let Some(e) = v["scan_error"].as_str() {
+        println!("GitHub   {e}");
+    } else if let Some(at) = v["last_scan_at"].as_str() {
+        println!("GitHub   checked {at}");
+    }
+    if let Some(d) = v["doing"].as_str() {
+        println!("now      {d}");
+    }
+    for p in v["prs"].as_array().into_iter().flatten() {
+        let phase = p["phase"].as_str().map(|x| format!("/{x}")).unwrap_or_default();
+        let att = p["attention"]["text"].as_str().map(|t| format!("  ⚑ {t}")).unwrap_or_default();
+        println!(
+            "  {:<24} {:<10} r{:<2} {}{}{}",
+            p["key"].as_str().unwrap_or("?"),
+            format!("{}{phase}", p["state"].as_str().unwrap_or("?")),
+            p["round"],
+            p["docket"].as_str().unwrap_or(""),
+            p["verdict"].as_str().map(|x| format!(" · {x}")).unwrap_or_default(),
+            att
+        );
+    }
+}
 
 /// `wh skill [show|install|remove]`: the agents' skill. With a shared
 /// `~/.agents/skills`, it goes there and is linked into Claude Code's and

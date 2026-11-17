@@ -152,6 +152,34 @@ impl Rex {
         Ok(created)
     }
 
+    /// Start `argv` in an existing session: in a new tab named `label`, or
+    /// split beside `anchor` (`right`, `left`, `above`, `below`).
+    pub async fn run_in(&self, session: &str, label: &str, cwd: &str, argv: &[String], split: Option<(&str, &str)>) -> Result<Created> {
+        let mut args: Vec<&str> = vec!["run", "-s", session, "--label", label, "-c", cwd, "--focus=false", "--json"];
+        if let Some((dir, anchor)) = split {
+            args.extend(["--split", dir, "-b", anchor]);
+        }
+        args.push("--");
+        args.extend(argv.iter().map(String::as_str));
+        let v = self.run_json(&args, None).await?;
+        let c = Created {
+            session_id: session.to_string(),
+            window_id: v["window_id"].as_str().map(str::to_string),
+            block_id: v["block_ids"][0].as_str().context("rex run: no block")?.to_string(),
+        };
+        if split.is_none()
+            && let Some(w) = &c.window_id
+        {
+            let _ = self.run(&["window", "rename", "-s", session, w, label], None).await;
+        }
+        Ok(c)
+    }
+
+    /// `rex block close -s SESSION BLOCK`.
+    pub async fn close_block(&self, session: &str, block: &str) -> Result<()> {
+        self.run(&["block", "close", "-s", session, block], None).await.map(|_| ())
+    }
+
     /// `rex do ACTION KEY=VALUE...`: an action `init.lua` defines, such as
     /// another tool's. Its result, as JSON.
     pub async fn action(&self, name: &str, args: &[(&str, &str)]) -> Result<Value> {

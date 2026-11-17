@@ -29,7 +29,7 @@ pub async fn run(shared: Shared) {
             Err(_) => return,
         };
         let kind = ev["type"].as_str().unwrap_or_default();
-        if kind != "needs" && !(kind == "message" && ev["to"] == "me") {
+        if kind != "needs" && kind != "review" && !(kind == "message" && ev["to"] == "me") {
             continue;
         }
         if kind == "needs" && rex_inbox_running() {
@@ -90,6 +90,25 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
             let sub = [m.docket.clone(), m.subject.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let url = m.docket.as_ref().map(|d| format!("{base}/#/d/{d}")).unwrap_or(format!("{base}/#/inbox"));
             Some(Note { title, subtitle: sub, body: m.body.lines().next().unwrap_or_default().to_string(), path: url, group: format!("wh-msg-{}", m.id) })
+        }
+        "review" => {
+            let key = ev["key"].as_str()?;
+            let a = core.review.attention.get(key)?;
+            if a.kind != ev["kind"].as_str()? {
+                return None;
+            }
+            let docket = ev["docket"].as_str()?.to_string();
+            let title = core.store.state(&docket).ok()??.title;
+            let short = key.rsplit('/').next().unwrap_or(key);
+            let what = match a.kind.as_str() {
+                "ready" => "is ready to post".to_string(),
+                "blocked" => "is blocked".to_string(),
+                "start-failed" => "didn't start".to_string(),
+                "stalled" => "stalled".to_string(),
+                "pane-closed" => "lost a pane".to_string(),
+                _ => "needs you".to_string(),
+            };
+            Some(Note { title: format!("Review of {short} {what}"), subtitle: format!("{docket} · {title}"), body: a.text.clone(), path: format!("{base}/#/d/{docket}"), group: format!("wh-review-{key}") })
         }
         _ => None,
     }

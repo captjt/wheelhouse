@@ -44,11 +44,13 @@ run today. `[x]` is built and checked; `[ ]` is next.
 
 ## Replace rex-reviewer (milestone 2)
 
-- [ ] GitHub source: PRs that request you, rounds, heads
-- [ ] The Review protocol: prep, reviewers, checker, post gate
-- [ ] The post action and its refusals; effort; guides; briefs
-- [ ] The Review tab and Recap
-- [ ] Switch over: rex-reviewer down
+- [x] GitHub source: PRs that request you, rounds, heads (one GraphQL check, as rex-reviewer did)
+- [x] The Review protocol: prep, blind reviewers, checker, merge risk, head moves, cleanup;
+      your rex-reviewer config read as it is (LuaJIT); its ledger imported
+- [x] The post and its refusals (post-review, ported and tested); effort; guides; briefs
+- [x] The Reviews view, a review panel on each Review docket, ready reviews in the Inbox
+- [ ] Recap
+- [ ] Switch over: rex-reviewer down, `wh review on` (needs your go)
 
 ## Replace rex-develop (milestone 3)
 

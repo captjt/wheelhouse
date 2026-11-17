@@ -195,3 +195,7 @@ export const IconMonitor = glyph("M2.5 3.5h11v7.5h-11v-7.5ZM6 13.5h4M8 11v2.5");
 export const IconSun = glyph("M8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6ZM8 1.8v1.4M8 12.8v1.4M1.8 8h1.4M12.8 8h1.4M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1");
 export const IconMoon = glyph("M12.8 9.6A5 5 0 0 1 6.4 3.2a5 5 0 1 0 6.4 6.4Z");
 export const IconHook = glyph("M10.5 3v5.5a3 3 0 0 1-6 0V7M10.5 3 9 4.5M10.5 3 12 4.5");
+export const IconPR = glyph("M3.2 3.5a1.3 1.3 0 1 0 2.6 0a1.3 1.3 0 1 0-2.6 0M4.5 4.8v6.4M3.2 12.5a1.3 1.3 0 1 0 2.6 0a1.3 1.3 0 1 0-2.6 0M10.2 12.5a1.3 1.3 0 1 0 2.6 0a1.3 1.3 0 1 0-2.6 0M11.5 11.2V6.5a2 2 0 0 0-2-2H7.5M8.8 3.2 7.5 4.5l1.3 1.3");
+export const IconPause = glyph("M5.5 3.5v9M10.5 3.5v9");
+export const IconPlay = glyph("M5 3.6v8.8L12 8 5 3.6Z");
+export const IconRefresh = glyph("M13 8a5 5 0 1 1-1.5-3.6M13 2.8v2.6h-2.6");

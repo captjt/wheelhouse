@@ -79,6 +79,14 @@ CREATE TABLE IF NOT EXISTS push_subs (
   last_ok TEXT,
   failures INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS review_prs (  -- the Review protocol's working state per PR; the story is on its docket
+  key TEXT PRIMARY KEY,      -- owner/name#n
+  repo TEXT NOT NULL,
+  pr INTEGER NOT NULL,
+  docket TEXT,
+  body TEXT NOT NULL,        -- JSON
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS keys (
   keyid TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -117,6 +125,35 @@ impl Store {
         conn.execute_batch(SCHEMA)?;
         migrate(&conn)?;
         Ok(Store { conn })
+    }
+
+    pub fn meta_get(&self, k: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT v FROM meta WHERE k = ?1", params![k], |r| r.get::<_, String>(0)).optional()?)
+    }
+
+    pub fn meta_set(&mut self, k: &str, v: &str) -> Result<()> {
+        self.conn.execute("INSERT INTO meta (k, v) VALUES (?1, ?2) ON CONFLICT (k) DO UPDATE SET v = ?2", params![k, v])?;
+        Ok(())
+    }
+
+    /// Every PR the Review protocol knows: (key, docket, body), by repo then number.
+    pub fn review_prs(&self) -> Result<Vec<(String, Option<String>, String)>> {
+        let mut st = self.conn.prepare("SELECT key, docket, body FROM review_prs ORDER BY repo, pr")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    pub fn review_pr(&self, key: &str) -> Result<Option<(Option<String>, String)>> {
+        Ok(self.conn.query_row("SELECT docket, body FROM review_prs WHERE key = ?1", params![key], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    }
+
+    pub fn put_review_pr(&mut self, key: &str, repo: &str, pr: i64, docket: Option<&str>, body: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO review_prs (key, repo, pr, docket, body, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (key) DO UPDATE SET docket = COALESCE(?4, docket), body = ?5, updated_at = ?6",
+            params![key, repo, pr, docket, body, crate::time::now()],
+        )?;
+        Ok(())
     }
 
     /// The next docket number, as `D-n`.

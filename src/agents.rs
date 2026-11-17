@@ -92,6 +92,11 @@ fn reconcile_one(core: &mut Core, block: &str) -> Result<()> {
     match (pane, tracked) {
         (Some(p), false) => {
             let a = agent_ref(core, &p);
+            if let Some((docket, role)) = crate::review::pane_docket(core, &p) {
+                adopt(core, &docket, &a, None);
+                core.append(&docket, "claim", &Who::Hub, None, json!({ "source": "wheelhouse", "role": role, "agent": a }))?;
+                return status(core, &p);
+            }
             match crate::reviewer::pane_role(core, &p) {
                 Some((pr, role)) => {
                     crate::reviewer::adopt_pane(core, &pr, &role, a)?;
@@ -140,7 +145,9 @@ pub fn tick(core: &mut Core) {
             say!("agents: release {b}: {e:#}");
         }
     }
-    crate::reviewer::sync(core);
+    if !crate::review::enabled(core) {
+        crate::reviewer::sync(core);
+    }
 }
 
 fn agent_ref(core: &Core, p: &Pane) -> AgentRef {
@@ -280,7 +287,10 @@ fn release(core: &mut Core, block: &str, reason: &str) -> Result<()> {
     // review is over and no pane of it is left.
     let review = core.store.state(&t.docket)?.and_then(|s| s.review).map(|r| r.key);
     let others = core.agents.by_block.values().any(|o| o.docket == t.docket);
+    let native = core.store.review_prs()?.iter().any(|(_, d, _)| d.as_deref() == Some(t.docket.as_str()));
     let done = match review {
+        // The Review protocol sets its docket's status itself.
+        Some(_) if native => false,
         Some(key) => !others && crate::reviewer::ended(core, &key),
         None => true,
     };

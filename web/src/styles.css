@@ -2231,3 +2231,357 @@ code {
     display: none;
   }
 }
+
+/* ---- Reviews ---- */
+.rv-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-height: 36px;
+  padding: 6px 14px 6px 20px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.rv-pill {
+  font-size: 11px;
+  font-weight: 550;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+.rv-pill.on {
+  color: var(--working);
+  background: var(--success-tint);
+}
+.rv-pill.paused {
+  color: var(--blocked);
+  background: var(--warning-tint);
+}
+.rv-doing {
+  color: var(--text-2);
+}
+.rv-err {
+  color: var(--error);
+}
+.view-empty.rv-off {
+  flex-direction: column;
+  gap: 4px;
+}
+.rv-off p {
+  max-width: 520px;
+  margin: 6px 0;
+  line-height: 1.55;
+}
+.rv-off strong {
+  color: var(--text);
+}
+.rv-off .btn {
+  margin-top: 10px;
+}
+.rv-key-cell {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.rv-row .row-title {
+  margin-left: 10px;
+}
+.rv-author {
+  flex: none;
+  margin-left: 10px;
+  font-size: 12px;
+}
+.rv-phase {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.rv-round {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+.rv-row-actions {
+  display: flex;
+}
+.rv-risk,
+.rv-verdict {
+  flex: none;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  padding: 0 7px;
+  border-radius: 5px;
+  white-space: nowrap;
+  border: 1px solid var(--line-2);
+  color: var(--text-2);
+}
+.rv-risk.risk-low {
+  color: var(--working);
+  border-color: color-mix(in oklch, var(--working) 30%, transparent);
+  background: var(--success-tint);
+}
+.rv-risk.risk-medium {
+  color: var(--blocked);
+  border-color: color-mix(in oklch, var(--blocked) 30%, transparent);
+  background: var(--warning-tint);
+}
+.rv-risk.risk-high {
+  color: var(--error);
+  border-color: color-mix(in oklch, var(--error) 30%, transparent);
+  background: var(--danger-tint);
+}
+.rv-verdict.v-ok {
+  color: var(--working);
+}
+.rv-verdict.v-changes {
+  color: var(--blocked);
+}
+.rv-verdict.v-muted {
+  color: var(--muted);
+}
+
+/* A Review docket's panel */
+.rv-panel {
+  margin-top: 18px;
+  padding: 12px 14px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--elev);
+}
+.rv-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.rv-head .glyph {
+  color: var(--text-2);
+}
+.rv-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text);
+  text-decoration: none;
+}
+.rv-key:hover {
+  color: var(--link);
+}
+.rv-steps {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+.rv-step {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 2px solid var(--line-2);
+  font-size: 12px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.rv-step.done {
+  color: var(--muted);
+  border-top-color: var(--working);
+}
+.rv-step.now {
+  color: var(--text);
+  font-weight: 500;
+  border-top-color: var(--accent);
+}
+.rv-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+.rv-step.now .rv-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.rv-state {
+  margin-top: 8px;
+}
+.rv-who {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+.rv-agent {
+  font-size: 12px;
+  line-height: 20px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--recessed);
+  color: var(--text-2);
+}
+.rv-panel .callout {
+  margin-top: 12px;
+}
+.rv-actions {
+  margin-top: 12px;
+}
+.rv-impl {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.rv-hist {
+  margin-top: 12px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.rv-hist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  font-size: 12px;
+}
+.rv-hist-round {
+  width: 30px;
+  flex: none;
+  font-family: var(--mono);
+  color: var(--muted);
+}
+.rv-hist-counts,
+.rv-hist-found,
+.rv-hist-tok,
+.rv-hist-at {
+  white-space: nowrap;
+}
+.rv-hist-found {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.rv-more {
+  margin-top: 2px;
+}
+@media (max-width: 760px) {
+  .rv-key-cell,
+  .rv-author,
+  .rv-round,
+  .rv-hist-found,
+  .rv-hist-tok,
+  .rv-row .rv-risk {
+    display: none;
+  }
+  .rv-step {
+    font-size: 11px;
+  }
+}
+.seg.seg-text button {
+  width: auto;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.rv-cfg {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+}
+.rv-draft {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 3px;
+}
+.rv-draft-line {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.rv-draft-verdict {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.rv-hist-row {
+  display: grid;
+  grid-template-columns: 30px 140px 176px 104px minmax(0, 1fr) 68px 52px 24px;
+}
+.rv-hist-row > .spacer {
+  display: none;
+}
+.rv-hist-row .rv-verdict,
+.rv-hist-row .rv-risk {
+  justify-self: start;
+}
+.rv-hist-found {
+  text-align: right;
+}
+.rv-hist-tok,
+.rv-hist-at {
+  text-align: right;
+}
+.inbox-pr {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--recessed);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+.rv-row .row-end {
+  margin-left: auto;
+  padding-left: 16px;
+}
+@media (max-width: 760px) {
+  .rv-btn-label,
+  .rv-cfg,
+  .rv-row .rv-phase,
+  .rv-row .row-age,
+  .rv-row-actions,
+  .rv-row .rv-verdict {
+    display: none;
+  }
+  .rv-row .row-note {
+    display: none;
+  }
+  .rv-panel .callout {
+    flex-wrap: wrap;
+  }
+  .rv-panel .callout-actions {
+    width: 100%;
+    padding-left: 24px;
+  }
+  .rv-hist-row {
+    grid-template-columns: 30px auto minmax(0, 1fr) auto 24px;
+  }
+  .rv-hist-row .rv-hist-counts,
+  .rv-hist-row .rv-hist-found,
+  .rv-hist-row .rv-hist-tok {
+    display: none;
+  }
+}
+.rv-panel .callout > div {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.rv-round {
+  line-height: 18px;
+}
+@media (max-width: 760px) {
+  .rv-panel .callout > .spacer {
+    display: none;
+  }
+}
