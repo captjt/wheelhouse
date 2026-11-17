@@ -68,26 +68,76 @@ fn base_args(cfg: &Config, agent: &str, extra: &[String]) -> Vec<String> {
     args
 }
 
-/// The pane's program: `env` with gh signed out and Cargo's caches shared,
-/// then the agent; with `path`, those folders first on its PATH.
-pub fn env_wrapper(wt: &Path, path: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    if !path.is_empty() {
-        // The pane's own PATH is the login shell's, which the hub can't
-        // see: prepend in the pane.
-        let dirs = path.iter().map(|d| d.replace('\'', "")).collect::<Vec<_>>().join(":");
-        out.extend(["/bin/sh".into(), "-c".into(), format!("PATH='{dirs}':\"$PATH\" exec \"$@\""), "sh".into()]);
+static SHELL_PATH: std::sync::Mutex<Option<(std::time::Instant, String)>> = std::sync::Mutex::new(None);
+
+/// Your interactive shell's PATH (what a terminal of yours has: nvm, Nix,
+/// pyenv and the rest that `.zshrc` adds), read with `$SHELL -ilc` and kept
+/// for ten minutes. A pane only gets the login shell's, which lacks them.
+pub fn shell_path() -> Option<String> {
+    if let Some((at, p)) = SHELL_PATH.lock().ok()?.as_ref()
+        && at.elapsed() < std::time::Duration::from_secs(600)
+    {
+        return Some(p.clone());
     }
-    out.extend([
+    let shell = std::env::var("SHELL").ok().filter(|s| s.starts_with('/')).unwrap_or_else(|| "/bin/zsh".into());
+    let home = crate::paths::home();
+    let mut child = std::process::Command::new(&shell)
+        .args(["-ilc", "printf 'WH_PATH=%s\\n' \"$PATH\""])
+        .env_clear()
+        .env("HOME", &home)
+        .env("USER", std::env::var("USER").unwrap_or_default())
+        .env("TERM", "dumb")
+        .current_dir(&home)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let started = std::time::Instant::now();
+    while child.try_wait().ok()?.is_none() {
+        if started.elapsed() > std::time::Duration::from_secs(15) {
+            let _ = child.kill();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let out = child.wait_with_output().ok()?;
+    let p = String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.strip_prefix("WH_PATH=")).next_back()?.trim().to_string();
+    if p.is_empty() {
+        return None;
+    }
+    if let Ok(mut c) = SHELL_PATH.lock() {
+        *c = Some((std::time::Instant::now(), p.clone()));
+    }
+    Some(p)
+}
+
+/// The agents' PATH: the config's folders first, then your shell's (or the
+/// usual places, if it can't be read), each once.
+pub fn agent_path(first: &[String]) -> String {
+    let rest = shell_path().unwrap_or_else(super::github::command_path);
+    let mut out: Vec<String> = Vec::new();
+    for d in first.iter().cloned().chain(rest.split(':').map(str::to_string)) {
+        if !d.is_empty() && !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    out.join(":")
+}
+
+/// The pane's program: `env` with gh signed out, your shell's PATH (the
+/// config's `path` first), and Cargo's caches shared; then the agent.
+pub fn env_wrapper(wt: &Path, path: &[String]) -> Vec<String> {
+    vec![
         "env".into(),
         "-u".into(),
         "GH_TOKEN".into(),
         "-u".into(),
         "GITHUB_TOKEN".into(),
+        format!("PATH={}", agent_path(path)),
         format!("GH_CONFIG_DIR={}", wt.join(".tmp/gh-empty").display()),
         format!("CARGO_HOME={}", super::cache_dir().join("cargo").display()),
-    ]);
-    out
+    ]
 }
 
 /// What starts an agent, and the session it will have (Claude Code's is
@@ -487,12 +537,24 @@ mod tests {
             },
         );
         let a = l.argv.join(" ");
-        assert!(a.starts_with("env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR=/w/pr-7/.tmp/gh-empty CARGO_HOME="), "{a}");
+        assert!(a.starts_with("env -u GH_TOKEN -u GITHUB_TOKEN PATH="), "{a}");
+        assert!(a.contains(" GH_CONFIG_DIR=/w/pr-7/.tmp/gh-empty CARGO_HOME="), "{a}");
         assert!(a.contains(&format!("/bin/claude --session-id {} --permission-mode auto --model claude-opus-5-5 --effort xhigh --add-dir /r/.git/worktrees --settings {{\"permissions\":{{\"additionalDirectories\":[\"/c/npm\"]}}}} -n", l.session.as_deref().unwrap())), "{a}");
         let c = checker(&cfg, &wt, &[], Some("high"), false, "t");
         let a = c.argv.join(" ");
         assert!(a.contains("--allowedTools Bash(wh review preview:*) --disallowedTools Bash(wh review dismiss:*) Bash(wh review post:*) -n t"), "{a}");
         let c = checker(&cfg, &wt, &[], None, true, "t");
         assert!(c.argv.join(" ").contains("--allowedTools Bash(wh review preview:*) Bash(wh review post:*) --disallowedTools Bash(wh review dismiss:*) -n"));
+    }
+}
+
+#[cfg(test)]
+mod shell {
+    /// `cargo test print_agent_path -- --ignored --nocapture` shows what the
+    /// agents get on this Mac.
+    #[test]
+    #[ignore]
+    fn print_agent_path() {
+        println!("WH_AGENT_PATH={}", super::agent_path(&["/first".into()]));
     }
 }
