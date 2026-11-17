@@ -63,6 +63,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/panes/name", post(pane_name))
         .route("/api/whoami", get(whoami))
         .route("/api/agents/start", post(start_agent))
+        .route("/api/hub/stop", post(hub_stop))
         .route("/api/hook", post(hook))
         .route("/api/events", get(events))
         .fallback(asset)
@@ -726,6 +727,19 @@ struct StartReq {
 
 async fn start_agent(State(shared): State<Shared>, Json(req): Json<StartReq>) -> ApiResult {
     crate::start::start(&shared, &req.app, &req.cwd, req.prompt.as_deref(), req.title.as_deref()).await.map(Json).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))
+}
+
+/// Stop this hub, so `wh up` can hand over to launchd. Not on the tailnet.
+async fn hub_stop(req: Request) -> ApiResult {
+    if req.extensions().get::<ViaTailnet>().is_some() {
+        return Err(fail(StatusCode::FORBIDDEN, "not from the tailnet"));
+    }
+    say!("stopping: asked to hand over (wh up)");
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        std::process::exit(0);
+    });
+    Ok(Json(json!({ "stopping": true })))
 }
 
 async fn verify_all(State(shared): State<Shared>) -> ApiResult {

@@ -40,7 +40,18 @@ pub fn up() -> Result<()> {
         eprintln!("wh: note: running from a build folder ({}); `cargo install --path .` gives a stable path", exe.display());
     }
     if hub_answers() && !launchd_has_it()? {
-        bail!("a hub is already running outside launchd (wh serve in a pane?). Stop it, then run wh up");
+        // A hub started by hand (wh serve in a pane): hand over to launchd.
+        let _ = crate::client::call("POST", "/api/hub/stop", Some(&serde_json::json!({})), Duration::from_secs(3));
+        for _ in 0..30 {
+            if !hub_answers() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if hub_answers() {
+            bail!("another hub is running and didn't stop; stop it, then run wh up");
+        }
+        println!("stopped the hub that was running by hand");
     }
     // A LaunchAgent's PATH is short: add rex, Homebrew, cargo, Tailscale.
     let rex_dir = crate::rex::rex_bin().parent().map(|p| p.display().to_string()).unwrap_or_default();
