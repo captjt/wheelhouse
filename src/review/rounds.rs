@@ -39,7 +39,7 @@ fn short(s: &str) -> String {
 
 // ---- git ----
 
-async fn git(dir: &Path, args: &[&str]) -> Result<String> {
+pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String> {
     let out = tokio::process::Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -61,7 +61,7 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String> {
 
 /// Fetch from GitHub over HTTPS with your `gh` login, so it works without
 /// an SSH agent (the hub runs as a LaunchAgent).
-async fn fetch(checkout: &Path, repo: &str, refspecs: &[String]) -> Result<()> {
+pub(crate) async fn fetch(checkout: &Path, repo: &str, refspecs: &[String]) -> Result<()> {
     let gh = github::gh_bin();
     let helper = format!("credential.helper=!'{}' auth git-credential", gh.display());
     // $WH_GIT_BASE points tests at a local origin.
@@ -88,10 +88,16 @@ async fn existing_ref(checkout: &Path, pr: i64, round: i64) -> Option<String> {
 // ---- Files in a worktree ----
 
 pub fn status(wt: &Path) -> String {
-    std::fs::read_to_string(wt.join(".tmp/status.txt")).ok().and_then(|s| s.lines().next().map(|l| l.trim().to_string())).unwrap_or_default()
+    status_in(wt, "status.txt")
 }
 
-fn set_status(wt: &Path, s: &str) -> Result<()> {
+/// The first line of `.tmp/<file>`, trimmed.
+pub fn status_in(wt: &Path, file: &str) -> String {
+    std::fs::read_to_string(wt.join(".tmp").join(file)).ok().and_then(|s| s.lines().next().map(|l| l.trim().to_string())).unwrap_or_default()
+}
+
+
+pub(crate) fn set_status(wt: &Path, s: &str) -> Result<()> {
     super::write_atomic(&wt.join(".tmp/status.txt"), &format!("{s}\n"))
 }
 

@@ -29,7 +29,7 @@ pub async fn run(shared: Shared) {
             Err(_) => return,
         };
         let kind = ev["type"].as_str().unwrap_or_default();
-        if kind != "needs" && kind != "review" && !(kind == "message" && ev["to"] == "me") {
+        if kind != "needs" && kind != "review" && kind != "build" && !(kind == "message" && ev["to"] == "me") {
             continue;
         }
         if kind == "needs" && rex_inbox_running() {
@@ -90,6 +90,15 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
             let sub = [m.docket.clone(), m.subject.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let url = m.docket.as_ref().map(|d| format!("{base}/#/d/{d}")).unwrap_or(format!("{base}/#/inbox"));
             Some(Note { title, subtitle: sub, body: m.body.lines().next().unwrap_or_default().to_string(), path: url, group: format!("wh-msg-{}", m.id) })
+        }
+        "build" => {
+            let docket = ev["docket"].as_str()?.to_string();
+            let a = core.build.attention.get(&docket)?;
+            if a.kind != ev["kind"].as_str()? {
+                return None;
+            }
+            let title = core.store.state(&docket).ok()??.title;
+            Some(Note { title: format!("Build {}", match a.kind.as_str() { "blocked" => "is blocked", "stalled" => "stalled", "start-failed" => "didn't start", "pane-closed" => "lost a pane", _ => "needs you" }), subtitle: format!("{docket} · {title}"), body: a.text.clone(), path: format!("{base}/#/d/{docket}"), group: format!("wh-build-{docket}") })
         }
         "review" => {
             let key = ev["key"].as_str()?;

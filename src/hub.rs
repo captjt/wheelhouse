@@ -31,6 +31,8 @@ pub struct Core {
     pub previews: std::collections::BTreeMap<u16, crate::preview::Live>,
     /// The Review protocol's live state.
     pub review: crate::review::Hub,
+    /// Build's live state.
+    pub build: crate::build::Hub,
 }
 
 #[derive(Clone)]
@@ -74,6 +76,7 @@ impl Core {
                 linear_ready: false,
                 previews: Default::default(),
                 review: Default::default(),
+                build: Default::default(),
             };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;
