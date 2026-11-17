@@ -64,6 +64,13 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/whoami", get(whoami))
         .route("/api/agents/start", post(start_agent))
         .route("/api/hub/stop", post(hub_stop))
+        .route("/api/push/key", get(push_key))
+        .route("/api/push/subscribe", post(push_subscribe))
+        .route("/api/push/unsubscribe", post(push_unsubscribe))
+        .route("/api/push/test", post(push_test))
+        .route("/api/reviews/post", post(review_post))
+        .route("/api/reviews/dismiss", post(review_dismiss))
+        .route("/api/reviews/preview", get(review_preview))
         .route("/api/hook", post(hook))
         .route("/api/events", get(events))
         .fallback(asset)
@@ -227,6 +234,9 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         })
         .collect();
 
+    drop(core);
+    let mut core = shared.lock();
+    let reviews = crate::reviewer::ready(&mut core);
     let messages: Vec<Value> = core
         .store
         .messages_where("to_addr = 'me' AND status = 'open'", [])
@@ -235,6 +245,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         .map(|m| crate::messages::view(&core, m))
         .collect();
     Ok(Json(json!({
+        "reviews": reviews,
         "messages": messages,
         "owner": core.owner,
         "hooks": crate::hooks::claude_installed(),
@@ -742,6 +753,69 @@ async fn hub_stop(req: Request) -> ApiResult {
     Ok(Json(json!({ "stopping": true })))
 }
 
+// ---- push ----
+
+async fn push_key() -> ApiResult {
+    Ok(Json(json!({ "public_key": crate::push::public_key().map_err(internal)? })))
+}
+
+#[derive(Deserialize)]
+struct PushSub {
+    subscription: Value,
+    #[serde(default)]
+    agent: Option<String>,
+}
+
+async fn push_subscribe(State(shared): State<Shared>, Json(req): Json<PushSub>) -> ApiResult {
+    crate::push::subscribe(&shared, &req.subscription, req.agent.as_deref()).map_err(bad)?;
+    Ok(Json(json!({ "subscribed": true })))
+}
+
+#[derive(Deserialize)]
+struct PushUnsub {
+    endpoint: String,
+}
+
+async fn push_unsubscribe(State(shared): State<Shared>, Json(req): Json<PushUnsub>) -> ApiResult {
+    shared.lock().store.push_unsubscribe(&req.endpoint).map_err(internal)?;
+    Ok(Json(json!({ "subscribed": false })))
+}
+
+async fn push_test(State(shared): State<Shared>) -> ApiResult {
+    let note = json!({ "title": "Wheelhouse", "body": "Notifications work. You'll hear when an agent needs you.", "tag": "test", "url": "/" });
+    let sent = crate::push::send_all(&shared, &note).await.map_err(internal)?;
+    Ok(Json(json!({ "sent": sent })))
+}
+
+// ---- rex-reviewer's reviews ----
+
+#[derive(Deserialize)]
+struct ReviewSeen {
+    item: String,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+async fn review_post(State(shared): State<Shared>, Json(req): Json<ReviewSeen>) -> ApiResult {
+    crate::reviewer::answer(&shared, &req.item, true, req.msg.as_deref(), req.updated_at.as_deref()).await.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
+}
+
+async fn review_dismiss(State(shared): State<Shared>, Json(req): Json<ReviewSeen>) -> ApiResult {
+    crate::reviewer::answer(&shared, &req.item, false, req.msg.as_deref(), req.updated_at.as_deref()).await.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
+}
+
+#[derive(Deserialize)]
+struct ItemQ {
+    item: String,
+}
+
+async fn review_preview(axum::extract::Query(q): axum::extract::Query<ItemQ>) -> ApiResult {
+    let text = crate::reviewer::preview(&q.item).await.map_err(|e| fail(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    Ok(Json(json!({ "preview": text })))
+}
+
 async fn verify_all(State(shared): State<Shared>) -> ApiResult {
     let core = shared.lock();
     let mut reports = Vec::new();
@@ -807,7 +881,8 @@ fn mime_of(name: &str) -> &'static str {
         Some("css") => "text/css; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
-        Some("json" | "webmanifest") => "application/json",
+        Some("json") => "application/json",
+        Some("webmanifest") => "application/manifest+json",
         Some("woff2") => "font/woff2",
         Some("woff") => "font/woff",
         _ => "application/octet-stream",

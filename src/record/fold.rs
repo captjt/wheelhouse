@@ -46,6 +46,38 @@ pub struct DocketState {
     /// The Linear issue linked to the docket, as Linear last said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linear: Option<LinearRef>,
+    /// The PR a Review docket is about, as rex-reviewer last said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewRef>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ReviewRef {
+    pub key: String,
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default)]
+    pub pr: i64,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub round: Option<i64>,
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default)]
+    pub merge_risk: Option<String>,
+    #[serde(default)]
+    pub review_url: Option<String>,
+    #[serde(default)]
+    pub implementation: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -118,13 +150,22 @@ impl DocketState {
                 self.title = e.body.clone().unwrap_or_default();
                 self.title_source = s(&d["title_source"]).unwrap_or_else(|| "person".into());
                 self.protocol = s(&d["protocol"]).unwrap_or_else(|| "none".into());
-                self.status = if self.protocol == "agent" { "in_progress".into() } else { "todo".into() };
+                // Work that starts with an agent on it is under way from the start.
+                self.status = if matches!(self.protocol.as_str(), "agent" | "review") { "in_progress".into() } else { "todo".into() };
                 self.created_at = e.at.clone();
                 if let Ok(a) = serde_json::from_value::<AgentRef>(d["agent"].clone()) {
                     self.agent = Some(a);
                 }
                 if let Some(sess) = s(&d["session"]) {
                     self.session = Some(sess);
+                }
+                if let Ok(r) = serde_json::from_value::<ReviewRef>(d["review"].clone()) {
+                    self.review = Some(r);
+                }
+            }
+            "observed" if d["what"].as_str() == Some("review") => {
+                if let Ok(r) = serde_json::from_value::<ReviewRef>(d["review"].clone()) {
+                    self.review = Some(r);
                 }
             }
             "set" => {

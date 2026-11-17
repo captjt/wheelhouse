@@ -8,6 +8,7 @@ import { IconActive, IconAgents, IconDone, IconHook, IconInbox, IconIssue, IconL
 import { HubProvider, LiveProvider, go, useHub, useRoute, useTheme, type Theme } from "./live";
 import { NewDocket, Palette } from "./Palette";
 import { PaneProvider } from "./Pane";
+import { PushHint, registerWorker } from "./Push";
 import { ToastProvider, typing, useToast } from "./ui";
 import { AgentsView, DocketListView } from "./views";
 import "./styles.css";
@@ -85,9 +86,9 @@ function App() {
   const [nav, setNav] = useState(false);
   const page = route[0] || "view";
 
-  const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? []).length, [hub.state]);
+  const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.reviews ?? []).length, [hub.state]);
   const urgent = useMemo(
-    () => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length + (hub.state?.messages.length ?? 0),
+    () => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length + (hub.state?.messages.length ?? 0) + (hub.state?.reviews?.length ?? 0),
     [hub.state],
   );
   useEffect(() => {
@@ -218,6 +219,7 @@ function App() {
         <div className="side-foot">
           {hub.state && !hub.state.hooks && <HooksHint />}
           {hub.state && !hub.state.linear && <LinearHint />}
+          <PushHint />
           <div className="conn">
             <span className={`conn-dot ${hub.state ? (hub.state.rex.connected ? "on" : "off") : ""}`} />
             {hub.state ? (hub.state.rex.connected ? "Following Rex" : `Rex: ${hub.state.rex.error || "connecting"}`) : hub.error ? "Hub unreachable" : "Connecting…"}
@@ -238,6 +240,8 @@ function App() {
     </div>
   );
 }
+
+registerWorker();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

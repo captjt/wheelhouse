@@ -190,6 +190,7 @@ export const IconX = glyph("M4 4l8 8M12 4l-8 8");
 export const IconIssue = glyph("M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM5.2 10.8l5.6-5.6M3.6 8.6l4.8-4.8M7.6 12.4l4.8-4.8");
 export const IconHistory = glyph("M2.8 8a5.2 5.2 0 1 0 1.6-3.8M2.5 2.8v2.6h2.6M8 5.2V8l2 1.4");
 export const IconExternal = glyph("M9 3h4v4M13 3 7.5 8.5M11.5 9.5V13H3V4.5h3.5");
+export const IconBell = glyph("M4 11V7a4 4 0 0 1 8 0v4l1.2 1.5H2.8L4 11ZM6.6 13.8a1.5 1.5 0 0 0 2.8 0");
 export const IconMonitor = glyph("M2.5 3.5h11v7.5h-11v-7.5ZM6 13.5h4M8 11v2.5");
 export const IconSun = glyph("M8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6ZM8 1.8v1.4M8 12.8v1.4M1.8 8h1.4M12.8 8h1.4M3.6 3.6l1 1M11.4 11.4l1 1M3.6 12.4l1-1M11.4 4.6l1-1");
 export const IconMoon = glyph("M12.8 9.6A5 5 0 0 1 6.4 3.2a5 5 0 1 0 6.4 6.4Z");

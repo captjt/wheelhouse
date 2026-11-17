@@ -49,6 +49,7 @@ export type Docket = {
   intent?: { body: string; source: string; by: string; at: string; seq: number };
   intent_versions?: number;
   linear?: LinearRef;
+  review?: ReviewRef;
 };
 
 export type LinearRef = {
@@ -107,7 +108,35 @@ export type Msg = {
   created_at: string;
 };
 
+export type ReviewReady = {
+  item: string;
+  key: string;
+  round?: number | null;
+  msg?: string | null;
+  updated_at?: string | null;
+  docket?: string | null;
+  title?: string | null;
+  url?: string | null;
+};
+
+export type ReviewRef = {
+  key: string;
+  repo: string;
+  pr: number;
+  url?: string | null;
+  title?: string | null;
+  author?: string | null;
+  state?: string | null;
+  phase?: string | null;
+  round?: number | null;
+  verdict?: string | null;
+  merge_risk?: string | null;
+  review_url?: string | null;
+  implementation?: string | null;
+};
+
 export type HubState = {
+  reviews: ReviewReady[];
   messages: Msg[];
   owner: string;
   hooks: boolean;

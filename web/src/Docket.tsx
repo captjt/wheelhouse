@@ -6,6 +6,8 @@ import { Kbd, Prose, useKeys, useMenu } from "./ui";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { IntentSection } from "./Intent";
 import { MessageCard } from "./Messages";
+import { ReviewButtons } from "./Reviews";
+import { IconExternal } from "./icons";
 import { LinearChip, LinearModal } from "./Linear";
 import { post } from "./api";
 import { IconIssue } from "./icons";
@@ -120,6 +122,19 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </div>
           )}
 
+          {(hub.state?.reviews ?? [])
+            .filter((r) => r.docket === d.id)
+            .map((r) => (
+              <div key={r.item} className="callout callout-blocked">
+                <LiveIcon state="blocked" />
+                <div>
+                  <strong>Review ready to post{r.round ? ` · round ${r.round}` : ""}</strong>
+                  {r.msg && <div className="callout-msg">{r.msg}</div>}
+                </div>
+                <span className="spacer" />
+                <ReviewButtons r={r} small />
+              </div>
+            ))}
           {(hub.state?.messages ?? [])
             .filter((m) => m.docket === d.id)
             .map((m) => (
@@ -151,6 +166,21 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               {STATUSES.find((s) => s.key === d.status)?.label}
             </button>
           </Prop>
+          {d.review && (
+            <Prop label="Review">
+              <a className="prop-btn" href={d.review.url || "#"} target="_blank" rel="noreferrer" title={d.review.title ?? ""}>
+                <span className="prop-text">
+                  {d.review.key}
+                  <span className="muted">
+                    {d.review.round ? ` · round ${d.review.round}` : ""}
+                    {d.review.verdict ? ` · ${d.review.verdict.replace("_", " ").toLowerCase()}` : d.review.phase ? ` · ${d.review.phase}` : ""}
+                    {d.review.merge_risk ? ` · risk ${d.review.merge_risk}` : ""}
+                  </span>
+                  <IconExternal size={11} />
+                </span>
+              </a>
+            </Prop>
+          )}
           <Prop label="Linear">
             {d.linear ? (
               <LinearChip l={d.linear} />
@@ -325,6 +355,9 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
         ? sys(hubA, <><b>Wheelhouse</b> picked up {agent}{d.agent?.cwd ? <> in <span className="act-path" title={d.agent.cwd}>{shortPath(d.agent.cwd)}</span></> : null}</>)
         : sys(you, <><b>You</b> opened this docket</>);
     case "claim": {
+      if (data.source === "rex-reviewer")
+        return sys(hubA, <><b>rex-reviewer</b> started its {data.role}{data.round ? ` for round ${data.round}` : ""}</>);
+      if (data.source === "wheelhouse") return sys(hubA, <><b>Wheelhouse</b> started {agent} in Rex's wheelhouse session</>);
       const s = <span className="mono-s">{String(data.session || "").slice(0, 8)}</span>;
       const src = data.source;
       return sys(
@@ -370,6 +403,11 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
         );
       return sys(hubA, <>Linked {e.body}</>);
     case "observed":
+      if (data.what === "review") {
+        const r = data.review || {};
+        const bits = [r.round && `round ${r.round}`, r.phase && r.state === "reviewing" ? r.phase : r.state, r.verdict && r.verdict.replace("_", " ").toLowerCase(), r.merge_risk && `risk ${r.merge_risk}`].filter(Boolean);
+        return sys(hubA, <><b>rex-reviewer</b> · {r.key}: {bits.join(" · ")}{r.review_url ? <> · <a className="act-link" href={r.review_url} target="_blank" rel="noreferrer">the review</a></> : null}</>);
+      }
       if (data.what === "linear-comment") return comment(<IconIssue size={18} />, data.author || "Someone", "commented in Linear", e.body || "", "linear");
       if (data.what === "linear") {
         const i = data.issue || {};
@@ -400,6 +438,8 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
       return sys(e.actor.type === "person" ? you : hubA, <><b>{who}</b> {parts.reduce<ReactNode[]>((a, p, i) => (i ? [...a, " and ", p] : [p]), [])}</>);
     }
     case "approval": {
+      if (data.kind === "review")
+        return sys(you, <><b>You</b> {data.decision === "post" ? "posted" : "dismissed"} the review{e.body ? <>: {e.body}</> : null}{data.url ? <> · <a className="act-link" href={data.url} target="_blank" rel="noreferrer">on GitHub</a></> : null}</>, data.decision === "post" ? "approved" : "denied");
       const ok = data.decision === "approve";
       return sys(
         you,

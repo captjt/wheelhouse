@@ -45,17 +45,27 @@ pub async fn run(shared: Shared) {
         recent.push_back(Instant::now());
         tokio::spawn(async move {
             tokio::time::sleep(GRACE).await;
-            if let Some((title, subtitle, body, url, group)) = still_due(&shared, &ev) {
-                post(&title, &subtitle, &body, &url, &group).await;
+            if let Some(n) = still_due(&shared, &ev) {
+                let url = format!("http://{}{}", crate::server::http_addr().map(|a| a.to_string()).unwrap_or_else(|| "127.0.0.1:7500".into()), n.path);
+                post(&n.title, &n.subtitle, &n.body, &url, &n.group).await;
             }
         });
     }
 }
 
+/// A notification: what, where, and the app's path to open on a click.
+pub struct Note {
+    pub title: String,
+    pub subtitle: String,
+    pub body: String,
+    pub path: String,
+    pub group: String,
+}
+
 /// The notification, if what it's about still needs you.
-fn still_due(shared: &Shared, ev: &Value) -> Option<(String, String, String, String, String)> {
+pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
     let core = shared.lock();
-    let base = format!("http://{}", crate::server::http_addr().map(|a| a.to_string()).unwrap_or_else(|| "127.0.0.1:7500".into()));
+    let base = "";
     match ev["type"].as_str()? {
         "needs" => {
             let block = ev["block"].as_str()?;
@@ -68,7 +78,7 @@ fn still_due(shared: &Shared, ev: &Value) -> Option<(String, String, String, Str
             let title = core.store.state(&docket).ok()??.title;
             let app = crate::mirror::app_name(p.app().unwrap_or("agent")).to_string();
             let what = if h.state == "error" { "failed".to_string() } else { h.kind.clone().map(|k| format!("waits on you ({k})")).unwrap_or("waits on you".into()) };
-            Some((format!("{app} {what}"), format!("{docket} · {title}"), h.msg.clone().unwrap_or_default(), format!("{base}/#/d/{docket}"), format!("wh-{docket}")))
+            Some(Note { title: format!("{app} {what}"), subtitle: format!("{docket} · {title}"), body: h.msg.clone().unwrap_or_default(), path: format!("{base}/#/d/{docket}"), group: format!("wh-{docket}") })
         }
         "message" => {
             let m = core.store.message(ev["id"].as_i64()?).ok()??;
@@ -79,13 +89,13 @@ fn still_due(shared: &Shared, ev: &Value) -> Option<(String, String, String, Str
             let title = if m.options.is_empty() { format!("{from} wrote to you") } else { format!("{from} asks you") };
             let sub = [m.docket.clone(), m.subject.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let url = m.docket.as_ref().map(|d| format!("{base}/#/d/{d}")).unwrap_or(format!("{base}/#/inbox"));
-            Some((title, sub, m.body.lines().next().unwrap_or_default().to_string(), url, format!("wh-msg-{}", m.id)))
+            Some(Note { title, subtitle: sub, body: m.body.lines().next().unwrap_or_default().to_string(), path: url, group: format!("wh-msg-{}", m.id) })
         }
         _ => None,
     }
 }
 
-fn rex_inbox_running() -> bool {
+pub fn rex_inbox_running() -> bool {
     let sock = crate::paths::home().join(".local/state/rex-inbox/hub.sock");
     std::os::unix::net::UnixStream::connect(sock).is_ok()
 }

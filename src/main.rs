@@ -17,7 +17,9 @@ mod hooks;
 mod hub;
 mod mirror;
 mod paths;
+mod push;
 mod record;
+mod reviewer;
 mod rex;
 mod server;
 mod service;
@@ -254,6 +256,7 @@ fn serve() -> Result<()> {
         tokio::spawn(linear::follow(shared.clone()));
         tokio::spawn(messages::deliver_loop(shared.clone()));
         tokio::spawn(notify::run(shared.clone()));
+        tokio::spawn(push::run(shared.clone()));
         server::serve(shared).await
     })
 }

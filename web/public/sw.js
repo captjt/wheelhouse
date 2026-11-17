@@ -1,0 +1,37 @@
+// Wheelhouse's service worker: shows pushes from the hub, and opens the
+// docket on a tap. It caches nothing: the app is always the hub's own.
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
+
+self.addEventListener("push", (e) => {
+  let d = {};
+  try {
+    d = e.data ? e.data.json() : {};
+  } catch {
+    d = { body: e.data && e.data.text() };
+  }
+  e.waitUntil(
+    self.registration.showNotification(d.title || "Wheelhouse", {
+      body: d.body || "",
+      tag: d.tag,
+      data: { url: d.url || "/" },
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || "/";
+  e.waitUntil(
+    (async () => {
+      const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      for (const w of wins) {
+        w.postMessage({ open: url });
+        return w.focus();
+      }
+      return self.clients.openWindow(url);
+    })(),
+  );
+});

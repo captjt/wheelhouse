@@ -67,6 +67,15 @@ CREATE TABLE IF NOT EXISTS messages (  -- numbering and delivery; the content is
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS push_subs (
+  endpoint TEXT PRIMARY KEY,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  agent TEXT,
+  created_at TEXT NOT NULL,
+  last_ok TEXT,
+  failures INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS keys (
   keyid TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -217,6 +226,36 @@ impl Store {
 
     pub fn set_message_status(&mut self, id: i64, status: &str, why: Option<&str>) -> Result<()> {
         self.conn.execute("UPDATE messages SET status = ?2, why = ?3, updated_at = ?4 WHERE id = ?1", params![id, status, why, crate::time::now_ms()])?;
+        Ok(())
+    }
+
+    pub fn push_subscribe(&mut self, endpoint: &str, p256dh: &str, auth: &str, agent: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO push_subs (endpoint, p256dh, auth, agent, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(endpoint) DO UPDATE SET p256dh = ?2, auth = ?3, agent = ?4, failures = 0",
+            params![endpoint, p256dh, auth, agent, crate::time::now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn push_unsubscribe(&mut self, endpoint: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM push_subs WHERE endpoint = ?1", [endpoint])?;
+        Ok(())
+    }
+
+    /// `(endpoint, p256dh, auth)` for every subscribed device.
+    pub fn push_subs(&self) -> Result<Vec<(String, String, String)>> {
+        let mut st = self.conn.prepare("SELECT endpoint, p256dh, auth FROM push_subs")?;
+        Ok(st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn push_result(&mut self, endpoint: &str, ok: bool) -> Result<()> {
+        let sql = if ok {
+            "UPDATE push_subs SET failures = 0, last_ok = ?2 WHERE endpoint = ?1"
+        } else {
+            "UPDATE push_subs SET failures = failures + 1 WHERE endpoint = ?1 AND ?2 IS NOT NULL"
+        };
+        self.conn.execute(sql, params![endpoint, crate::time::now()])?;
         Ok(())
     }
 

@@ -91,7 +91,15 @@ fn reconcile_one(core: &mut Core, block: &str) -> Result<()> {
     let tracked = core.agents.by_block.contains_key(block);
     match (pane, tracked) {
         (Some(p), false) => {
-            open_for(core, agent_ref(core, &p), None, None)?;
+            let a = agent_ref(core, &p);
+            match crate::reviewer::pane_role(core, &p) {
+                Some((pr, role)) => {
+                    crate::reviewer::adopt_pane(core, &pr, &role, a)?;
+                }
+                None => {
+                    open_for(core, a, None, None)?;
+                }
+            }
             status(core, &p)
         }
         (Some(p), true) => {
@@ -132,6 +140,7 @@ pub fn tick(core: &mut Core) {
             say!("agents: release {b}: {e:#}");
         }
     }
+    crate::reviewer::sync(core);
 }
 
 fn agent_ref(core: &Core, p: &Pane) -> AgentRef {
@@ -266,8 +275,18 @@ fn flush_turn(core: &mut Core, block: &str) -> Result<()> {
 fn release(core: &mut Core, block: &str, reason: &str) -> Result<()> {
     flush_turn(core, block)?;
     let Some(t) = core.agents.by_block.remove(block) else { return Ok(()) };
-    core.append(&t.docket, "release", &Who::Hub, None, json!({ "reason": reason }))?;
-    core.append(&t.docket, "set", &Who::Hub, None, json!({ "status": "done" }))?;
+    core.append(&t.docket, "release", &Who::Hub, None, json!({ "reason": reason, "block": block }))?;
+    // A Review docket outlives any one of its panes: it ends when the PR's
+    // review is over and no pane of it is left.
+    let review = core.store.state(&t.docket)?.and_then(|s| s.review).map(|r| r.key);
+    let others = core.agents.by_block.values().any(|o| o.docket == t.docket);
+    let done = match review {
+        Some(key) => !others && crate::reviewer::ended(core, &key),
+        None => true,
+    };
+    if done {
+        core.append(&t.docket, "set", &Who::Hub, None, json!({ "status": "done" }))?;
+    }
     Ok(())
 }
 
@@ -636,6 +655,60 @@ mod tests {
         assert!(can_send(&p("held")).unwrap_err().contains("waiting on a prompt"));
         assert!(can_send(&p("new")).is_err());
         assert!(can_send(&p("shell")).unwrap_err().contains("isn't running an agent"));
+    }
+
+    #[test]
+    fn a_reviews_panes_share_one_docket_that_ends_with_the_review() {
+        // A made-up rex-reviewer ledger: one PR, a reviewer and a checker.
+        let dir = std::env::temp_dir().join(format!("wh-reviewer-{}", std::process::id()));
+        let pr_dir = dir.join("repos/acme/api");
+        std::fs::create_dir_all(&pr_dir).unwrap();
+        let write = |state: &str| {
+            let pr = json!({ "repo": "acme/api", "pr": 341, "title": "Add rate limiting", "state": state, "phase": "reviewer", "round": 2,
+                             "session_id": "s1", "pane": "api-341", "checker_pane": "api-341-check", "reviewers": { "codex": { "pane": "api-341" } } });
+            std::fs::write(pr_dir.join("pr-341.json"), pr.to_string()).unwrap();
+        };
+        write("reviewing");
+        // SAFETY: the only test that reads this variable.
+        unsafe { std::env::set_var("REX_REVIEWER_STATE_DIR", &dir) };
+        let mut core = test_core();
+        for (b, label) in [("r1", "api-341"), ("r2", "api-341-check")] {
+            agent_pane(&mut core, b, Some("working"));
+            core.mirror.panes.get_mut(b).unwrap().label = label.into();
+        }
+        reconcile(&mut core, ["r1".to_string(), "r2".to_string()]);
+        let d1 = docket_of(&core, "r1").unwrap();
+        assert_eq!(docket_of(&core, "r2").as_deref(), Some(d1.as_str()), "one docket for the PR");
+        let st = core.store.state(&d1).unwrap().unwrap();
+        assert_eq!(st.title, "Review api#341: Add rate limiting");
+        assert_eq!(st.protocol, "review");
+        assert_eq!(st.review.as_ref().unwrap().round, Some(2));
+
+        // rex-reviewer's prompt doesn't rename it.
+        hook(&mut core, "UserPromptSubmit", "claude-code", "r1", &json!({ "prompt": "Read .tmp/ground-rules.md, then .tmp/rounds/2/task.md" })).unwrap();
+        assert_eq!(core.store.state(&d1).unwrap().unwrap().title, "Review api#341: Add rate limiting");
+
+        // One pane closing doesn't end the review.
+        core.mirror.panes.remove("r1");
+        reconcile(&mut core, ["r1".to_string()]);
+        if let Some(t) = core.agents.by_block.get_mut("r1") {
+            t.missing_since = Some(Instant::now() - GRACE);
+        }
+        tick(&mut core);
+        assert_eq!(core.store.state(&d1).unwrap().unwrap().status, "in_progress");
+
+        // The PR merges and the last pane closes: done.
+        write("merged");
+        core.reviewer = Default::default();
+        core.mirror.panes.remove("r2");
+        reconcile(&mut core, ["r2".to_string()]);
+        if let Some(t) = core.agents.by_block.get_mut("r2") {
+            t.missing_since = Some(Instant::now() - GRACE);
+        }
+        tick(&mut core);
+        assert_eq!(core.store.state(&d1).unwrap().unwrap().status, "done");
+        assert!(core.verify(&d1).unwrap().ok);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -20,13 +20,14 @@ run today. `[x]` is built and checked; `[ ]` is next.
       each on the record (questions, decisions, notes on the thread)
 - [x] The `wheelhouse` agent skill (`wh skill install`)
 - [ ] The global agent instructions point at Wheelhouse (at switch-over)
-- [ ] Web Push on the phone
+- [x] Web Push on the phone (Home Screen app, Turn on in the sidebar)
 - [ ] Previews: `wh share PORT`
 - [ ] Other Rex hosts
 - [ ] Codex's prompt keys
 - [ ] `wh import`: history from rex-inbox, rex-reviewer, rex-develop
-- [ ] A bridge to rex-reviewer until Review lands: its "ready to post"
-      reviews in the Inbox with Post and Dismiss, as rex-inbox does
+- [x] A bridge to rex-reviewer until Review lands: one Review docket per
+      PR with all its panes, following its round, verdict and merge risk;
+      "ready to post" reviews in the Inbox with Post, Preview and Dismiss
 - [ ] Switch over: rex-inbox down, its hook and skill removed
 
 ## Dockets as the living source of truth

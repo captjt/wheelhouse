@@ -27,6 +27,8 @@ pub struct Core {
     pub started: std::time::Instant,
     /// Whether a Linear key is set up (checked at start and every few minutes).
     pub linear_ready: bool,
+    /// rex-reviewer's ledger, while it runs alongside.
+    pub reviewer: crate::reviewer::Ledger,
 }
 
 #[derive(Clone)]
@@ -68,6 +70,7 @@ impl Core {
                 tailnet_host: None,
                 started: std::time::Instant::now(),
                 linear_ready: false,
+                reviewer: Default::default(),
             };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;
