@@ -2835,3 +2835,46 @@ code {
     display: inline;
   }
 }
+
+/* ---- Builds ---- */
+.bd-dec {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 12.5px;
+}
+.bd-q {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-2);
+}
+.bd-a {
+  flex: none;
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 500;
+}
+.bd-a.open {
+  color: var(--blocked);
+  font-weight: 500;
+}
+@media (max-width: 760px) {
+  /* A long subject gets its own line under who's asking. */
+  .msg-head {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .msg-head .msg-subject {
+    order: 9;
+    flex-basis: 100%;
+  }
+  .rv-head {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .rv-head .mono-s,
+  .rv-head .act-dot {
+    display: none;
+  }
+}

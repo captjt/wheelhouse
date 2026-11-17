@@ -7,6 +7,7 @@ import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { IntentSection } from "./Intent";
 import { MessageCard } from "./Messages";
 import { ReviewPanel } from "./Reviews";
+import { BuildIt, BuildPanel } from "./Builds";
 import { IconExternal } from "./icons";
 import { LinearChip, LinearModal } from "./Linear";
 import { post } from "./api";
@@ -32,6 +33,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
     if (pos >= 0 && next) go(`/d/${next}`);
   };
   const d = data?.docket;
+  const building = !!d && !!hub.state?.build?.tasks.some((t) => t.docket === d.id);
   const openStatus = () => d && statusRef.current && menu.open(statusRef.current, statusItems(d, (s) => hub.setStatus(d.id, s).then(reload)), "Change status");
 
   useKeys(
@@ -122,13 +124,14 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </div>
           )}
 
+          <ReviewPanel d={d} />
+          <BuildPanel d={d} />
           {(hub.state?.messages ?? [])
             .filter((m) => m.docket === d.id)
             .map((m) => (
               <MessageCard key={m.id} m={m} />
             ))}
 
-          <ReviewPanel d={d} />
           <IntentSection d={d} entries={entries} onSaved={reload} />
 
           <div className="activity-head">
@@ -169,6 +172,17 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </a>
             </Prop>
           )}
+          {d.protocol !== "review" && (
+            <Prop label="Build">
+              {hub.state?.build?.tasks.some((t) => t.docket === d.id) ? (
+                <span className="prop-val">{(() => { const t = hub.state!.build!.tasks.find((x) => x.docket === d.id)!; return `${t.repo} · ${t.state === "active" ? t.phase?.replace("_", " ") : t.state}`; })()}</span>
+              ) : d.intent?.body?.trim() ? (
+                <BuildIt d={d} />
+              ) : (
+                <span className="prop-val muted" title="Write the intent first: what this is for, and how you'll know it's done">Needs an intent</span>
+              )}
+            </Prop>
+          )}
           <Prop label="Linear">
             {d.linear ? (
               <LinearChip l={d.linear} />
@@ -178,7 +192,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </button>
             )}
           </Prop>
-          {d.agent && d.protocol !== "review" && (
+          {d.agent && d.protocol !== "review" && !building && (
             <>
               <Prop label="Agent">
                 <span className="prop-val">
@@ -226,9 +240,9 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </>
           )}
           <Prop label="Protocol">
-            <span className="prop-val">{d.protocol === "agent" ? "Agent" : d.protocol === "review" ? "Review" : "By hand"}</span>
+            <span className="prop-val">{building ? "Build" : d.protocol === "agent" ? "Agent" : d.protocol === "review" ? "Review" : "By hand"}</span>
           </Prop>
-          {d.protocol !== "review" && <Prop label="Work">
+          {d.protocol !== "review" && !building && <Prop label="Work">
             <span className="prop-val">
               {d.prompts} prompt{d.prompts === 1 ? "" : "s"} · {d.turns} turn{d.turns === 1 ? "" : "s"}
             </span>

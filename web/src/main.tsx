@@ -4,9 +4,10 @@ import { createRoot } from "react-dom/client";
 import type { Docket } from "./api";
 import { DocketScreen } from "./Docket";
 import { InboxView, inboxItems } from "./Inbox";
-import { IconActive, IconAgents, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSun, Logo, SessionIcon } from "./icons";
+import { IconActive, IconAgents, IconBuild, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSun, Logo, SessionIcon } from "./icons";
 import { ReviewsView } from "./Reviews";
 import { RecapView } from "./Recap";
+import { BuildsView } from "./Builds";
 import { HubProvider, LiveProvider, go, useHub, useRoute, useTheme, type Theme } from "./live";
 import { NewDocket, Palette } from "./Palette";
 import { PaneProvider } from "./Pane";
@@ -90,9 +91,11 @@ function App() {
 
   const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.review?.prs ?? []).length, [hub.state]);
   const reviewAlerts = (hub.state?.review?.prs ?? []).filter((p) => p.attention).length;
+  const buildAlerts = (hub.state?.build?.tasks ?? []).filter((t) => t.attention).length;
+  const buildCount = (hub.state?.build?.tasks ?? []).filter((t) => t.state === "queued" || t.state === "active").length;
   const urgent = useMemo(
-    () => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length + (hub.state?.messages.length ?? 0) + reviewAlerts,
-    [hub.state, reviewAlerts],
+    () => (hub.state?.dockets ?? []).filter((d) => d.live?.state === "blocked" || d.live?.state === "error").length + (hub.state?.messages.length ?? 0) + reviewAlerts + buildAlerts,
+    [hub.state, reviewAlerts, buildAlerts],
   );
   const reviewCount = (hub.state?.review?.prs ?? []).filter((p) => p.state === "queued" || p.state === "reviewing").length;
   useEffect(() => {
@@ -117,7 +120,7 @@ function App() {
       if (pending.current) {
         window.clearTimeout(pending.current);
         pending.current = null;
-        const dest = { i: "/inbox", a: "/view/active", d: "/view/all", n: "/agents", x: "/view/done", r: "/reviews", p: "/recap" }[e.key];
+        const dest = { i: "/inbox", a: "/view/active", d: "/view/all", n: "/agents", x: "/view/done", r: "/reviews", p: "/recap", b: "/builds" }[e.key];
         if (dest) {
           e.preventDefault();
           go(dest);
@@ -163,6 +166,7 @@ function App() {
   else if (page === "agents") main = <AgentsView />;
   else if (page === "reviews") main = <ReviewsView />;
   else if (page === "recap") main = <RecapView />;
+  else if (page === "builds") main = <BuildsView />;
   else if (page === "session" && route[1]) {
     const s = route[1];
     main = (
@@ -207,6 +211,7 @@ function App() {
         <nav className="nav">
           {item("/inbox", "Inbox", <IconInbox size={15} />, inboxCount, urgent > 0)}
           {item("/reviews", "Reviews", <IconPR size={15} />, reviewAlerts || reviewCount, reviewAlerts > 0)}
+          {item("/builds", "Builds", <IconBuild size={15} />, buildAlerts || buildCount, buildAlerts > 0)}
           {item("/view/active", "Active", <IconActive size={15} />, counts.active)}
           {item("/view/all", "All dockets", <IconLayers size={15} />)}
           {item("/view/done", "Done", <IconDone size={15} />)}

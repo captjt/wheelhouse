@@ -157,6 +157,45 @@ export type ReviewPr = {
   draft?: { event: string; verdict?: string | null; blocking: number; non_blocking: number; merge_risk?: string | null } | null;
 };
 
+/** A docket's Build. */
+export type BuildTask = {
+  docket: string;
+  key: string;
+  title: string;
+  url?: string | null;
+  source: string;
+  repo: string;
+  state: string;
+  phase?: string | null;
+  branch?: string | null;
+  base?: string | null;
+  plan_version: number;
+  check_n: number;
+  fix_used: number;
+  last_check?: { n: number; verdict: string; summary?: string; findings?: { id: string; severity: string; what: string }[] } | null;
+  checked_head?: string | null;
+  pushed_head?: string | null;
+  pr_number?: number | null;
+  pr_url?: string | null;
+  builder: { agent?: string; effort?: string | null };
+  checker: { agent?: string; effort?: string | null };
+  decisions: { id: string; question: string; answered: boolean; label?: string | null }[];
+  asks: string[];
+  why?: string | null;
+  start_error?: string | null;
+  updated_at?: string | null;
+  tokens?: number | null;
+  attention?: { kind: string; text: string } | null;
+};
+
+export type BuildStatus = {
+  paused: boolean;
+  doing?: string | null;
+  config?: { path?: string | null; repos: string[]; builder: string; checker: string; gates: Record<string, string>; max_tasks: number } | null;
+  config_error?: string | null;
+  tasks: BuildTask[];
+};
+
 export type ReviewStatus = {
   enabled: boolean;
   paused: boolean;
@@ -189,6 +228,7 @@ export type ReviewRef = {
 
 export type HubState = {
   review?: ReviewStatus;
+  build?: BuildStatus;
   messages: Msg[];
   owner: string;
   hooks: boolean;

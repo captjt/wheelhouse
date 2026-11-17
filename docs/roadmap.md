@@ -60,9 +60,18 @@ run today. `[x]` is built and checked; `[ ]` is next.
 - [ ] Next for Review: drafts and status on the docket's record rather
       than in `.tmp/`, once a few more live rounds have run
 
-## Replace rex-develop (milestone 3)
+## Build (milestone 3, replacing rex-develop)
 
-- [ ] Linear (above) and GitHub Issues as sources for Build
-- [ ] The Build protocol: readiness, plan, decisions, build, check,
-      preview, open, address rounds
-- [ ] Switch over: rex-develop down
+- [x] Build, Wheelhouse's own (docs/build.md): a docket's intent is the
+      spec; `wh build start D-12 | owner/name#45 | GRD-142`, or Build it on
+      a docket; readiness, plan, decisions as messages with buttons, the
+      plan gate (approving it makes it the intent), build, check with fix
+      rounds, preview, the open gate, a draft PR with the plan block;
+      merge and close clean up; the agents' wall; the Builds view and a
+      Build panel on each docket
+- [x] GitHub issues with `sources.github.label` start on their own
+- [ ] Linear cycle offers and label intake (needs `wh setup-linear`)
+- [ ] Address rounds after the PR opens: review comments (the pr-reply
+      contract), CI, rebase; pre-review with the Review protocol
+- [ ] A first live Build on a real repo
+- rex-develop never ran on this Mac, so there's nothing to switch off

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { appName, type Msg } from "./api";
-import { AppAvatar, IconExternal } from "./icons";
+import { AppAvatar, HubAvatar, IconExternal } from "./icons";
 import { onThisMac } from "./Pane";
 import { agoLong, useHub } from "./live";
 import { Kbd, Prose } from "./ui";
@@ -19,8 +19,8 @@ export function MessageCard({ m, compact }: { m: Msg; compact?: boolean }) {
   return (
     <div className="msg-card">
       <div className="msg-head">
-        <AppAvatar app={m.from_app === "Codex" ? "codex" : "claude-code"} size={18} />
-        <strong>{m.from_app || m.from}</strong>
+        {m.from === "wheelhouse" ? <HubAvatar size={18} /> : <AppAvatar app={m.from_app === "Codex" ? "codex" : "claude-code"} size={18} />}
+        <strong>{m.from === "wheelhouse" ? "Wheelhouse" : m.from_app || m.from}</strong>
         <span className="muted">{m.options.length ? "asks you" : "wrote to you"}</span>
         {m.subject && <span className="msg-subject">· {m.subject}</span>}
         <span className="spacer" />
@@ -77,4 +77,4 @@ export function MessageCard({ m, compact }: { m: Msg; compact?: boolean }) {
 }
 
 export const msgTitle = (m: Msg) => m.subject || m.body.split("\n").find((l) => l.trim())?.trim() || `Message #${m.id}`;
-export const msgFrom = (m: Msg) => m.from_app || appName(m.from);
+export const msgFrom = (m: Msg) => (m.from === "wheelhouse" ? "Wheelhouse" : m.from_app || appName(m.from));
