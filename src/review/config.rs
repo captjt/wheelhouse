@@ -1,6 +1,7 @@
-//! The Review protocol's config: rex-reviewer's `config.lua`, read as it is
-//! (`~/.config/wheelhouse/review.lua` first, if you make one). Settings come
-//! out as JSON; functions (the effort policy, guides) are called per PR.
+//! The Review protocol's config: `~/.config/wheelhouse/review.lua`, a Lua
+//! file that returns a table (docs/review.md has the keys). LuaJIT reads
+//! it: settings come out as JSON, and functions (the effort policy, guides)
+//! are called per PR. `wh import rex-reviewer` writes it from rex-reviewer's.
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
@@ -47,20 +48,55 @@ pub struct Config {
     pub poll_seconds: u64,
     pub caches: Vec<PathBuf>,
     pub agents: BTreeMap<String, AgentCfg>,
+    /// Folders put first on the agents' PATH (node for a hook, say).
+    pub path_dirs: Vec<String>,
 }
 
-/// Where the config is: `$WH_REVIEW_CONFIG`, else Wheelhouse's own, else
-/// rex-reviewer's.
+/// Wheelhouse's config folder: `~/.config/wheelhouse`.
+pub fn dir() -> PathBuf {
+    crate::paths::home().join(".config/wheelhouse")
+}
+
+/// Where the config is: `$WH_REVIEW_CONFIG`, or `~/.config/wheelhouse/review.lua`.
 pub fn path() -> PathBuf {
-    if let Some(p) = std::env::var_os("WH_REVIEW_CONFIG") {
-        return p.into();
+    std::env::var_os("WH_REVIEW_CONFIG").map(PathBuf::from).unwrap_or_else(|| dir().join("review.lua"))
+}
+
+/// Bring rex-reviewer's config over: its `config.lua` becomes
+/// `review.lua`, and its guides move under `~/.config/wheelhouse/guides`,
+/// with the config's paths to them rewritten. Its own files stay.
+pub fn import_rex_reviewer() -> Result<Vec<PathBuf>> {
+    let to = path();
+    if to.exists() {
+        bail!("{} already exists; Wheelhouse's review config is its own now", crate::paths::tilde(&to.to_string_lossy()));
     }
-    let own = crate::paths::home().join(".config/wheelhouse/review.lua");
-    if own.exists() {
-        return own;
+    let from_dir = std::env::var_os("REX_REVIEWER_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| crate::paths::home().join(".config/rex-reviewer"));
+    let from = from_dir.join("config.lua");
+    let text = std::fs::read_to_string(&from).map_err(|e| anyhow!("reading {}: {e}", from.display()))?;
+    let mut written = Vec::new();
+    let guides_from = from_dir.join("guides");
+    let guides_to = to.parent().unwrap_or(&dir()).join("guides");
+    if guides_from.is_dir() {
+        std::fs::create_dir_all(&guides_to)?;
+        for e in std::fs::read_dir(&guides_from)?.flatten() {
+            let dest = guides_to.join(e.file_name());
+            if e.path().is_file() && !dest.exists() {
+                std::fs::copy(e.path(), &dest)?;
+                written.push(dest);
+            }
+        }
     }
-    let dir = std::env::var_os("REX_REVIEWER_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| crate::paths::home().join(".config/rex-reviewer"));
-    dir.join("config.lua")
+    let home = crate::paths::home().to_string_lossy().into_owned();
+    let mut text = text
+        .replace("~/.config/rex-reviewer/guides/", "~/.config/wheelhouse/guides/")
+        .replace(&format!("{home}/.config/rex-reviewer/guides/"), &format!("{home}/.config/wheelhouse/guides/"));
+    text = format!("-- Wheelhouse's review config (docs/review.md), brought over from rex-reviewer's\n-- on {}. Edit it here; rex-reviewer's copy is no longer read.\n{text}", crate::time::now());
+    if let Some(d) = to.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    std::fs::write(&to, text)?;
+    written.insert(0, to);
+    Ok(written)
 }
 
 const DEFAULT_CACHES: [&str; 12] = [
@@ -89,7 +125,7 @@ fn is_fn(v: &Value) -> Option<&str> {
 pub fn load() -> Result<Config> {
     let path = path();
     if !path.exists() {
-        bail!("no review config at {}", crate::paths::tilde(&path.to_string_lossy()));
+        bail!("no review config at {} (docs/review.md; wh import rex-reviewer brings rex-reviewer's over)", crate::paths::tilde(&path.to_string_lossy()));
     }
     let raw = lua::dump(&path)?;
     from_value(path, raw)
@@ -182,6 +218,7 @@ pub fn from_value(path: PathBuf, raw: Value) -> Result<Config> {
         poll_seconds: raw["poll_seconds"].as_u64().unwrap_or(180).max(30),
         caches: caches.iter().map(|c| crate::paths::expand(c)).collect(),
         agents,
+        path_dirs: strings(&raw["path"]).iter().map(|d| crate::paths::expand(d).display().to_string()).collect(),
         raw,
     })
 }

@@ -22,7 +22,6 @@ mod recap;
 mod review;
 mod push;
 mod record;
-mod reviewer;
 mod rex;
 mod server;
 mod service;
@@ -131,7 +130,7 @@ enum Cmd {
         #[arg(long)]
         stop: bool,
     },
-    /// The Review protocol: status, on, off, pause, resume, check,
+    /// Reviews: status, on, off, pause, resume, check,
     /// post-mode ask|auto|config, pickup, preview, post, dismiss.
     /// A PR is OWNER/NAME N (or OWNER/NAME#N).
     Review {
@@ -142,6 +141,13 @@ enum Cmd {
         force: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Move over from another tool, once: `wh import rex-reviewer` brings its
+    /// config, guides and ledger into Wheelhouse.
+    Import {
+        from: String,
+        #[arg(long)]
+        force: bool,
     },
     /// What happened: today, this week (the default), or 30 days; as Markdown.
     Recap { period: Option<String> },
@@ -226,6 +232,15 @@ fn main() {
                 .map(|v| println!("{} started in {}: wheelhouse/{}", if codex { "Codex" } else { "Claude Code" }, v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?")))
         }
         Some(Cmd::Skill { action }) => skill(action.as_deref()),
+        Some(Cmd::Import { from, force }) => match from.as_str() {
+            "rex-reviewer" => client::json("POST", "/api/import/rex-reviewer", Some(&json!({ "force": force }))).map(|v| {
+                for p in v["config"].as_array().into_iter().flatten() {
+                    println!("wrote {}", p.as_str().unwrap_or("?"));
+                }
+                println!("imported {} PR(s) from its ledger (PRs Wheelhouse already had are left alone)", v["prs"]);
+            }),
+            other => Err(anyhow::anyhow!("wh import takes rex-reviewer, not {other}")),
+        },
         Some(Cmd::Recap { period }) => {
             let p = period.as_deref().unwrap_or("week");
             client::json("GET", &format!("/api/recap?period={p}"), None).map(|v| print!("{}", v["markdown"].as_str().unwrap_or("")))
@@ -373,12 +388,9 @@ fn print_review_status(v: &Value) {
     let paused = v["paused"].as_bool() == Some(true);
     println!(
         "Review   {}{}",
-        if on { "on" } else { "off (wh review on: imports rex-reviewer's PRs and takes over)" },
+        if on { "on" } else { "off (wh review on turns it on; docs/review.md)" },
         if on && paused { " · paused: no new rounds start (wh review resume)" } else { "" }
     );
-    if let Some(n) = v["imported"].as_u64() {
-        println!("         imported {n} PR(s) from rex-reviewer");
-    }
     if let Some(e) = v["config_error"].as_str() {
         println!("config   {e}");
     } else if let Some(c) = v["config"].as_object() {

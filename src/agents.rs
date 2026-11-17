@@ -97,14 +97,7 @@ fn reconcile_one(core: &mut Core, block: &str) -> Result<()> {
                 core.append(&docket, "claim", &Who::Hub, None, json!({ "source": "wheelhouse", "role": role, "agent": a }))?;
                 return status(core, &p);
             }
-            match crate::reviewer::pane_role(core, &p) {
-                Some((pr, role)) => {
-                    crate::reviewer::adopt_pane(core, &pr, &role, a)?;
-                }
-                None => {
-                    open_for(core, a, None, None)?;
-                }
-            }
+            open_for(core, a, None, None)?;
             status(core, &p)
         }
         (Some(p), true) => {
@@ -144,9 +137,6 @@ pub fn tick(core: &mut Core) {
         if let Err(e) = release(core, &b, reason) {
             say!("agents: release {b}: {e:#}");
         }
-    }
-    if !crate::review::enabled(core) {
-        crate::reviewer::sync(core);
     }
 }
 
@@ -285,15 +275,8 @@ fn release(core: &mut Core, block: &str, reason: &str) -> Result<()> {
     core.append(&t.docket, "release", &Who::Hub, None, json!({ "reason": reason, "block": block }))?;
     // A Review docket outlives any one of its panes: it ends when the PR's
     // review is over and no pane of it is left.
-    let review = core.store.state(&t.docket)?.and_then(|s| s.review).map(|r| r.key);
-    let others = core.agents.by_block.values().any(|o| o.docket == t.docket);
-    let native = core.store.review_prs()?.iter().any(|(_, d, _)| d.as_deref() == Some(t.docket.as_str()));
-    let done = match review {
-        // The Review protocol sets its docket's status itself.
-        Some(_) if native => false,
-        Some(key) => !others && crate::reviewer::ended(core, &key),
-        None => true,
-    };
+    // A Review docket's status is the Review protocol's to set.
+    let done = core.store.state(&t.docket)?.is_none_or(|s| s.protocol != "review");
     if done {
         core.append(&t.docket, "set", &Who::Hub, None, json!({ "status": "done" }))?;
     }
@@ -370,7 +353,7 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
         }
         "UserPromptSubmit" => {
             let prompt = p["prompt"].as_str().unwrap_or_default().trim();
-            if prompt.is_empty() {
+            if prompt.is_empty() || from_the_harness(prompt) {
                 return Ok(json!({}));
             }
             if let Some(s) = session
@@ -404,6 +387,12 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
     }
     core.live_changed();
     Ok(json!({ "docket": core.agents.by_block.get(block).map(|t| t.docket.clone()) }))
+}
+
+/// Text Claude Code hands its agent as a prompt that nobody typed: a
+/// background subagent's result, or a task's notification.
+fn from_the_harness(prompt: &str) -> bool {
+    ["<agent-message", "<task-notification", "<system-reminder"].iter().any(|p| prompt.starts_with(p))
 }
 
 /// A prompt you gave an agent: a note on its docket, and the docket's title
@@ -668,57 +657,48 @@ mod tests {
     }
 
     #[test]
-    fn a_reviews_panes_share_one_docket_that_ends_with_the_review() {
-        // A made-up rex-reviewer ledger: one PR, a reviewer and a checker.
-        let dir = std::env::temp_dir().join(format!("wh-reviewer-{}", std::process::id()));
-        let pr_dir = dir.join("repos/acme/api");
-        std::fs::create_dir_all(&pr_dir).unwrap();
-        let write = |state: &str| {
-            let pr = json!({ "repo": "acme/api", "pr": 341, "title": "Add rate limiting", "state": state, "phase": "reviewer", "round": 2,
-                             "session_id": "s1", "pane": "api-341", "checker_pane": "api-341-check", "reviewers": { "codex": { "pane": "api-341" } } });
-            std::fs::write(pr_dir.join("pr-341.json"), pr.to_string()).unwrap();
-        };
-        write("reviewing");
-        // SAFETY: the only test that reads this variable.
-        unsafe { std::env::set_var("REX_REVIEWER_STATE_DIR", &dir) };
+    fn a_reviews_panes_join_its_docket_which_only_the_protocol_ends() {
         let mut core = test_core();
+        core.mirror.sessions.insert("s1".into(), crate::mirror::Session { session_id: "s1".into(), label: crate::review::session_name(), windows: vec![] });
+        let mut p = crate::review::pr::Pr::new("acme/api", 341);
+        p.title = Some("Add rate limiting".into());
+        p.state = "reviewing".into();
+        p.round = 2;
+        p.reviewers.insert("claude".into(), crate::review::pr::Reviewer { name: "claude".into(), agent: "claude".into(), pane: Some("api-341".into()), ..Default::default() });
+        p.checker_pane = Some("api-341-check".into());
+        let d1 = crate::review::save(&mut core, &mut p).unwrap();
         for (b, label) in [("r1", "api-341"), ("r2", "api-341-check")] {
             agent_pane(&mut core, b, Some("working"));
             core.mirror.panes.get_mut(b).unwrap().label = label.into();
         }
         reconcile(&mut core, ["r1".to_string(), "r2".to_string()]);
-        let d1 = docket_of(&core, "r1").unwrap();
+        assert_eq!(docket_of(&core, "r1").as_deref(), Some(d1.as_str()));
         assert_eq!(docket_of(&core, "r2").as_deref(), Some(d1.as_str()), "one docket for the PR");
         let st = core.store.state(&d1).unwrap().unwrap();
         assert_eq!(st.title, "Review api#341: Add rate limiting");
         assert_eq!(st.protocol, "review");
         assert_eq!(st.review.as_ref().unwrap().round, Some(2));
 
-        // rex-reviewer's prompt doesn't rename it.
+        // A subagent's result isn't a prompt from you.
+        hook(&mut core, "UserPromptSubmit", "claude-code", "r1", &json!({ "prompt": "<agent-message from=\"a1\">done</agent-message>" })).unwrap();
+        assert!(!entries(&core, &d1).iter().any(|k| k == "note"));
+
+        // The reviewer's brief doesn't rename it.
         hook(&mut core, "UserPromptSubmit", "claude-code", "r1", &json!({ "prompt": "Read .tmp/ground-rules.md, then .tmp/rounds/2/task.md" })).unwrap();
         assert_eq!(core.store.state(&d1).unwrap().unwrap().title, "Review api#341: Add rate limiting");
 
-        // One pane closing doesn't end the review.
-        core.mirror.panes.remove("r1");
-        reconcile(&mut core, ["r1".to_string()]);
-        if let Some(t) = core.agents.by_block.get_mut("r1") {
-            t.missing_since = Some(Instant::now() - GRACE);
+        // Its panes closing doesn't end the review: the protocol does.
+        for b in ["r1", "r2"] {
+            core.mirror.panes.remove(b);
+            reconcile(&mut core, [b.to_string()]);
+            if let Some(t) = core.agents.by_block.get_mut(b) {
+                t.missing_since = Some(Instant::now() - GRACE);
+            }
         }
         tick(&mut core);
+        assert!(core.agents.by_block.is_empty());
         assert_eq!(core.store.state(&d1).unwrap().unwrap().status, "in_progress");
-
-        // The PR merges and the last pane closes: done.
-        write("merged");
-        core.reviewer = Default::default();
-        core.mirror.panes.remove("r2");
-        reconcile(&mut core, ["r2".to_string()]);
-        if let Some(t) = core.agents.by_block.get_mut("r2") {
-            t.missing_since = Some(Instant::now() - GRACE);
-        }
-        tick(&mut core);
-        assert_eq!(core.store.state(&d1).unwrap().unwrap().status, "done");
         assert!(core.verify(&d1).unwrap().ok);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

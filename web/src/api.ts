@@ -170,16 +170,6 @@ export type ReviewStatus = {
   prs: ReviewPr[];
 };
 
-export type ReviewReady = {
-  item: string;
-  key: string;
-  round?: number | null;
-  msg?: string | null;
-  updated_at?: string | null;
-  docket?: string | null;
-  title?: string | null;
-  url?: string | null;
-};
 
 export type ReviewRef = {
   key: string;
@@ -198,7 +188,6 @@ export type ReviewRef = {
 };
 
 export type HubState = {
-  reviews: ReviewReady[];
   review?: ReviewStatus;
   messages: Msg[];
   owner: string;

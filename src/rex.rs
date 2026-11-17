@@ -180,15 +180,6 @@ impl Rex {
         self.run(&["block", "close", "-s", session, block], None).await.map(|_| ())
     }
 
-    /// `rex do ACTION KEY=VALUE...`: an action `init.lua` defines, such as
-    /// another tool's. Its result, as JSON.
-    pub async fn action(&self, name: &str, args: &[(&str, &str)]) -> Result<Value> {
-        let pairs: Vec<String> = args.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        let mut argv = vec!["do", name];
-        argv.extend(pairs.iter().map(String::as_str));
-        self.run_json(&argv, None).await
-    }
-
     /// `rex block rename -s SESSION BLOCK NAME`.
     pub async fn rename_block(&self, session: &str, block: &str, name: &str) -> Result<()> {
         self.run(&["block", "rename", "-s", session, block, name], None).await.map(|_| ())
