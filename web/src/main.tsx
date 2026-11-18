@@ -247,14 +247,24 @@ function App() {
 
   const docket = page === "d" && route[1] ? route[1] : null;
   const main = docket ? <DocketScreen key={docket} id={docket} /> : <RouteView route={route} />;
+  // A flavored hub (Wheelhouse Dev) has Rex, Linear, hooks and push off on
+  // purpose: no hints to turn them on, and a calm line instead of Rex's error.
   const foot = (
     <>
-      {hub.state && !hub.state.hooks && <HooksHint />}
-      {hub.state && !hub.state.linear && <LinearHint />}
-      <PushHint />
+      {hub.state && !hub.state.hooks && !flavor && <HooksHint />}
+      {hub.state && !hub.state.linear && !flavor && <LinearHint />}
+      {!flavor && <PushHint />}
       <div className="conn">
-        <span className={`conn-dot ${hub.state ? (hub.state.rex.connected ? "on" : "off") : ""}`} />
-        {hub.state ? (hub.state.rex.connected ? "Following Rex" : `Rex: ${hub.state.rex.error || "connecting"}`) : hub.error ? "Hub unreachable" : "Connecting…"}
+        <span className={`conn-dot ${flavor ? "flavor" : hub.state ? (hub.state.rex.connected ? "on" : "off") : ""}`} />
+        {flavor ? (
+          <span className="conn-text" title={`${name}: a copy of your dockets, built from ${flavor.branch} at ${flavor.commit.slice(0, 7)}. Rex, GitHub, Linear and notifications are off.`}>
+            Nothing live
+          </span>
+        ) : (
+          <span className="conn-text">
+            {hub.state ? (hub.state.rex.connected ? "Following Rex" : `Rex: ${hub.state.rex.error || "connecting"}`) : hub.error ? "Hub unreachable" : "Connecting…"}
+          </span>
+        )}
         <span className="spacer" />
         <ThemeSwitch />
       </div>
@@ -297,7 +307,7 @@ function App() {
             <span className="ws-logo">
               <Logo size={14} />
             </span>
-            Wheelhouse
+            <span className="ws-name">Wheelhouse</span>
             {flavor && <FlavorBadge flavor={flavor} />}
           </a>
           <span className="spacer" />
