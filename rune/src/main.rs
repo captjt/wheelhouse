@@ -50,8 +50,11 @@ fn main() {
         };
         // The traffic lights centred on the toolbar, in the framed pane.
         let chrome = Chrome { full_size_content: true, traffic_lights: Some((16.0, 25.0)), drag_regions: true };
-        let main = App::new(spec).chrome(chrome).keep_running();
+        let mut main = App::new(spec).chrome(chrome).keep_running();
         let me = main.handle();
+        // Settings (⌘,): a window of its own, hidden until the main window opens it.
+        let (settings, _) = main.window(app::settings::spec(store.clone(), me.clone()));
+        app::settings::link(settings);
         let follow = store.clone();
         let main = main.init(move || app::Main::new(store, me)).on_ready(move |_| follow.follow());
         let windows: Vec<rune::AnyWindowSpec> = vec![WindowSpec::from_app("main", main).into(), panel::spec(hub, show_panel).into()];

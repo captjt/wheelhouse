@@ -5,6 +5,7 @@
 mod activity;
 mod docket;
 mod lists;
+pub mod settings;
 mod sidebar;
 pub mod widgets;
 
@@ -445,6 +446,10 @@ pub fn on_key(s: &mut Main, ev: &KeyEvent, _: &mut Tx) -> bool {
     }
     if ev.is_command('i') && ev.mods.alt {
         s.inspector.toggle();
+        return true;
+    }
+    if ev.is_command(',') && !ev.mods.alt && !ev.mods.shift {
+        settings::open(s.theme);
         return true;
     }
     if ev.mods.cmd {
