@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { appName, post, type Docket, type EntryView } from "./api";
+import { appName, post, type Decision, type Docket, type EntryView } from "./api";
 import { IconEdit, IconHistory, IconIssue } from "./icons";
 import { agoLong, stamp } from "./live";
 import { Kbd, Modal, Prose, useToast } from "./ui";
@@ -228,4 +228,35 @@ export function lineDiff(a: string, b: string): DiffLine[] {
   while (i < n) out.push({ op: "del", text: x[i++] });
   while (j < m) out.push({ op: "add", text: y[j++] });
   return out;
+}
+
+/** Decisions in force: what an agent asked you, and the answer that stands. */
+export function DecisionsSection({ decisions }: { decisions: Decision[] }) {
+  if (!decisions.length) return null;
+  const open = decisions.filter((d) => !d.answer).length;
+  return (
+    <section className="decisions">
+      <div className="intent-head">
+        <span className="intent-label">Decisions</span>
+        <span className="intent-meta">
+          {decisions.length - open} in force{open ? ` · ${open} waiting on you` : ""}
+        </span>
+      </div>
+      <ul className="dec-list">
+        {decisions.map((d) => (
+          <li key={d.key} className={`dec${d.answer ? "" : " open"}`} title={`Asked by ${d.asked_by}, ${stamp(d.asked_at)}${d.options.length ? `\nOptions: ${d.options.join(" · ")}` : ""}`}>
+            <span className="dec-mark">{d.answer ? "✓" : "?"}</span>
+            <span className="dec-q">{d.question}</span>
+            <span className="dec-arrow">→</span>
+            <span className="dec-a">{d.answer ?? "waiting on you"}</span>
+            <span className="dec-by">
+              {d.answer ? (d.by === "stood" ? "the recommendation stood" : d.by === "you" ? "you" : d.by) : ""}
+              {d.at ? ` · ${agoLong(d.at)}` : ""}
+            </span>
+            {d.note && <span className="dec-note">“{d.note}”</span>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }

@@ -319,8 +319,10 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
     let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
     let keys: std::collections::BTreeMap<String, String> = core.store.keys().map_err(internal)?.into_iter().collect();
     let mut entries = Vec::new();
+    let mut read = Vec::new();
     for s in core.store.entries(&id).map_err(internal)? {
         let e = s.entry().map_err(internal)?;
+        read.push(e.clone());
         let keyid = s.keyid();
         entries.push(json!({
             "seq": s.seq,
@@ -337,7 +339,8 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
     }
     let report = core.verify(&id).map_err(internal)?;
     let queued: Vec<Value> = core.store.queued_prompts(Some(&id)).map_err(internal)?.into_iter().map(|(q, _, _, body, at)| json!({ "id": q, "body": body, "at": at })).collect();
-    Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued })))
+    let decisions: Vec<Value> = crate::decisions::of(&read).iter().map(crate::decisions::Decision::json).collect();
+    Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions })))
 }
 
 #[derive(Deserialize)]
@@ -1313,10 +1316,13 @@ async fn events(State(shared): State<Shared>, axum::extract::Query(q): axum::ext
         });
         (core.events.subscribe(), app)
     };
-    let stream = BroadcastStream::new(rx).filter_map(|r| r.ok()).map(move |ev| {
+    // A hello at once, so a client knows it's connected before anything
+    // changes (a named event: the web app's onmessage doesn't see it).
+    let hello = tokio_stream::iter([Ok::<Event, axum::Error>(Event::default().event("hello").data("{}"))]);
+    let stream = hello.chain(BroadcastStream::new(rx).filter_map(|r| r.ok()).map(move |ev| {
         let _held = &app;
         Event::default().json_data(ev)
-    });
+    }));
     // nosniff: without it, URLSession (Wheelhouse.app) holds the first bytes
     // back to guess their type, and the stream looks dead for a while.
     ([(header::X_CONTENT_TYPE_OPTIONS, "nosniff"), (header::CACHE_CONTROL, "no-cache")], Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))

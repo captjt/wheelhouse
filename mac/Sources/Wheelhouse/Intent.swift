@@ -235,3 +235,64 @@ func lineDiff(_ a: String, _ b: String) -> [DiffLine] {
     while j < m { out.append(DiffLine(op: .add, text: y[j])); j += 1 }
     return out
 }
+
+/// Decisions in force: what an agent asked you, and the answer that stands.
+struct DecisionsSection: View {
+    let decisions: [JSON]
+
+    var body: some View {
+        if !decisions.isEmpty {
+            let open = decisions.filter { $0["answer"].isNull }.count
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("Decisions").font(.system(size: 13, weight: .semibold)).foregroundStyle(K.text)
+                    Text("\(decisions.count - open) in force\(open > 0 ? " · \(open) waiting on you" : "")").font(.system(size: 12)).foregroundStyle(K.muted)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(decisions.enumerated()), id: \.offset) { _, d in
+                        DecisionRow(d: d)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct DecisionRow: View {
+    let d: JSON
+    @State private var hover = false
+
+    var body: some View {
+        let answered = d["answer"].exists
+        let by: String = {
+            switch d["by"].str {
+            case "stood": return "the recommendation stood"
+            case let b?: return b
+            default: return ""
+            }
+        }()
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: answered ? "checkmark" : "questionmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(answered ? K.working : K.blocked)
+                    .frame(width: 14)
+                Text(d["question"].str ?? "").foregroundStyle(K.text2)
+                Text("→").foregroundStyle(K.faint)
+                Text(d["answer"].str ?? "waiting on you").fontWeight(answered ? .semibold : .regular).foregroundStyle(answered ? K.text : K.blocked)
+                if answered {
+                    Text("\(by)\(d["at"].str.map { " · \(agoLong($0))" } ?? "")").font(.system(size: 11.5)).foregroundStyle(K.faint)
+                }
+                Spacer(minLength: 0)
+            }
+            if let note = d["note"].text {
+                Text("“\(note)”").font(.system(size: 12)).foregroundStyle(K.muted).padding(.leading, 20)
+            }
+        }
+        .font(.system(size: 13))
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(hover ? K.hover : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .onHover { hover = $0 }
+        .help("Asked by \(d["asked_by"].str ?? "?"), \(stamp(d["asked_at"].str))\(d["options"].strings.isEmpty ? "" : "\nOptions: \(d["options"].strings.joined(separator: " · "))")")
+    }
+}

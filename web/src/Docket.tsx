@@ -6,7 +6,7 @@ import { Kbd, Prose, Sheet, useKeys, useMenu, usePhone } from "./ui";
 import { nav } from "./mobile";
 import { IconBack, IconBuild, IconInfo } from "./icons";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
-import { IntentSection } from "./Intent";
+import { DecisionsSection, IntentSection } from "./Intent";
 import { ArtifactViewer, ArtifactsSection, RecordViewer } from "./Artifacts";
 import { ChatView } from "./Chat";
 import { IconTerminal } from "./icons";
@@ -360,6 +360,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             ))}
 
           <IntentSection d={d} entries={entries} onSaved={reload} />
+          <DecisionsSection decisions={data.decisions ?? []} />
           <ArtifactsSection entries={entries} onOpen={setViewing} />
 
           <div className="activity-head">

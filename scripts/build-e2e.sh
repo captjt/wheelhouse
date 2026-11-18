@@ -21,7 +21,10 @@ port=${PORT:-7614}
 base="http://127.0.0.1:$port"
 hub=""
 cleanup() {
-  [ -n "$hub" ] && kill "$hub" 2>/dev/null || true
+  if [ -n "$hub" ]; then
+    kill "$hub" 2>/dev/null || true
+    wait "$hub" 2>/dev/null || true
+  fi
   if [ -n "${KEEP:-}" ]; then echo "kept $t"; else rm -rf "$t"; fi
 }
 trap cleanup EXIT
