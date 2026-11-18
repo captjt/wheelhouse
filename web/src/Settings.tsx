@@ -18,11 +18,14 @@ import {
   timeoutWord,
   usedWord,
   varChanges,
+  whenDraft,
+  whenValue,
   type CheckSpec,
   type DocText,
   type Path,
   type Settings,
   type SettingsDoc,
+  type WhenDraft,
 } from "./config";
 import { diffCounts, foldDiff, lineDiff } from "./diff";
 import { MarkdownEditor, markdownKeys, type EditorHandle } from "./Editor";
@@ -311,21 +314,6 @@ function Orders({ c }: { c: Ctl }) {
               <span className="set-order-name">{name}</span>
               <span className={`rv-pill ${state === "on" ? "on" : state === "paused" ? "paused" : "off"}`}>{state === "on" ? "On" : state === "paused" ? "Paused" : "Off"}</span>
               <span className="spacer" />
-              {p === "review" && rv && on && (
-                <span className="set-inline set-post" title="Who posts a checked review: you (Ask), or the checker (Auto)">
-                  <span className="muted small">Posting</span>
-                  <Seg
-                    label="Review's posting"
-                    value={rv.post === "auto" ? "auto" : "ask"}
-                    disabled={c.busy === `${where}.post`}
-                    options={[
-                      { key: "ask", label: "Ask", title: "You post each checked review" },
-                      { key: "auto", label: "Auto", title: "The checker posts each review" },
-                    ]}
-                    onPick={(v) => c.act(`${where}.post`, "/api/review/settings", { post: v }, v === "auto" ? "The checker posts each review" : "You post each review")}
-                  />
-                </span>
-              )}
               {p === "review" && !on && (
                 <button className="btn btn-small" disabled={c.busy === where} onClick={() => c.act(where, "/api/review/settings", { enabled: true }, "Reviews are on, paused until you resume")}>
                   Turn on
@@ -354,8 +342,14 @@ function Orders({ c }: { c: Ctl }) {
               </div>
             ))}
             {p === "verify" && <div className="set-order-note">Change which checks run under Repos.</div>}
+            {p === "review" && rv && (
+              <div className="set-rows set-order-posting">
+                <Row label="Posting" note={<span className="set-order-note">For one repo, under Repos.</span>}>
+                  <Posting c={c} />
+                </Row>
+              </div>
+            )}
             <Err c={c} where={where} />
-            <Err c={c} where={`${where}.post`} />
           </div>
         );
       })}
@@ -518,6 +512,133 @@ function Agents({ c }: { c: Ctl }) {
   );
 }
 
+// ---- posting ----
+
+type PostKey = "same" | "ask" | "auto" | "rule";
+
+/**
+ * Who posts a checked review, for every repo or (with `slug`) one: Ask,
+ * Auto, or When… (a rule: it posts itself when every condition holds, and
+ * otherwise waits for you, saying why). docs/review.md#who-posts.
+ */
+function Posting({ c, slug }: { c: Ctl; slug?: string }) {
+  const r = c.s.review.config;
+  const [draft, setDraft] = useState<WhenDraft | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  if (!r) return null;
+  const own = slug ? (r.repos[slug]?.post ?? null) : r.post_rule;
+  const path: Path = slug ? ["review", "repos", slug, "post"] : ["review", "post"];
+  const where = slug ? `repo.${slug}.post` : "review.post";
+  const value: PostKey = draft ? "rule" : !own ? "same" : own.mode;
+  const inRepo = (s: string) => (slug ? `In ${slug}, ${s.charAt(0).toLowerCase()}${s.slice(1)}` : s);
+  const save = (v: unknown, done: string | ((s: Settings) => string)) => c.change(where, patchAt(path, v), done).then((s) => s && (setDraft(null), setProblem(null)));
+  const pick = (k: PostKey) => {
+    setProblem(null);
+    if (k === "rule") return setDraft(whenDraft(own?.mode === "rule" ? own.auto : null));
+    setDraft(null);
+    if (k === "same") return save(null, (s) => (s.review.config?.repos[slug!]?.post ? `review.lua sets ${slug}'s posting: change it there` : `${slug} posts as every repo does`));
+    save(k, inRepo(k === "auto" ? "The checker posts each review" : "You post each review"));
+  };
+  const saveRule = () => {
+    if (!draft) return;
+    const v = whenValue(draft);
+    if ("error" in v) return setProblem(v.error);
+    save(v.value, inRepo("A checked review posts itself when your rule holds"));
+  };
+  const options: { key: PostKey; label: string; title: string }[] = [
+    ...(slug ? [{ key: "same" as const, label: "Same as all", title: "As Agents → Review → Posting says, for every repo" }] : []),
+    { key: "ask", label: "Ask", title: "You post each checked review, or dismiss it" },
+    { key: "auto", label: "Auto", title: "The checker posts each review" },
+    { key: "rule", label: "When…", title: "It posts itself when every condition holds; otherwise it waits for you" },
+  ];
+  const sentence = own?.fn
+    ? `\`${own.fn}\` in review.lua decides, for each checked review. Pick Ask, Auto or When… to set it here instead.`
+    : own
+      ? `A checked review ${own.text}.`
+      : `As every repo: a checked review ${r.post_rule.text}.`;
+  return (
+    <>
+      <Seg label={slug ? `${slug}'s posting` : "Review's posting"} value={value} options={options} disabled={c.busy === where} onPick={pick} />
+      {!draft && <span className="set-sentence">{sentence}</span>}
+      {!draft && own?.mode === "rule" && own.auto && (
+        <button className="set-link" onClick={() => pick("rule")}>
+          Edit the rule
+        </button>
+      )}
+      {!slug && r.post_override && (
+        <div className="set-note">
+          <code>wh review post-mode {r.post_override}</code> is on: every repo {r.post_override === "auto" ? "posts itself" : "waits for you"} until you change posting here.{" "}
+          <button className="set-link" disabled={c.busy === where} onClick={() => c.act(where, "/api/review/settings", { post: "config" }, "Posting follows these settings again")}>
+            Follow these settings
+          </button>
+        </div>
+      )}
+      {draft && (
+        <div className="set-check-edit">
+          <div className="set-check-fields">
+            <div className="set-field">
+              <span>Verdict</span>
+              <Seg
+                label="Verdict"
+                value={draft.approve ? "approve" : "any"}
+                options={[
+                  { key: "approve", label: "Approves", title: "A review that requests changes waits for you" },
+                  { key: "any", label: "Any" },
+                ]}
+                onPick={(v) => (setDraft({ ...draft, approve: v === "approve" }), setProblem(null))}
+              />
+            </div>
+            <div className="set-field">
+              <span>Merge risk</span>
+              <Seg
+                label="Merge risk"
+                value={draft.risk || "any"}
+                options={[
+                  { key: "low", label: "Low" },
+                  { key: "medium", label: "Medium or lower" },
+                  { key: "any", label: "Any" },
+                ]}
+                onPick={(v) => (setDraft({ ...draft, risk: v === "any" ? "" : v }), setProblem(null))}
+              />
+            </div>
+            <label className="set-field">
+              <span>At most, lines</span>
+              <input className="set-input set-num" inputMode="numeric" value={draft.maxLines} placeholder="any" onChange={(e) => (setDraft({ ...draft, maxLines: e.target.value.replace(/[^0-9]/g, "") }), setProblem(null))} onKeyDown={(e) => e.key === "Enter" && saveRule()} />
+            </label>
+          </div>
+          <div className="set-check-fields">
+            <label className="set-field set-field-grow">
+              <span>By one of</span>
+              <input className="set-input" value={draft.authors} placeholder="anyone" onChange={(e) => (setDraft({ ...draft, authors: e.target.value }), setProblem(null))} onKeyDown={(e) => e.key === "Enter" && saveRule()} />
+            </label>
+            <label className="set-field set-field-grow">
+              <span>Labeled one of</span>
+              <input className="set-input" value={draft.labels} placeholder="any labels" onChange={(e) => (setDraft({ ...draft, labels: e.target.value }), setProblem(null))} onKeyDown={(e) => e.key === "Enter" && saveRule()} />
+            </label>
+            <label className="set-field set-field-grow">
+              <span>Not touching</span>
+              <input className="set-input mono-s" value={draft.notTouching} placeholder="db/migrations/, auth/" onChange={(e) => (setDraft({ ...draft, notTouching: e.target.value }), setProblem(null))} onKeyDown={(e) => e.key === "Enter" && saveRule()} />
+            </label>
+          </div>
+          <div className="set-actions">
+            <span className="set-sentence">It posts itself only when every condition holds. Otherwise it waits for you, and says why.</span>
+            <span className="spacer" />
+            <button className="btn btn-small btn-ghost" onClick={() => (setDraft(null), setProblem(null))}>
+              Cancel
+            </button>
+            <button className="btn btn-small btn-primary" disabled={c.busy === where} onClick={saveRule}>
+              Save
+            </button>
+          </div>
+          {problem && <div className="set-err">{problem}</div>}
+        </div>
+      )}
+      <Here c={c} paths={[path]} part="review" where={where} what={slug ? `${slug}'s posting` : "Posting"} />
+      <Err c={c} where={where} />
+    </>
+  );
+}
+
 // ---- repos ----
 
 function Repos({ c }: { c: Ctl }) {
@@ -629,6 +750,11 @@ function RepoCard({ c, slug }: { c: Ctl; slug: string }) {
           </Row>
         )}
         {b && <Checks c={c} slug={slug} checks={b.checks} />}
+        {r && (
+          <Row label="Posting">
+            <Posting c={c} slug={slug} />
+          </Row>
+        )}
         {r && <ReviewGuide c={c} slug={slug} />}
       </div>
     </div>

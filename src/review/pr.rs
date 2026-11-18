@@ -96,6 +96,14 @@ pub struct Pr {
     pub checker_effort: Option<String>,
     #[serde(default, deserialize_with = "list", skip_serializing_if = "Vec::is_empty")]
     pub checker_threads: Vec<String>,
+    /// How posting was set when the round's checker started: `ask`, `auto`
+    /// or `rule`. Under a rule, the hub decides once the review is checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checker_post: Option<String>,
+    /// What the hub decided under a rule, for one checked review:
+    /// `{round, head, digest, auto, why}`, and `refused` if its post was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_decision: Option<Value>,
     #[serde(default, deserialize_with = "map")]
     pub reviewers: BTreeMap<String, Reviewer>,
     #[serde(default, deserialize_with = "list")]

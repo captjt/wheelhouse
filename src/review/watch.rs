@@ -295,7 +295,11 @@ async fn step(shared: &Shared, cfg: &Config, mut e: Pr, paused: bool, active: &m
                             rounds::follow_head(shared, &key, &head).await?;
                             return Ok(None);
                         }
-                        return Ok(att("ready", "the checked review is ready to post", round));
+                        return match rounds::decide(shared, &key).await? {
+                            rounds::Decided::Posted => Ok(None),
+                            rounds::Decided::Waits(why) => Ok(att("ready", format!("the checked review is ready to post; it waits for you because {why}"), round)),
+                            rounds::Decided::NotRule => Ok(att("ready", "the checked review is ready to post", round)),
+                        };
                     }
                     if phase == "checking" && st == "HEAD_MOVED" {
                         let live = github::live_head(&e.repo, e.pr).await?;
@@ -364,7 +368,8 @@ pub fn status(shared: &Shared) -> Value {
     let core = shared.lock();
     let prs = super::all(&core).unwrap_or_default();
     let cfg = core.review.config.as_ref().map(|(c, _)| c.clone());
-    let mode = cfg.as_ref().map(|c| super::post_mode(&core, c));
+    let mode = cfg.as_ref().map(|c| super::post_mode(&core, c, None));
+    let rule = cfg.as_ref().map(|c| super::post_for(&core, c, None).json());
     let list: Vec<Value> = prs
         .iter()
         .filter(|p| !p.finished() || p.cleaned_at.as_deref().and_then(crate::time::secs_since).is_some_and(|s| s < 7 * 86400))
@@ -386,6 +391,8 @@ pub fn status(shared: &Shared) -> Value {
             // History is for a docket's panel; Recap has its own.
             v["history"] = if docket.is_some() { json!(p.history.iter().rev().collect::<Vec<_>>()) } else { json!([]) };
             v["draft"] = draft_summary(p);
+            v["post_decision"] = json!(p.post_decision.as_ref().filter(|d| d["round"] == json!(p.round)));
+            v["post"] = json!(cfg.as_ref().map(|c| super::post_mode(&core, c, Some(&p.repo))));
             v["docket"] = json!(docket);
             if p.finished() && docket.is_none() {
                 v["implementation"] = Value::Null;
@@ -397,11 +404,14 @@ pub fn status(shared: &Shared) -> Value {
         "enabled": super::enabled(&core),
         "paused": super::paused(&core),
         "post": mode,
+        "post_rule": rule,
+        "post_override": super::post_override(&core).map(|p| p.kind()),
         "config": cfg.as_ref().map(|c| json!({
             "path": crate::paths::tilde(&c.path.to_string_lossy()),
             "repos": c.repo_list(),
             "reviewers": c.reviewers.iter().map(|r| json!({ "name": r.name, "agent": r.agent })).collect::<Vec<_>>(),
-            "checker": c.checker, "post": c.post, "max_rounds": c.max_rounds, "poll_seconds": c.poll_seconds,
+            "checker": c.checker, "post": c.post.kind(), "max_rounds": c.max_rounds, "poll_seconds": c.poll_seconds,
+            "repo_posts": c.repos.iter().filter_map(|(slug, r)| r.post.as_ref().map(|p| (slug.clone(), p.json()))).collect::<serde_json::Map<String, Value>>(),
         })),
         "config_error": core.review.config_error,
         "last_scan_at": core.review.last_scan_at,

@@ -152,18 +152,9 @@ struct OrdersSettings: View {
                         }
                         .disabled(model.isBusy("review.paused"))
                         ErrorLine(key: "review.paused")
-                        Picker(selection: Binding(get: { rv?.auto == true ? "auto" : "ask" }, set: { v in
-                            Task { await model.toggle("review.post", "/api/review/settings", ["post": v]) }
-                        })) {
-                            Text("Ask").tag("ask")
-                            Text("Auto").tag("auto")
-                        } label: {
-                            Described(title: "Posting", text: rv?.auto == true ? "The checker posts each review on its own." : "You post each checked review, or dismiss it.")
-                        }
-                        .pickerStyle(.segmented)
-                        .fixedSize()
-                        ErrorLine(key: "review.post")
                     }
+                    // A rule is config: worth setting before Reviews are on, too.
+                    PostingPicker(slug: nil)
                 }
             }
             if model.build.exists {
@@ -439,6 +430,14 @@ struct RepoForm: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            form.onReceive(NotificationCenter.default.publisher(for: .snapshotScroll)) { n in
+                if let to = n.object as? String { proxy.scrollTo(to, anchor: .top) }
+            }
+        }
+    }
+
+    private var form: some View {
         Form {
             ConfigProblems()
             Section {
@@ -531,7 +530,7 @@ struct RepoForm: View {
                 }
             }
             if inReview {
-                ReviewGuidePicker(slug: slug)
+                ReviewGuidePicker(slug: slug).id("posting")
             }
             WhereItLives()
         }
@@ -744,7 +743,150 @@ struct CheckEditor: View {
     }
 }
 
-/// The repo's review guide: one of your guides, or none.
+// ---- who posts a checked review ----
+
+/// Who posts a checked review, for every repo or (with a slug) one: Ask,
+/// Auto, or When… (a rule: it posts itself when every condition holds,
+/// and otherwise waits for you, saying why). docs/review.md#who-posts.
+struct PostingPicker: View {
+    let slug: String?
+    @Environment(SettingsModel.self) private var model
+    @State private var editing = false
+
+    private var rule: JSON { slug.map { model.review["repos"][$0]["post"] } ?? model.review["post_rule"] }
+    private var path: [String] { slug.map { ["repos", $0, "post"] } ?? ["post"] }
+    private var key: String { slug.map { "repo.\($0).post" } ?? "review.post" }
+
+    var body: some View {
+        let mode = rule.exists ? (rule["mode"].str ?? "ask") : "same"
+        let sentence = rule["fn"].text.map { "`\($0)` in review.lua decides, for each checked review. Pick Ask, Auto or When… to set it here instead." }
+            ?? (rule.exists ? "A checked review \(rule["text"].str ?? "")." : "As every repo: a checked review \(model.review["post_rule"]["text"].str ?? "waits for you").")
+        VStack(alignment: .leading, spacing: 4) {
+            Picker(selection: Binding(get: { mode }, set: { pick($0) })) {
+                if slug != nil { Text("Same as All").tag("same") }
+                Text("Ask").tag("ask")
+                Text("Auto").tag("auto")
+                Text("When…").tag("rule")
+            } label: {
+                Described(title: "Posting", text: sentence)
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+            .disabled(model.isBusy(key))
+            if mode == "rule", rule["auto"].exists {
+                Button("Edit the Rule…") { editing = true }.buttonStyle(.link).font(.system(size: 11.5))
+            }
+            if slug == nil, let o = model.review["post_override"].text {
+                HStack(spacing: 6) {
+                    Text("`wh review post-mode \(o)` is on: every repo \(o == "auto" ? "posts itself" : "waits for you") until you change posting here.")
+                        .foregroundStyle(.secondary)
+                    Button("Follow These Settings") { Task { await model.toggle(key, "/api/review/settings", ["post": "config"]) } }
+                        .buttonStyle(.link)
+                        .disabled(model.isBusy(key))
+                }
+                .font(.system(size: 11.5))
+            }
+            SetHere(part: "review", path: path, key: key)
+            ErrorLine(key: key)
+        }
+        .sheet(isPresented: $editing) { RuleEditor(slug: slug, rule: rule["mode"].str == "rule" ? rule["auto"] : .null) }
+        .onReceive(NotificationCenter.default.publisher(for: .snapshotRule)) { n in
+            if (n.object as? String) == (slug ?? "") { editing = true }
+        }
+    }
+
+    private func pick(_ v: String) {
+        switch v {
+        case "rule": editing = true
+        case "same": Task { await model.change(key, SettingsPatch.make("review", path, nil)) }
+        default: Task { await model.change(key, SettingsPatch.make("review", path, v)) }
+        }
+    }
+}
+
+/// A posting rule's conditions: every one set must hold for a checked
+/// review to post itself.
+struct RuleEditor: View {
+    let slug: String?
+    let rule: JSON
+    @Environment(SettingsModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var approve = true
+    @State private var risk = "low"
+    @State private var maxLines = ""
+    @State private var authors = ""
+    @State private var labels = ""
+    @State private var notTouching = ""
+    @State private var problem: String?
+
+    private var key: String { "rule.edit" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(slug.map { "When a review in \($0) posts itself" } ?? "When a review posts itself").font(.system(size: 14, weight: .semibold)).padding([.horizontal, .top], 20)
+            Form {
+                Picker("Verdict", selection: $approve) {
+                    Text("Approves").tag(true)
+                    Text("Any").tag(false)
+                }
+                .pickerStyle(.segmented)
+                Picker("Merge risk", selection: $risk) {
+                    Text("Low").tag("low")
+                    Text("Medium or Lower").tag("medium")
+                    Text("Any").tag("")
+                }
+                .pickerStyle(.segmented)
+                TextField("At most, lines", text: $maxLines, prompt: Text("any"))
+                TextField("By one of", text: $authors, prompt: Text("anyone"))
+                TextField("Labeled one of", text: $labels, prompt: Text("any labels"))
+                TextField("Not touching", text: $notTouching, prompt: Text("db/migrations/, auth/"))
+                    .font(.system(size: 13, design: .monospaced))
+                if let problem { Text(problem).font(.system(size: 11.5)).foregroundStyle(K.error) }
+                ErrorLine(key: key)
+            }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            Text("It posts itself only when every condition holds. Otherwise it waits for you, and the Inbox says why. Lists are comma-separated.")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary).padding(.horizontal, 20)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save") { save() }
+                    .buttonStyle(.borderedProminent).tint(K.accent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(model.isBusy(key))
+            }
+            .padding(20)
+        }
+        .frame(width: 480)
+        .onAppear {
+            model.errors[key] = nil
+            guard rule.exists else { return }
+            approve = rule["verdict"].str == "approve"
+            risk = rule["merge_risk"].str ?? ""
+            maxLines = rule["max_lines"].int.map(String.init) ?? ""
+            authors = rule["authors"].strings.joined(separator: ", ")
+            labels = rule["labels"].strings.joined(separator: ", ")
+            notTouching = rule["not_touching"].strings.joined(separator: ", ")
+        }
+    }
+
+    private func save() {
+        let r = SettingsPatch.rule(approve: approve, risk: risk, maxLines: maxLines, authors: authors, labels: labels, notTouching: notTouching)
+        guard let v = r.value else {
+            problem = r.error
+            return
+        }
+        problem = nil
+        let path = slug.map { ["repos", $0, "post"] } ?? ["post"]
+        Task {
+            if await model.change(key, SettingsPatch.make("review", path, v)) { dismiss() }
+        }
+    }
+}
+
+/// The repo's Review section: who posts its checked reviews, and its
+/// review guide (one of your guides, or none).
 struct ReviewGuidePicker: View {
     let slug: String
     @Environment(SettingsModel.self) private var model
@@ -757,6 +899,7 @@ struct ReviewGuidePicker: View {
         let known = mine.contains { $0.path == current }
         let doc = mine.first { $0.path == current }
         Section {
+            PostingPicker(slug: slug)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Picker(selection: Binding(get: { current ?? "" }, set: { v in

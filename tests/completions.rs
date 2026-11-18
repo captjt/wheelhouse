@@ -118,7 +118,11 @@ fn zsh_and_bash_complete_from_the_hub() {
         assert_eq!(words(&["wh", "reply", ""]), [d("41", "from api/planner · Migration order")], "{sh}");
         let choice = if zsh { "Users first" } else { "'Users first'" };
         assert_eq!(words(&["wh", "reply", "41", "--choice", "U"]), [choice], "{sh}: bash gets it quoted");
-        assert_eq!(words(&["wh", "review", "post-mode", ""]), [d("ask", "you post it"), d("auto", "the checker posts it"), d("config", "what review.lua says")], "{sh}");
+        assert_eq!(
+            words(&["wh", "review", "post-mode", ""]),
+            [d("ask", "you post it"), d("auto", "the checker posts it"), d("config", "your rules, from Settings and review.lua")],
+            "{sh}"
+        );
         assert_eq!(words(&["wh", "review", "post", ""]), [d("acme/api#12", "posted · Add retries")], "{sh}");
         assert_eq!(
             words(&["wh", "set", "D-4", "--status", "d"]),

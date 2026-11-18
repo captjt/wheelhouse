@@ -98,7 +98,25 @@ fn lay(raw: &mut Value, part: &Value) {
     if !raw.is_object() {
         *raw = json!({});
     }
+    whole(raw, part);
     merge(raw, &Value::Object(o.clone()));
+}
+
+/// Review's posting rule (`post`, and each repo's) is replaced whole, not
+/// key by key: a rule's conditions only make sense together.
+fn whole(base: &mut Value, over: &Value) {
+    if over.get("post").is_some()
+        && let Some(b) = base.as_object_mut()
+    {
+        b.remove("post");
+    }
+    for (slug, r) in over["repos"].as_object().into_iter().flatten() {
+        if r.get("post").is_some()
+            && let Some(b) = base.get_mut("repos").and_then(|x| x.get_mut(slug)).and_then(Value::as_object_mut)
+        {
+            b.remove("post");
+        }
+    }
 }
 
 /// What Settings may change. Lua keeps the rest: agents' programs and
@@ -111,7 +129,7 @@ const ALLOWED: [(&str, &[&str]); 2] = [
             "repos.*.checks", "repos.*.checkout", "guides.plan_format", "guides.pr_style", "sources.github.label", "sources.linear",
         ],
     ),
-    ("review", &["reviewers", "checker", "max_rounds", "repos.*.notes", "repos.*.checkout", "repos.*.guides", "guides"]),
+    ("review", &["reviewers", "checker", "max_rounds", "post", "repos.*.notes", "repos.*.checkout", "repos.*.guides", "repos.*.post", "guides"]),
 ];
 
 fn allowed(part: &str, at: &[String]) -> bool {
@@ -168,6 +186,18 @@ pub fn check(s: &Value) -> Result<()> {
     Ok(())
 }
 
+/// Review's posting rules in a patch, checked as sent: pruning empty tables
+/// later would otherwise turn `{ auto = {} }` into nothing set.
+fn check_posts(patch: &Value) -> Result<()> {
+    let r = &patch["review"];
+    let posts =
+        std::iter::once(("post".to_string(), &r["post"])).chain(r["repos"].as_object().into_iter().flatten().map(|(slug, x)| (format!("repos[\"{slug}\"].post"), &x["post"])));
+    for (at, v) in posts {
+        crate::review::posting::parse(v, &at).context("Review's settings")?;
+    }
+    Ok(())
+}
+
 /// Lay `patch` (`{ "build": {…}, "review": {…} }`) over settings.json, check
 /// it loads, and write it. Refuses what Settings may not change.
 pub fn change(patch: &Value) -> Result<Value> {
@@ -193,7 +223,11 @@ pub fn change(patch: &Value) -> Result<Value> {
             }
         }
     }
+    check_posts(patch)?;
     let mut s = load().unwrap_or_else(|_| json!({}));
+    if let (Some(r), Some(over)) = (s.get_mut("review"), patch.get("review")) {
+        whole(r, over);
+    }
     merge(&mut s, patch);
     prune(&mut s);
     check(&s)?;
@@ -500,7 +534,7 @@ pub fn orders(core: &crate::hub::Core, b: Option<&crate::build::config::Config>,
             }
             v
         };
-        let post = crate::review::post_mode(core, r);
+        let post = crate::review::post_for(core, r, None);
         let on = crate::review::enabled(core);
         out.push(json!({
             "protocol": "review", "on": on, "paused": on && crate::review::paused(core),
@@ -510,9 +544,15 @@ pub fn orders(core: &crate::hub::Core, b: Option<&crate::build::config::Config>,
                 and(&reviewers),
                 if r.reviewers.len() > reviewers.len() { format!(" ({} reviewers)", r.reviewers.len()) } else { String::new() },
                 app(&r.checker),
-                if post == "auto" { "post it".to_string() } else { "ask you before posting".to_string() }
+                post.order()
             ),
         }));
+        // A repo that posts its own way, unless `wh review post-mode` set one way for all.
+        if crate::review::post_override(core).is_none() {
+            for (slug, p) in r.repos.iter().filter_map(|(slug, x)| x.post.as_ref().filter(|p| **p != r.post).map(|p| (slug, p))) {
+                out.push(json!({ "protocol": "review", "on": on, "paused": on && crate::review::paused(core), "text": format!("In {slug}, a checked review {}.", p.outcome()) }));
+            }
+        }
     }
     if let Some(b) = b {
         let asked: Vec<String> = ["plan", "preview", "open", "address", "push"].iter().filter(|g| b.gate(g) == "ask").map(|g| g.to_string()).collect();
@@ -599,11 +639,13 @@ pub fn view(
     let review = match &r {
         Ok(c) => json!({
             "reviewers": c.reviewers.iter().map(|x| json!({ "name": x.name, "agent": x.agent })).collect::<Vec<_>>(),
-            "checker": c.checker, "post": crate::review::post_mode(core, c), "max_rounds": c.max_rounds,
+            "checker": c.checker, "post": crate::review::post_mode(core, c, None), "max_rounds": c.max_rounds,
+            "post_rule": c.post.json(), "post_override": crate::review::post_override(core).map(|p| p.kind()),
             "enabled": crate::review::enabled(core),
             "guides": c.raw["guides"].clone(),
             "repos": c.repos.iter().map(|(slug, x)| (slug.clone(), json!({
                 "checkout": crate::paths::tilde(&x.checkout.display().to_string()), "notes": x.notes, "guides": c.raw["repos"][slug]["guides"].clone(),
+                "post": x.post.as_ref().map(|p| p.json()),
             }))).collect::<Map<String, Value>>(),
         }),
         Err(_) => Value::Null,
@@ -655,7 +697,45 @@ mod tests {
         refused("build", &json!({ "agents": { "claude": { "program": "/bin/sh" } }, "path": ["/tmp"], "wall": { "mcp": true } }), &mut Vec::new(), &mut bad);
         assert_eq!(bad, vec!["build.agents.claude.program", "build.path", "build.wall.mcp"]);
         let mut bad = Vec::new();
-        refused("review", &json!({ "repos": { "o/a": { "guides": { "review": "~/x.md" } } }, "effort": { "review": "high" } }), &mut Vec::new(), &mut bad);
+        refused(
+            "review",
+            &json!({ "repos": { "o/a": { "guides": { "review": "~/x.md" }, "post": "auto" } }, "post": { "auto": { "verdict": "approve" } }, "effort": { "review": "high" } }),
+            &mut Vec::new(),
+            &mut bad,
+        );
         assert_eq!(bad, vec!["review.effort.review"]);
+    }
+
+    #[test]
+    fn an_empty_or_bad_posting_rule_is_refused_as_sent() {
+        assert!(check_posts(&json!({ "review": { "post": { "auto": { "verdict": "approve" } }, "repos": { "o/a": { "post": null } } } })).is_ok());
+        assert!(check_posts(&json!({ "build": { "gates": { "open": "auto" } } })).is_ok());
+        let err = |v: Value| format!("{:#}", check_posts(&v).unwrap_err());
+        assert!(err(json!({ "review": { "post": { "auto": {} } } })).contains("post.auto has no conditions"));
+        assert!(err(json!({ "review": { "repos": { "o/a": { "post": "sometimes" } } } })).contains("repos[\"o/a\"].post must be"));
+    }
+
+    #[test]
+    fn a_posting_rule_is_replaced_whole() {
+        let mut raw =
+            json!({ "post": { "auto": { "merge_risk": "low", "max_lines": 400 } }, "repos": { "o/a": { "checkout": "/c", "post": { "auto": { "verdict": "approve" } } } } });
+        lay(&mut raw, &json!({ "post": { "auto": { "verdict": "approve" } }, "repos": { "o/a": { "post": { "auto": { "labels": ["safe"] } } } } }));
+        assert_eq!(raw["post"], json!({ "auto": { "verdict": "approve" } }));
+        assert_eq!(raw["repos"]["o/a"], json!({ "checkout": "/c", "post": { "auto": { "labels": ["safe"] } } }));
+        // Setting something else leaves it alone.
+        let mut raw = json!({ "post": { "auto": { "verdict": "approve" } } });
+        lay(&mut raw, &json!({ "max_rounds": 2 }));
+        assert_eq!(raw["post"], json!({ "auto": { "verdict": "approve" } }));
+        // In settings.json, as change() stores it: a new rule replaces the
+        // one there, and null removes it, so review.lua's comes back.
+        let mut s = json!({ "review": { "post": { "auto": { "merge_risk": "low" } }, "max_rounds": 2 } });
+        let patch = json!({ "review": { "post": { "auto": { "verdict": "approve" } } } });
+        whole(&mut s["review"], &patch["review"]);
+        merge(&mut s, &patch);
+        assert_eq!(s["review"]["post"], json!({ "auto": { "verdict": "approve" } }));
+        let patch = json!({ "review": { "post": null } });
+        whole(&mut s["review"], &patch["review"]);
+        merge(&mut s, &patch);
+        assert_eq!(s, json!({ "review": { "max_rounds": 2 } }));
     }
 }

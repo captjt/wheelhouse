@@ -178,7 +178,7 @@ struct ActivityRow: View {
             case "review" where data["source"].str == "wheelhouse": return .none
             case "review-event":
                 let ev = data["event"].str
-                return sys(.pr, [.t(e.body ?? "")], ev == "posted" || ev == "merged" ? "approved" : ev == "dismissed" ? "denied" : nil)
+                return sys(.pr, [.t(e.body ?? "")], ev == "posted" || ev == "merged" ? "approved" : ev == "dismissed" || ev == "post-refused" ? "denied" : nil)
             case "review-attention":
                 let k = data["kind"].str
                 let tone = k == "ready" || k == "blocked" ? "blocked" : "error"

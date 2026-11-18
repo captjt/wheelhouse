@@ -22,11 +22,20 @@ export type BuildConfig = {
   guides: { plan_format: unknown; pr_style: unknown };
   repos: Record<string, BuildRepo>;
 };
-export type ReviewRepo = { checkout: string; notes: string; guides: Record<string, unknown> | null };
+/** A posting rule's conditions, as review.lua and settings.json have them. */
+export type AutoWhen = { verdict?: "approve"; merge_risk?: "low" | "medium"; max_lines?: number; authors?: string[]; labels?: string[]; not_touching?: string[] };
+/** Who posts a checked review (src/review/posting.rs): `text` ends "A checked review …". */
+export type PostRule = { mode: "ask" | "auto" | "rule"; auto: AutoWhen | null; fn: string | null; text: string };
+export type ReviewRepo = { checkout: string; notes: string; guides: Record<string, unknown> | null; post: PostRule | null };
 export type ReviewConfig = {
   reviewers: { name: string; agent: string }[];
   checker: string;
+  /** What posting does now, by default: `ask`, `auto` or `rule`, after any override. */
   post: string;
+  /** review.lua's (or Settings') posting for every repo, without the override. */
+  post_rule: PostRule;
+  /** `wh review post-mode ask|auto`, over every repo's rule. */
+  post_override: "ask" | "auto" | null;
   max_rounds: number;
   enabled: boolean;
   guides: unknown;
@@ -204,4 +213,48 @@ export function usedWord(u: string): string {
   const slot = /^guides\.(\w+)$/.exec(at);
   if (slot) return `${part === "review" ? "Review" : "Build"}'s ${slotWord(slot[1])} guide`;
   return `${part}.lua: ${at}`;
+}
+
+/** A posting rule as you edit it: lists as you type them, comma-separated. */
+export type WhenDraft = { approve: boolean; risk: "" | "low" | "medium"; maxLines: string; authors: string; labels: string; notTouching: string };
+
+/** A rule's form, from the rule (or, for a new one, approvals at low merge risk). */
+export function whenDraft(a: AutoWhen | null | undefined): WhenDraft {
+  if (!a) return { approve: true, risk: "low", maxLines: "", authors: "", labels: "", notTouching: "" };
+  return {
+    approve: a.verdict === "approve",
+    risk: a.merge_risk ?? "",
+    maxLines: a.max_lines ? String(a.max_lines) : "",
+    authors: (a.authors ?? []).join(", "),
+    labels: (a.labels ?? []).join(", "),
+    notTouching: (a.not_touching ?? []).join(", "),
+  };
+}
+
+const items = (s: string) =>
+  s
+    .split(/[,\n]/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+/** The `post` a form saves as, or what's wrong with it. */
+export function whenValue(d: WhenDraft): { value: { auto: AutoWhen } } | { error: string } {
+  const auto: AutoWhen = {};
+  if (d.approve) auto.verdict = "approve";
+  if (d.risk) auto.merge_risk = d.risk;
+  const n = d.maxLines.trim();
+  if (n) {
+    if (!/^\d+$/.test(n) || Number(n) < 1) return { error: "Lines: a whole number, 1 or more." };
+    auto.max_lines = Number(n);
+  }
+  for (const [k, v] of [
+    ["authors", d.authors],
+    ["labels", d.labels],
+    ["not_touching", d.notTouching],
+  ] as const) {
+    const xs = items(v);
+    if (xs.length) auto[k] = xs;
+  }
+  if (!Object.keys(auto).length) return { error: "Pick at least one condition. For a review that always posts itself, choose Auto." };
+  return { value: { auto } };
 }
