@@ -83,6 +83,10 @@ Its intent has acceptance items, so it closes on evidence (passing checks, a mer
             );
         }
     }
+    // The repo's notes: its rules, and the decisions that stand for it.
+    if let Some(notes) = v["repo"].as_str().and_then(|r| core.build.notes(r).map(|n| (r, n))) {
+        out.push_str(&format!("\n## Notes on {}\n\n{}\n", notes.0, notes.1.replace("## Standing decisions", "### Standing decisions")));
+    }
     let mut recent = Vec::new();
     for s in entries.iter().rev() {
         let Ok(e) = s.entry() else { continue };
