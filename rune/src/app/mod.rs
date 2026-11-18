@@ -18,6 +18,7 @@ mod record;
 mod shortcuts;
 pub mod menubar;
 pub mod notify;
+pub mod settings;
 mod sidebar;
 mod verify;
 pub mod widgets;
@@ -543,6 +544,10 @@ pub fn on_key(s: &mut Main, ev: &KeyEvent, _: &mut Tx) -> bool {
     // ⌘/ (and ? below): the keyboard's shortcuts.
     if ev.is_command('/') || (ev.mods.cmd && ev.is_command('?')) {
         s.sheet = Some(Sheet::Shortcuts);
+        return true;
+    }
+    if ev.is_command(',') && !ev.mods.alt && !ev.mods.shift {
+        settings::open(s.theme);
         return true;
     }
     if ev.mods.cmd {

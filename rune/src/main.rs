@@ -57,8 +57,11 @@ fn main() {
         };
         // The traffic lights centred on the toolbar, in the framed pane.
         let chrome = Chrome { full_size_content: true, traffic_lights: Some((16.0, 25.0)), drag_regions: true };
-        let main = App::new(spec).chrome(chrome).keep_running().on_reopen(app::windows::reopen);
+        let mut main = App::new(spec).chrome(chrome).keep_running().on_reopen(app::windows::reopen);
         let me = main.handle();
+        // Settings (⌘,): a window of its own, hidden until the main window opens it.
+        let (settings, _) = main.window(app::settings::spec(store.clone(), me.clone()));
+        app::settings::link(settings);
         let follow = store.clone();
         // The menu bar's panel and the docket windows (app/windows.rs).
         let more = app::windows::more(&store, &me);

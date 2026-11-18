@@ -70,7 +70,9 @@ pub fn sidebar(s: &Main, st: Option<&HubState>, k: &K, kit: &Kit) -> El {
             sb = sb.section(SidebarSection::new("Rex sessions").rows(rows));
         }
     }
-    sb.footer(foot(s, st, k)).build(kit)
+    // Settings (⌘,), over the hub's status and the theme.
+    let settings = SidebarRow::new("Settings").icon(&icons::GEAR).height(28.0).on_select(|s: &mut Main, _| super::settings::open(s.theme)).build(kit).key("open-settings");
+    sb.footer(settings).footer(foot(s, st, k)).build(kit)
 }
 
 /// Under the sidebar: which hub, how it's connected, and the theme.
@@ -103,7 +105,10 @@ fn foot(s: &Main, st: Option<&HubState>, k: &K) -> El {
             .child(widgets::icon_segments(
                 "theme",
                 &[(&icons::SYSTEM, "System", s.theme.is_none()), (&icons::LIGHT, "Light", s.theme == Some(false)), (&icons::DARK, "Dark", s.theme == Some(true))],
-                |s: &mut Main, i| s.theme = [None, Some(false), Some(true)][i],
+                |s: &mut Main, i| {
+                    s.theme = [None, Some(false), Some(true)][i];
+                    super::settings::follow_theme(s.theme);
+                },
                 k,
             )),
     )

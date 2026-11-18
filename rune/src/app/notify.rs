@@ -15,10 +15,12 @@
 //! shows the docket in the main window. One that no longer needs you,
 //! answered here, on your phone or in Rex, is withdrawn.
 //!
-//! `WH_RUNE_NOTIFY=off` turns them off (Settings' "Notify me", for now).
+//! `WH_RUNE_NOTIFY=off` turns them off for the run; Settings' "Notify me"
+//! turns them off and on while it runs.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -142,6 +144,45 @@ fn enabled() -> bool {
     !std::env::var("WH_RUNE_NOTIFY").is_ok_and(|v| v == "off" || v == "0")
 }
 
+/// Settings' "Notify me about what needs me" (this run only).
+static OFF: AtomicBool = AtomicBool::new(false);
+/// What macOS said last: 0 not asked, 1 allowed, 2 turned off.
+static MACOS: AtomicU8 = AtomicU8::new(0);
+static STORE: OnceLock<Arc<Store>> = OnceLock::new();
+
+/// Whether notifications can be on at all in this run, and are.
+pub fn available() -> bool {
+    enabled() && STORE.get().is_some()
+}
+pub fn on() -> bool {
+    available() && !OFF.load(Ordering::Relaxed)
+}
+pub fn macos() -> u8 {
+    MACOS.load(Ordering::Relaxed)
+}
+
+/// Settings' switch: the hub follows the change on the next connection, as
+/// the Mac app's `Store.reconnect` makes it.
+pub fn set_on(on: bool) {
+    OFF.store(!on, Ordering::Relaxed);
+    if let Some(s) = STORE.get() {
+        let s = s.clone();
+        auth::allowed(move |ok| allowed(&s, ok));
+    }
+}
+
+fn allowed(store: &Store, ok: bool) {
+    MACOS.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
+    store.set_notifies(ok && !OFF.load(Ordering::Relaxed));
+}
+
+/// Settings' Send a Test (Notifier.test).
+pub fn test() {
+    if available() {
+        rune_notify::post(&rune_notify::Notification::new("test", "Wheelhouse").body("Notifications are on. Prompts, messages, finished turns and reviews show up like this."));
+    }
+}
+
 /// Post the hub's notifications from now on: in a window, from a bundled
 /// app (macOS notifies only for one), while they're on. Clicks and answers
 /// go to the hub and the main window.
@@ -149,6 +190,7 @@ pub fn start(store: Arc<Store>) {
     if store.headless || !enabled() || !rune_notify::available() {
         return;
     }
+    let _ = STORE.set(store.clone());
     {
         let store = store.clone();
         rune_notify::on_click(move |c| {
@@ -175,12 +217,12 @@ pub fn start(store: Arc<Store>) {
     // Ask at launch (Notifier.setUp), then look again every 30 s: System
     // Settings may turn them on or off (Store.checkNotifying).
     let s = store.clone();
-    auth::request(move |ok| s.set_notifies(ok));
+    auth::request(move |ok| allowed(&s, ok));
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let s = store.clone();
-            auth::allowed(move |ok| s.set_notifies(ok));
+            auth::allowed(move |ok| allowed(&s, ok));
         }
     });
 }
