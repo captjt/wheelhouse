@@ -82,9 +82,9 @@ struct RootView: View {
         })
     }
 
-    /// `wheelhouse://docket/D-12`: show it.
+    /// `wheelhouse://docket/D-12` (Dev's `wheelhouse-dev://`): show it.
     private func open(_ url: URL) {
-        guard url.scheme == "wheelhouse" else { return }
+        guard url.scheme == Flavor.scheme else { return }
         let parts = ([url.host] + url.pathComponents).compactMap { $0 }.filter { $0 != "/" }
         if parts.first == "docket", let id = parts.dropFirst().first {
             nav.show(id, store: store)
@@ -277,7 +277,7 @@ struct ShortcutsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private let groups: [(String, [(String, String)])] = [
-        ("Anywhere", [("⌥⌘K", "Wheelhouse over any app: approve, answer, find a docket, start one")]),
+        ("Anywhere", [(Flavor.chord, "\(Flavor.name) over any app: approve, answer, find a docket, start one")]),
         ("Go", [("⌘K  or  /", "Search dockets and commands"), ("⌘1 … ⌘8", "Inbox, Reviews, Builds, Active, All, Done, Agents, Recap"), ("G, then I R B A D X N P", "The same, as in the web app"), ("⌘R", "Refresh"), ("⌘,", "Settings: standing orders, agents, repos, guides")]),
         ("Create", [("⌘N  or  C", "New docket"), ("⇧⌘N", "Start an agent on a new docket")]),
         ("A list", [("J K  or  ↑ ↓", "Move"), ("↩  or  double-click", "Open the docket in its own window"), ("O", "Show the agent's pane in Rex"), ("S, then 1–4", "Change status"), ("E", "In the Inbox: done"), ("Swipe", "Done, Drop, Status; Approve, Deny, File in the Inbox")]),

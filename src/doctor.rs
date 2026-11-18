@@ -58,7 +58,7 @@ pub fn run() -> Result<()> {
     if commit != mine && commit != "unknown" && mine != "unknown" {
         r.warn("version", &format!("the hub runs {commit}, but this wh is {mine}"), "wh up restarts it on this one");
     }
-    if crate::paths::home().join("Library/LaunchAgents/dev.wheelhouse.hub.plist").exists() {
+    if crate::paths::home().join(format!("Library/LaunchAgents/{}.plist", crate::service::label())).exists() {
         r.ok("login", "starts at login (a LaunchAgent)");
     } else {
         r.note("login", "runs only while its terminal does", "wh up keeps it running, and starts it at login");

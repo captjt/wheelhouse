@@ -308,7 +308,7 @@ struct DocketMenu: View {
         Button("Run Checks") { Task { await store.runChecks(d.id) } }
         Divider()
         Button("Copy ID") { copy(d.id) }
-        Button("Copy Link") { copy("wheelhouse://docket/\(d.id)") }
+        Button("Copy Link") { copy("\(Flavor.scheme)://docket/\(d.id)") }
         if !d.head.isEmpty { Button("Copy Record Head") { copy("Docket: \(d.id) @ \(d.shortHead)") } }
     }
 

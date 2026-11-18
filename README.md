@@ -283,11 +283,12 @@ doesn't.
 just check          # what a pull request needs to pass (there's no CI: run it)
 just e2e            # a Build end to end, with stand-ins for Rex, gh, GitHub and Linear
 just app            # build Wheelhouse.app into ~/Applications
+just dev-install    # Wheelhouse Dev: this checkout beside your everyday one, never meeting it
 just dev            # the web app with hot reload on :5180, against a running hub
 just screenshots    # the README's images, from a made-up world
 ```
 
-[CONTRIBUTING.md](CONTRIBUTING.md) covers a second hub to try changes on,
+[CONTRIBUTING.md](CONTRIBUTING.md) covers Wheelhouse Dev and a second hub to try changes on,
 where things are, and the house style.
 
 ## License

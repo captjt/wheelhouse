@@ -217,7 +217,7 @@ private struct Converter {
         while let r = rest.range(of: #"(?<![\w/-])D-\d+\b"#, options: .regularExpression) {
             out += plain(String(rest[..<r.lowerBound]), st, sz)
             var linked = st
-            linked.link = URL(string: "wheelhouse://docket/\(rest[r])")
+            linked.link = URL(string: "\(Flavor.scheme)://docket/\(rest[r])")
             out += plain(String(rest[r]), linked, sz)
             rest = rest[r.upperBound...]
         }

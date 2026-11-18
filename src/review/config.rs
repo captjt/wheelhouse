@@ -53,8 +53,10 @@ pub struct Config {
 }
 
 /// Wheelhouse's config folder: `~/.config/wheelhouse`.
+/// Wheelhouse's config (settings, review.lua, build.lua, briefs): `$WH_CONFIG`
+/// for a second hub beside the daily one, or `~/.config/wheelhouse`.
 pub fn dir() -> PathBuf {
-    crate::paths::home().join(".config/wheelhouse")
+    std::env::var_os("WH_CONFIG").map(PathBuf::from).unwrap_or_else(|| crate::paths::home().join(".config/wheelhouse"))
 }
 
 /// Where the config is: `$WH_REVIEW_CONFIG`, or `~/.config/wheelhouse/review.lua`.
