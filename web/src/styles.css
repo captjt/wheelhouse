@@ -160,6 +160,8 @@ code {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Gives way before the buttons beside it do. */
+  min-width: 0;
   font-weight: 600;
   padding: 4px 6px;
   border-radius: 6px;
@@ -173,16 +175,33 @@ code {
   --brand: #2f7dff;
   --brand-2: #8fb8ff;
 }
+.ws-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.side-top .icon-btn {
+  flex: none;
+}
+/* With a badge, the header's gaps tighten so the name stays whole. */
+.side-top:has(.flavor-badge) {
+  gap: 0;
+}
+.workspace:has(.flavor-badge) {
+  gap: 6px;
+  padding-right: 4px;
+}
 .flavor-badge {
-  margin-left: 2px;
-  padding: 1px 6px;
+  flex: none;
+  margin-left: -2px;
+  padding: 0 4px;
   border-radius: 999px;
   background: linear-gradient(135deg, var(--brand-2), var(--brand));
   color: #fff;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 800;
-  letter-spacing: 0.06em;
-  line-height: 15px;
+  letter-spacing: 0.05em;
+  line-height: 14px;
 }
 .ws-logo {
   width: 20px;
@@ -330,10 +349,21 @@ code {
   color: var(--muted);
 }
 .conn-dot {
+  flex: none;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--faint);
+}
+.conn-dot.flavor {
+  background: var(--brand);
+}
+/* One line, whatever Rex says: the theme switch stays beside it. */
+.conn-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .conn-dot.on {
   background: var(--working);
