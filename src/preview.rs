@@ -44,7 +44,9 @@ async fn answers(port: u16) -> bool {
 
 async fn tailscale(args: &[&str]) -> Result<()> {
     let bin = crate::tailnet::tailscale_bin().ok_or_else(|| anyhow!("Tailscale isn't installed on this Mac"))?;
-    let out = tokio::process::Command::new(bin).args(args).output().await?;
+    let out = tokio::time::timeout(std::time::Duration::from_secs(30), tokio::process::Command::new(bin).args(args).kill_on_drop(true).output())
+        .await
+        .map_err(|_| anyhow::anyhow!("tailscale took over 30s"))??;
     if !out.status.success() {
         bail!("tailscale {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
     }
@@ -117,8 +119,7 @@ pub async fn stop(shared: &Shared, from: &Caller, app_port: Option<u16>) -> Resu
 pub async fn sweep(shared: Shared) {
     loop {
         tokio::time::sleep(SWEEP).await;
-        let checks: Vec<(u16, i64, u16, Option<String>)> =
-            shared.lock().previews.iter().map(|(k, p)| (*k, p.message, p.app_port, p.block.clone())).collect();
+        let checks: Vec<(u16, i64, u16, Option<String>)> = shared.lock().previews.iter().map(|(k, p)| (*k, p.message, p.app_port, p.block.clone())).collect();
         for (https_port, msg, app_port, block) in checks {
             let why = {
                 let core = shared.lock();

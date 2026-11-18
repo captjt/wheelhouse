@@ -2,8 +2,12 @@
 name = "wheelhouse"
 version = "0.1.0"
 edition = "2024"
+# Let chains (`if let … && …`) need 1.88.
+rust-version = "1.88"
 description = "Wheelhouse: every piece of agent work as a docket, on a record you can check"
-license = "UNLICENSED"
+license = "MIT"
+repository = "https://github.com/captjt/wheelhouse"
+homepage = "https://www.superlogical.com/rex"
 publish = false
 
 [[bin]]

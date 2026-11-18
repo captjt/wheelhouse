@@ -2,23 +2,30 @@
 
 Product design, draft, 2026-11-17. The decisions table marks what's
 settled. The repo is `captjt/wheelhouse` (private for now). The product
-is Wheelhouse.
+is Wheelhouse. This is the design: what's built so far is in
+[docs/roadmap.md](docs/roadmap.md), and the commands that exist are in
+README.md and `wh --help`.
 
 Wheelhouse is where you run all your agent work on your Mac. Each piece of
 work is a **docket**. Agents run in Rex. Wheelhouse starts them, briefs
 them, and watches them. It asks you only what you must decide, and keeps a
 record you can check.
 
-It brings together what rex-inbox, rex-reviewer and rex-develop each do
-today. Those three become built-in features on one record, and one app
-shows them. The three tools stay as their own open-source projects for
-anyone who runs one alone. Wheelhouse shares no code with them: it ports
-what they proved and goes further.
+**New here?** rex-inbox, rex-reviewer and rex-develop, named throughout
+this document, are earlier, separate tools on Rex by the same author:
+rex-inbox followed agents and answered them, rex-reviewer ran multi-agent
+PR reviews, and rex-develop took an issue to a PR. Wheelhouse replaces all
+three, so you don't need any of them.
 
-This is the local, one-person product described in the
-[Wheelhouse concept](https://muse.0utlaw.xyz/designs/wheelhouse/). Teams
-come after it works well for one person. The record format comes from
-`rex-inbox/docs/dockets.md`, which moves here as `docs/record.md`.
+It brings together what rex-inbox, rex-reviewer and rex-develop each do.
+Those three become built-in features on one record, and one app shows
+them. The three tools stay as their own open-source projects for anyone
+who runs one alone. Wheelhouse shares no code with them: it ports what
+they proved and goes further.
+
+This is the local, one-person product. Teams come after it works well for
+one person. The record format, first written for rex-inbox, is in
+`docs/record.md`.
 
 ## Who it's for
 
@@ -74,7 +81,7 @@ three.
 
 A standing order opens the docket. Either an issue assigned to you in
 Todo has the `agent` label, or it's in your active cycle (you're asked to
-**Start** or **Skip** first). You can also run `wh build ENG-142`.
+**Start** or **Skip** first). You can also run `wh build start ENG-142`.
 
 | Step | What happens | Entries |
 | --- | --- | --- |
@@ -91,7 +98,7 @@ Todo has the `agent` label, or it's in your active cycle (you're asked to
 ### Review (what rex-reviewer does)
 
 A standing order opens the docket when a PR requests you by name. You can
-also run `wh review api#341`.
+also run `wh review pickup acme/api 341`.
 
 | Step | What happens | Entries |
 | --- | --- | --- |
@@ -116,9 +123,9 @@ Rex pane.
 - **Its entries:** each prompt you give (`note`), each turn's summary
   (`turn`), each permission you answer (`approval`), its messages, and
   what it shares.
-- **Join instead.** `wh join D-41` in a pane, or **Working on…** in the
-  app, attaches the session to an existing docket. Its own docket then
-  folds into that one.
+- **Join instead (planned).** `wh join D-41` in a pane, or **Working
+  on…** in the app, attaches the session to an existing docket. Its own
+  docket then folds into that one.
 - **Promote.** **Make this a Build** turns a spike into planned work.
   The plan starts from the session's record.
 - **It ends with the session** and moves to Done on its own. Short
@@ -150,13 +157,13 @@ These things come only from having the protocols on one record:
 | **Wheelhouse.app** | One menu bar icon, orange with a count while something needs you. The panel shows your asks. The window holds the full app. Notifications carry the answer (Approve and Deny, Post and Dismiss, a decision's options) and are withdrawn once answered. |
 | **The window** | The web UI in a native window: Home, Dockets, Agents, Recap, Settings, and ⌘K. |
 | **The phone** | The same UI from the Home Screen over your tailnet, with Web Push, laid out natively: a tab bar, large titles, a docket that slides onto its list (swipe right to go back), rows that swipe (Done, Drop, Status, File, Approve) and long-press for their menu, sheets from the bottom, and pull to refresh. An agent's docket opens to its conversation: what you asked, what it answered, what it's doing now, and a box to send the next thing (queued while it works; its reply comes as a push). Previews open here. |
-| **The terminal** | `wh` for you: `wh` (your asks), `wh D-41`, `wh approve 3`, `wh build ENG-142`. Rex key bindings: `wh_next` focuses the next pane that needs you. |
-| **Agents** | `wh` for agents: `ask`, `note`, `attach`, `send`, `reply`, `share`, `done`. Also a skill, and a brief at `SessionStart`. |
+| **The terminal** | `wh` for you: `wh` (your asks), `wh show D-41`, `wh reply 3 --choice "5xx + timeouts"`, `wh build start ENG-142`. Rex key bindings (planned): `wh_next` focuses the next pane that needs you. |
+| **Agents** | `wh` for agents: `brief`, `intent`, `note`, `attach`, `send`, `reply`, `wait`, `share`. Also a skill (docs/agent-instructions.md), and a brief at `SessionStart`. |
 
 ### Home
 
 ```
-Wheelhouse                                         ⌘K     rex ●  studio ●
+Wheelhouse                                            ⌘K     rex ●  mac ●
 ──────────────────────────────────────────────────────────────────────────
 Needs you · 4
   D-41  ENG-142  decision  D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
@@ -276,7 +283,7 @@ Needs you: D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
   `decide(docket, observation, now) → actions`. rex-reviewer and
   rex-develop both use this pattern, with a `replay` command. Here a
   docket's state is the fold of its entries, so replay comes free:
-  `wh replay D-41` runs the rules over the record.
+  `wh replay D-41` (planned) runs the rules over the record.
 - **The runtime is behind four verbs.** `identify`, `observe`, `deliver`,
   and `brief`, as the concept defines them. Rex is the only runtime in
   v1. Herdr could come later without touching the protocols.
@@ -295,10 +302,11 @@ Needs you: D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
   daemon picks it up. rex-develop's decision files already work this way.
 - **Outward actions run through Rex**, as rex-reviewer's do, so they use
   your shell's git and gh sign-ins, not the LaunchAgent's environment.
-- **Config.** `~/.config/wheelhouse/config.lua`, like the tools, because
-  effort and routing are functions. Settings shows it and checks it.
-  Runtime changes (pausing, a gate on one docket) are `set` entries on
-  the record.
+- **Config.** Lua files in `~/.config/wheelhouse` (`review.lua` and
+  `build.lua`; `examples/` has a commented copy of each), like the tools,
+  because effort and routing are functions. Settings shows them and checks
+  them. Runtime changes (pausing, a gate on one docket) are `set` entries
+  on the record.
 
 ## The record format
 
@@ -307,10 +315,11 @@ Nostr's shape without using Nostr: signed, self-contained entries, ids by
 hash, and a key for each actor. Nostr's wire format, curve, and relays
 are left out.
 
-- **An entry is our own JSON, signed as exact bytes.** The payload is the
-  entry object from `dockets.md`: `v`, `docket`, `kind`, `at`, `actor`,
-  `body`, `data`, and `blobs`. Nothing is re-serialized before it's hashed
-  or checked, so there are no canonical-JSON rules to get wrong.
+- **An entry is Wheelhouse's own JSON, signed as exact bytes.** The
+  payload is the entry object from `docs/record.md`: `v`, `docket`,
+  `kind`, `at`, `actor`, `body`, `data`, and `blobs`. Nothing is
+  re-serialized before it's hashed or checked, so there are no
+  canonical-JSON rules to get wrong.
 - **Each entry is wrapped in a [DSSE](https://github.com/secure-systems-lab/dsse)
   envelope**, with `payloadType: application/vnd.wheelhouse.entry+json`.
   DSSE is the signing envelope that in-toto and Sigstore use, so any DSSE
@@ -346,17 +355,18 @@ Later additions that need no change to entries:
   as the hub's own Nostr identity, linking to the verifiable export.
 
 **Why not Nostr.** Most of its value is in relays and clients, and
-Wheelhouse uses neither. No Nostr client would render our two dozen entry
-kinds; Buzz's own custom kinds don't render in standard clients either.
-Nostr events have no order, and Buzz adds its own hash-chained audit log
-on the relay side, so we'd need our own chain anyway. A Nostr id is
-computed over a specific JSON serialization, while we sign exact bytes.
-Nostr uses secp256k1 Schnorr signatures, which git, SSH, and the Keychain
-don't use, so Buzz had to write `git-sign-nostr`. Its agent identity
-isn't standard Nostr either: Buzz's owner attestation and agent tokens
-are its own NIP documents. What we give up is signatures that check
-natively inside Buzz. A bridge re-signs as the hub, which is fine until a
-team actually works in Buzz.
+Wheelhouse uses neither. No Nostr client would render Wheelhouse's two
+dozen entry kinds; Buzz's own custom kinds don't render in standard
+clients either. Nostr events have no order, and Buzz adds its own
+hash-chained audit log on the relay side, so Wheelhouse would need its own
+chain anyway. A Nostr id is computed over a specific JSON serialization,
+while Wheelhouse signs exact bytes. Nostr uses secp256k1 Schnorr
+signatures, which git, SSH, and the Keychain don't use, so Buzz had to
+write `git-sign-nostr`. Its agent identity isn't standard Nostr either:
+Buzz's owner attestation and agent tokens are its own NIP documents. What
+Wheelhouse gives up is signatures that check natively inside Buzz. A
+bridge re-signs as the hub, which is fine until a team actually works in
+Buzz.
 
 ## Safety
 
@@ -400,18 +410,24 @@ own. A fix worth having in both is ported on purpose.
 
 ## Moving over from the tools
 
+This applies only to someone who ran the earlier tools. A new user
+starts with Wheelhouse alone.
+
 Each milestone below takes over from one tool, so you switch over in
 stages:
 
-- **History comes with you.** `wh import` reads rex-inbox's database and
-  the rex-reviewer and rex-develop ledgers into dockets, so Recap and
-  search have your past from day one.
+- **History comes with you.** `wh import rex-reviewer` brings
+  rex-reviewer's config, guides and ledger over, so its PRs resume where
+  they were. Importing rex-inbox's database and rex-develop's ledger is
+  planned.
 - **No double work.** Two reviewers on one PR, or two hubs pasting into
-  one pane, is the failure to avoid. `wh doctor` checks that the tool a
-  milestone replaces is down and its hooks are removed.
-- **Until a protocol lands,** Wheelhouse shows the remaining tool's
-  status records and answers them through that tool's actions, as
-  rex-inbox does for rex-reviewer today.
+  one pane, is the failure to avoid. `wh review on` and `wh import
+  rex-reviewer` refuse while rex-reviewer's watcher runs. A `wh doctor`
+  that checks every replaced tool is down and its hooks are removed is
+  planned.
+- **Until a protocol lands,** Wheelhouse can show the remaining tool's
+  status records and answer them through that tool's actions. It did this
+  for rex-reviewer until Review landed; that bridge is gone now.
 
 ## Milestones
 
@@ -421,27 +437,31 @@ Each milestone is usable on its own and takes over from one tool.
    entry format is the costly part to change. The daemon, the store, the
    fold, `verify`, and the React shell. Fixtures use a made-up workspace
    (team `ENG`, repo `acme/api`).
-   *Status, 2026-11-17: built as a first slice. The record format is
-   still a draft until it's reviewed.*
-   *Milestone 1 so far: every agent tracked as an Agent docket, with
-   Claude Code's hooks; the app (Inbox, lists, board, docket pages, ⌘K);
-   the pane from any device; messages to an agent between turns; and
-   guarded approve and deny. Still to come: messages between agents,
-   previews, starting agents, push notifications, the menu bar app, other
-   hosts, and `wh import`.*
+   *Status: built. The record format is still a draft until it's
+   reviewed.*
 1. **Inbox and every agent. Replaces rex-inbox.** The runtime, the Agent
    protocol, asks, messages, guarded approve, starting agents, previews,
    and the hooks. In the UI: Home, Dockets, Agents, and a docket's
    Activity. Also Wheelhouse.app, the phone with push, `wh`, the skill,
    and `wh import`. rex-reviewer and rex-develop keep running behind the
    bridge.
+   *Status: built, with messages between agents, previews (`wh share`),
+   starting agents (`wh start`), Mac notifications and Web Push, and the
+   phone app with Chat. Still to come: the menu bar app, other Rex hosts,
+   Codex's permission prompts, and importing rex-inbox's history.*
 2. **Review. Replaces rex-reviewer.** The Review protocol, the GitHub
    source, standing orders for review requests, several reviewers and a
    checker, the post action, the Review tab, and Recap for reviews.
+   *Status: built (docs/review.md). `wh import rex-reviewer` moves an
+   existing setup over.*
 3. **Build. Replaces rex-develop.** The Build protocol, the Linear and
    GitHub Issues sources, readiness, plans and decisions, gates,
    previews, the open action, address rounds, the Plan tab, and
    pre-review through Review.
+   *Status: built up to the draft PR (docs/build.md): plans, decisions,
+   gates, checks, previews and opening, with GitHub issue intake by label
+   and Linear issues started by hand. Still to come: address rounds
+   (review comments, CI, rebase), pre-review, and Linear intake.*
 4. **Verify.** Witnessed checks and the patch each one covers, verdict
    independence, checks with teeth, the rule for done, the Attention
    list, and Hold.
@@ -449,6 +469,9 @@ Each milestone is usable on its own and takes over from one tool.
    boundaries, variants in worktrees, and the trace view.
 6. **A team.** The workspace hub, member keys, and shared dockets, as the
    record design lays out.
+
+Milestones 4 to 6 haven't started. [docs/roadmap.md](docs/roadmap.md)
+tracks what's built and what's next.
 
 Review comes before Build because rex-reviewer is the more settled tool
 (0.5, used daily), while rex-develop (0.1) is still finding its shape.
@@ -471,7 +494,7 @@ Build also gains pre-review by landing second.
 | Language | A Rust daemon (rex-inbox's code ports directly), a React UI, and a Swift menu bar app. | proposed |
 | Protocol rules | Ported to Rust as pure functions, tested by replaying the tools' fixtures | proposed |
 | Config | A Lua file, like the tools', so effort and routing can be functions. Runtime changes are entries. | proposed |
-| Record format | Our own JSON entries, signed as exact bytes in DSSE envelopes with Ed25519 keys, and hash-chained per docket by the hub (see "The record format") | proposed |
+| Record format | Wheelhouse's own JSON entries, signed as exact bytes in DSSE envelopes with Ed25519 keys, and hash-chained per docket by the hub (see "The record format") | proposed |
 | Nostr | No. Take its shape (signed self-contained entries, ids by hash, a key per actor), not its wire format, curve, or relays. A bridge to Buzz can come later. | proposed |
 | Order | Review before Build | proposed |
 | Names | The app is Wheelhouse.app, the CLI is `wh`, and Rex actions start with `wh_` | proposed |
@@ -493,7 +516,7 @@ Build also gains pre-review by landing second.
 | --- | --- |
 | Scope: three tools' worth of features | Port, don't rewrite. Each milestone takes over from one tool and is used daily before the next starts. |
 | The record format is hard to change once there's history | Settled in milestone 0, before anything writes to it |
-| Two systems acting on the same PR or pane during the switch | `wh doctor`, the staged moves, and the bridge |
+| Two systems acting on the same PR or pane during the switch | Refusals while rex-reviewer's watcher runs, the staged moves, and `wh doctor` (planned) |
 | Sandboxed agents can't reach the socket | The outbox folder |
 | The LaunchAgent lacks your sign-ins | Outward actions run through Rex, in your shell's environment |
 | Wheelhouse and the tools drift apart | Accepted. Fixes are ported on purpose. |

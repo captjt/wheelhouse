@@ -110,14 +110,7 @@ mod tests {
     use super::*;
 
     fn rec(state: &str, kind: Option<&str>, msg: &str, at: &str) -> Record {
-        Record {
-            id: String::new(),
-            state: state.into(),
-            kind: kind.map(str::to_string),
-            msg: Some(msg.into()),
-            updated_at: Some(at.into()),
-            ..Default::default()
-        }
+        Record { id: String::new(), state: state.into(), kind: kind.map(str::to_string), msg: Some(msg.into()), updated_at: Some(at.into()), ..Default::default() }
     }
 
     #[test]

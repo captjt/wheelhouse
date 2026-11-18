@@ -90,7 +90,10 @@ pub fn import_rex_reviewer() -> Result<Vec<PathBuf>> {
     let mut text = text
         .replace("~/.config/rex-reviewer/guides/", "~/.config/wheelhouse/guides/")
         .replace(&format!("{home}/.config/rex-reviewer/guides/"), &format!("{home}/.config/wheelhouse/guides/"));
-    text = format!("-- Wheelhouse's review config (docs/review.md), brought over from rex-reviewer's\n-- on {}. Edit it here; rex-reviewer's copy is no longer read.\n{text}", crate::time::now());
+    text = format!(
+        "-- Wheelhouse's review config (docs/review.md), brought over from rex-reviewer's\n-- on {}. Edit it here; rex-reviewer's copy is no longer read.\n{text}",
+        crate::time::now()
+    );
     if let Some(d) = to.parent() {
         std::fs::create_dir_all(d)?;
     }
@@ -147,7 +150,8 @@ pub fn from_value(path: PathBuf, raw: Value) -> Result<Config> {
     let list: Vec<Value> = match (&raw["reviewers"], &raw["reviewer"]) {
         (Value::Array(a), _) => a.clone(),
         (_, Value::String(s)) => vec![Value::String(s.clone())],
-        _ => vec![Value::String("codex".into())],
+        // Claude Code by default; Codex is one line away in review.lua.
+        _ => vec![Value::String("claude".into())],
     };
     if list.is_empty() || list.len() > MAX_REVIEWERS {
         bail!("reviewers: one to {MAX_REVIEWERS}");
@@ -195,11 +199,7 @@ pub fn from_value(path: PathBuf, raw: Value) -> Result<Config> {
         let a = &raw["agents"][name];
         agents.insert(
             name.to_string(),
-            AgentCfg {
-                program: a["program"].as_str().map(str::to_string),
-                args: a["args"].is_array().then(|| strings(&a["args"])),
-                extra_args: strings(&a["extra_args"]),
-            },
+            AgentCfg { program: a["program"].as_str().map(str::to_string), args: a["args"].is_array().then(|| strings(&a["args"])), extra_args: strings(&a["extra_args"]) },
         );
     }
     for slot in raw["guides"].as_object().into_iter().flatten().map(|(k, _)| k) {
@@ -258,10 +258,7 @@ impl Config {
         match out {
             Value::Null | Value::Bool(false) => Ok(None),
             Value::String(s) if LEVELS.contains(&s.as_str()) => Ok(Some(s)),
-            other => bail!(
-                "effort.{slot} returned {other} for {repo}#{}; return low, medium, high, xhigh, or max, or nil for the agent's own setting",
-                view["pr"]
-            ),
+            other => bail!("effort.{slot} returned {other} for {repo}#{}; return low, medium, high, xhigh, or max, or nil for the agent's own setting", view["pr"]),
         }
     }
 

@@ -44,17 +44,7 @@ impl Actor {
 
 impl Entry {
     pub fn new(docket: &str, kind: &str, at: &str, actor: Actor) -> Self {
-        Entry {
-            v: 1,
-            docket: docket.to_string(),
-            kind: kind.to_string(),
-            at: at.to_string(),
-            actor,
-            body: None,
-            data: Value::Null,
-            blobs: Vec::new(),
-            replaces: None,
-        }
+        Entry { v: 1, docket: docket.to_string(), kind: kind.to_string(), at: at.to_string(), actor, body: None, data: Value::Null, blobs: Vec::new(), replaces: None }
     }
 
     #[cfg(test)]

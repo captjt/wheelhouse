@@ -1,77 +1,145 @@
 # Roadmap
 
-The goal: Wheelhouse replaces rex-inbox, rex-reviewer and rex-develop for
-everyday development and reviewing. Each step below retires something you
-run today. `[x]` is built and checked; `[ ]` is next.
+Wheelhouse is one hub and one app for agent work in Rex: every agent on a
+docket, a signed record of what happened, and two protocols, Review and
+Build. It replaces three earlier tools on Rex by the same author:
+rex-inbox (follow agents and answer them), rex-reviewer (multi-agent PR
+review) and rex-develop (an issue to a PR). A new user doesn't need any of
+them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
-## Replace rex-inbox (milestone 1)
+`[x]` is built and tested. `[ ]` is planned.
 
-- [x] Every agent tracked as a docket, with Claude Code's hooks
-- [x] The app: Inbox, lists, board, docket pages, ⌘K, Cloudflare theme
-- [x] The pane from any device; messages to an agent between turns
-- [x] Guarded approve and deny for Claude Code's permission prompts
-- [x] The hub as a LaunchAgent: `wh up`, `down`, `logs`, `status`
+## Built
+
+### The hub and the record
+
+- [x] Every Claude Code or Codex agent in a Rex pane gets a docket.
+      Claude Code's hooks (`wh hooks install`) add names from your prompts,
+      each turn's summary, and a new docket on `/clear`.
+- [x] A signed, hash-chained record per docket: `wh verify`, `wh export`,
+      and `wh verify --file` for an export ([record.md](record.md))
+- [x] The hub at login, as a LaunchAgent: `wh up`, `down`, `logs`, `status`
 - [x] The app on your tailnet, answering only you (`wh web --publish`)
-- [x] Notifications on the Mac: what needs you, failures, messages
-      (quiet for prompts and failures while rex-inbox runs)
-- [x] Start an agent from the app or `wh start`, on a docket
-- [x] Messages: `wh send --to me|PANE`, `reply`, `inbox`, `read`,
-      `wait`, `name`, `whoami`, options as buttons, delivered between turns,
-      each on the record (questions, decisions, notes on the thread)
-- [x] The `wheelhouse` agent skill (`wh skill install`)
-- [x] The global agent instructions point at Wheelhouse (Claude Code and Codex)
-- [x] Web Push on the phone (Home Screen app, Turn on in the sidebar)
-- [x] Previews: `wh share PORT`, answering only you (each request checked)
-- [ ] Other Rex hosts
-- [ ] Codex's prompt keys
-- [ ] `wh import`: history from rex-inbox, rex-reviewer, rex-develop
-- [x] A bridge to rex-reviewer until Review lands: one Review docket per
-      PR with all its panes, following its round, verdict and merge risk;
-      "ready to post" reviews in the Inbox with Post, Preview and Dismiss
-- [x] Switch over (2026-11-17): rex-inbox down, its hook and skill links removed
 
-## Dockets as the living source of truth
+### Inbox, messages, previews and push
 
-- [x] Intent on every docket: a versioned Markdown spec at the top of the
-      page (what it's for, acceptance, out of scope), edited in place,
-      with its history on the record; agents read it with `wh brief`
-- [x] Linear: `wh setup-linear`; a docket from a Linear issue
-      (`wh new --linear ENG-142`, or New docket › From Linear); link an
-      issue to any docket; the issue's description seeds the intent, and
-      changes to it, its state and its comments come in as entries
-      (built and checked against a stand-in for Linear's API; needs your key)
-- [ ] Decisions in force under the intent, with who made each one
+- [x] The app: Inbox, Active, All, Done, Agents, a view per Rex session,
+      lists and a board, docket pages, ⌘K, and light and dark themes
+- [x] Guarded approve and deny for Claude Code's permission prompts: a key
+      goes in only if the prompt is still the one you saw
+- [x] The pane from any device, and messages to an agent between turns
+- [x] Messages: `wh send --to me|PANE`, `reply`, `inbox`, `read`, `wait`,
+      `name`, `whoami`; options as buttons; each one on the record
+- [x] Start an agent on a new docket, from the app or with `wh start`
+- [x] Previews: `wh share PORT` puts an app an agent serves on your
+      tailnet, answering only you, with a question and buttons
+- [x] Notifications on the Mac, and Web Push on the phone
+- [x] The agents' skill (`wh skill install`) and the lines for your global
+      agent instructions ([agent-instructions.md](agent-instructions.md))
 
-## Replace rex-reviewer (milestone 2)
+### Dockets as the source of truth
 
-- [x] GitHub source: PRs that request you, rounds, heads (one GraphQL check, as rex-reviewer did)
-- [x] The Review protocol: prep, blind reviewers, checker, merge risk, head moves, cleanup;
-      your rex-reviewer config read as it is (LuaJIT); its ledger imported
-- [x] The post and its refusals (post-review, ported and tested); effort; guides; briefs
-- [x] The Reviews view, a review panel on each Review docket, ready reviews in the Inbox
-- [x] Recap: today, this week or 30 days; reviews and their verdicts, PRs
-      merged, waiting or closed, agents' work, your decisions; Copy as
-      Markdown, and `wh recap`
-- [x] Switch over (2026-11-17): rex-reviewer down, `wh review on`, ask mode
-      for the first live rounds
-- [x] Review is Wheelhouse's own: its config and guides in
-      `~/.config/wheelhouse` (`wh import rex-reviewer` once), the bridge to
-      rex-reviewer gone; the first live round (api#742) ran end to end
-- [ ] Next for Review: drafts and status on the docket's record rather
-      than in `.tmp/`, once a few more live rounds have run
+- [x] An intent on every docket: a versioned Markdown spec at the top of
+      the page, edited in place. Agents read it with `wh brief` and update
+      it with `wh intent`.
+- [x] Linear: `wh setup-linear` stores a read-only key. `wh new --linear
+      ENG-142` or `wh link D-12 ENG-142` ties an issue to a docket. The
+      issue seeds the intent, and its changes and comments come in as
+      entries.
+- [x] Artifacts: the hub keeps what the work made (each review round's
+      reports, checked review and merge risk; each Build's plan and
+      checks). Agents keep anything else with `wh attach FILE|URL`. The
+      record pins each file by its hash.
+- [x] The readable record: open it in the app, see who signed each entry,
+      and check every kept file against its hash
 
-## Build (milestone 3, replacing rex-develop)
+### Review ([review.md](review.md))
 
-- [x] Build, Wheelhouse's own (docs/build.md): a docket's intent is the
-      spec; `wh build start D-12 | owner/name#45 | ENG-142`, or Build it on
-      a docket; readiness, plan, decisions as messages with buttons, the
-      plan gate (approving it makes it the intent), build, check with fix
-      rounds, preview, the open gate, a draft PR with the plan block;
-      merge and close clean up; the agents' wall; the Builds view and a
-      Build panel on each docket
-- [x] GitHub issues with `sources.github.label` start on their own
-- [ ] Linear cycle offers and label intake (needs `wh setup-linear`)
-- [ ] Address rounds after the PR opens: review comments (the pr-reply
-      contract), CI, rebase; pre-review with the Review protocol
-- [ ] A first live Build on a real repo
-- rex-develop never ran on this Mac, so there's nothing to switch off
+- [x] PRs that request you, in the repos `review.lua` lists, become Review
+      dockets, one per PR for its whole life
+- [x] Rounds: one to four blind reviewers, a checker that merges and
+      checks their findings and rates the merge risk, and later rounds on
+      what changed
+- [x] Posting from your account, behind the post's refusals, in `ask` or
+      `auto` mode
+- [x] Effort and guides as Lua policies; the Reviews view and a review
+      panel on each Review docket
+- [x] Each review links the Linear issues its PR addresses, and writes the
+      docket's intent from them
+- [x] `wh import rex-reviewer` moves an existing rex-reviewer setup over,
+      once
+
+### Build ([build.md](build.md))
+
+- [x] A docket's intent is the spec. Start with `wh build start D-12`, a
+      GitHub issue (`acme/api#45`), a Linear issue (`ENG-142`), or Build it
+      in the app.
+- [x] Readiness, a plan, decisions as messages with buttons, the plan
+      gate, build, check with fix rounds, preview, the open gate, and a
+      draft PR with the plan block
+- [x] The wall: builders and checkers can't push, post, or reach a tracker
+- [x] GitHub issues assigned to you with a label start on their own
+      (`sources.github.label`)
+- [x] The Builds view and a Build panel on each docket
+
+### Recap and the phone
+
+- [x] Recap: today, this week or 30 days. Reviews and their verdicts, PRs
+      merged, waiting or closed, the agents' work, and your decisions; Copy
+      as Markdown, and `wh recap`.
+- [x] The phone app, from the Home Screen: a tab bar, swipe back, rows that
+      swipe, sheets, and pull to refresh
+- [x] Chat: an agent's docket as a conversation, with a box to send the
+      next thing (queued while it works) and its reply pushed to the phone
+
+## Next
+
+### Build after the PR opens
+
+- [ ] Address rounds: review comments on the PR become a round of fixes,
+      with one reply per thread, behind a **Push & reply** gate
+- [ ] CI: a failing check on the PR starts a fix round
+- [ ] Rebase: when the base moves on and the PR falls behind or conflicts,
+      a rebase round, pushed only after you approve it
+- [ ] Pre-review: a Review of the branch before the PR opens, with your
+      own reviewers, posting nothing
+- [ ] Build run live on more real repos
+
+### Linear intake for Build
+
+- [ ] Linear issues assigned to you with a label start a Build, as GitHub
+      issues do now (`sources.linear` in `build.lua`)
+- [ ] Cycle offers: an issue that enters your active cycle asks you to
+      **Start** or **Skip**
+
+### Review
+
+- [ ] Codex reviewers and checkers tested in live rounds. The config
+      supports them, but they haven't run a live Wheelhouse round yet.
+- [ ] Drafts and round status on the docket's record, rather than in the
+      worktree's `.tmp/`
+
+### Isolation
+
+- [ ] Agents isolated from the hub and your credentials: Review's and
+      Build's agents in Claude Code's sandbox (or a separate macOS user),
+      and owner-only API calls that need a secret agents can't read. Today
+      the wall stops mistakes, not a hostile agent (docs/security.md).
+
+### Elsewhere
+
+- [ ] Codex's permission prompts answered from the app, as Claude Code's
+      are
+- [ ] Rex hosts other than this Mac
+- [ ] Decisions in force shown under the intent, with who made each one
+- [ ] The menu bar app (Wheelhouse.app)
+
+## Later
+
+- **Verify:** witnessed checks and the patch each one covers, and verdict
+  independence (DESIGN.md, milestone 4)
+- **Your own protocols:** standing orders and protocols you write
+  (milestone 5)
+- **Teams:** a workspace hub, member keys, and shared dockets, so
+  teammates work on one record (milestone 6). The record format is built
+  for it already.

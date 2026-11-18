@@ -1,0 +1,18 @@
+⏺ The cart refactor moved `applyDiscount` into cart/pricing.ts; the
+  checkout tests still import it from cart/index.ts. I'll fix the imports
+  and run the checkout suite.
+
+⏺ Update(src/checkout/checkout.spec.ts)
+  ⎿  Updated src/checkout/checkout.spec.ts with 2 additions and 2 removals
+
+ ╭──────────────────────────────────────────────────────────────╮
+ │ Bash command                                                 │
+ │                                                              │
+ │   pnpm test --filter checkout                                │
+ │   Run the checkout tests                                     │
+ │                                                              │
+ │ Do you want to proceed?                                      │
+ │ ❯ 1. Yes                                                     │
+ │   2. Yes, and don't ask again for pnpm test commands         │
+ │   3. No, and tell Claude what to do differently (esc)        │
+ ╰──────────────────────────────────────────────────────────────╯

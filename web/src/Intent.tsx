@@ -42,7 +42,7 @@ export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: Ent
   const tick = useCallback(
     (index: number, checked: boolean): Promise<boolean> => {
       const body = d.intent?.body ?? "";
-      const count = (renderMarkdown(body).match(/<input /g) ?? []).length;
+      const count = renderMarkdown(body).querySelectorAll("input").length;
       const next = toggleTask(body, index, checked, count);
       if (next === null) {
         toast("That box isn't plain in the text: edit the intent to change it", "error");

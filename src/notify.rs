@@ -78,14 +78,26 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
             let title = core.store.state(&docket).ok()??.title;
             let app = crate::mirror::app_name(p.app().unwrap_or("agent")).to_string();
             let what = if h.state == "error" { "failed".to_string() } else { h.kind.clone().map(|k| format!("waits on you ({k})")).unwrap_or("waits on you".into()) };
-            Some(Note { title: format!("{app} {what}"), subtitle: format!("{docket} · {title}"), body: h.msg.clone().unwrap_or_default(), path: format!("{base}/#/d/{docket}"), group: format!("wh-{docket}") })
+            Some(Note {
+                title: format!("{app} {what}"),
+                subtitle: format!("{docket} · {title}"),
+                body: h.msg.clone().unwrap_or_default(),
+                path: format!("{base}/#/d/{docket}"),
+                group: format!("wh-{docket}"),
+            })
         }
         // An agent answered what you sent it from the app.
         "turn" => {
             let docket = ev["docket"].as_str()?.to_string();
             let st = core.store.state(&docket).ok()??;
             let app = st.agent.as_ref().map(|a| crate::mirror::app_name(&a.app).to_string()).unwrap_or_else(|| "The agent".into());
-            Some(Note { title: format!("{app} replied"), subtitle: format!("{docket} · {}", st.title), body: ev["text"].as_str().unwrap_or_default().to_string(), path: format!("{base}/#/d/{docket}"), group: format!("wh-{docket}") })
+            Some(Note {
+                title: format!("{app} replied"),
+                subtitle: format!("{docket} · {}", st.title),
+                body: ev["text"].as_str().unwrap_or_default().to_string(),
+                path: format!("{base}/#/d/{docket}"),
+                group: format!("wh-{docket}"),
+            })
         }
         "message" => {
             let m = core.store.message(ev["id"].as_i64()?).ok()??;
@@ -105,7 +117,22 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 return None;
             }
             let title = core.store.state(&docket).ok()??.title;
-            Some(Note { title: format!("Build {}", match a.kind.as_str() { "blocked" => "is blocked", "stalled" => "stalled", "start-failed" => "didn't start", "pane-closed" => "lost a pane", _ => "needs you" }), subtitle: format!("{docket} · {title}"), body: a.text.clone(), path: format!("{base}/#/d/{docket}"), group: format!("wh-build-{docket}") })
+            Some(Note {
+                title: format!(
+                    "Build {}",
+                    match a.kind.as_str() {
+                        "blocked" => "is blocked",
+                        "stalled" => "stalled",
+                        "start-failed" => "didn't start",
+                        "pane-closed" => "lost a pane",
+                        _ => "needs you",
+                    }
+                ),
+                subtitle: format!("{docket} · {title}"),
+                body: a.text.clone(),
+                path: format!("{base}/#/d/{docket}"),
+                group: format!("wh-build-{docket}"),
+            })
         }
         "review" => {
             let key = ev["key"].as_str()?;
@@ -124,7 +151,13 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 "pane-closed" => "lost a pane".to_string(),
                 _ => "needs you".to_string(),
             };
-            Some(Note { title: format!("Review of {short} {what}"), subtitle: format!("{docket} · {title}"), body: a.text.clone(), path: format!("{base}/#/d/{docket}"), group: format!("wh-review-{key}") })
+            Some(Note {
+                title: format!("Review of {short} {what}"),
+                subtitle: format!("{docket} · {title}"),
+                body: a.text.clone(),
+                path: format!("{base}/#/d/{docket}"),
+                group: format!("wh-review-{key}"),
+            })
         }
         _ => None,
     }

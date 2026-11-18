@@ -41,7 +41,8 @@ pub async fn run(shared: Shared) {
 /// Issues assigned to you with the label, in Build's repos, start a Build.
 async fn intake(shared: &Shared, cfg: &super::config::Config) {
     let Some(label) = cfg.github_label.as_deref() else { return };
-    let mut args = vec!["search".to_string(), "issues".into(), "--assignee=@me".into(), format!("--label={label}"), "--state=open".into(), "--json".into(), "number,repository".into()];
+    let mut args =
+        vec!["search".to_string(), "issues".into(), "--assignee=@me".into(), format!("--label={label}"), "--state=open".into(), "--json".into(), "number,repository".into()];
     for r in cfg.repos.keys() {
         args.push(format!("--repo={r}"));
     }

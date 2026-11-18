@@ -3,7 +3,7 @@
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::agents::{self as wall, Spec};
@@ -101,7 +101,16 @@ pub async fn start_from(shared: &Shared, spec: &str, repo: Option<&str>) -> Resu
         let d = core.open(&Who::Owner, &format!("Build {}: {}", i.identifier, i.title), json!({ "protocol": "build", "title_source": "build" }))?;
         crate::linear::link(&mut core, &d, &i, &Who::Owner)?;
         crate::linear::apply(&mut core, &d, &i)?;
-        let mut t = Task { docket: d, key: i.identifier.clone(), title: i.title.clone(), url: Some(i.url.clone()), source: "linear".into(), trigger: "manual".into(), repo, ..Default::default() };
+        let mut t = Task {
+            docket: d,
+            key: i.identifier.clone(),
+            title: i.title.clone(),
+            url: Some(i.url.clone()),
+            source: "linear".into(),
+            trigger: "manual".into(),
+            repo,
+            ..Default::default()
+        };
         if let Some(b) = i.branch.clone().filter(|b| !b.is_empty()) {
             t.branch = Some(b);
         }
@@ -136,7 +145,12 @@ pub async fn prep(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
         format!("{}{}-{}", cfg.branch_prefix, k, slug(&t.title, 40)).trim_end_matches('-').to_string()
     });
     let url = format!("{}/{}.git", std::env::var("WH_GIT_BASE").unwrap_or_else(|_| "https://github.com".into()), t.repo);
-    let remote = git(&checkout, &["-c", "credential.helper=", "-c", &format!("credential.helper=!'{}' auth git-credential", github::gh_bin().display()), "ls-remote", "--heads", &url, &branch]).await.unwrap_or_default();
+    let remote = git(
+        &checkout,
+        &["-c", "credential.helper=", "-c", &format!("credential.helper=!'{}' auth git-credential", github::gh_bin().display()), "ls-remote", "--heads", &url, &branch],
+    )
+    .await
+    .unwrap_or_default();
     if !remote.trim().is_empty() && t.pushed_head.is_none() {
         bail!("the branch {branch} is already on GitHub; Build won't build over someone's branch. Delete it, or pick another branch");
     }
@@ -161,7 +175,10 @@ pub async fn prep(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
         let core = shared.lock();
         let st = core.store.state(&t.docket)?;
         let intent = st.as_ref().and_then(|s| s.intent.as_ref()).map(|i| i.body.clone()).unwrap_or_default();
-        let issue = st.as_ref().and_then(|s| s.linear.as_ref()).map(|l| format!("# {}: {}\n\n{}\n\n{}", l.key, l.title.clone().unwrap_or_default(), l.url.clone().unwrap_or_default(), l.description.clone().unwrap_or_default()));
+        let issue = st
+            .as_ref()
+            .and_then(|s| s.linear.as_ref())
+            .map(|l| format!("# {}: {}\n\n{}\n\n{}", l.key, l.title.clone().unwrap_or_default(), l.url.clone().unwrap_or_default(), l.description.clone().unwrap_or_default()));
         (intent, issue)
     };
     crate::review::write_atomic(&w.join(".tmp/context/intent.md"), &format!("# {}: {}\n\n{intent}\n", t.key, t.title))?;
@@ -175,7 +192,12 @@ pub async fn prep(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
         {
             let mut md = format!("# {}: {}\n\n{}\n\n{}\n", t.key, j["title"].as_str().unwrap_or(""), j["url"].as_str().unwrap_or(""), j["body"].as_str().unwrap_or(""));
             for c in j["comments"].as_array().into_iter().flatten() {
-                md.push_str(&format!("\n### {}, {}\n\n{}\n", c["author"]["login"].as_str().unwrap_or("?"), c["createdAt"].as_str().unwrap_or(""), c["body"].as_str().unwrap_or("")));
+                md.push_str(&format!(
+                    "\n### {}, {}\n\n{}\n",
+                    c["author"]["login"].as_str().unwrap_or("?"),
+                    c["createdAt"].as_str().unwrap_or(""),
+                    c["body"].as_str().unwrap_or("")
+                ));
             }
             crate::review::write_atomic(&w.join(".tmp/context/issue.md"), &md)?;
             crate::review::write_atomic(&w.join(".tmp/context/issue.json"), &v)?;
@@ -241,7 +263,11 @@ fn vars(cfg: &Config, t: &Task, login: &str) -> crate::review::briefs::Vars {
 fn closes(t: &Task) -> Option<String> {
     match t.source.as_str() {
         "linear" => Some(format!("Closes {}", t.key)),
-        "github" => Some(if t.key.rsplit_once('#').map(|x| x.0) == Some(t.repo.as_str()) { format!("Closes #{}", t.key.rsplit('#').next().unwrap_or("")) } else { format!("Closes {}", t.key) }),
+        "github" => Some(if t.key.rsplit_once('#').map(|x| x.0) == Some(t.repo.as_str()) {
+            format!("Closes #{}", t.key.rsplit('#').next().unwrap_or(""))
+        } else {
+            format!("Closes {}", t.key)
+        }),
         _ => None,
     }
 }
@@ -259,7 +285,10 @@ async fn open_role(shared: &Shared, cfg: &Config, t: &mut Task, role: &str, prom
     let resume = if role == "builder" { t.builder.session.clone() } else { t.checker.session.clone() };
     let checkout = cfg.repos.get(&t.repo).map(|x| x.checkout.clone()).unwrap_or_default();
     let title = format!("wheelhouse build {} {role}", t.docket);
-    let l = wall::argv(cfg, &Spec { agent: &r.agent, extra_args: &r.extra_args, resume: resume.as_deref(), worktree: &w, checkout: &checkout, effort: effort.as_deref(), title: &title });
+    let l = wall::argv(
+        cfg,
+        &Spec { agent: &r.agent, extra_args: &r.extra_args, resume: resume.as_deref(), worktree: &w, checkout: &checkout, effort: effort.as_deref(), title: &title },
+    );
     let label = t.label(role);
     shared.lock().build.panes.insert(label.clone(), (t.docket.clone(), role.to_string()));
     if let (Some(b), Some(s)) = (panes::find_in(shared, None, &super::session_name(), &label), panes::session_named(shared, &super::session_name())) {
@@ -268,7 +297,14 @@ async fn open_role(shared: &Shared, cfg: &Config, t: &mut Task, role: &str, prom
     let since = epoch();
     let created = panes::open_in(shared, &super::session_name(), &label, &w.to_string_lossy(), &l.argv, place).await?;
     {
-        let a = crate::record::fold::AgentRef { app: app_of(&r.agent).into(), host: "local".into(), block: created.block_id.clone(), rex_session: super::session_name(), pane: label.clone(), cwd: Some(crate::paths::tilde(&w.to_string_lossy())) };
+        let a = crate::record::fold::AgentRef {
+            app: app_of(&r.agent).into(),
+            host: "local".into(),
+            block: created.block_id.clone(),
+            rex_session: super::session_name(),
+            pane: label.clone(),
+            cwd: Some(crate::paths::tilde(&w.to_string_lossy())),
+        };
         let mut core = shared.lock();
         crate::agents::adopt(&mut core, &t.docket, &a, Some(prompt));
         let _ = core.append(&t.docket, "claim", &Who::Hub, None, json!({ "source": "wheelhouse", "role": format!("Build {role}"), "agent": a }));
@@ -317,7 +353,13 @@ pub async fn start(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     t.start_failed_epoch = None;
     let mut core = shared.lock();
     super::save(&mut core, t)?;
-    super::event(&mut core, &t.docket, "started", format!("The builder is planning {} on {}, from {}.", t.key, t.branch.clone().unwrap_or_default(), t.base.clone().unwrap_or_default()), json!({ "branch": t.branch, "base": t.base }))?;
+    super::event(
+        &mut core,
+        &t.docket,
+        "started",
+        format!("The builder is planning {} on {}, from {}.", t.key, t.branch.clone().unwrap_or_default(), t.base.clone().unwrap_or_default()),
+        json!({ "branch": t.branch, "base": t.base }),
+    )?;
     Ok(())
 }
 
@@ -533,7 +575,13 @@ async fn answer(shared: &Shared, cfg: &Config, t: &mut Task, what: &str, r: Repl
             let msg = format!("{what} ({}): {label}{note}. Its answer is in .tmp/decisions/{what}.answer.json.", d.question);
             if status_in(&wt(t), "status.txt") == format!("DECISION {what}") {
                 let phase = t.phase().to_string();
-                tell_builder(shared, t, &format!("Your decision has an answer:\n\n{msg}\n\nCarry on, and write {} when it's done.", if phase == "planning" { "PLAN_READY" } else { "BUILT" }), &format!("WORKING {phase}")).await?;
+                tell_builder(
+                    shared,
+                    t,
+                    &format!("Your decision has an answer:\n\n{msg}\n\nCarry on, and write {} when it's done.", if phase == "planning" { "PLAN_READY" } else { "BUILT" }),
+                    &format!("WORKING {phase}"),
+                )
+                .await?;
             } else {
                 t.outbox.push(msg);
             }
@@ -544,14 +592,29 @@ async fn answer(shared: &Shared, cfg: &Config, t: &mut Task, what: &str, r: Repl
         ("not_ready", Some(1)) => discard(shared, t, "you dropped it: not ready").await?,
         ("not_ready", _) => {
             t.phase = Some("planning".into());
-            tell_builder(shared, t, &format!("Proceed: plan on the assumptions you stated, and mark each one in the plan's Notes.{}\n\nWrite the plan as .tmp/tasks/plan.md says, then write PLAN_READY.", words(&r)), "WORKING planning").await?;
+            tell_builder(
+                shared,
+                t,
+                &format!(
+                    "Proceed: plan on the assumptions you stated, and mark each one in the plan's Notes.{}\n\nWrite the plan as .tmp/tasks/plan.md says, then write PLAN_READY.",
+                    words(&r)
+                ),
+                "WORKING planning",
+            )
+            .await?;
         }
         ("plan", Some(0)) => approve_plan(shared, t, &r.text, false).await?,
         ("plan", Some(2)) => discard(shared, t, "you discarded the plan").await?,
         ("plan", _) => {
             t.phase = Some("planning".into());
             let said = if r.text.trim().is_empty() { "No more was said; look again at what's weakest.".to_string() } else { format!("The answer was: \"{}\"", r.text.trim()) };
-            tell_builder(shared, t, &format!("Revise the plan. {said}\n\nUpdate .tmp/plan.md (and add decisions if it raises any), then write PLAN_READY again."), "WORKING planning").await?;
+            tell_builder(
+                shared,
+                t,
+                &format!("Revise the plan. {said}\n\nUpdate .tmp/plan.md (and add decisions if it raises any), then write PLAN_READY again."),
+                "WORKING planning",
+            )
+            .await?;
         }
         ("preview", Some(0)) => {
             t.previewed_head = t.checked_head.clone();
@@ -561,7 +624,8 @@ async fn answer(shared: &Shared, cfg: &Config, t: &mut Task, what: &str, r: Repl
         }
         ("preview", _) => {
             t.phase = Some("building".into());
-            tell_builder(shared, t, &format!("The preview needs work: {}\n\nFix it, commit, and write BUILT. The checker checks it again.", r.text.trim()), "WORKING building").await?;
+            tell_builder(shared, t, &format!("The preview needs work: {}\n\nFix it, commit, and write BUILT. The checker checks it again.", r.text.trim()), "WORKING building")
+                .await?;
         }
         ("open", Some(0)) => {
             let mut core = shared.lock();
@@ -605,9 +669,23 @@ async fn approve_plan(shared: &Shared, t: &mut Task, note: &str, auto: bool) -> 
         let who = if auto { Who::Hub } else { Who::Owner };
         let s = core.append(&t.docket, "intent", &who, Some(plan::intent(&p)), json!({ "source": "plan", "version": t.plan_version }))?;
         if let Some(md) = t.plan.clone() {
-            keep(&mut core, t, format!("The approved plan (v{})", t.plan_version), format!("plan-v{}.md", t.plan_version), md.into_bytes(), "Plan", json!({ "role": "plan", "version": t.plan_version }));
+            keep(
+                &mut core,
+                t,
+                format!("The approved plan (v{})", t.plan_version),
+                format!("plan-v{}.md", t.plan_version),
+                md.into_bytes(),
+                "Plan",
+                json!({ "role": "plan", "version": t.plan_version }),
+            );
         }
-        core.append(&t.docket, "approval", &who, if note.trim().is_empty() { None } else { Some(note.trim().to_string()) }, json!({ "what": "plan", "gate": "plan", "version": t.plan_version, "intent_seq": s.seq, "auto": auto }))?;
+        core.append(
+            &t.docket,
+            "approval",
+            &who,
+            if note.trim().is_empty() { None } else { Some(note.trim().to_string()) },
+            json!({ "what": "plan", "gate": "plan", "version": t.plan_version, "intent_seq": s.seq, "auto": auto }),
+        )?;
     }
     let mut msg = String::from("The plan is approved.\n\nThe decisions, as they stand (each answer is also in .tmp/decisions/):\n");
     for (id, d) in &t.decisions {
@@ -647,7 +725,12 @@ async fn plan_ready(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     if cfg.gate("plan") == "auto" {
         return approve_plan(shared, t, "", true).await;
     }
-    let open: Vec<String> = t.decisions.iter().filter(|(_, d)| d.answer.is_none()).map(|(id, d)| format!("- {id}: {} (recommended: {})", d.question, d.options.get(d.recommend).cloned().unwrap_or_default())).collect();
+    let open: Vec<String> = t
+        .decisions
+        .iter()
+        .filter(|(_, d)| d.answer.is_none())
+        .map(|(id, d)| format!("- {id}: {} (recommended: {})", d.question, d.options.get(d.recommend).cloned().unwrap_or_default()))
+        .collect();
     let mut body = String::new();
     for (name, text) in &p.sections {
         if name.eq_ignore_ascii_case("Decisions") {
@@ -683,7 +766,11 @@ async fn built(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     let prj = std::fs::read_to_string(w.join(".tmp/pr.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok());
     let pr_ok = prj.as_ref().is_some_and(|p| p["title"].as_str().is_some_and(|x| !x.trim().is_empty()) && p["body"].as_str().is_some_and(|x| !x.trim().is_empty()));
     let problem = if count == 0 {
-        Some(format!("there are no commits on {} past {}. Commit the work (Conventional Commits), then write BUILT.", t.branch.clone().unwrap_or_default(), t.base.clone().unwrap_or_default()))
+        Some(format!(
+            "there are no commits on {} past {}. Commit the work (Conventional Commits), then write BUILT.",
+            t.branch.clone().unwrap_or_default(),
+            t.base.clone().unwrap_or_default()
+        ))
     } else if !tmp.is_empty() {
         Some(format!("the commits include files under .tmp/, which is Wheelhouse's and never ships: {}. Take them out of the commits, then write BUILT.", tmp.join(", ")))
     } else if !pr_ok {
@@ -758,9 +845,18 @@ async fn after_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     t.tokens = Some(agentcli::tokens(&w));
     {
         let mut core = shared.lock();
-        core.append(&t.docket, "verdict", &Who::Hub, c["summary"].as_str().map(str::to_string), json!({ "role": "checker", "n": n, "verdict": verdict, "findings": findings.len(), "head": head }))?;
+        core.append(
+            &t.docket,
+            "verdict",
+            &Who::Hub,
+            c["summary"].as_str().map(str::to_string),
+            json!({ "role": "checker", "n": n, "verdict": verdict, "findings": findings.len(), "head": head }),
+        )?;
         for (file, title, role) in [(format!("check-{n}.json"), format!("Check {n}"), "check"), (format!("report-{n}.md"), format!("Check {n}'s report"), "check-report")] {
-            if let Ok(bytes) = std::fs::read(w.join(".tmp/check").join(&file)) {
+            let path = w.join(".tmp/check").join(&file);
+            if crate::review::through_link(&path).is_none()
+                && let Ok(bytes) = std::fs::read(&path)
+            {
                 keep(&mut core, t, title, file, bytes, "Checks", json!({ "role": role, "n": n, "head": head }));
             }
         }
@@ -782,7 +878,16 @@ async fn after_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
         let mut asked = false;
         if let (Some(port), Some(b)) = (p["port"].as_u64(), t.builder.block.clone()) {
             let from = crate::messages::caller(&shared.lock(), Some(&b));
-            if let Ok(v) = crate::preview::share(shared, &from, port as u16, Some(format!("{} · preview · {title}", t.key)), Some(body.clone()), vec!["Looks right".into(), "Needs work".into()]).await {
+            if let Ok(v) = crate::preview::share(
+                shared,
+                &from,
+                port as u16,
+                Some(format!("{} · preview · {title}", t.key)),
+                Some(body.clone()),
+                vec!["Looks right".into(), "Needs work".into()],
+            )
+            .await
+            {
                 let id = v["message"].as_i64().unwrap_or(0);
                 let version = t.asks.get("preview").map_or(0, |a| a.version) + 1;
                 t.asks.insert("preview".into(), super::Ask { message: id, version, options: vec!["Looks right".into(), "Needs work".into()] });
@@ -809,12 +914,24 @@ fn gate_open(cfg: &Config, t: &mut Task) {
     }
 }
 
+/// The PR's title and description, as `.tmp/pr.json` says now, and a hash
+/// of them: what you're asked to open is what opens.
+fn pr_said(w: &Path) -> (Value, String) {
+    let path = w.join(".tmp/pr.json");
+    let text = if crate::review::through_link(&path).is_none() { std::fs::read_to_string(&path).unwrap_or_default() } else { String::new() };
+    let v: Value = serde_json::from_str(&text).unwrap_or_default();
+    let digest = crate::review::rounds::draft_digest(&format!("{}\n{}", v["title"].as_str().unwrap_or(""), v["body"].as_str().unwrap_or("")));
+    (v, digest)
+}
+
 fn ask_open(shared: &Shared, t: &mut Task, failed: Option<&str>) -> Result<()> {
     let w = wt(t);
-    let prj: Value = std::fs::read_to_string(w.join(".tmp/pr.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let (prj, digest) = pr_said(&w);
+    t.extra.insert("asked_pr".into(), json!(digest));
     let commits = std::process::Command::new("git")
         .arg("-C")
         .arg(&w)
+        .args(crate::review::rounds::SAFE_GIT)
         .args(["log", "--oneline", &format!("{}..HEAD", t.base_head.clone().unwrap_or_default())])
         .env("PATH", github::command_path())
         .output()
@@ -822,7 +939,12 @@ fn ask_open(shared: &Shared, t: &mut Task, failed: Option<&str>) -> Result<()> {
         .unwrap_or_default();
     let n = commits.lines().count();
     let c = t.last_check.clone().unwrap_or_default();
-    let left: Vec<String> = c["findings"].as_array().into_iter().flatten().map(|f| format!("- {} ({}): {}", f["id"].as_str().unwrap_or("?"), f["severity"].as_str().unwrap_or("?"), f["what"].as_str().unwrap_or(""))).collect();
+    let left: Vec<String> = c["findings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|f| format!("- {} ({}): {}", f["id"].as_str().unwrap_or("?"), f["severity"].as_str().unwrap_or("?"), f["what"].as_str().unwrap_or("")))
+        .collect();
     let stood = t.decisions.values().filter(|d| d.answer.as_ref().is_some_and(|a| a["stood"] == true)).count();
     let mut subject = format!("{} · ready to open · {n} commit{}, checked", t.key, if n == 1 { "" } else { "s" });
     if !left.is_empty() && c["verdict"] == "fix" {
@@ -844,7 +966,12 @@ fn ask_open(shared: &Shared, t: &mut Task, failed: Option<&str>) -> Result<()> {
     if !left.is_empty() {
         body.push_str(&format!("\nFindings:\n{}\n", left.join("\n")));
     }
-    body.push_str(&format!("\nOpen PR pushes {} and opens it {}on {} with the plan attached. Needs changes sends your words to the builder.", t.branch.clone().unwrap_or_default(), "as a draft ", t.repo));
+    body.push_str(&format!(
+        "\nOpen PR pushes {} and opens it {}on {} with the plan attached. Needs changes sends your words to the builder.",
+        t.branch.clone().unwrap_or_default(),
+        "as a draft ",
+        t.repo
+    ));
     send_ask(shared, t, "open", &subject, &body, &["Open PR", "Needs changes", "Discard"])
 }
 
@@ -867,12 +994,20 @@ pub async fn open_pr(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     if t.approved_head.as_ref() != Some(&head) {
         bail!("you approved {}, but the branch is at {}; nothing was pushed", t.approved_head.as_deref().map(short).unwrap_or_else(|| "nothing".into()), short(&head));
     }
+    if let Some(asked) = t.extra.get("asked_pr").and_then(Value::as_str)
+        && asked != pr_said(&w).1
+    {
+        bail!("the PR's title or description changed after you were asked; ask again before it opens. Nothing was pushed");
+    }
     let base_head = t.base_head.clone().unwrap_or_default();
     let tmp = git(&w, &["diff", "--name-only", &format!("{base_head}..HEAD")]).await?;
     if tmp.lines().any(|l| l.starts_with(".tmp/")) {
         bail!("the commits include .tmp/ files; nothing was pushed");
     }
-    let prj: Value = std::fs::read_to_string(w.join(".tmp/pr.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).ok_or_else(|| anyhow!(".tmp/pr.json has no title and body; nothing was pushed"))?;
+    let prj: Value = std::fs::read_to_string(w.join(".tmp/pr.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .ok_or_else(|| anyhow!(".tmp/pr.json has no title and body; nothing was pushed"))?;
     let (title, body) = (prj["title"].as_str().unwrap_or("").trim().to_string(), plan::strip(prj["body"].as_str().unwrap_or("")));
     if title.is_empty() || body.is_empty() {
         bail!(".tmp/pr.json has no title and body; nothing was pushed");
@@ -918,7 +1053,11 @@ pub async fn open_pr(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
             .map(|(id, d)| plan::Decided {
                 id: id.clone(),
                 question: d.question.clone(),
-                answer: d.answer.as_ref().and_then(|a| a["label"].as_str().map(str::to_string)).map(|l| if l == "Another answer" { d.answer.as_ref().and_then(|a| a["text"].as_str()).unwrap_or("").to_string() } else { l }),
+                answer: d
+                    .answer
+                    .as_ref()
+                    .and_then(|a| a["label"].as_str().map(str::to_string))
+                    .map(|l| if l == "Another answer" { d.answer.as_ref().and_then(|a| a["text"].as_str()).unwrap_or("").to_string() } else { l }),
                 by: d.answer.as_ref().map(|a| if a["stood"] == true { "stood".into() } else { "you".into() }),
                 note: d.answer.as_ref().and_then(|a| a["text"].as_str().map(str::to_string)),
             })
@@ -955,7 +1094,13 @@ pub async fn open_pr(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     close_panes(shared, t).await;
     let mut core = shared.lock();
     core.append(&t.docket, "link", &Who::Hub, None, json!({ "kind": "github-pr", "url": url, "key": format!("{}#{}", t.repo, number.unwrap_or(0)) }))?;
-    super::event(&mut core, &t.docket, "opened", format!("Opened {}#{} from {} at {}.", t.repo.rsplit('/').next().unwrap_or(&t.repo), number.unwrap_or(0), branch, short(&head)), json!({ "pr": number, "url": url, "head": head }))?;
+    super::event(
+        &mut core,
+        &t.docket,
+        "opened",
+        format!("Opened {}#{} from {} at {}.", t.repo.rsplit('/').next().unwrap_or(&t.repo), number.unwrap_or(0), branch, short(&head)),
+        json!({ "pr": number, "url": url, "head": head }),
+    )?;
     Ok(())
 }
 
@@ -993,9 +1138,7 @@ async fn remove_worktree(shared: &Shared, t: &Task, branch_too: bool) {
         let _ = git(&checkout, &["worktree", "remove", "--force", &w.to_string_lossy()]).await;
     }
     let _ = git(&checkout, &["worktree", "prune"]).await;
-    if branch_too
-        && let Some(b) = &t.branch
-    {
+    if branch_too && let Some(b) = &t.branch {
         let _ = git(&checkout, &["branch", "-D", b]).await;
     }
 }

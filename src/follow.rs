@@ -124,10 +124,7 @@ async fn snapshot(rex: &Rex, only: Option<(BTreeSet<String>, BTreeSet<String>)>)
         Some((sessions, known)) => (sessions.into_iter().collect::<Vec<_>>(), None, Some(known)),
         None => {
             let list = rex.session_list().await?;
-            let ids: Vec<String> = list["sessions"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|s| s["session_id"].as_str().map(str::to_string)).collect())
-                .unwrap_or_default();
+            let ids: Vec<String> = list["sessions"].as_array().map(|a| a.iter().filter_map(|s| s["session_id"].as_str().map(str::to_string)).collect()).unwrap_or_default();
             let all = ids.iter().cloned().collect();
             (ids, Some(all), None)
         }
@@ -172,10 +169,7 @@ async fn snapshot(rex: &Rex, only: Option<(BTreeSet<String>, BTreeSet<String>)>)
     while let Some(r) = set.join_next().await {
         let (sid, bid, status, process, pwd) = r?;
         let Ok(status) = status else { continue };
-        let records: Vec<Record> = status["records"]
-            .as_array()
-            .map(|a| a.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
-            .unwrap_or_default();
+        let records: Vec<Record> = status["records"].as_array().map(|a| a.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect()).unwrap_or_default();
         statuses.push((sid, bid, records, process, pwd));
     }
     Ok(Snapshot { all_sessions, sessions, statuses })
@@ -186,16 +180,7 @@ async fn fetch_session(rex: &Rex, sid: &str) -> Result<SessionSnapshot> {
     let blocks = rex.api(Some(sid), "session.list_blocks", &json!({})).await?;
     let windows = view["windows"]
         .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|w| {
-                    Some(Window {
-                        window_id: w["window_id"].as_str()?.to_string(),
-                        label: w["label"].as_str().unwrap_or_default().to_string(),
-                    })
-                })
-                .collect()
-        })
+        .map(|a| a.iter().filter_map(|w| Some(Window { window_id: w["window_id"].as_str()?.to_string(), label: w["label"].as_str().unwrap_or_default().to_string() })).collect())
         .unwrap_or_default();
     let blocks = blocks["blocks"]
         .as_array()
@@ -212,10 +197,7 @@ async fn fetch_session(rex: &Rex, sid: &str) -> Result<SessionSnapshot> {
                 .collect()
         })
         .unwrap_or_default();
-    Ok(SessionSnapshot {
-        session: Session { session_id: sid.to_string(), label: view["label"].as_str().unwrap_or_default().to_string(), windows },
-        blocks,
-    })
+    Ok(SessionSnapshot { session: Session { session_id: sid.to_string(), label: view["label"].as_str().unwrap_or_default().to_string(), windows }, blocks })
 }
 
 /// Fetch some sessions again (or the whole list, with `None`). Status is
@@ -226,10 +208,7 @@ async fn resync(shared: &Shared, rex: &Rex, only: Option<BTreeSet<String>>) -> R
         Some(s) => s,
         None => {
             let list = rex.session_list().await?;
-            let ids: BTreeSet<String> = list["sessions"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|s| s["session_id"].as_str().map(str::to_string)).collect())
-                .unwrap_or_default();
+            let ids: BTreeSet<String> = list["sessions"].as_array().map(|a| a.iter().filter_map(|s| s["session_id"].as_str().map(str::to_string)).collect()).unwrap_or_default();
             let mut core = shared.lock();
             let changed = core.mirror.retain_sessions(&ids).panes;
             agents::reconcile(&mut core, changed);

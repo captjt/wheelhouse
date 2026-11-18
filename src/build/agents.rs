@@ -2,55 +2,14 @@
 //! every push rewritten to fail, `.tmp/` ignored by git, and for Claude Code
 //! no `git push`, `gh` or `wh send|share|reply`, and no MCP servers.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::config::Config;
 use crate::review::agentcli::{self, Launch};
 
-/// Where every push from an agent's pane goes: nowhere.
-const NEVER: &str = "wheelhouse-agents-never-push:///";
-
-/// A git ignore file with yours and `.tmp/`, for the agents' git.
-fn agent_gitignore() -> PathBuf {
-    let p = crate::review::cache_dir().join("agent-gitignore");
-    let home = crate::paths::home();
-    let mine = ["~/.config/git/ignore", "~/.gitignore_global", "~/.gitignore"]
-        .iter()
-        .map(|f| crate::paths::expand(f))
-        .find(|f| f.exists())
-        .and_then(|f| std::fs::read_to_string(f).ok())
-        .unwrap_or_default();
-    let text = format!("{mine}\n# Wheelhouse's, never committed\n.tmp/\n");
-    if std::fs::read_to_string(&p).ok().as_deref() != Some(&text) {
-        let _ = std::fs::create_dir_all(p.parent().unwrap_or(&home));
-        let _ = std::fs::write(&p, &text);
-    }
-    p
-}
-
-/// The pane's program: `env` with the wall up, then the agent.
+/// The pane's program: `env` with the wall up (Review's and Build's are one).
 pub fn env_wall(cfg: &Config, wt: &Path) -> Vec<String> {
-    let mut v: Vec<String> = ["env", "-u", "GH_TOKEN", "-u", "GITHUB_TOKEN", "-u", "LINEAR_API_KEY", "-u", "SSH_AUTH_SOCK"].iter().map(|s| s.to_string()).collect();
-    let instead = format!("url.{NEVER}.pushInsteadOf");
-    let git: Vec<(String, String)> = vec![
-        ("remote.origin.pushurl".into(), NEVER.into()),
-        ("credential.helper".into(), String::new()),
-        (instead.clone(), "https://".into()),
-        (instead.clone(), "git@".into()),
-        (instead, "ssh://".into()),
-        ("core.excludesFile".into(), agent_gitignore().display().to_string()),
-    ];
-    v.push(format!("PATH={}", agentcli::agent_path(&cfg.path_dirs)));
-    v.push(format!("GH_CONFIG_DIR={}", wt.join(".tmp/gh-empty").display()));
-    v.push("GIT_TERMINAL_PROMPT=0".into());
-    v.push("GIT_SSH_COMMAND=false".into());
-    v.push(format!("GIT_CONFIG_COUNT={}", git.len()));
-    for (i, (k, val)) in git.iter().enumerate() {
-        v.push(format!("GIT_CONFIG_KEY_{i}={k}"));
-        v.push(format!("GIT_CONFIG_VALUE_{i}={val}"));
-    }
-    v.push(format!("CARGO_HOME={}", crate::review::cache_dir().join("cargo").display()));
-    v
+    agentcli::env_wrapper(wt, &cfg.path_dirs)
 }
 
 pub struct Spec<'a> {
@@ -69,7 +28,19 @@ pub fn argv(cfg: &Config, s: &Spec) -> Launch {
     let mut args: Vec<String> = match (&a.args, s.agent) {
         (Some(x), _) => x.clone(),
         (None, "claude") => vec!["--permission-mode".into(), "auto".into()],
-        (None, _) => ["--approve-for-me", "--no-alt-screen", "--disable", "apps", "-c", "plugins.\"github@openai-curated\".enabled=false", "-c", "sandbox_workspace_write.network_access=true"].iter().map(|x| x.to_string()).collect(),
+        (None, _) => [
+            "--approve-for-me",
+            "--no-alt-screen",
+            "--disable",
+            "apps",
+            "-c",
+            "plugins.\"github@openai-curated\".enabled=false",
+            "-c",
+            "sandbox_workspace_write.network_access=true",
+        ]
+        .iter()
+        .map(|x| x.to_string())
+        .collect(),
     };
     args.extend(a.extra_args.iter().cloned());
     args.extend(s.extra_args.iter().cloned());
@@ -118,10 +89,18 @@ mod tests {
         let cfg = super::super::config::from_value(None, json!({}), Some(&rc)).unwrap();
         let l = argv(
             &cfg,
-            &Spec { agent: "claude", extra_args: &[], resume: None, worktree: Path::new("/w/D-1"), checkout: Path::new("/src/api"), effort: Some("high"), title: "wheelhouse build D-1 builder" },
+            &Spec {
+                agent: "claude",
+                extra_args: &[],
+                resume: None,
+                worktree: Path::new("/w/D-1"),
+                checkout: Path::new("/src/api"),
+                effort: Some("high"),
+                title: "wheelhouse build D-1 builder",
+            },
         );
         let a = l.argv.join(" ");
-        assert!(a.starts_with("env -u GH_TOKEN -u GITHUB_TOKEN -u LINEAR_API_KEY -u SSH_AUTH_SOCK PATH="), "{a}");
+        assert!(a.starts_with("env -u GH_TOKEN -u GITHUB_TOKEN -u LINEAR_API_KEY -u WH_LINEAR_KEY -u SSH_AUTH_SOCK PATH="), "{a}");
         assert!(a.contains("GIT_SSH_COMMAND=false GIT_CONFIG_COUNT=6 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=wheelhouse-agents-never-push:///"), "{a}");
         assert!(a.contains("GIT_CONFIG_KEY_2=url.wheelhouse-agents-never-push:///.pushInsteadOf GIT_CONFIG_VALUE_2=https://"), "{a}");
         assert!(a.contains("--effort high --add-dir /src/api/.git --settings"), "{a}");

@@ -6,30 +6,30 @@ macro_rules! say {
 }
 
 mod agents;
-mod artifacts;
-mod build;
-mod brief;
-mod linear;
-mod messages;
-mod notify;
 mod approve;
+mod artifacts;
+mod brief;
+mod build;
 mod client;
 mod follow;
 mod hooks;
 mod hub;
+mod linear;
+mod messages;
 mod mirror;
+mod notify;
 mod paths;
 mod preview;
-mod recap;
-mod review;
 mod push;
+mod recap;
 mod record;
+mod review;
 mod rex;
 mod server;
 mod service;
 mod start;
-mod tailnet;
 mod store;
+mod tailnet;
 mod time;
 
 use anyhow::{Context, Result, bail};
@@ -252,8 +252,9 @@ fn main() {
                 Some("-") => text_or_stdin(prompt.clone()).ok(),
                 _ => prompt,
             };
-            client::json("POST", "/api/agents/start", Some(&json!({ "app": if codex { "codex" } else { "claude-code" }, "cwd": cwd, "prompt": prompt, "title": title })))
-                .map(|v| println!("{} started in {}: wheelhouse/{}", if codex { "Codex" } else { "Claude Code" }, v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?")))
+            client::json("POST", "/api/agents/start", Some(&json!({ "app": if codex { "codex" } else { "claude-code" }, "cwd": cwd, "prompt": prompt, "title": title }))).map(|v| {
+                println!("{} started in {}: wheelhouse/{}", if codex { "Codex" } else { "Claude Code" }, v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?"))
+            })
         }
         Some(Cmd::Skill { action }) => skill(action.as_deref()),
         Some(Cmd::Import { from, force }) => match from.as_str() {
@@ -277,11 +278,10 @@ fn main() {
                 client::json("POST", "/api/share/stop", Some(&json!({ "port": port, "block": block }))).map(|v| println!("stopped {} preview(s)", v["stopped"]))
             } else {
                 let port = port.ok_or_else(|| anyhow::anyhow!("which port? wh share 5173"));
-                port.and_then(|p| client::json("POST", "/api/share", Some(&json!({ "port": p, "title": title, "ask": ask, "options": options, "block": block }))))
-                    .map(|v| {
-                        println!("#{} in the user's inbox: {}", v["message"], v["url"].as_str().unwrap_or("?"));
-                        println!("their answer comes back as a reply: wh wait --thread {}", v["message"]);
-                    })
+                port.and_then(|p| client::json("POST", "/api/share", Some(&json!({ "port": p, "title": title, "ask": ask, "options": options, "block": block })))).map(|v| {
+                    println!("#{} in the user's inbox: {}", v["message"], v["url"].as_str().unwrap_or("?"));
+                    println!("their answer comes back as a reply: wh wait --thread {}", v["message"]);
+                })
             }
         }
         Some(Cmd::Send { to, subject, options, text }) => msg_send(&to, subject, options, text),
@@ -327,12 +327,61 @@ fn normalize(d: &str) -> String {
     if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() { format!("D-{n}") } else { d.to_string() }
 }
 
+/// Run one of the hub's loops, and start it again if it panics: a bug in
+/// one loop is logged and survives, instead of silently stopping, say, the
+/// Rex mirror while the rest of the hub carries on.
+fn supervise<F, Fut>(name: &'static str, shared: hub::Shared, run: F)
+where
+    F: Fn(hub::Shared) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        loop {
+            match tokio::spawn(run(shared.clone())).await {
+                Err(e) if e.is_panic() => {
+                    say!("{name} stopped on a bug (a panic); it starts again in 5s");
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+                _ => return,
+            }
+        }
+    });
+}
+
+/// Refuse to start beside a running hub: a second one would take over the
+/// first one's socket (and every hook and `wh` command with it), run every
+/// loop twice for a moment, and then fail on the port anyway.
+fn alone() -> Result<()> {
+    let sock = paths::socket();
+    if std::os::unix::net::UnixStream::connect(&sock).is_ok() {
+        anyhow::bail!("a hub is already running on {} (wh status). Stop it first: wh down, or quit its terminal", paths::tilde(&sock.to_string_lossy()));
+    }
+    if let Some(addr) = server::http_addr()
+        && std::net::TcpListener::bind(addr).is_err()
+    {
+        anyhow::bail!("{addr} is in use: another hub, or another app. Stop it, or set WH_HTTP to another address");
+    }
+    Ok(())
+}
+
 fn serve() -> Result<()> {
+    alone()?;
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let dir = paths::state_dir();
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        // The record, messages and kept files are yours alone on this Mac.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        }
         let store = store::Store::open(&paths::db())?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for f in ["wheelhouse.db", "wheelhouse.db-wal", "wheelhouse.db-shm"] {
+                let _ = std::fs::set_permissions(dir.join(f), std::fs::Permissions::from_mode(0o600));
+            }
+        }
         let keys = record::Keyring::open(&paths::keys())?;
         let owner = std::env::var("USER").unwrap_or_else(|_| "you".into());
         let mut core = hub::Core::new(store, keys, &owner)?;
@@ -340,15 +389,17 @@ fn serve() -> Result<()> {
         let tracked = core.agents.by_block.len();
         let shared = hub::Shared::new(core);
         say!("state in {} ({tracked} agent dockets open)", paths::tilde(&dir.to_string_lossy()));
-        tokio::spawn(follow::run(shared.clone()));
-        tokio::spawn(tailnet::watch(shared.clone()));
-        tokio::spawn(linear::follow(shared.clone()));
-        tokio::spawn(messages::deliver_loop(shared.clone()));
-        tokio::spawn(notify::run(shared.clone()));
-        tokio::spawn(push::run(shared.clone()));
-        tokio::spawn(preview::sweep(shared.clone()));
-        tokio::spawn(review::watch::run(shared.clone()));
-        tokio::spawn(build::watch::run(shared.clone()));
+        supervise("live events", shared.clone(), hub::run_live);
+        supervise("the Rex mirror", shared.clone(), follow::run);
+        supervise("the tailnet", shared.clone(), tailnet::watch);
+        supervise("Linear", shared.clone(), linear::follow);
+        supervise("message delivery", shared.clone(), messages::deliver_loop);
+        supervise("notifications", shared.clone(), notify::run);
+        supervise("push", shared.clone(), push::run);
+        supervise("previews", shared.clone(), preview::sweep);
+        supervise("Review", shared.clone(), review::watch::run);
+        supervise("Build", shared.clone(), build::watch::run);
+        supervise("logs", shared.clone(), service::trim_logs);
         server::serve(shared).await
     })
 }
@@ -362,7 +413,13 @@ fn build_cmd(action: &str, args: &[String], repo: Option<String>, as_json: bool)
             let from = args.first().ok_or_else(|| anyhow::anyhow!("start what? wh build start D-12 (or owner/name#45, or ENG-142)"))?;
             let v = client::json("POST", "/api/build/start", Some(&json!({ "from": from, "repo": repo })))?;
             if !as_json {
-                println!("{}: Build of {} into {} is {}", v["docket"].as_str().unwrap_or("?"), v["key"].as_str().unwrap_or("?"), v["repo"].as_str().unwrap_or("?"), v["state"].as_str().unwrap_or("?"));
+                println!(
+                    "{}: Build of {} into {} is {}",
+                    v["docket"].as_str().unwrap_or("?"),
+                    v["key"].as_str().unwrap_or("?"),
+                    v["repo"].as_str().unwrap_or("?"),
+                    v["state"].as_str().unwrap_or("?")
+                );
                 return Ok(());
             }
             v
@@ -402,7 +459,7 @@ fn pr_key(args: &[String]) -> Result<String> {
         [repo, n] => format!("{repo}#{}", n.trim_start_matches('#')),
         _ => joined,
     };
-    review::pr::parse_key(&key).map(|(r, n)| format!("{r}#{n}")).ok_or_else(|| anyhow::anyhow!("give the PR as OWNER/NAME N, such as: acme/api 632"))
+    review::pr::parse_key(&key).map(|(r, n)| format!("{r}#{n}")).ok_or_else(|| anyhow::anyhow!("give the PR as OWNER/NAME N, such as: acme/api 12"))
 }
 
 fn review_cmd(action: &str, args: &[String], force: bool, as_json: bool) -> Result<()> {
@@ -461,7 +518,14 @@ fn print_review_status(v: &Value) {
         println!("config   {e}");
     } else if let Some(c) = v["config"].as_object() {
         let rs: Vec<String> = c["reviewers"].as_array().into_iter().flatten().map(|r| r["name"].as_str().unwrap_or("?").to_string()).collect();
-        println!("config   {} · {} · reviewers {} · checker {} · post {}", c["path"].as_str().unwrap_or("?"), c["repos"].as_array().map_or(0, Vec::len).to_string() + " repos", rs.join(", "), c["checker"].as_str().unwrap_or("?"), v["post"].as_str().unwrap_or("?"));
+        println!(
+            "config   {} · {} · reviewers {} · checker {} · post {}",
+            c["path"].as_str().unwrap_or("?"),
+            c["repos"].as_array().map_or(0, Vec::len).to_string() + " repos",
+            rs.join(", "),
+            c["checker"].as_str().unwrap_or("?"),
+            v["post"].as_str().unwrap_or("?")
+        );
     }
     if v["rex_reviewer_running"].as_bool() == Some(true) {
         println!("         rex-reviewer's watcher is running too (rex-reviewer down stops it)");
@@ -602,19 +666,31 @@ fn print_msg(v: &Value, as_json: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(v)?);
         return Ok(());
     }
-    println!("#{} from {} to {}{}", v["id"], v["from"].as_str().unwrap_or("?"), v["to"].as_str().unwrap_or("?"), v["docket"].as_str().map(|d| format!(" ({d})")).unwrap_or_default());
+    println!(
+        "#{} from {} to {}{}",
+        v["id"],
+        v["from"].as_str().unwrap_or("?"),
+        v["to"].as_str().unwrap_or("?"),
+        v["docket"].as_str().map(|d| format!(" ({d})")).unwrap_or_default()
+    );
     if let Some(s) = v["subject"].as_str() {
         println!("Subject: {s}");
     }
     if let Some(c) = v["choice"].as_str() {
         println!("Chose: {c}");
     }
-    println!("
-{}", v["body"].as_str().unwrap_or_default());
+    println!(
+        "
+{}",
+        v["body"].as_str().unwrap_or_default()
+    );
     let opts: Vec<&str> = v["options"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     if !opts.is_empty() {
-        println!("
-Options: {}", opts.join(" · "));
+        println!(
+            "
+Options: {}",
+            opts.join(" · ")
+        );
     }
     Ok(())
 }
@@ -672,7 +748,11 @@ fn intent(d: &str, text: Option<String>) -> Result<()> {
             };
             let block = std::env::var("REX_BLOCK").ok();
             let v = client::json("POST", &format!("/api/dockets/{d}/intent"), Some(&json!({ "body": body, "block": block })))?;
-            if v["unchanged"].as_bool() == Some(true) { println!("{d}: the intent is already that") } else { println!("{d} #{}", v["seq"]) }
+            if v["unchanged"].as_bool() == Some(true) {
+                println!("{d}: the intent is already that")
+            } else {
+                println!("{d} #{}", v["seq"])
+            }
             Ok(())
         }
     }
@@ -857,7 +937,12 @@ fn verify(docket: Option<String>, file: Option<PathBuf>) -> Result<()> {
     let mut bad = 0;
     for r in &reports {
         if r["ok"].as_bool() == Some(true) {
-            println!("✓ {:<6} {} entries, head {}", r["docket"].as_str().unwrap_or_default(), r["entries"], &r["head"].as_str().unwrap_or("")[..8.min(r["head"].as_str().unwrap_or("").len())]);
+            println!(
+                "✓ {:<6} {} entries, head {}",
+                r["docket"].as_str().unwrap_or_default(),
+                r["entries"],
+                &r["head"].as_str().unwrap_or("")[..8.min(r["head"].as_str().unwrap_or("").len())]
+            );
         } else {
             bad += 1;
             println!("✕ {:<6} {}", r["docket"].as_str().unwrap_or_default(), r["problems"]);
@@ -878,8 +963,7 @@ fn verify_file(file: &std::path::Path) -> Result<()> {
         bail!("not a Wheelhouse record/v1 export");
     }
     let docket = header["docket"].as_str().unwrap_or_default().to_string();
-    let keys: std::collections::BTreeSet<String> =
-        header["keys"].as_array().into_iter().flatten().filter_map(|k| k["keyid"].as_str().map(str::to_string)).collect();
+    let keys: std::collections::BTreeSet<String> = header["keys"].as_array().into_iter().flatten().filter_map(|k| k["keyid"].as_str().map(str::to_string)).collect();
     let mut entries = Vec::new();
     for l in lines.filter(|l| !l.trim().is_empty()) {
         let v: Value = serde_json::from_str(l)?;

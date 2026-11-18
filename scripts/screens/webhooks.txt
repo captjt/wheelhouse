@@ -1,0 +1,21 @@
+> Retry failed webhook deliveries with backoff. A 5xx or a timeout is
+  retried up to 3 times; a 4xx isn't. Tests for both.
+
+⏺ I'll add the retry loop in deliver.ts and a test for each case.
+
+⏺ Read(src/webhooks/deliver.ts)
+  ⎿  Read 142 lines
+
+⏺ Update(src/webhooks/deliver.ts)
+  ⎿  Updated src/webhooks/deliver.ts with 31 additions and 4 removals
+
+⏺ Write(src/webhooks/deliver.test.ts)
+  ⎿  Wrote 88 lines to src/webhooks/deliver.test.ts
+
+⏺ Bash(pnpm test --filter webhooks)
+  ⎿  ✓ retries a 503 three times, then gives up (41 ms)
+     ✓ doesn't retry a 404 (3 ms)
+     ✓ waits 1s, 2s, 4s between attempts (12 ms)
+     … running 9 more
+
+✻ Running the webhook tests… (1m 12s · ↓ 2.4k tokens)

@@ -178,8 +178,7 @@ impl Mirror {
         let mut changes = Changes::default();
         let sid = snap.session.session_id.clone();
         let keep: BTreeSet<&String> = snap.blocks.iter().map(|b| &b.0).collect();
-        let gone: Vec<String> =
-            self.panes.values().filter(|p| p.session_id == sid && !keep.contains(&p.block_id)).map(|p| p.block_id.clone()).collect();
+        let gone: Vec<String> = self.panes.values().filter(|p| p.session_id == sid && !keep.contains(&p.block_id)).map(|p| p.block_id.clone()).collect();
         for b in gone {
             self.panes.remove(&b);
             changes.panes.insert(b);
@@ -241,13 +240,7 @@ impl Mirror {
                             changes.panes.insert(b);
                         }
                     }
-                    "block_created"
-                    | "session_view_changed"
-                    | "session_label_changed"
-                    | "window_created"
-                    | "window_closed"
-                    | "window_label_changed"
-                    | "active_window_changed" => {
+                    "block_created" | "session_view_changed" | "session_label_changed" | "window_created" | "window_closed" | "window_label_changed" | "active_window_changed" => {
                         changes.resync.insert(sid);
                     }
                     "session_destroyed" => changes.resync_all = true,
@@ -343,9 +336,13 @@ fn path_of(pwd: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
+        // Two hex digits after `%`, checked as bytes: slicing the str could
+        // cut a multibyte character (`100%日本`) and panic.
         if bytes[i] == b'%'
             && i + 2 < bytes.len()
-            && let Ok(b) = u8::from_str_radix(&path[i + 1..i + 3], 16)
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit()
+            && let Ok(b) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("zz"), 16)
         {
             out.push(b);
             i += 3;
@@ -355,6 +352,16 @@ fn path_of(pwd: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+#[cfg(test)]
+mod path_tests {
+    #[test]
+    fn a_percent_before_a_multibyte_character_isnt_a_panic() {
+        assert_eq!(super::path_of("file://mac/Users/j/100%%E6%97%A5"), "/Users/j/100%日");
+        assert_eq!(super::path_of("file://mac/Users/j/100%日本"), "/Users/j/100%日本");
+        assert_eq!(super::path_of("file://mac/a%2"), "/a%2");
+    }
 }
 
 #[cfg(test)]

@@ -2,9 +2,9 @@
 //! tracks, behind one lock. Every entry goes through `Core::append`, which
 //! signs it as its actor, chains it, and folds it into the docket's state.
 
-use sha2::Digest;
 use anyhow::Result;
 use serde_json::{Value, json};
+use sha2::Digest;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::broadcast;
@@ -34,6 +34,12 @@ pub struct Core {
     pub review: crate::review::Hub,
     /// Build's live state.
     pub build: crate::build::Hub,
+    /// Something live changed since the last `live` event went out: events
+    /// go out at most a few times a second (`run_live`), not once per change.
+    pub live_dirty: Arc<std::sync::atomic::AtomicBool>,
+    /// Each docket's last quick check, by its head: a record that hasn't
+    /// moved isn't checked again.
+    verified: std::collections::HashMap<String, (String, verify::Report)>,
 }
 
 #[derive(Clone)]
@@ -63,22 +69,23 @@ pub enum Who {
 impl Core {
     pub fn new(store: Store, keys: Keyring, owner: &str) -> Result<Self> {
         let (events, _) = broadcast::channel(256);
-        let mut core =
-            Core {
-                store,
-                keys,
-                mirror: Mirror::default(),
-                agents: Tracker::default(),
-                events,
-                owner: owner.to_string(),
-                tailnet_owner: None,
-                tailnet_host: None,
-                started: std::time::Instant::now(),
-                linear_ready: false,
-                previews: Default::default(),
-                review: Default::default(),
-                build: Default::default(),
-            };
+        let mut core = Core {
+            store,
+            keys,
+            mirror: Mirror::default(),
+            agents: Tracker::default(),
+            events,
+            owner: owner.to_string(),
+            tailnet_owner: None,
+            tailnet_host: None,
+            started: std::time::Instant::now(),
+            linear_ready: false,
+            previews: Default::default(),
+            review: Default::default(),
+            build: Default::default(),
+            live_dirty: Default::default(),
+            verified: Default::default(),
+        };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;
         }
@@ -94,10 +101,9 @@ impl Core {
         match who {
             Who::Hub => (Actor::new("hub", "hub@local"), "hub".into()),
             Who::Owner => (Actor::new("person", &self.owner), "owner".into()),
-            Who::Agent { app, block, session } => (
-                Actor::new("agent", &format!("{app}@local")).with("block", block.as_str()).with("session", session.clone()),
-                format!("agent-{app}@local"),
-            ),
+            Who::Agent { app, block, session } => {
+                (Actor::new("agent", &format!("{app}@local")).with("block", block.as_str()).with("session", session.clone()), format!("agent-{app}@local"))
+            }
         }
     }
 
@@ -121,10 +127,11 @@ impl Core {
         if new_key {
             self.store.put_key(&keyid, &key_name, &at)?;
         }
-        let stored = self.store.append(docket, &envelope, kind, &at, &keyid)?;
-        let mut st = self.store.state(docket)?.unwrap_or_else(|| DocketState::new(docket));
-        st.apply(stored.seq, &stored.chain, &e);
-        self.store.save_state(&st)?;
+        let stored = self.store.append_folded(docket, &envelope, kind, &at, &keyid, |s, was| {
+            let mut st = was.unwrap_or_else(|| DocketState::new(docket));
+            st.apply(s.seq, &s.chain, &e);
+            Some(st)
+        })?;
         let _ = self.events.send(json!({ "type": "docket", "docket": docket }));
         Ok(stored)
     }
@@ -136,14 +143,26 @@ impl Core {
         Ok(id)
     }
 
-    /// Something live changed (an agent's state), not the record.
+    /// Something live changed (an agent's state), not the record. The
+    /// `live` event goes out with the next beat of `run_live`.
     pub fn live_changed(&self) {
-        let _ = self.events.send(json!({ "type": "live" }));
+        self.live_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Check a docket's record, and that every file it names is kept.
-    pub fn verify(&self, docket: &str) -> Result<verify::Report> {
-        self.check(docket, false)
+    /// Check a docket's record, and that every file it names is kept. A
+    /// record whose head hasn't moved since its last check isn't read again.
+    pub fn verify(&mut self, docket: &str) -> Result<verify::Report> {
+        let head = self.store.state(docket)?.map(|s| s.head);
+        if let (Some(h), Some((seen, r))) = (&head, self.verified.get(docket))
+            && h == seen
+        {
+            return Ok(r.clone());
+        }
+        let r = self.check(docket, false)?;
+        if let Some(h) = head {
+            self.verified.insert(docket.to_string(), (h, r.clone()));
+        }
+        Ok(r)
     }
 
     /// `verify`, and every file's bytes against the hash the record names.
@@ -191,6 +210,23 @@ impl Core {
             }
         }
         Ok(differ)
+    }
+}
+
+/// Send the `live` event when something live changed: at most every 300 ms,
+/// however many changes come in between, so a busy Rex doesn't make every
+/// app refetch on every keystroke.
+pub async fn run_live(shared: Shared) {
+    let (dirty, events) = {
+        let core = shared.lock();
+        (core.live_dirty.clone(), core.events.clone())
+    };
+    let mut beat = tokio::time::interval(std::time::Duration::from_millis(300));
+    loop {
+        beat.tick().await;
+        if dirty.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            let _ = events.send(json!({ "type": "live" }));
+        }
     }
 }
 

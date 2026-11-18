@@ -1,0 +1,258 @@
+#!/bin/bash
+# Render the README's screenshots and the GitHub social preview card from a
+# made-up world, so nothing of yours shows up in them:
+#
+# - Rex sessions "acme-api" and "storefront" with agents: one at work on
+#   webhook retries, one asking to run the checkout tests, one failed, some
+#   finished;
+# - their prompts and replies, played through the same hooks Claude Code
+#   calls; an intent with acceptance; files kept with a docket; a message
+#   to you with options;
+# - Review history for acme/storefront, imported from a made-up
+#   rex-reviewer ledger.
+#
+# The hub follows that world through scripts/fake-rex, with its own HOME,
+# state, socket and port; GitHub and Linear are stand-ins and nothing
+# notifies. Your own Rex, hub and config are left alone. Needs jq, Node 22
+# or later, and Google Chrome. Run it again after changing a layout; then
+# upload docs/images/social-preview.png in the repo's Settings, under
+# Social preview.
+#
+#   scripts/screenshots.sh           # render the screenshots
+#   scripts/screenshots.sh --serve   # keep the made-up world's hub running
+#                                    # at http://127.0.0.1:7438 (Ctrl-C stops it)
+set -euo pipefail
+serve=""
+[ "${1:-}" = --serve ] && serve=1
+
+here=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$here/.." && pwd)
+images="$root/docs/images"
+demo=$(mktemp -d)
+port=7438
+base="http://127.0.0.1:$port"
+hub=""
+cleanup() {
+  [ -n "$hub" ] && kill "$hub" 2>/dev/null || true
+  rm -rf "$demo"
+}
+trap cleanup EXIT
+
+(cd "$root/web" && npm run build --silent >/dev/null)
+cargo build --release --quiet --manifest-path "$root/Cargo.toml"
+wh="$root/target/release/wh"
+mkdir -p "$images" "$demo/home/code/acme-api" "$demo/home/code/storefront" "$demo/state"
+
+# --- The world --------------------------------------------------------------
+
+cat >"$demo/world.jq" <<'EOF'
+# Times are in minutes before now.
+def ago($m): (now - $m * 60) | floor | todate;
+def pane($label; $cwd; $process; $records):
+  {block_id: "block:\($label)", label: $label, cwd: $cwd, process: $process, records: $records};
+def root($state; $app; $m): {state: $state, app: $app, updated_at: ago($m)};
+{
+  sessions: [
+    {session_id: "session:acme-api", label: "acme-api", windows: [
+      {window_id: "window:webhooks", label: "webhooks", blocks: [
+        pane("webhooks"; $api; "claude"; [root("working"; "claude-code"; 2) + {msg: "Running the webhook tests"}]) + {screen: $webhooks},
+        pane("checkout"; $api; "claude"; [root("blocked"; "claude-code"; 1) + {kind: "permission", msg: "Bash: pnpm test --filter checkout"}]) + {screen: $checkout}
+      ]},
+      {window_id: "window:data", label: "data", blocks: [
+        pane("search"; $api; "codex"; [root("done"; "codex"; 6)]),
+        pane("migrations"; $api; "codex"; [root("error"; "codex"; 9) + {msg: "Migration 0042 fails on the replica: column \"region\" already exists"}])
+      ]}
+    ]},
+    {session_id: "session:storefront", label: "storefront", windows: [
+      {window_id: "window:pricing", label: "pricing", blocks: [
+        pane("pricing"; $store; "claude"; [root("idle"; "claude-code"; 14)]),
+        pane("docs"; $store; "claude"; [root("done"; "claude-code"; 22)])
+      ]}
+    ]}
+  ],
+  home: $home
+}
+EOF
+jq -n --rawfile webhooks "$here/screens/webhooks.txt" --rawfile checkout "$here/screens/checkout.txt" \
+  --arg home "$demo/home" --arg api "$demo/home/code/acme-api" --arg store "$demo/home/code/storefront" \
+  -f "$demo/world.jq" >"$demo/world.json"
+
+# GitHub, as a stand-in: you're "you", and no PR asks for you right now.
+cat >"$demo/gh" <<'EOF'
+#!/bin/bash
+case "$*" in
+  "api user"*) echo you ;;
+  "api graphql"*) echo '{"data":{"viewer":{"login":"you"},"search":{"nodes":[]}}}' ;;
+  *) echo "not in the demo: gh $*" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$demo/gh"
+
+# Review: a config for a repo the demo never reviews, and rex-reviewer's
+# ledger for acme/storefront: a PR merged, one waiting on its author.
+cat >"$demo/review.lua" <<EOF
+return { repos = { ["acme/api"] = { checkout = "$demo/home/code/acme-api" } }, reviewers = { "claude", { name = "codex", agent = "codex" } }, checker = "claude", post = "ask" }
+EOF
+mkdir -p "$demo/reviewer/repos/acme/storefront"
+echo '{"schema": 1}' >"$demo/reviewer/state.json"
+ago() { date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ; }
+round() { # n verdict risk blocking non_blocking minutes-ago
+  jq -n --argjson n "$1" --arg v "$2" --arg r "$3" --argjson b "$4" --argjson nb "$5" --arg at "$(ago "$6")" --arg req "$(ago $(($6 + 40)))" \
+    '{round: $n, verdict: $v, merge_risk: $r, blocking: $b, non_blocking: $nb, at: $at, requested_at: $req, started_at: $req, by: "you", trigger: "requested",
+      reviewers: {claude: {drafted: 4, kept: 3, only: 1, effort: "high", tokens: 2100000}, codex: {drafted: 3, kept: 2, only: 1, effort: "high", tokens: 1700000}},
+      tokens: {total: 3800000, input: 900000, output: 120000, cache_read: 2700000, cache_write: 80000}, url: "https://github.com/acme/storefront/pull/0"}'
+}
+jq -n --argjson h "[$(round 1 REQUEST_CHANGES high 2 1 700), $(round 2 APPROVE low 0 1 380)]" --arg at "$(ago 380)" \
+  '{repo: "acme/storefront", pr: 205, round: 2, state: "cleaned", outcome: "merged", title: "Cache product images at the edge", author: "dana",
+    url: "https://github.com/acme/storefront/pull/205", verdict: "APPROVE", merge_risk: "low", posted_at: $at, ended_at: $at,
+    implementation: "Serves product images through the CDN with a 1-day cache and purges on upload.", history: $h}' \
+  >"$demo/reviewer/repos/acme/storefront/pr-205.json"
+jq -n --argjson h "[$(round 1 REQUEST_CHANGES medium 1 2 95)]" --arg at "$(ago 95)" \
+  '{repo: "acme/storefront", pr: 212, round: 1, state: "posted", title: "Retry failed webhook deliveries with backoff", author: "sam",
+    url: "https://github.com/acme/storefront/pull/212", verdict: "REQUEST_CHANGES", merge_risk: "medium", posted_at: $at,
+    implementation: "Retries 5xx and timeouts up to 3 times with exponential backoff; 4xx fail at once.", history: $h}' \
+  >"$demo/reviewer/repos/acme/storefront/pr-212.json"
+jq -n --arg at "$(ago 12)" \
+  '{repo: "acme/storefront", pr: 214, round: 0, state: "queued", title: "Discount rules for bundles", author: "dana",
+    url: "https://github.com/acme/storefront/pull/214", requested_at: $at, trigger: "requested", history: []}' \
+  >"$demo/reviewer/repos/acme/storefront/pr-214.json"
+
+# --- The hub ----------------------------------------------------------------
+
+export HOME="$demo/home" WH_STATE="$demo/state" WH_SOCKET="$demo/wh.sock" WH_HTTP="127.0.0.1:$port" \
+  WH_TAILNET=off WH_NOTIFY=off WH_LINEAR_KEY=demo WH_LINEAR_ENDPOINT=http://127.0.0.1:9 \
+  WH_REX="$here/fake-rex" WH_WORLD="$demo/world.json" \
+  WH_GH="$demo/gh" WH_REVIEW_CONFIG="$demo/review.lua" WH_BUILD_CONFIG="$demo/none.lua" \
+  REX_REVIEWER_STATE_DIR="$demo/reviewer" USER=you
+# Claude Code's hooks, in the made-up HOME, so the app shows them on. Never
+# your own config, even when this runs inside Claude Code.
+unset CLAUDE_CONFIG_DIR CODEX_HOME
+mkdir -p "$demo/home/.claude"
+"$wh" hooks install >/dev/null
+"$wh" serve >"$demo/hub.log" 2>&1 &
+hub=$!
+api() { curl -fsS -H 'x-wheelhouse: 1' -H 'content-type: application/json' "$@"; }
+for _ in $(seq 60); do
+  n=$(api "$base/api/state" 2>/dev/null | jq '[.dockets[] | select(.agent)] | length' 2>/dev/null || echo 0)
+  [ "$n" -ge 6 ] && break
+  sleep 0.5
+done
+[ "$n" -ge 6 ] || { echo "the demo hub didn't pick up its agents:" >&2; cat "$demo/hub.log" >&2; exit 1; }
+docket() { api "$base/api/state" | jq -r --arg p "$1" '.dockets[] | select(.agent.pane == $p) | .id'; }
+hook() { # block event payload
+  api -X POST "$base/api/hook" -d "$(jq -n --arg b "block:$1" --arg e "$2" --argjson p "$3" '{event: $e, agent: "claude-code", block: $b, payload: $p}')" >/dev/null
+}
+prompt() { hook "$1" UserPromptSubmit "$(jq -n --arg t "$2" --arg s "s-$1" '{session_id: $s, prompt: $t}')"; }
+reply() { hook "$1" Stop "$(jq -n --arg t "$2" '{last_assistant_message: $t}')"; sleep 4; }
+
+for b in webhooks checkout pricing docs; do
+  hook "$b" SessionStart "$(jq -n --arg s "s-$b" '{session_id: $s, source: "startup"}')"
+done
+prompt webhooks "Retry failed webhook deliveries with backoff. A 5xx or a timeout is retried up to 3 times; a 4xx isn't. Tests for both."
+cat >"$demo/reply-webhooks.md" <<'EOF'
+Here's the plan before I change anything:
+
+1. **`deliver.ts`**: wrap the POST in a retry loop. 5xx and timeouts retry with backoff (1s, 2s, 4s); a 4xx fails at once, since resending can't fix it.
+2. **Jitter**: up to 250 ms on each wait, so one outage doesn't make every retry land at the same moment.
+3. **Tests**: one per case, with a fake clock so they run in milliseconds.
+
+| Response | Retried | Logged |
+| --- | :---: | --- |
+| 5xx, timeout | up to 3 times | each attempt |
+| 4xx | no | once, as failed |
+
+Going ahead with that.
+EOF
+reply webhooks "$(cat "$demo/reply-webhooks.md")"
+prompt webhooks "Also log each retry with its attempt number, so support can see them."
+prompt checkout "The checkout tests fail after the cart refactor. Fix them."
+prompt pricing "Bundle discounts: apply the larger of the bundle price and the item discounts, never both."
+reply pricing "Done. **\`applyBundle\`** now takes the larger discount, never both, and the cart test covers a bundle that also has an item on sale. All 214 pricing tests pass. Not committed: say if you want a PR."
+prompt docs "Update the API docs for webhook retries."
+reply docs "Updated **docs/webhooks.md**: retries, which responses are final, and the new \`X-Attempt\` header. The OpenAPI file is regenerated."
+
+W=$(docket webhooks)
+C=$(docket checkout)
+S=$(docket search)
+M=$(docket migrations)
+"$wh" set "$W" --title "Retry failed webhook deliveries" >/dev/null
+"$wh" set "$C" --title "Fix the checkout tests after the cart refactor" >/dev/null
+"$wh" set "$S" --title "Reindex products after the catalog import" >/dev/null
+"$wh" set "$M" --title "Add a region column to orders" >/dev/null
+"$wh" set "$(docket docs)" --status done >/dev/null
+"$wh" intent "$W" - >/dev/null <<'EOF'
+A flaky endpoint shouldn't lose events: failed deliveries retry with backoff, and the ones that can't succeed stop at once.
+
+## Acceptance
+
+- [x] A 5xx or a timeout is retried up to 3 times, with backoff and jitter
+- [x] A 4xx isn't retried, and is logged once as failed
+- [ ] Each retry is logged with its attempt number
+- [ ] `pnpm test --filter webhooks` passes
+
+> [!NOTE]
+> Out of scope: a dead-letter queue. That's its own docket.
+EOF
+"$wh" intent "$C" - >/dev/null <<'EOF'
+The checkout tests pass again after the cart refactor, without changing what checkout does.
+
+## Acceptance
+
+- [ ] `pnpm test --filter checkout` passes
+- [ ] No change to checkout's behavior: only imports and fixtures
+EOF
+cat >"$demo/retry-design.md" <<'EOF'
+# Webhook retries
+
+Deliveries that fail with a 5xx or time out are retried three times, waiting 1s, 2s and 4s, each with up to 250 ms of jitter. A 4xx is final: the endpoint said no, and resending won't change its mind.
+
+| Attempt | Wait | Total |
+| --- | --- | --- |
+| 1 | 1s | 1s |
+| 2 | 2s | 3s |
+| 3 | 4s | 7s |
+
+After the third failure the delivery is marked failed, and the endpoint's failure count goes up. Five in an hour pauses the endpoint.
+EOF
+"$wh" attach "$demo/retry-design.md" --docket "$W" --title "Retry design" >/dev/null
+"$wh" attach https://claude.ai/artifact/demo-retry-timeline --docket "$W" --title "Retry timeline (Claude artifact)" >/dev/null
+api -X POST "$base/api/messages" -d "$(jq -n '{to: "me", block: "block:search", subject: "Reindex now or tonight?",
+  body: "The catalog import finished: 18,204 products. Reindexing takes about 20 minutes and slows search while it runs. I would run it tonight at 2am, when traffic is lowest; meanwhile new products only show up by exact name.",
+  options: ["Tonight at 2am", "Now"]}')" >/dev/null
+api -X POST "$base/api/import/rex-reviewer" -d '{"force": true}' >/dev/null
+api -X POST "$base/api/review/settings" -d '{"enabled": true, "paused": true}' >/dev/null || true
+api -X POST "$base/api/build/settings" -d '{"paused": true}' >/dev/null || true
+sleep 2
+
+if [ -n "$serve" ]; then
+  echo "The made-up world's hub: $base (Ctrl-C stops it)"
+  wait "$hub"
+  exit 0
+fi
+
+# --- The shots ---------------------------------------------------------------
+
+shot() { node "$here/shot.mjs" "$@" >/dev/null && echo "wrote ${2#"$root"/}"; }
+# Scroll the docket to its intent, past the title, for the hero shot.
+intent_js='document.querySelector(".docket-main")?.scrollTo(0, 0)'
+record_js='document.querySelector(".verify-chip")?.click(); new Promise(r => setTimeout(r, 900))'
+artifact_js='[...document.querySelectorAll(".art-card")].find(c => c.textContent.includes("Retry design"))?.click(); new Promise(r => setTimeout(r, 900))'
+for look in light dark; do
+  shot "$base/#/d/$W" "$images/docket-$look.png" "$look" desktop "$intent_js"
+  shot "$base/#/inbox" "$images/inbox-$look.png" "$look" desktop
+  shot "$base/#/reviews" "$images/reviews-$look.png" "$look" desktop
+  shot "$base/#/d/$W" "$images/record-$look.png" "$look" desktop "$record_js"
+  shot "$base/#/recap" "$images/recap-$look.png" "$look" desktop
+  shot "$base/#/d/$W" "$images/phone-chat-$look.png" "$look" phone
+  shot "$base/#/inbox" "$images/phone-inbox-$look.png" "$look" phone
+  shot "$base/#/view/active" "$images/phone-active-$look.png" "$look" phone
+  shot "$base/#/d/$W" "$images/phone-artifact-$look.png" "$look" phone \
+    "[...document.querySelectorAll('.docket-seg button')].find(b => b.textContent === 'Docket')?.click(); new Promise(r => setTimeout(r, 600)).then(() => { $artifact_js })"
+done
+
+# The social preview card shows docket-dark.png, so render it after.
+chrome="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+# A profile of its own: never your Chrome's, which may be open.
+"$chrome" --headless=new --disable-gpu --hide-scrollbars --window-size=1280,640 --user-data-dir="$demo/chrome" \
+  --screenshot="$images/social-preview.png" "file://$images/social-preview.html" >/dev/null 2>&1
+echo "wrote docs/images/social-preview.png"

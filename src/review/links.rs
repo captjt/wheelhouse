@@ -84,9 +84,8 @@ pub struct Found {
     pub state: Option<String>,
 }
 
-const CLOSING: [&str; 16] = [
-    "close", "closes", "closed", "closing", "fix", "fixes", "fixed", "fixing", "resolve", "resolves", "resolved", "resolving", "complete", "completes", "completed", "completing",
-];
+const CLOSING: [&str; 16] =
+    ["close", "closes", "closed", "closing", "fix", "fixes", "fixed", "fixing", "resolve", "resolves", "resolved", "resolving", "complete", "completes", "completed", "completing"];
 const REFERRING: [&str; 8] = ["ref", "refs", "references", "part of", "related to", "contributes to", "toward", "towards"];
 
 fn rank(how: &str) -> usize {
@@ -474,10 +473,7 @@ pub fn acceptance(description: &str) -> Vec<String> {
             _ => {}
         }
     }
-    out.into_iter()
-        .take(10)
-        .map(|i| if i.chars().count() > 320 { format!("{}…", i.chars().take(300).collect::<String>().trim_end()) } else { i })
-        .collect()
+    out.into_iter().take(10).map(|i| if i.chars().count() > 320 { format!("{}…", i.chars().take(300).collect::<String>().trim_end()) } else { i }).collect()
 }
 
 fn issue_link(f: &Found) -> String {
@@ -547,7 +543,9 @@ fn join(xs: &[String]) -> String {
 /// `linear.md` for the reviewers: each issue, how it's linked, and what it
 /// asks for.
 pub fn linear_md(found: &[Found]) -> String {
-    let mut s = String::from("# The Linear issues this PR addresses\n\nHold the PR to what they ask for. An issue's description may cover more than this PR; its own description says which part is this PR's.\n");
+    let mut s = String::from(
+        "# The Linear issues this PR addresses\n\nHold the PR to what they ask for. An issue's description may cover more than this PR; its own description says which part is this PR's.\n",
+    );
     for i in found {
         let how = match i.how {
             "linkback" => "Linear links it to the PR",
@@ -698,20 +696,20 @@ mod tests {
 
     const LINKBACK: &str = "<!-- linear-linkback -->\n<details>\n<summary><a href=\"https://linear.app/acme/issue/ENG-445/webhook-retries\">ENG-445 Webhook retries &amp; backoff</a></summary>\n<p>\n\n## Outcome\n\nFailed deliveries retry with backoff.\n\n## Acceptance criteria\n\n* ~~The retry design is reviewed.~~ Signed off.\n* The retry PR is merged, and `just ci` passes\n  for `libs/webhooks`.\n* Existing behavior is unchanged.\n\n## Docs\n\n* Not this.\n\n</p>\n</details>\n<!-- linear-review-link -->\n<p><a href=\"https://linear.app/acme/review/x\">Review in Linear</a></p>";
 
-    fn pr742() -> Facts {
+    fn pr42() -> Facts {
         Facts {
             title: "feat(webhooks): retry failed deliveries with backoff".into(),
             body: "## What\n\nThis adds an optional `retries` setting to webhook delivery. It's the second ENG-445 PR, after #33. ENG-448 then turns it on.\n\n```json\n{}\n```\n\n## Not in this PR\n\n- **Turning it on**: ENG-448.\n\nRefs ENG-445\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n".into(),
             branch: "feat/eng-445-retries".into(),
             author: Some("dana".into()),
-            url: Some("https://github.com/acme/api/pull/742".into()),
+            url: Some("https://github.com/acme/api/pull/42".into()),
             comments: vec![("ci-bot".into(), "[vc]: #x".into()), ("linear-code".into(), LINKBACK.into()), ("dana".into(), "Fixed in 18f7e91.".into())],
         }
     }
 
     #[test]
     fn linears_link_on_the_pr_is_the_issue_and_bare_mentions_arent() {
-        let found = detect(&pr742(), &[]);
+        let found = detect(&pr42(), &[]);
         assert_eq!(found.len(), 1, "{found:?}");
         let f = &found[0];
         assert_eq!((f.key.as_str(), f.how), ("ENG-445", "linkback"));
@@ -719,7 +717,7 @@ mod tests {
         assert_eq!(f.url.as_deref(), Some("https://linear.app/acme/issue/ENG-445/webhook-retries"));
         assert!(f.description.as_deref().unwrap().starts_with("## Outcome"));
         assert!(f.description.as_deref().unwrap().ends_with("* Not this."), "{:?}", f.description);
-        assert_eq!(workspaces(&pr742()), ["acme"]);
+        assert_eq!(workspaces(&pr42()), ["acme"]);
     }
 
     #[test]
@@ -738,7 +736,7 @@ mod tests {
         assert_eq!(keys(&f("feat(ENG-9): y", "", "main"), &["eng"]), [("ENG-9".into(), "title")]);
         assert_eq!(keys(&f("x", "Refs ENG-5", "feat/eng-6-y"), &[]), [("ENG-5".into(), "refs"), ("ENG-6".into(), "branch")]);
         // A linkback from anyone but Linear is only a comment.
-        let mut spoof = pr742();
+        let mut spoof = pr42();
         spoof.comments = vec![("someone".into(), LINKBACK.into())];
         spoof.body = String::new();
         spoof.branch = String::new();
@@ -747,13 +745,18 @@ mod tests {
 
     #[test]
     fn the_intent_says_what_the_review_holds_the_pr_to() {
-        let found = detect(&pr742(), &[]);
-        let i = intent("acme/api", 742, &pr742(), &found, "ask");
+        let found = detect(&pr42(), &[]);
+        let i = intent("acme/api", 42, &pr42(), &found, "ask");
         assert!(
-            i.starts_with("Review [acme/api#742](https://github.com/acme/api/pull/742) by @dana: feat(webhooks): retry failed deliveries with backoff. It addresses [ENG-445](https://linear.app/acme/issue/ENG-445/webhook-retries) (Webhook retries & backoff).\n"),
+            i.starts_with("Review [acme/api#42](https://github.com/acme/api/pull/42) by @dana: feat(webhooks): retry failed deliveries with backoff. It addresses [ENG-445](https://linear.app/acme/issue/ENG-445/webhook-retries) (Webhook retries & backoff).\n"),
             "{i}"
         );
-        assert!(i.contains("What it says it does:\n\n> This adds an optional `retries` setting to webhook delivery. It's the second ENG-445 PR, after #33. ENG-448 then turns it on.\n"), "{i}");
+        assert!(
+            i.contains(
+                "What it says it does:\n\n> This adds an optional `retries` setting to webhook delivery. It's the second ENG-445 PR, after #33. ENG-448 then turns it on.\n"
+            ),
+            "{i}"
+        );
         assert!(i.contains("posts once you approve it"), "{i}");
         assert!(i.contains("- The review holds the PR to its part of ENG-445's acceptance criteria:\n  - ~~The retry design is reviewed.~~ Signed off.\n  - The retry PR is merged, and `just ci` passes for `libs/webhooks`.\n  - Existing behavior is unchanged.\n- Done when"), "{i}");
         assert!(!i.contains("Not this") && !i.contains("Generated with"), "{i}");
@@ -787,30 +790,33 @@ mod tests {
         // SAFETY: no test reads this but Linear's key lookup.
         unsafe { std::env::set_var("WH_LINEAR_OFF", "1") };
         let shared = Shared::new(crate::hub::test_core());
-        let key = "acme/api#742";
-        let mut p = crate::review::pr::Pr { repo: "acme/api".into(), pr: 742, state: "queued".into(), title: Some(pr742().title), ..Default::default() };
+        let key = "acme/api#42";
+        let mut p = crate::review::pr::Pr { repo: "acme/api".into(), pr: 42, state: "queued".into(), title: Some(pr42().title), ..Default::default() };
         let d = crate::review::save(&mut shared.lock(), &mut p).unwrap();
         let ctx = std::env::temp_dir().join(format!("wh-links-{}", std::process::id()));
         std::fs::create_dir_all(&ctx).unwrap();
-        integrate(&shared, key, &pr742(), Some(&ctx)).await.unwrap();
+        integrate(&shared, key, &pr42(), Some(&ctx)).await.unwrap();
         let st = |s: &Shared| s.lock().store.state(&d).unwrap().unwrap();
         let s1 = st(&shared);
         let l = s1.linear.as_ref().unwrap();
         assert_eq!((l.key.as_str(), l.title.as_deref()), ("ENG-445", Some("Webhook retries & backoff")));
         let i = s1.intent.as_ref().unwrap();
         assert_eq!(i.source, "review");
-        assert!(i.body.starts_with("Review [acme/api#742]"), "{}", i.body);
+        assert!(i.body.starts_with("Review [acme/api#42]"), "{}", i.body);
         let md = std::fs::read_to_string(ctx.join("linear.md")).unwrap();
-        assert!(md.contains("## ENG-445: Webhook retries & backoff\n\n- How it's linked: Linear links it to the PR\n- Link: https://linear.app/acme/issue/ENG-445/webhook-retries\n"), "{md}");
-        assert_eq!(shared.lock().store.meta_get("linear.teams").unwrap().as_deref(), Some("GRD"));
+        assert!(
+            md.contains("## ENG-445: Webhook retries & backoff\n\n- How it's linked: Linear links it to the PR\n- Link: https://linear.app/acme/issue/ENG-445/webhook-retries\n"),
+            "{md}"
+        );
+        assert_eq!(shared.lock().store.meta_get("linear.teams").unwrap().as_deref(), Some("ENG"));
 
         // Nothing new: nothing written.
-        integrate(&shared, key, &pr742(), None).await.unwrap();
+        integrate(&shared, key, &pr42(), None).await.unwrap();
         assert_eq!(st(&shared).entries, s1.entries);
 
         // The PR closes a second issue: linked beside the first. The new
         // description makes a new version of the intent.
-        let mut f = pr742();
+        let mut f = pr42();
         f.body = format!("Closes ENG-450.\n\n{}", f.body);
         integrate(&shared, key, &f, None).await.unwrap();
         let s2 = st(&shared);
@@ -818,14 +824,16 @@ mod tests {
         assert_eq!(s2.linear_also.iter().map(|l| l.key.as_str()).collect::<Vec<_>>(), ["ENG-450"]);
         assert_eq!(s2.linear_also[0].url.as_deref(), Some("https://linear.app/acme/issue/ENG-450"));
         assert_eq!(s2.intent_versions, 2);
-        assert!(s2.intent.as_ref().unwrap().body.contains("It addresses [ENG-445](https://linear.app/acme/issue/ENG-445/webhook-retries) (Webhook retries & backoff) and [ENG-450](https://linear.app/acme/issue/ENG-450)."));
+        assert!(s2.intent.as_ref().unwrap().body.contains(
+            "It addresses [ENG-445](https://linear.app/acme/issue/ENG-445/webhook-retries) (Webhook retries & backoff) and [ENG-450](https://linear.app/acme/issue/ENG-450)."
+        ));
 
         // Once you edit the intent, it's yours.
         shared.lock().append(&d, "intent", &Who::Owner, Some("Mine.".into()), json!({ "source": "person" })).unwrap();
         f.title = "feat: renamed".into();
         integrate(&shared, key, &f, None).await.unwrap();
         assert_eq!(st(&shared).intent.unwrap().body, "Mine.");
-        let core = shared.lock();
+        let mut core = shared.lock();
         assert!(core.verify(&d).unwrap().ok);
         assert!(core.rebuild_check().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&ctx);

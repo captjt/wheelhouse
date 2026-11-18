@@ -232,18 +232,18 @@ mod tests {
     #[test]
     fn a_ledger_entry_round_trips_with_lua_empties_and_unknown_fields() {
         let v = json!({
-            "repo": "acme/api", "pr": 632, "state": "posted", "round": 9,
+            "repo": "acme/api", "pr": 12, "state": "posted", "round": 9,
             "history": {}, "round_reviewers": {}, "reviewers": [], "extra_worktrees": {},
-            "review_id": 5808497544u64, "someday_field": { "x": 1 }
+            "review_id": 1234567890u64, "someday_field": { "x": 1 }
         });
         let pr: Pr = serde_json::from_value(v).unwrap();
-        assert_eq!(pr.key(), "acme/api#632");
-        assert_eq!(pr.short(), "api#632");
+        assert_eq!(pr.key(), "acme/api#12");
+        assert_eq!(pr.short(), "api#12");
         assert!(pr.history.is_empty() && pr.reviewers.is_empty() && pr.round_reviewers.is_empty());
         let back = serde_json::to_value(&pr).unwrap();
         assert_eq!(back["someday_field"]["x"], 1);
-        assert_eq!(back["review_id"], 5808497544u64);
-        assert_eq!(parse_key("acme/api#632"), Some(("acme/api".into(), 632)));
-        assert_eq!(parse_key("api#632"), None);
+        assert_eq!(back["review_id"], 1234567890u64);
+        assert_eq!(parse_key("acme/api#12"), Some(("acme/api".into(), 12)));
+        assert_eq!(parse_key("api#12"), None);
     }
 }

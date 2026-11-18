@@ -69,6 +69,8 @@ export function ReviewActions({ p, small }: { p: ReviewPr; small?: boolean }) {
   const toast = useToast();
   const [busy, setBusy] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  // The draft you saw (in its summary, or its preview): the hub posts only that.
+  const [seen, setSeen] = useState<string | undefined>(undefined);
   const cls = small ? "btn btn-small" : "btn";
   const ready = p.state === "reviewing" && p.phase === "awaiting";
   const stop = (e?: React.MouseEvent) => (e?.preventDefault(), e?.stopPropagation());
@@ -76,7 +78,7 @@ export function ReviewActions({ p, small }: { p: ReviewPr; small?: boolean }) {
     stop(e);
     if (busy) return;
     setBusy(what);
-    post<{ url?: string }>(`/api/review/${what}`, { key: p.full_key }).then(
+    post<{ url?: string }>(`/api/review/${what}`, { key: p.full_key, digest: what === "post" ? (seen ?? p.draft?.digest) : undefined }).then(
       () => {
         toast(what === "post" ? `Posted the review of ${p.key}` : `Dismissed round ${p.round} of ${p.key}; nothing was posted`);
         setBusy(null);
@@ -89,8 +91,8 @@ export function ReviewActions({ p, small }: { p: ReviewPr; small?: boolean }) {
   const show = (e: React.MouseEvent) => {
     stop(e);
     setBusy("preview");
-    post<{ preview: string }>(`/api/review/preview`, { key: p.full_key }).then(
-      (v) => (setBusy(null), setPreview(v.preview)),
+    post<{ preview: string; digest?: string }>(`/api/review/preview`, { key: p.full_key }).then(
+      (v) => (setBusy(null), setPreview(v.preview), setSeen(v.digest)),
       (err: Error) => (setBusy(null), toast(err.message, "error")),
     );
   };

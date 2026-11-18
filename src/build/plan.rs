@@ -146,7 +146,10 @@ pub fn block(key: &str, intent_md: &str, notes: Option<&str>, decisions: &[Decid
         for d in decisions {
             let what = match (&d.answer, d.by.as_deref()) {
                 (Some(a), Some("stood")) => format!("{a}. The recommendation stood; nobody answered."),
-                (Some(a), _) => format!("{a}. Chosen by {approved_by}{}.", d.note.as_deref().filter(|n| !n.trim().is_empty()).map(|n| format!(": \"{}\"", n.chars().take(300).collect::<String>())).unwrap_or_default()),
+                (Some(a), _) => format!(
+                    "{a}. Chosen by {approved_by}{}.",
+                    d.note.as_deref().filter(|n| !n.trim().is_empty()).map(|n| format!(": \"{}\"", n.chars().take(300).collect::<String>())).unwrap_or_default()
+                ),
                 (None, _) => "Open: not answered yet.".into(),
             };
             b.push_str(&format!("- **{} · {}** {what}\n", d.id, d.question));
@@ -207,13 +210,13 @@ mod tests {
             Decided { id: "D1".into(), question: "Should retries cover 4xx?".into(), answer: Some("No".into()), by: Some("you".into()), note: Some("log them".into()) },
             Decided { id: "D2".into(), question: "Cap?".into(), answer: Some("3".into()), by: Some("stood".into()), note: None },
         ];
-        let b = block("ENG-142", &intent(&p), p.get("Notes"), &ds, "@captjt", "full");
-        assert!(b.starts_with("<!-- wheelhouse:plan v1 ENG-142 -->\n<details open><summary><b>Plan</b> · ENG-142 · approved by @captjt</summary>"), "{b}");
+        let b = block("ENG-142", &intent(&p), p.get("Notes"), &ds, "@you", "full");
+        assert!(b.starts_with("<!-- wheelhouse:plan v1 ENG-142 -->\n<details open><summary><b>Plan</b> · ENG-142 · approved by @you</summary>"), "{b}");
         assert!(b.contains("**Intent**\n\nRetry failed deliveries"), "{b}");
-        assert!(b.contains("- **D1 · Should retries cover 4xx?** No. Chosen by @captjt: \"log them\"."), "{b}");
+        assert!(b.contains("- **D1 · Should retries cover 4xx?** No. Chosen by @you: \"log them\"."), "{b}");
         assert!(b.contains("- **D2 · Cap?** 3. The recommendation stood; nobody answered."), "{b}");
         assert!(b.contains("**Notes**\n\n- Backoff doubles"), "{b}");
-        let s = block("ENG-142", &intent(&p), p.get("Notes"), &ds, "@captjt", "summary");
+        let s = block("ENG-142", &intent(&p), p.get("Notes"), &ds, "@you", "summary");
         assert!(!s.contains("**Notes**"));
         let body = format!("Why.\n\n{b}\n\n---\nfooter");
         assert_eq!(strip(&body), "Why.\n\n\n\n---\nfooter");
