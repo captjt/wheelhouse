@@ -118,10 +118,13 @@ enum Cmd {
     Name { name: String },
     /// This pane's address and docket.
     Whoami,
-    /// Start Claude Code (or Codex) on a new docket, in a folder, with a prompt.
+    /// Start Claude Code (or Codex) on a new docket, in a folder, with a
+    /// prompt; --docket D-12 works on that docket instead.
     Start {
         #[arg(long)]
         codex: bool,
+        #[arg(long)]
+        docket: Option<String>,
         #[arg(short = 'C', long, default_value = ".")]
         dir: String,
         #[arg(long)]
@@ -287,13 +290,18 @@ fn main() {
         Some(Cmd::Intent { docket, text }) => intent(&normalize(&docket), text),
         Some(Cmd::Brief { docket }) => brief(docket.as_deref().map(normalize)),
         Some(Cmd::SetupLinear) => linear::setup(),
-        Some(Cmd::Start { codex, dir, title, prompt }) => {
+        Some(Cmd::Start { codex, docket, dir, title, prompt }) => {
             let cwd = std::fs::canonicalize(&dir).map(|p| p.to_string_lossy().into_owned()).unwrap_or(dir);
             let prompt = match prompt.as_deref() {
                 Some("-") => text_or_stdin(prompt.clone()).ok(),
                 _ => prompt,
             };
-            client::json("POST", "/api/agents/start", Some(&json!({ "app": if codex { "codex" } else { "claude-code" }, "cwd": cwd, "prompt": prompt, "title": title }))).map(|v| {
+            client::json(
+                "POST",
+                "/api/agents/start",
+                Some(&json!({ "app": if codex { "codex" } else { "claude-code" }, "cwd": cwd, "prompt": prompt, "title": title, "docket": docket.as_deref().map(normalize) })),
+            )
+            .map(|v| {
                 println!("{} started in {}: wheelhouse/{}", if codex { "Codex" } else { "Claude Code" }, v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?"))
             })
         }
