@@ -31,6 +31,7 @@ runs the hub at login, and installs the agents' hooks and skill.
 | Path | What's there |
 | --- | --- |
 | `src/main.rs` | The CLI (`wh`), and `wh serve` starting the hub's loops |
+| `src/complete.rs`, `tests/completions.rs` | Tab completion: the zsh and bash hooks, and what the hub fills in. The test runs both shells against a stand-in hub |
 | `src/hub.rs`, `src/store.rs` | The hub's state, and SQLite: entries, dockets, messages, blobs. A new column goes in `migrate` |
 | `src/record/` | The record: entries, DSSE envelopes, the chain, keys, verify, and the fold to a docket's state. [docs/record.md](docs/record.md) is the contract |
 | `src/mirror.rs`, `src/follow.rs`, `src/rex.rs` | Rex: following its events, and calling its CLI |
