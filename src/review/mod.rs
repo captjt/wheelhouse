@@ -407,7 +407,7 @@ mod link_tests {
 
     #[test]
     fn the_hub_wont_write_through_a_link_in_tmp() {
-        let root = std::env::temp_dir().join(format!("wh-links-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("wh-no-link-{}", std::process::id()));
         let elsewhere = root.join("elsewhere");
         let wt = root.join("wt");
         std::fs::create_dir_all(&elsewhere).unwrap();
