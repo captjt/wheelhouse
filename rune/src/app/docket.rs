@@ -68,6 +68,13 @@ fn header(s: &Main, d: &Docket, k: &K) -> El {
         let a = id.clone();
         top = top.child(widgets::button("open-rex", "Open in Rex", false, true, k, move |s: &mut Main, _| s.open_in_rex(&a)));
     }
+    // In a window of its own (windows.rs): from the main one. A docket's own
+    // window has its id and Open in Rex in its title bar instead.
+    let main = s.window == super::Window::Main;
+    if main {
+        let b = id.clone();
+        top = top.child(widgets::button("open-docket", "Open Docket", false, true, k, move |_: &mut Main, _| super::windows::open_docket(&b)));
+    }
     let mut chips = row().gap(6.0).center_y().child(theme::mark_chip(theme::status_icon(d.status(), 12.0, k), d.status().label(), k.text2, k));
     if let Some(l) = d.live() {
         chips = chips.child(theme::mark_chip(theme::live_icon(Some(l.state()), 12.0, k), l.state().word(), k.live(Some(l.state())), k));
@@ -75,12 +82,11 @@ fn header(s: &Main, d: &Docket, k: &K) -> El {
     if let Some(why) = d.hold() {
         chips = chips.child(theme::chip(&format!("On hold: {why}"), k.blocked, false));
     }
-    let _ = s;
-    col()
-        .w_full()
-        .gap(8.0)
-        .child(top)
-        .child(text(d.title()).font(font(22.0, 600.0).lh(27.0)).color(k.text).wrap().role("heading").level(1))
+    let mut c = col().w_full().gap(8.0);
+    if main {
+        c = c.child(top);
+    }
+    c.child(text(d.title()).font(font(22.0, 600.0).lh(27.0)).color(k.text).wrap().role("heading").level(1))
         .child(chips)
 }
 

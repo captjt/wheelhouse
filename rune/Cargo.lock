@@ -2749,6 +2749,18 @@ version = "0.1.0"
 source = "git+https://github.com/anomalyco/rune?rev=78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a#78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a"
 
 [[package]]
+name = "rune-notify"
+version = "0.0.1"
+source = "git+https://github.com/anomalyco/rune?rev=78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a#78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a"
+dependencies = [
+ "block2 0.5.1",
+ "objc2 0.5.3",
+ "windows",
+ "windows-core",
+ "windows-registry",
+]
+
+[[package]]
 name = "rune-staging"
 version = "0.0.1"
 source = "git+https://github.com/anomalyco/rune?rev=78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a#78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a"
@@ -3971,11 +3983,14 @@ dependencies = [
 name = "wheelhouse-rune"
 version = "0.0.1"
 dependencies = [
+ "block2 0.5.1",
  "chrono",
+ "objc2 0.5.3",
  "objc2-app-kit 0.2.2",
  "objc2-foundation 0.2.2",
  "rune",
  "rune-kit",
+ "rune-notify",
  "serde_json",
  "ureq",
 ]
@@ -4070,6 +4085,17 @@ checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
 dependencies = [
  "windows-core",
  "windows-link",
+]
+
+[[package]]
+name = "windows-registry"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
+dependencies = [
+ "windows-link",
+ "windows-result",
+ "windows-strings",
 ]
 
 [[package]]

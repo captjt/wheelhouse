@@ -5,8 +5,11 @@
 mod activity;
 mod docket;
 mod lists;
+pub mod menubar;
+pub mod notify;
 mod sidebar;
 pub mod widgets;
+pub mod windows;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -86,10 +89,21 @@ pub enum Sheet {
     NewDocket,
 }
 
+/// Which window a `Main` draws (windows.rs): every one acts on the hub the same way.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Window {
+    Main,
+    /// The menu bar's panel: what needs you, and no docket page.
+    MenuBar,
+    /// A docket in a window of its own (DocketWindow); None while it's free.
+    Docket(Option<String>),
+}
+
 pub struct Main {
     pub store: Arc<Store>,
     pub version: u64,
     pub me: Option<AppHandle<Main>>,
+    pub window: Window,
     pub place: Place,
     pub selection: HashMap<Place, String>,
     pub sidebar: PaneState,
@@ -117,6 +131,7 @@ impl Main {
             store: store.clone(),
             version: 0,
             me: Some(me.clone()),
+            window: Window::Main,
             place: Place::Inbox,
             selection: HashMap::new(),
             sidebar: PaneState::new(228.0).range(200.0, 320.0),
@@ -171,6 +186,11 @@ impl Main {
     /// The docket the window shows now: the selected one, or the first.
     pub fn current(&self) -> Option<String> {
         let state = self.state()?;
+        match &self.window {
+            Window::Main => {}
+            Window::MenuBar => return None,
+            Window::Docket(id) => return id.clone().filter(|id| state.docket(id).is_some()),
+        }
         let sel = self.selection.get(&self.place).cloned();
         match &self.place {
             Place::Inbox => {

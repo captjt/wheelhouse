@@ -63,8 +63,17 @@ impl Hub {
 
     /// Follow `/api/events` until it ends: `opened` once connected, then
     /// `event` for each one. Returns why it stopped.
-    pub fn follow(&self, mut opened: impl FnMut(), mut event: impl FnMut()) -> String {
-        let res = self.stream.get(format!("{}/api/events", self.base)).header("Accept", "text/event-stream").call();
+    pub fn follow(&self, opened: impl FnMut(), mut event: impl FnMut()) -> String {
+        self.follow_events(false, opened, |_| event(), &std::sync::atomic::AtomicBool::new(false))
+    }
+
+    /// Follow `/api/events` with each event's JSON. `mac`: as Wheelhouse.app
+    /// (`?client=mac`), which posts the Mac's notifications, so the hub posts
+    /// none of its own while this stream is open. It ends early, at the next
+    /// line or keep-alive (every 5 s), once `stop` is set.
+    pub fn follow_events(&self, mac: bool, mut opened: impl FnMut(), mut event: impl FnMut(Value), stop: &std::sync::atomic::AtomicBool) -> String {
+        let path = if mac { "/api/events?client=mac" } else { "/api/events" };
+        let res = self.stream.get(format!("{}{path}", self.base)).header("Accept", "text/event-stream").call();
         let res = match res {
             Ok(r) if r.status() == 200 => r,
             Ok(r) => return format!("The hub answered {}", r.status().as_u16()),
@@ -73,8 +82,11 @@ impl Hub {
         opened();
         let reader = BufReader::new(res.into_body().into_reader());
         for line in reader.lines() {
+            if stop.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return "Following again".to_string();
+            }
             match line {
-                Ok(l) if l.starts_with("data:") => event(),
+                Ok(l) if l.starts_with("data:") => event(serde_json::from_str(l[5..].trim()).unwrap_or(Value::Null)),
                 Ok(_) => {}
                 Err(e) => return e.to_string(),
             }

@@ -130,6 +130,7 @@ fn selected_id(s: &Main, st: &HubState) -> Option<String> {
 }
 
 fn list_row(key: String, on: bool, k: &K, content: El, select: String) -> El {
+    let again = select.clone();
     row()
         .key(key)
         .w_full()
@@ -141,6 +142,13 @@ fn list_row(key: String, on: bool, k: &K, content: El, select: String) -> El {
         .role("option")
         .focus_selected(on)
         .on_press(move |s: &mut Main| s.select(select.clone()))
+        // A double-click opens its docket in a window of its own (the list's primaryAction).
+        .on_double_press(move |s: &mut Main| {
+            s.select(again.clone());
+            if let Some(id) = s.current() {
+                super::windows::open_docket(&id);
+            }
+        })
         .child(content.grow(1.0).min_w(0.0))
 }
 
