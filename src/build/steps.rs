@@ -1009,7 +1009,7 @@ async fn checked(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     let head = t.checked_head.clone().unwrap_or_default();
     let sp = specs(cfg, t);
     if !sp.is_empty() && t.extra.get("verified_head").and_then(Value::as_str) != Some(head.as_str()) {
-        let target = crate::checks::Target { repo: t.repo.clone(), dir: wt(t), base: t.base_head.clone(), specs: sp };
+        let target = crate::checks::Target { repo: t.repo.clone(), dir: wt(t), base: t.base_head.clone(), specs: sp, path: cfg.path_dirs.clone() };
         let run = crate::checks::spawn(shared, &t.docket, target, "build");
         t.extra.insert("check_run".into(), json!(run));
         t.extra.insert("verified_head".into(), json!(head));
