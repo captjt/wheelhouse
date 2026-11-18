@@ -921,10 +921,16 @@ struct StartReq {
     prompt: Option<String>,
     #[serde(default)]
     title: Option<String>,
+    /// Work on this docket instead of opening a new one.
+    #[serde(default)]
+    docket: Option<String>,
 }
 
 async fn start_agent(State(shared): State<Shared>, Json(req): Json<StartReq>) -> ApiResult {
-    crate::start::start(&shared, &req.app, &req.cwd, req.prompt.as_deref(), req.title.as_deref()).await.map(Json).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))
+    crate::start::start(&shared, &req.app, &req.cwd, req.prompt.as_deref(), req.title.as_deref(), req.docket.as_deref())
+        .await
+        .map(Json)
+        .map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))
 }
 
 /// Stop this hub, so `wh up` can hand over to launchd. Not on the tailnet.

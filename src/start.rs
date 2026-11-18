@@ -29,7 +29,9 @@ fn expand(cwd: &str) -> String {
     }
 }
 
-pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, title: Option<&str>) -> Result<Value> {
+/// `docket`: an existing docket to work on, instead of a new one. It must be
+/// open, and not already held by an agent in a live pane.
+pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, title: Option<&str>, docket: Option<&str>) -> Result<Value> {
     let (bin, app) = program(app)?;
     let cwd = expand(cwd);
     if !std::path::Path::new(&cwd).is_dir() {
@@ -44,7 +46,19 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
             (None, Some(t)) => (t, "prompt"),
             (None, None) => (format!("{} in {}", crate::mirror::app_name(app), shown), "pane"),
         };
-        let id = core.open(&Who::Owner, &t, json!({ "protocol": "agent", "title_source": src, "started": true }))?;
+        let id = match docket {
+            Some(d) => {
+                let st = core.store.state(d)?.ok_or_else(|| anyhow::anyhow!("no docket {d}"))?;
+                if !st.is_open() {
+                    bail!("{d} is {}: reopen it first", st.status.replace('_', " "));
+                }
+                if st.agent.as_ref().is_some_and(|a| agents::live(&core, &a.block).is_some()) {
+                    bail!("{d} already has an agent in a live pane: open it there, or end that session first");
+                }
+                d.to_string()
+            }
+            None => core.open(&Who::Owner, &t, json!({ "protocol": "agent", "title_source": src, "started": true }))?,
+        };
         let session = core.mirror.sessions.values().find(|s| s.label == SESSION).map(|s| s.session_id.clone());
         (id, session)
     };
@@ -66,6 +80,9 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
     }
     agents::adopt(&mut core, &docket, &agent, prompt);
     core.append(&docket, "claim", &Who::Hub, None, json!({ "source": "wheelhouse", "agent": agent }))?;
+    if core.store.state(&docket)?.is_some_and(|s| s.status == "todo") {
+        core.append(&docket, "set", &Who::Hub, None, json!({ "status": "in_progress" }))?;
+    }
     if let Some(p) = prompt {
         core.append(&docket, "note", &Who::Owner, Some(p.to_string()), json!({ "via": "prompt", "from": "wheelhouse" }))?;
     }
