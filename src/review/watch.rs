@@ -336,7 +336,7 @@ async fn step(shared: &Shared, cfg: &Config, mut e: Pr, paused: bool, active: &m
 
 /// The checked review of the round in progress, in brief, once the
 /// checker has written it.
-fn draft_summary(p: &Pr) -> Value {
+pub(crate) fn draft_summary(p: &Pr) -> Value {
     if p.state != "reviewing" || p.phase() == "reviewer" {
         return Value::Null;
     }

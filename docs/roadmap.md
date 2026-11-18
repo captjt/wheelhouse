@@ -92,6 +92,21 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [x] Chat: an agent's docket as a conversation, with a box to send the
       next thing (queued while it works) and its reply pushed to the phone
 
+### Wheelhouse.app
+
+- [x] A native Mac app (SwiftUI, `mac/`): the sidebar, lists beside their
+      dockets, the inspector, Chat, the record, Reviews, Builds, Recap and
+      ⌘K, in the web app's look and words
+- [x] Dockets in windows of their own; kept files in Quick Look, checked
+      against their hash first; a file dropped on a docket is kept with it
+- [x] The menu bar: the wheel, orange with a count, and a panel to answer
+      what needs you in place
+- [x] Notifications with their answers on the banner: Approve and Deny, a
+      reply to an agent, an agent's options, Post; withdrawn once answered
+      anywhere. The hub posts none while the app does.
+- [ ] Signed and notarized builds, so a teammate can install it without
+      building it
+
 ## Next
 
 ### Build after the PR opens
@@ -132,7 +147,6 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       are
 - [ ] Rex hosts other than this Mac
 - [ ] Decisions in force shown under the intent, with who made each one
-- [ ] The menu bar app (Wheelhouse.app)
 
 ## Later
 

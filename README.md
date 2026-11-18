@@ -29,8 +29,8 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
 
 <table>
   <tr>
-    <td><img src="docs/images/docket-light.png" alt="A docket on the Mac: its intent with acceptance boxes, a note callout, the two files it kept, and its signed activity, beside its properties and the record's check"></td>
-    <td><img src="docs/images/inbox-dark.png" alt="The Inbox in dark mode: an agent asking to run the checkout tests with Approve and Deny, a question with two answers as buttons, a failed migration, and a finished turn; beside it the first item's docket"></td>
+    <td><img src="docs/images/mac-docket-light.png" alt="Wheelhouse.app: the sidebar, the Active list grouped by what needs you, and a docket beside it with its intent's acceptance boxes, the two files it kept, its signed activity, and its properties in the inspector"></td>
+    <td><img src="docs/images/mac-inbox-dark.png" alt="Wheelhouse.app's Inbox in dark mode: an agent asking to run the checkout tests with Approve and Deny, a question with two answers as buttons, a failed migration, and a finished turn; beside it the first item's docket"></td>
   </tr>
 </table>
 
@@ -43,11 +43,40 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
 > Rex is in private beta. Wheelhouse needs a Rex build whose agents report
 > program status (OSC 7501): Claude Code and Codex do on their own.
 
+## Wheelhouse.app
+
+On the Mac, Wheelhouse is a native app (SwiftUI), with the web app's look
+and words in the system's own controls:
+
+- **The window.** A sidebar, each list beside its docket (as Mail does),
+  and the docket's properties in an inspector. Chat with an agent, read
+  the record, tick the intent's boxes, and ⌘K for everything. Double-click
+  a docket for a window of its own.
+- **The menu bar.** The wheel turns orange with a count when something needs
+  you, and its panel answers it in place: Approve, Deny, an agent's
+  options, Post.
+- **Notifications you answer from the banner.** Approve a prompt, reply to
+  an agent, pick one of its options, post a review. Each is withdrawn once
+  it's answered, here or on your phone.
+- **The Mac's own ways.** Kept files open in Quick Look once their bytes
+  match the record's hash; drop a file on a docket to keep it there; swipe
+  a row to Done; the Dock badge counts what needs you, and its menu lists
+  it; ⌘1–⌘8 go anywhere.
+
+<p align="center">
+  <img src="docs/images/mac-menubar-light.png" width="340" alt="The menu bar panel: a prompt to approve, a question with its two answers as buttons, a failed migration, and a finished turn">
+  <img src="docs/images/mac-palette-dark.png" width="520" alt="The ⌘K palette over the Inbox: the selected docket's actions, then Create and Go to">
+</p>
+
+The web app is the same Wheelhouse at http://127.0.0.1:7500, and on your
+phone over Tailscale.
+
 ## Requirements
 
 - macOS and [Rex](https://www.superlogical.com/rex), with the `rex` CLI
 - [Rust](https://rustup.rs) 1.88 or later, [Node](https://nodejs.org) 22.18
   or later, and [just](https://github.com/casey/just) (`brew install just`)
+- Xcode 26 (Swift 6.2), for Wheelhouse.app
 - [LuaJIT](https://luajit.org) (`brew install luajit`), to read
   `review.lua` and `build.lua`
 - [GitHub CLI](https://cli.github.com), signed in (`gh auth login`), for
@@ -65,15 +94,17 @@ cd ~/src/wheelhouse
 just setup
 ```
 
-`just setup` builds the app and the hub (`wh`, in `~/.cargo/bin`), runs the
-hub at login as a LaunchAgent (`wh up`; logs with `wh logs`), installs
-Claude Code's hooks (names from your prompts, turns with their last
-message, a new docket on `/clear`), and installs the `wheelhouse` skill for
-agents. Run it again after pulling to update.
+`just setup` builds the hub (`wh`, in `~/.cargo/bin`, with the web app
+built in), runs it at login as a LaunchAgent (`wh up`; logs with
+`wh logs`), installs Claude Code's hooks (names from your prompts, turns
+with their last message, a new docket on `/clear`) and the `wheelhouse`
+skill for agents, and puts Wheelhouse.app in `~/Applications`. Run it again
+after pulling to update (`just app` rebuilds only the Mac app).
 
 Then:
 
-1. Open http://127.0.0.1:7500. Every agent pane in Rex is already a docket.
+1. Open Wheelhouse.app, and allow its notifications. Every agent pane in
+   Rex is already a docket. (Or open http://127.0.0.1:7500.)
 2. Tell your agents about Wheelhouse: paste the block in
    [docs/agent-instructions.md](docs/agent-instructions.md) into
    `~/.claude/CLAUDE.md` (and `~/.codex/AGENTS.md`).
@@ -130,6 +161,9 @@ skill (`wh skill`) teaches them how.
 
 ## The app
 
+The same keys in Wheelhouse.app and the web app; on the Mac, the menus
+have them too (⌘N new docket, ⌘K search, ⌘1–⌘8 go, ⌥⌘1–4 status).
+
 | Keys | |
 | --- | --- |
 | `⌘K`, `/` | Search dockets and commands |
@@ -172,9 +206,11 @@ odd setups.
 - **The record** is SQLite: one signed, chained entry per thing that
   happened, and each docket's state folded from its entries. Files are kept
   once, by hash. Keys are Ed25519, one per signer, on this Mac.
-- **The app** is React, built into the binary and served by the hub, on
-  your Mac and (through Tailscale) your phone. Live updates come over
-  server-sent events.
+- **The apps**: Wheelhouse.app (SwiftUI, `mac/`) on the Mac, and the web
+  app (React, built into the binary and served by the hub) in a browser
+  and, through Tailscale, on your phone. Both follow the hub's API and its
+  server-sent events. While Wheelhouse.app listens, it posts the Mac's
+  notifications, with their actions; the hub posts none of its own.
 - **Review and Build** run agents in Rex panes of their own, with a wall
   around them, and keep their working state per PR or docket.
 
@@ -192,6 +228,7 @@ doesn't.
 
 ```sh
 just check          # what a pull request needs to pass
+just app            # build Wheelhouse.app into ~/Applications
 just dev            # the web app with hot reload on :5180, against a running hub
 just screenshots    # the README's images, from a made-up world
 ```

@@ -1,4 +1,7 @@
 target/
+mac/.build/
+mac/build/
+mac/.swiftpm/
 web/node_modules/
 web/dist/
 .DS_Store

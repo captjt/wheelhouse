@@ -155,7 +155,7 @@ These things come only from having the protocols on one record:
 | Surface | What it's for |
 | --- | --- |
 | **Wheelhouse.app** | One menu bar icon, orange with a count while something needs you. The panel shows your asks. The window holds the full app. Notifications carry the answer (Approve and Deny, Post and Dismiss, a decision's options) and are withdrawn once answered. |
-| **The window** | The web UI in a native window: Home, Dockets, Agents, Recap, Settings, and ⌘K. |
+| **The window** | Native (SwiftUI), not the web UI in a frame: a sidebar, each list beside its docket, an inspector for its properties, Chat, the record, Recap, and ⌘K. It looks like the web app and works like a Mac app: dockets in windows of their own, kept files in Quick Look, files dropped on a docket kept with it, rows that swipe on the trackpad, menus and ⌘1–⌘8. |
 | **The phone** | The same UI from the Home Screen over your tailnet, with Web Push, laid out natively: a tab bar, large titles, a docket that slides onto its list (swipe right to go back), rows that swipe (Done, Drop, Status, File, Approve) and long-press for their menu, sheets from the bottom, and pull to refresh. An agent's docket opens to its conversation: what you asked, what it answered, what it's doing now, and a box to send the next thing (queued while it works; its reply comes as a push). Previews open here. |
 | **The terminal** | `wh` for you: `wh` (your asks), `wh show D-41`, `wh reply 3 --choice "5xx + timeouts"`, `wh build start ENG-142`. Rex key bindings (planned): `wh_next` focuses the next pane that needs you. |
 | **Agents** | `wh` for agents: `brief`, `intent`, `note`, `attach`, `send`, `reply`, `wait`, `share`. Also a skill (docs/agent-instructions.md), and a brief at `SessionStart`. |
@@ -447,7 +447,8 @@ Each milestone is usable on its own and takes over from one tool.
    bridge.
    *Status: built, with messages between agents, previews (`wh share`),
    starting agents (`wh start`), Mac notifications and Web Push, and the
-   phone app with Chat. Still to come: the menu bar app, other Rex hosts,
+   phone app with Chat, and Wheelhouse.app (the window, the menu bar,
+   notifications answered in place). Still to come: other Rex hosts,
    Codex's permission prompts, and importing rex-inbox's history.*
 2. **Review. Replaces rex-reviewer.** The Review protocol, the GitHub
    source, standing orders for review requests, several reviewers and a
@@ -485,13 +486,13 @@ Build also gains pre-review by landing second.
 | Is rex-hub Wheelhouse? | Yes. The repo is `captjt/wheelhouse` and the product is Wheelhouse. Dockets live here. | decided |
 | The standalone tools | They stay separate open-source projects, maintained on their own. Wheelhouse shares no code with them and ports what it needs. | decided |
 | Which agents are tracked? | Every one. A session no protocol started is an Agent docket. | decided |
-| UI | React and TypeScript, built with Vite and embedded in the binary. One UI covers the window, the phone, and a browser. A native menu bar app wraps it. | decided |
+| UI | React and TypeScript, built with Vite and embedded in the binary, for the phone and a browser. On the Mac, Wheelhouse.app is native SwiftUI against the same API: the same views and words, in the system's own controls. | decided |
 | UX bar | It looks, feels, and works like Linear: a sidebar with Inbox and views, dense lists grouped under headers, a board, a docket page with a properties rail and an activity feed, ⌘K, single-key shortcuts, menus with numbered choices, and a new-docket dialog. The UX is vital; the brand stays Wheelhouse's own. | decided |
 | The pane off the Mac | Rex has no link that opens a pane in its iOS app, so off the Mac, "Open in Rex" becomes **View pane**: the agent's terminal, live, in the app, with a box to message the agent between turns. On the Mac it stays "Open in Rex". | decided |
 | Theme | Colors from Cloudflare's open-source Kumo design system: neutral oklch surfaces, Cloudflare blue for actions and links, Cloudflare orange (`#f6821f`) for the brand, Kumo's success, warning and danger colors and tints. Every token is a CSS `light-dark()`: the mode follows the system by default, or you pin Light or Dark in the sidebar or ⌘K. | decided |
 | Repo | Private for now, and possibly open source later. Fixtures and screenshots use a made-up workspace from the start. | decided |
 | Teams | Not in v1. The record is built so teams can share it later. | decided |
-| Language | A Rust daemon (rex-inbox's code ports directly), a React UI, and a Swift menu bar app. | proposed |
+| Language | A Rust daemon (rex-inbox's code ports directly), a React UI, and a SwiftUI Mac app (`mac/`). | decided |
 | Protocol rules | Ported to Rust as pure functions, tested by replaying the tools' fixtures | proposed |
 | Config | A Lua file, like the tools', so effort and routing can be functions. Runtime changes are entries. | proposed |
 | Record format | Wheelhouse's own JSON entries, signed as exact bytes in DSSE envelopes with Ed25519 keys, and hash-chained per docket by the hub (see "The record format") | proposed |

@@ -250,6 +250,17 @@ for look in light dark; do
     "[...document.querySelectorAll('.docket-seg button')].find(b => b.textContent === 'Docket')?.click(); new Promise(r => setTimeout(r, 600)).then(() => { $artifact_js })"
 done
 
+# Wheelhouse.app, against the same world: it renders its own windows (kept
+# behind yours; the app never takes the keyboard). Needs Xcode 26, and
+# screen recording for your terminal, as screencapture does.
+if swift --version 2>/dev/null | grep -qE "Swift version (6\.[2-9]|[7-9])"; then
+  (cd "$root/mac" && swift build -c release --product Wheelhouse >/dev/null)
+  WH_APP_HUB="$base" "$root/mac/.build/release/Wheelhouse" --snapshot "$images" \
+    --only "${MAC_SHOTS:-docket,inbox,chat,reviews,board,record,palette,window,menubar}" | sed "s|$root/||"
+else
+  echo "skipped Wheelhouse.app's shots: they need Xcode 26 (Swift 6.2)"
+fi
+
 # The social preview card shows docket-dark.png, so render it after.
 chrome="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 # A profile of its own: never your Chrome's, which may be open.

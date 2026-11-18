@@ -1,0 +1,483 @@
+import AppKit
+import Foundation
+import Observation
+
+/// A short note at the bottom of the window: what just happened, and its undo.
+struct Toast: Identifiable {
+    let id = UUID()
+    let text: String
+    let error: Bool
+    let action: (label: String, run: () -> Void)?
+}
+
+/// One thing in the Inbox: a prompt, a review to post, a message, a failure,
+/// or a finished turn.
+struct InboxItem: Identifiable, Hashable {
+    enum Kind: Int { case blocked, review, message, error, done }
+    let kind: Kind
+    let docket: Docket?
+    let docketId: String
+    let title: String
+    let line: String
+    let at: String?
+    let msg: Msg?
+    let pr: ReviewPr?
+    let id: String
+
+    static func == (a: InboxItem, b: InboxItem) -> Bool { a.id == b.id && a.line == b.line && a.docket == b.docket && a.msg == b.msg && a.pr == b.pr }
+    func hash(into h: inout Hasher) { h.combine(id) }
+}
+
+/// The app's one view of the hub: its state, kept live, and what you do to it.
+@Observable @MainActor
+final class Store {
+    static let shared = Store()
+
+    let hub = HubClient()
+    private(set) var state: HubState?
+    private(set) var error: String?
+    /// Following the hub's events right now; and whether it ever has.
+    private(set) var live = false {
+        didSet { if live { wasLive = true } }
+    }
+
+    private(set) var wasLive = false
+    /// Bumps on every change the hub reports, so open dockets reload.
+    private(set) var version = 0
+    private(set) var toasts: [Toast] = []
+    /// Starting the hub (`wh up`) from the app.
+    private(set) var startingHub = false
+
+    private var started = false
+    private var refreshing = false
+    private var again = false
+    private var scheduled = false
+
+    var dockets: [Docket] { state?.dockets ?? [] }
+    func docket(_ id: String?) -> Docket? { id.flatMap { state?.byId[$0] } }
+
+    // ---- following the hub ----
+
+    func start() {
+        guard !started else { return }
+        started = true
+        Task { await refresh() }
+        Task { await follow() }
+        // Times and anything missed: every 30 seconds, as the web app does.
+        Task {
+            while true {
+                try? await Task.sleep(for: .seconds(30))
+                await self.runRefresh()
+                await self.checkNotifying()
+            }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor in await Store.shared.checkNotifying() }
+        }
+    }
+
+    private var stream: Task<Void, Never>?
+    /// The current stream told the hub the app posts notifications: only
+    /// then does it post them (the hub posts none of its own).
+    private(set) var notifying = false
+
+    /// Whether the app may post changed (System Settings, or Settings here):
+    /// follow again, telling the hub.
+    func checkNotifying() async {
+        if await Notifier.shared.canPost() != notifying { reconnect() }
+    }
+
+    /// Follow again from the top: the hub address changed, or whether the
+    /// app posts notifications did.
+    func reconnect() {
+        stream?.cancel()
+    }
+
+    private func follow() async {
+        var wait = 1.0
+        while true {
+            let notifies = await Notifier.shared.canPost()
+            notifying = notifies
+            let task = Task { @MainActor in
+                do {
+                    for try await ev in hub.events(notifies: notifies) {
+                        live = true
+                        wait = 1
+                        if ev["type"].str == "notify" { Notifier.shared.post(ev) }
+                        bump()
+                    }
+                } catch {}
+            }
+            stream = task
+            await task.value
+            live = false
+            try? await Task.sleep(for: .seconds(wait))
+            wait = min(wait * 2, 10)
+        }
+    }
+
+    /// Something changed: refresh soon, once for a burst of changes.
+    func bump() {
+        if refreshing {
+            again = true
+            return
+        }
+        guard !scheduled else { return }
+        scheduled = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            scheduled = false
+            await runRefresh()
+        }
+    }
+
+    private func runRefresh() async {
+        if refreshing {
+            again = true
+            return
+        }
+        refreshing = true
+        repeat {
+            again = false
+            await refresh()
+            version += 1
+        } while again
+        refreshing = false
+    }
+
+    func refresh() async {
+        do {
+            let next = HubState(try await hub.get("/api/state"))
+            if next != state { state = next }
+            error = nil
+            Notifier.shared.reconcile(next)
+            Badge.update(urgent)
+        } catch {
+            self.error = Self.words(error)
+            Badge.update(0)
+        }
+    }
+
+    /// Refresh now, and tell open dockets to reload.
+    func reload() {
+        Task { await runRefresh() }
+    }
+
+    static func words(_ e: Error) -> String {
+        if let h = e as? HubError { return h.message }
+        let ns = e as NSError
+        if ns.domain == NSURLErrorDomain, [NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut, NSURLErrorCannotFindHost].contains(ns.code) {
+            return "The hub isn't running"
+        }
+        return e.localizedDescription
+    }
+
+    /// The hub isn't answering at all (as opposed to answering with an error).
+    var hubDown: Bool { state == nil && error == "The hub isn't running" }
+
+    /// Start the hub at login and now: `wh up`, as in a terminal.
+    func startHub() {
+        guard !startingHub else { return }
+        startingHub = true
+        Task.detached {
+            let result = Shell.run(Shell.wh, ["up"])
+            await MainActor.run {
+                self.startingHub = false
+                if result.ok {
+                    self.toast("The hub is starting")
+                } else {
+                    self.toast(result.output.isEmpty ? "Couldn't find wh: install it with `just setup`" : result.output, error: true)
+                }
+                Task {
+                    try? await Task.sleep(for: .seconds(1.5))
+                    await self.runRefresh()
+                }
+            }
+        }
+    }
+
+    // ---- what needs you ----
+
+    var inbox: [InboxItem] { Self.inbox(state) }
+
+    nonisolated static func inbox(_ state: HubState?) -> [InboxItem] {
+        guard let state else { return [] }
+        var items: [InboxItem] = []
+        let attention = ["ready": "Ready to post", "blocked": "Blocked", "start-failed": "Didn't start", "stalled": "Stalled", "pane-closed": "Pane closed", "error": "Failed"]
+        for p in state.prs {
+            guard let a = p.attention else { continue }
+            let d = p.docket.flatMap { state.byId[$0] }
+            let what = a.kind == "ready" ? draftLine(p) ?? a.text : a.text
+            items.append(InboxItem(kind: .review, docket: d, docketId: p.docket ?? p.key, title: d?.title ?? "Review \(p.key)\(p.title.map { ": \($0)" } ?? "")", line: "\(attention[a.kind] ?? "Needs you") (round \(a.round)): \(what)", at: p.updatedAt, msg: nil, pr: p, id: "rv:\(p.fullKey)"))
+        }
+        for m in state.messages {
+            let d = m.docket.flatMap { state.byId[$0] }
+            items.append(InboxItem(kind: .message, docket: d, docketId: m.docket ?? "#\(m.id)", title: d?.title ?? m.title, line: "\(m.who): \(m.title)", at: m.createdAt, msg: m, pr: nil, id: "m\(m.id)"))
+        }
+        for d in state.dockets {
+            guard let l = d.live else { continue }
+            switch l.state {
+            case .blocked:
+                items.append(InboxItem(kind: .blocked, docket: d, docketId: d.id, title: d.title, line: l.msg ?? "\(appName(d.agent?.app)) needs you", at: l.since, msg: nil, pr: nil, id: d.id))
+            case .error where d.isOpen:
+                items.append(InboxItem(kind: .error, docket: d, docketId: d.id, title: d.title, line: l.msg ?? "Failed", at: l.since, msg: nil, pr: nil, id: d.id))
+            case .done where d.isOpen:
+                items.append(InboxItem(kind: .done, docket: d, docketId: d.id, title: d.title, line: firstLine(d.lastTurn) ?? "Finished its turn", at: l.since ?? d.updatedAt, msg: nil, pr: nil, id: d.id))
+            default: break
+            }
+        }
+        return items.sorted { a, b in a.kind.rawValue != b.kind.rawValue ? a.kind.rawValue < b.kind.rawValue : (a.at ?? "") > (b.at ?? "") }
+    }
+
+    /// What needs you now: the Dock badge and the menu bar's count.
+    var urgent: Int {
+        guard let s = state else { return 0 }
+        return s.dockets.filter { $0.live?.state == .blocked || $0.live?.state == .error }.count + s.messages.count + s.prs.filter { $0.attention != nil }.count + s.tasks.filter { $0.attention != nil }.count
+    }
+
+    // ---- toasts ----
+
+    func toast(_ text: String, error: Bool = false, action: (label: String, run: () -> Void)? = nil) {
+        let t = Toast(text: text, error: error, action: action)
+        toasts = Array(toasts.suffix(2)) + [t]
+        let wait: Double = action != nil ? 5.5 : error ? 6 : 3.2
+        Task {
+            try? await Task.sleep(for: .seconds(wait))
+            toasts.removeAll { $0.id == t.id }
+        }
+    }
+
+    func dismiss(_ t: Toast) { toasts.removeAll { $0.id == t.id } }
+
+    /// Run a write; on failure, say why. True if it went through.
+    @discardableResult
+    func act(_ path: String, _ body: [String: Any] = [:], done: String? = nil) async -> JSON? {
+        do {
+            let r = try await hub.post(path, body)
+            if let done { toast(done) }
+            reload()
+            return r
+        } catch {
+            toast(Self.words(error), error: true)
+            reload()
+            return nil
+        }
+    }
+
+    // ---- dockets ----
+
+    func page(_ id: String) async throws -> DocketPage {
+        DocketPage(try await hub.get("/api/dockets/\(id)"))
+    }
+
+    func setStatus(_ id: String, _ status: Status, undo: Status? = nil) {
+        Task {
+            guard await act("/api/dockets/\(id)/set", ["status": status.rawValue]) != nil else { return }
+            if let undo, undo != status {
+                toast("\(id) moved to \(status.label)", action: ("Undo", { [weak self] in
+                    Task { await self?.act("/api/dockets/\(id)/set", ["status": undo.rawValue], done: "\(id) is back in \(undo.label)") }
+                }))
+            } else {
+                toast("\(id) moved to \(status.label)")
+            }
+        }
+    }
+
+    func rename(_ id: String, _ title: String) {
+        Task { await act("/api/dockets/\(id)/set", ["title": title]) }
+    }
+
+    func note(_ id: String, _ body: String) async -> Bool {
+        await act("/api/dockets/\(id)/note", ["body": body]) != nil
+    }
+
+    func create(title: String, note: String) async -> String? {
+        guard let r = await act("/api/dockets", ["title": title]), let id = r["docket"].str else { return nil }
+        if !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { _ = await self.note(id, note) }
+        toast("\(id) created")
+        return id
+    }
+
+    func openInRex(_ id: String) {
+        Task { await act("/api/dockets/\(id)/open", done: "Showing \(id)'s pane in Rex") }
+    }
+
+    /// Approve or deny an agent's prompt. The hub reads the prompt from Rex
+    /// again and answers only if it's the one shown here.
+    func answer(_ d: Docket, approve: Bool) async {
+        guard let l = d.live else { return }
+        await answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: approve)
+    }
+
+    /// Answer the prompt as it was shown: the hub refuses if what waits in
+    /// the pane now is a different prompt.
+    func answer(_ id: String, record: String, since: String?, msg: String?, approve: Bool) async {
+        let body: [String: Any] = ["record": record, "updated_at": since ?? NSNull(), "msg": msg ?? NSNull()]
+        guard let r = await act("/api/dockets/\(id)/\(approve ? "approve" : "deny")", body) else { return }
+        if r["cleared"].bool {
+            toast("\(approve ? "Approved" : "Denied")\(msg.map { ": \($0)" } ?? "")")
+        } else {
+            toast("Sent, but the prompt is still showing. Look at the pane.", error: true)
+        }
+    }
+
+    func send(_ id: String, _ text: String) async -> Bool {
+        guard let r = await act("/api/dockets/\(id)/send", ["text": text, "queue": true]) else { return false }
+        if r["queued"].int != nil { toast("Queued: it goes in when the turn ends") }
+        return true
+    }
+
+    func unqueue(_ id: String, _ q: Int) {
+        Task { await act("/api/dockets/\(id)/queue/\(q)/cancel", done: "Taken back") }
+    }
+
+    func setIntent(_ id: String, _ body: String, versions: Int) async -> Bool {
+        await act("/api/dockets/\(id)/intent", ["body": body], done: "\(id): intent saved as version \(versions + 1)") != nil
+    }
+
+    func takeLinear(_ d: Docket) {
+        Task { await act("/api/dockets/\(d.id)/intent", ["take_linear": true], done: "\(d.id) follows \(d.linear?.key ?? "the issue")'s description again") }
+    }
+
+    func link(_ id: String, issue: String, hadIntent: Bool) async {
+        await act("/api/dockets/\(id)/linear", ["key": issue], done: "\(id) linked to \(issue)\(hadIntent ? "" : ": its description is the intent")")
+    }
+
+    func attach(_ id: String, file: URL) async {
+        guard let bytes = try? Data(contentsOf: file) else {
+            toast("Couldn't read \(file.lastPathComponent)", error: true)
+            return
+        }
+        await act("/api/dockets/\(id)/artifacts", ["name": file.lastPathComponent, "content": bytes.base64EncodedString()], done: "Kept \(file.lastPathComponent) with \(id), pinned by its hash")
+    }
+
+    func attach(_ id: String, link: URL) async {
+        await act("/api/dockets/\(id)/artifacts", ["url": link.absoluteString], done: "Linked it to \(id)")
+    }
+
+    func startAgent(app: String, cwd: String, prompt: String, title: String?) async -> String? {
+        var body: [String: Any] = ["app": app, "cwd": cwd, "prompt": prompt]
+        if let title, !title.isEmpty { body["title"] = title }
+        guard let r = await act("/api/agents/start", body), let id = r["docket"].str else { return nil }
+        toast("\(id): \(appName(app)) started in Rex's wheelhouse session")
+        return id
+    }
+
+    func fromLinear(_ key: String) async -> String? {
+        guard let r = await act("/api/dockets/from-linear", ["key": key]), let id = r["docket"].str else { return nil }
+        toast(r["existing"].bool ? "\(key) is already \(id)" : "\(id) created from \(key)")
+        return id
+    }
+
+    func verifyAll() {
+        Task {
+            do {
+                let r = try await hub.get("/api/verify")
+                let n = r["dockets"].array.count
+                if r["ok"].bool { toast("All \(n) records check: chains intact, signatures good") } else { toast("\(r["dockets"].array.filter { !$0["ok"].bool }.count) records don't check", error: true) }
+            } catch { toast(Self.words(error), error: true) }
+        }
+    }
+
+    // ---- messages ----
+
+    func reply(_ m: Msg, _ body: String, choice: String? = nil) async -> Bool {
+        var b: [String: Any] = ["body": body]
+        if let choice { b["choice"] = choice }
+        guard let r = await act("/api/messages/\(m.id)/reply", b) else { return false }
+        toast("\(choice.map { "Chose \($0)" } ?? "Replied") · it goes to \(r["to"].str ?? m.who) between turns")
+        return true
+    }
+
+    func file(_ m: Msg) {
+        Task { await act("/api/messages/\(m.id)/done") }
+    }
+
+    // ---- reviews and builds ----
+
+    func post(_ p: ReviewPr, digest: String?) async -> Bool {
+        var b: [String: Any] = ["key": p.fullKey]
+        if let d = digest ?? p.draft?.digest { b["digest"] = d }
+        return await act("/api/review/post", b, done: "Posted the review of \(p.key)") != nil
+    }
+
+    func dismissReview(_ p: ReviewPr) async -> Bool {
+        await act("/api/review/dismiss", ["key": p.fullKey], done: "Dismissed round \(p.round) of \(p.key); nothing was posted") != nil
+    }
+
+    func preview(_ p: ReviewPr) async -> (text: String, digest: String?)? {
+        do {
+            let r = try await hub.post("/api/review/preview", ["key": p.fullKey])
+            return (r["preview"].str ?? "", r["digest"].text)
+        } catch {
+            toast(Self.words(error), error: true)
+            return nil
+        }
+    }
+
+    func reviewSettings(_ body: [String: Any], done: String) {
+        Task { await act("/api/review/settings", body, done: done) }
+    }
+
+    func checkGitHub() {
+        Task { await act("/api/review/check", done: "Checking GitHub") }
+    }
+
+    func build(_ d: Docket, into repo: String) {
+        Task { await act("/api/build/start", ["from": d.id, "repo": repo], done: "\(d.id) is queued to build into \(repo)") }
+    }
+
+    func discardBuild(_ id: String) {
+        Task { await act("/api/build/discard", ["docket": id], done: "Discarded \(id)'s Build; its branch stays") }
+    }
+
+    func pauseBuilds(_ paused: Bool) {
+        Task { await act("/api/build/settings", ["paused": paused], done: paused ? "Builds paused: nothing new starts" : "Builds resumed") }
+    }
+}
+
+/// The checked review, in a line: what it asks and what it found.
+func draftLine(_ p: ReviewPr) -> String? {
+    guard let d = p.draft else { return nil }
+    let ask = d.event == "APPROVE" ? "Approve" : d.event == "REQUEST_CHANGES" ? "Request changes" : d.event
+    return [ask, "\(d.blocking) blocking, \(d.nonBlocking) non-blocking", d.mergeRisk.map { "merge risk \($0)" }].compactMap { $0 }.joined(separator: " · ")
+}
+
+/// The Dock icon's badge: what needs you.
+enum Badge {
+    @MainActor static func update(_ n: Int) {
+        NSApp?.dockTile.badgeLabel = n > 0 ? String(n) : nil
+    }
+}
+
+/// Running `wh` and friends, as from a login shell.
+enum Shell {
+    /// `wh`: on PATH, or where `cargo install` and Homebrew put it.
+    static var wh: String {
+        let home = NSHomeDirectory()
+        for p in ["\(home)/.cargo/bin/wh", "/opt/homebrew/bin/wh", "/usr/local/bin/wh"] where FileManager.default.isExecutableFile(atPath: p) {
+            return p
+        }
+        return "wh"
+    }
+
+    static func run(_ cmd: String, _ args: [String]) -> (ok: Bool, output: String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = [cmd] + args
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = "\(NSHomeDirectory())/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+        p.environment = env
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        do {
+            try p.run()
+            p.waitUntilExit()
+        } catch {
+            return (false, "")
+        }
+        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (p.terminationStatus == 0, out)
+    }
+}
