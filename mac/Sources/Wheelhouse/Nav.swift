@@ -83,6 +83,8 @@ final class Nav {
     var linking: String?
     /// Holding a docket: asking why.
     var holding: String?
+    /// Starting an agent on a docket: asking where, and with what.
+    var starting: String?
     /// Done was refused for want of evidence: its checks, or your word.
     var closing: Closing?
     var inspector = true

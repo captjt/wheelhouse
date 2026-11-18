@@ -7,7 +7,7 @@ import { attentionShown } from "./evidence";
 import { go, setTheme, useHub } from "./live";
 import { Kbd, Modal, useToast } from "./ui";
 import { onThisMac, usePane } from "./Pane";
-import { STATUSES } from "./views";
+import { STATUSES, canStartAgent } from "./views";
 import { inboxItems } from "./Inbox";
 
 type Cmd = { id: string; group: string; label: string; icon?: ReactNode; hint?: ReactNode; keywords?: string; run: () => void };
@@ -79,6 +79,7 @@ export function Palette({
       if (d.hold) out.push({ id: "resume", group: d.id, label: `Resume: it's on hold (${d.hold})`, icon: <IconPlay size={15} />, keywords: "hold unhold resume", run: () => void hub.resume(d.id).catch(() => {}) });
       else out.push({ id: "hold", group: d.id, label: "Hold…", icon: <IconPause size={15} />, keywords: "hold pause stop wait", run: () => hub.setDialog({ kind: "hold", id: d.id }) });
       out.push({ id: "checks", group: d.id, label: "Run checks", icon: <IconShield size={15} />, keywords: "verify test lint witnessed", run: () => void hub.runChecks(d.id).catch(() => {}) });
+      if (canStartAgent(d)) out.push({ id: "start-agent", group: d.id, label: "Start an agent…", icon: <IconAgents size={15} />, keywords: "agent claude codex start pane work", run: () => hub.setDialog({ kind: "agent", id: d.id }) });
     }
     // What else needs a look: held, failing, quiet, closed on your word.
     for (const a of attentionShown(hub.state?.attention, asks.map((i) => ({ docket: i.d.id, kind: i.kind }))))
@@ -187,6 +188,91 @@ export function Palette({
             </div>
           );
         })}
+      </div>
+    </Modal>
+  );
+}
+
+/** Start an agent on a docket you already have: it claims this docket, in a new pane. */
+export function StartAgent({ id, onClose }: { id: string; onClose: () => void }) {
+  const hub = useHub();
+  const toast = useToast();
+  const d = hub.byId.get(id);
+  const [folders, setFolders] = useState<string[]>([]);
+  const [cwd, setCwd] = useState(d?.agent?.cwd ?? "");
+  const [app, setApp] = useState<"claude-code" | "codex">(d?.agent?.app === "codex" ? "codex" : "claude-code");
+  const [note, setNote] = useState(`Read wh brief ${id}, then work on its intent.`);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    get<{ folders: string[]; suggested: string | null }>(`/api/folders?docket=${encodeURIComponent(id)}`).then(
+      (r) => {
+        setFolders(r.folders);
+        if (r.suggested) setCwd((c) => c || r.suggested!);
+      },
+      () => {},
+    );
+  }, [id]);
+  const startIt = () => {
+    if (busy || !cwd.trim()) return;
+    setBusy(true);
+    post<{ docket: string }>("/api/agents/start", { app, cwd: cwd.trim(), prompt: note.trim() || undefined, docket: id }).then(
+      () => {
+        toast(`${app === "codex" ? "Codex" : "Claude Code"} is on ${id}, in wheelhouse/${id}`);
+        hub.reload();
+        onClose();
+      },
+      (e: Error) => (setBusy(false), toast(e.message, "error")),
+    );
+  };
+  const keys = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), startIt());
+  };
+  return (
+    <Modal onClose={onClose} className="new-docket">
+      <div className="nd-head">
+        <span className="chip">{id}</span>
+        <span className="muted">›</span>
+        <span>Start an agent</span>
+        <span className="spacer" />
+        <span className="muted small nd-for" title={d?.title}>
+          {d?.title}
+        </span>
+      </div>
+      <textarea
+        autoFocus
+        className="nd-note nd-prompt"
+        placeholder="What should the agent do first? Leave it empty to start it idle."
+        value={note}
+        rows={4}
+        onChange={(e) => setNote(e.target.value)}
+        onKeyDown={keys}
+      />
+      <div className="nd-row">
+        <label className="nd-label">Folder</label>
+        <input className="nd-input" list="wh-start-folders" placeholder="~/git/project" value={cwd} onChange={(e) => setCwd(e.target.value)} onKeyDown={keys} />
+        <datalist id="wh-start-folders">
+          {folders.map((f) => (
+            <option key={f} value={f} />
+          ))}
+        </datalist>
+      </div>
+      <div className="nd-row">
+        <label className="nd-label">Agent</label>
+        <div className="seg">
+          <button className={app === "claude-code" ? "on" : ""} onClick={() => setApp("claude-code")}>
+            Claude Code
+          </button>
+          <button className={app === "codex" ? "on" : ""} onClick={() => setApp("codex")}>
+            Codex
+          </button>
+        </div>
+      </div>
+      <div className="nd-foot">
+        <span className="muted small">A new tab in Rex's wheelhouse session, named {id}. The agent works on this docket and reads its intent.</span>
+        <span className="spacer" />
+        <button className="btn btn-primary" disabled={!cwd.trim() || busy} onClick={startIt}>
+          {busy ? "Starting…" : "Start agent"} <Kbd>⌘↩</Kbd>
+        </button>
       </div>
     </Modal>
   );

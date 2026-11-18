@@ -68,6 +68,7 @@ enum Snapshot {
             }
         },
         Shot(name: "hold", place: .active, select: "D-6", target: .sheet) { nav in nav.holding = "D-6" },
+        Shot(name: "start-agent", place: .active, select: "D-6", target: .sheet) { nav in nav.starting = "D-6" },
         // The real refusal: D-1 has acceptance items and nothing behind them.
         Shot(name: "closing", place: .active, select: "D-1", target: .sheet) { nav in
             Task {
@@ -232,6 +233,7 @@ enum Snapshot {
         nav.creating = nil
         nav.shortcuts = false
         nav.holding = nil
+        nav.starting = nil
         nav.closing = nil
         NotificationCenter.default.post(name: .snapshotTab, object: "docket")
         NotificationCenter.default.post(name: .snapshotOutput, object: nil)

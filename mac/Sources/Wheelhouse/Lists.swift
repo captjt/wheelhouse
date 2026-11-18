@@ -306,6 +306,7 @@ struct DocketMenu: View {
             Button("Hold…") { nav.holding = d.id }
         }
         Button("Run Checks") { Task { await store.runChecks(d.id) } }
+        if d.canStartAgent { Button("Start an Agent…") { nav.starting = d.id } }
         Divider()
         Button("Copy ID") { copy(d.id) }
         Button("Copy Link") { copy("wheelhouse://docket/\(d.id)") }

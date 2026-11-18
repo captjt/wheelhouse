@@ -148,7 +148,7 @@ type Hub = {
 };
 
 /** What the app asks you in a dialog, from anywhere a docket's actions are. */
-export type HubDialog = { kind: "refused"; id: string; message: string } | { kind: "hold"; id: string } | null;
+export type HubDialog = { kind: "refused"; id: string; message: string } | { kind: "hold"; id: string } | { kind: "agent"; id: string } | null;
 
 const HubCtx = createContext<Hub | null>(null);
 
