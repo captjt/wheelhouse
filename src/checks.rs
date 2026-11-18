@@ -36,6 +36,8 @@ pub struct Target {
     /// The commit the change is measured from, for the patch.
     pub base: Option<String>,
     pub specs: Vec<CheckSpec>,
+    /// Folders first on PATH (Build's `path`), as the agents have them.
+    pub path: Vec<String>,
 }
 
 /// A docket's checks: its Build's worktree, or, for an agent's docket, its
@@ -48,12 +50,12 @@ pub fn target(shared: &Shared, docket: &str) -> Result<Target> {
     };
     if let Some(t) = task.filter(|t| t.worktree.as_deref().is_some_and(|w| Path::new(w).join(".git").exists())) {
         let specs = cfg.repos.get(&t.repo).map(|r| r.checks.clone()).unwrap_or_default();
-        return Ok(Target { repo: t.repo.clone(), dir: PathBuf::from(t.worktree.clone().unwrap_or_default()), base: t.base_head.clone(), specs });
+        return Ok(Target { repo: t.repo.clone(), dir: PathBuf::from(t.worktree.clone().unwrap_or_default()), base: t.base_head.clone(), specs, path: cfg.path_dirs.clone() });
     }
     let cwd = state.and_then(|s| s.agent).and_then(|a| a.cwd).map(|c| crate::paths::expand(&c)).ok_or_else(|| anyhow!("{docket} has no worktree or folder to check"))?;
     for (repo, r) in &cfg.repos {
         if cwd.starts_with(&r.checkout) {
-            return Ok(Target { repo: repo.clone(), dir: cwd, base: None, specs: r.checks.clone() });
+            return Ok(Target { repo: repo.clone(), dir: cwd, base: None, specs: r.checks.clone(), path: cfg.path_dirs.clone() });
         }
     }
     bail!("{} isn't in one of Build's repos, so it has no checks", crate::paths::tilde(&cwd.to_string_lossy()))
@@ -72,7 +74,7 @@ fn keep(shared: &Shared, bytes: &[u8]) -> Result<String> {
 
 /// The wall, as agents have it: no tokens, no SSH agent, a gh signed out,
 /// and every push sent nowhere.
-fn walled(cmd: &mut tokio::process::Command, dir: &Path) {
+fn walled(cmd: &mut tokio::process::Command, dir: &Path, path: &[String]) {
     let empty = crate::paths::state_dir().join("gh-empty");
     let _ = std::fs::create_dir_all(&empty);
     for v in ["GH_TOKEN", "GITHUB_TOKEN", "LINEAR_API_KEY", "WH_LINEAR_KEY", "SSH_AUTH_SOCK"] {
@@ -87,7 +89,8 @@ fn walled(cmd: &mut tokio::process::Command, dir: &Path) {
     cmd.env("GH_CONFIG_DIR", &empty)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_SSH_COMMAND", "false")
-        .env("PATH", crate::review::github::command_path())
+        // Your shell's PATH, Build's `path` first: what the builder had.
+        .env("PATH", crate::review::agentcli::agent_path(path))
         .env("WH_CHECK", "1")
         .current_dir(dir)
         .stdin(std::process::Stdio::null())
@@ -95,11 +98,11 @@ fn walled(cmd: &mut tokio::process::Command, dir: &Path) {
 }
 
 /// One check's result: its exit (none when it timed out) and its output.
-async fn run_one(spec: &CheckSpec, dir: &Path) -> (Option<i32>, Vec<u8>, Duration) {
+async fn run_one(spec: &CheckSpec, dir: &Path, path: &[String]) -> (Option<i32>, Vec<u8>, Duration) {
     let shell = std::env::var("SHELL").ok().filter(|s| s.starts_with('/')).unwrap_or_else(|| "/bin/zsh".into());
     let mut cmd = tokio::process::Command::new(shell);
     cmd.arg("-lc").arg(&spec.run);
-    walled(&mut cmd, dir);
+    walled(&mut cmd, dir, path);
     cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     let started = Instant::now();
     let child = match cmd.spawn() {
@@ -149,7 +152,7 @@ async fn run_inner(shared: &Shared, docket: &str, t: &Target, run: &str, why: &s
     };
     let mut results = Vec::new();
     for spec in &t.specs {
-        let (exit, output, took) = run_one(spec, &t.dir).await;
+        let (exit, output, took) = run_one(spec, &t.dir, &t.path).await;
         let ok = exit == Some(0);
         let out = keep(shared, &output)?;
         let mut blobs = vec![out.clone()];
@@ -277,11 +280,11 @@ mod tests {
         let s = CheckSpec { name: "env".into(), run: "echo token=${GH_TOKEN:-none} ssh=${SSH_AUTH_SOCK:-none} check=$WH_CHECK; exit 3".into(), required: true, timeout: 30 };
         // SAFETY: this test alone reads these, in its own child.
         unsafe { std::env::set_var("GH_TOKEN", "secret") };
-        let (exit, out, _) = run_one(&s, &dir).await;
+        let (exit, out, _) = run_one(&s, &dir, &[]).await;
         assert_eq!(exit, Some(3));
         assert!(String::from_utf8_lossy(&out).contains("token=none ssh=none check=1"), "{}", String::from_utf8_lossy(&out));
         let quick = CheckSpec { name: "slow".into(), run: "sleep 5".into(), required: true, timeout: 1 };
-        let (exit, out, _) = run_one(&quick, &dir).await;
+        let (exit, out, _) = run_one(&quick, &dir, &[]).await;
         assert_eq!(exit, None);
         assert!(String::from_utf8_lossy(&out).contains("timed out"));
         let _ = std::fs::remove_dir_all(&dir);
