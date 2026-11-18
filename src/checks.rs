@@ -12,7 +12,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -25,8 +25,8 @@ use crate::review::rounds::git;
 /// The most of a check's output that's kept: its end, where failures are.
 const OUTPUT_MAX: usize = 256 * 1024;
 
-/// Dockets with a run going, so two never overlap.
-static RUNNING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+/// Dockets with a run going, and its name, so two never overlap.
+static RUNNING: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
 
 /// Where a docket's checks run, and which.
 #[derive(Clone, Debug)]
@@ -123,19 +123,11 @@ async fn run_one(spec: &CheckSpec, dir: &Path, path: &[String]) -> (Option<i32>,
 
 /// Run a docket's checks now, at its worktree's HEAD, and write what the
 /// hub saw. `run` names this run, so its entries can be found together.
-pub async fn run(shared: &Shared, docket: &str, t: &Target, run: &str, why: &str) -> Result<Vec<Value>> {
+async fn run(shared: &Shared, docket: &str, t: &Target, run: &str, why: &str) -> Result<Vec<Value>> {
     if t.specs.is_empty() {
         bail!("{} has no checks: add `checks` to its table in build.lua", t.repo);
     }
-    {
-        let mut r = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
-        if !r.insert(docket.to_string()) {
-            bail!("{docket}'s checks are already running");
-        }
-    }
-    let out = run_inner(shared, docket, t, run, why).await;
-    RUNNING.lock().unwrap_or_else(|e| e.into_inner()).remove(docket);
-    out
+    run_inner(shared, docket, t, run, why).await
 }
 
 async fn run_inner(shared: &Shared, docket: &str, t: &Target, run: &str, why: &str) -> Result<Vec<Value>> {
@@ -179,12 +171,23 @@ async fn run_inner(shared: &Shared, docket: &str, t: &Target, run: &str, why: &s
     Ok(results)
 }
 
-/// Start a run in the background; its entries say how it went.
+/// Start a run in the background; its entries say how it went. It's
+/// marked running before this returns, so a step that looks right after
+/// sees it going. When one is going already, that one's name comes back.
 pub fn spawn(shared: &Shared, docket: &str, t: Target, why: &str) -> String {
     let run = format!("{}-{}", docket.to_lowercase(), crate::time::now_ms().replace([':', '.', '-'], ""));
+    {
+        let mut going = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(r) = going.get(docket) {
+            return r.clone();
+        }
+        going.insert(docket.to_string(), run.clone());
+    }
     let (s, d, r, w) = (shared.clone(), docket.to_string(), run.clone(), why.to_string());
     tokio::spawn(async move {
-        if let Err(e) = self::run(&s, &d, &t, &r, &w).await {
+        let out = self::run(&s, &d, &t, &r, &w).await;
+        RUNNING.lock().unwrap_or_else(|e| e.into_inner()).remove(&d);
+        if let Err(e) = out {
             say!("checks: {d}: {e:#}");
             let mut core = s.lock();
             let _ = core.append(&d, "observed", &Who::Hub, Some(format!("The checks didn't run: {e:#}")), json!({ "what": "check-error", "run": r }));
@@ -197,7 +200,7 @@ pub fn spawn(shared: &Shared, docket: &str, t: Target, why: &str) -> String {
 }
 
 pub fn running(docket: &str) -> bool {
-    RUNNING.lock().unwrap_or_else(|e| e.into_inner()).contains(docket)
+    RUNNING.lock().unwrap_or_else(|e| e.into_inner()).contains_key(docket)
 }
 
 /// Each check's latest result on a docket, by name.
