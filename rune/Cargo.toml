@@ -68,3 +68,12 @@ debug = false
 [profile.release]
 codegen-units = 16
 incremental = true
+
+# What a release would ship: one codegen unit and LTO, for the runtime and
+# size numbers (docs/rune.md's profile). `release` stays quick to rebuild.
+[profile.ship]
+inherits = "release"
+codegen-units = 1
+lto = "fat"
+incremental = false
+strip = true
