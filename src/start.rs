@@ -62,7 +62,11 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
         let session = core.mirror.sessions.values().find(|s| s.label == SESSION).map(|s| s.session_id.clone());
         (id, session)
     };
-    let mut argv = vec![bin.to_string()];
+    // `rex run` starts the agent straight from Rex Server, with its short
+    // login PATH: no nvm, pyenv or the rest `.zshrc` adds, so hooks that run
+    // `node` fail. It gets your shell's PATH, as Build's and Review's do.
+    let path = tokio::task::spawn_blocking(|| crate::review::agentcli::agent_path(&[])).await.context("reading your shell's PATH")?;
+    let mut argv = vec!["env".to_string(), format!("PATH={path}"), bin.to_string()];
     if let Some(p) = prompt {
         // After `--`, a prompt that starts with `-` is a prompt, never a flag.
         argv.push("--".into());
