@@ -219,3 +219,9 @@ export const IconTable = glyph("M2.5 3h11v10h-11V3ZM2.5 6.5h11M2.5 9.8h11M7 6.5V
 export const IconBack = glyph("M10 3 5 8l5 5");
 export const IconMore = glyph("M2.3 8a1.25 1.25 0 1 0 2.5 0a1.25 1.25 0 1 0-2.5 0ZM6.75 8a1.25 1.25 0 1 0 2.5 0a1.25 1.25 0 1 0-2.5 0ZM11.2 8a1.25 1.25 0 1 0 2.5 0a1.25 1.25 0 1 0-2.5 0Z", true);
 export const IconInfo = glyph("M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM8 7.3v3.4M8 5.2h.01");
+// Artifacts.
+export const IconFile = glyph("M4 2.5h5l3 3v8H4v-11ZM9 2.5v3h3M6 8.5h4M6 11h4");
+export const IconBraces = glyph("M6 2.5c-1.5 0-2 .7-2 2v1.6c0 .8-.4 1.4-1.3 1.4.9 0 1.3.6 1.3 1.4v2.6c0 1.3.5 2 2 2M10 2.5c1.5 0 2 .7 2 2v1.6c0 .8.4 1.4 1.3 1.4-.9 0-1.3.6-1.3 1.4v2.6c0 1.3-.5 2-2 2");
+export const IconImage = glyph("M2.5 3.5h11v9h-11v-9ZM2.5 10.5l3-3 3 3 2-2 3 3M10.5 6.5h.01");
+export const IconGlobe = glyph("M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2.5 8h11M8 2.5c1.6 1.6 2.3 3.5 2.3 5.5S9.6 11.9 8 13.5M8 2.5C6.4 4.1 5.7 6 5.7 8s.7 3.9 2.3 5.5");
+export const IconLinkOut = glyph("M7 9a2.8 2.8 0 0 0 4 0l2-2a2.8 2.8 0 0 0-4-4l-.8.8M9 7a2.8 2.8 0 0 0-4 0l-2 2a2.8 2.8 0 0 0 4 4l.8-.8");

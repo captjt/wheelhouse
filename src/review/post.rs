@@ -464,7 +464,7 @@ pub async fn run(a: &Args<'_>, draft: &Value) -> Result<Value, Refusal> {
         .map_err(|e| Refusal::Other(format!("GitHub refused the review: {e:#}")))?;
     let out: Value = serde_json::from_str(&out).unwrap_or_default();
     let inline = r.payload["comments"].as_array().map_or(0, Vec::len);
-    Ok(json!({ "review_id": out["id"], "state": out["state"], "url": out["html_url"], "inline": inline, "replies": replied, "merge_risk": risk }))
+    Ok(json!({ "review_id": out["id"], "state": out["state"], "url": out["html_url"], "inline": inline, "replies": replied, "merge_risk": risk, "preview": preview_text(&r) }))
 }
 
 #[cfg(test)]

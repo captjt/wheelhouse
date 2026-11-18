@@ -48,6 +48,14 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/approve", post(approve))
         .route("/api/dockets/{id}/deny", post(deny))
         .route("/api/dockets/{id}/export", get(export))
+        .route("/api/dockets/{id}/record", get(record_view))
+        .route("/api/dockets/{id}/record/{seq}", get(record_entry))
+        .route("/api/dockets/{id}/verify", get(verify_one))
+        .route(
+            "/api/dockets/{id}/artifacts",
+            get(artifacts_list).post(artifacts_attach).layer(axum::extract::DefaultBodyLimit::max(crate::artifacts::MAX * 4 / 3 + (1 << 20))),
+        )
+        .route("/api/blobs/{digest}", get(blob))
         .route("/api/verify", get(verify_all))
         .route("/api/dockets/{id}/intent", post(set_intent))
         .route("/api/dockets/{id}/linear", post(link_linear))
@@ -1090,10 +1098,140 @@ async fn verify_all(State(shared): State<Shared>) -> ApiResult {
     let core = shared.lock();
     let mut reports = Vec::new();
     for id in core.store.docket_ids().map_err(internal)? {
-        reports.push(core.verify(&id).map_err(internal)?);
+        reports.push(core.verify_full(&id).map_err(internal)?);
     }
     reports.sort_by_key(|r| r.docket.trim_start_matches("D-").parse::<i64>().unwrap_or(0));
     Ok(Json(json!({ "ok": reports.iter().all(|r| r.ok), "dockets": reports })))
+}
+
+/// One docket's full check: the record, and every file's bytes.
+async fn verify_one(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let core = shared.lock();
+    if core.store.state(&id).map_err(internal)?.is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
+    }
+    Ok(Json(serde_json::to_value(core.verify_full(&id).map_err(internal)?).unwrap_or_default()))
+}
+
+/// The record as the app reads it: every entry with its id, chain value,
+/// key and mark, the keys that signed, and the full check, with each
+/// problem placed on its entry.
+async fn record_view(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let core = shared.lock();
+    let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+    let names: std::collections::BTreeMap<String, String> = core.store.keys().map_err(internal)?.into_iter().collect();
+    let report = core.verify_full(&id).map_err(internal)?;
+    let on = |seq: i64| -> Vec<&String> { report.problems.iter().filter(|p| p.starts_with(&format!("#{seq}:"))).collect() };
+    let mut entries = Vec::new();
+    let mut signed: std::collections::BTreeMap<String, usize> = Default::default();
+    for s in core.store.entries(&id).map_err(internal)? {
+        let e = s.entry().map_err(internal)?;
+        let keyid = s.keyid();
+        if let Some(k) = &keyid {
+            *signed.entry(k.clone()).or_default() += 1;
+        }
+        entries.push(json!({
+            "seq": s.seq, "id": s.id, "chain": s.chain, "kind": e.kind, "at": e.at, "actor": e.actor,
+            "body": e.body, "data": e.data, "blobs": e.blobs, "replaces": e.replaces, "mark": mark(&e),
+            "keyid": keyid, "key": keyid.as_ref().and_then(|k| names.get(k)), "problems": on(s.seq),
+        }));
+    }
+    let keys: Vec<Value> = signed.iter().map(|(k, n)| json!({ "keyid": k, "name": names.get(k), "entries": n })).collect();
+    Ok(Json(json!({ "docket": id, "title": st.title, "head": st.head, "short_head": st.short_head(), "keys": keys, "verify": report, "entries": entries })))
+}
+
+/// One entry exactly as it's stored and signed: its envelope, and the
+/// payload the signature covers.
+async fn record_entry(State(shared): State<Shared>, Path((id, seq)): Path<(String, i64)>) -> ApiResult {
+    let core = shared.lock();
+    let s = core.store.entries(&id).map_err(internal)?.into_iter().find(|s| s.seq == seq).ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no entry #{seq}")))?;
+    let env: record::Envelope = serde_json::from_str(&s.envelope).map_err(|e| internal(e.into()))?;
+    let payload = env.payload_bytes().map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    Ok(Json(json!({ "seq": s.seq, "id": s.id, "chain": s.chain, "envelope": s.envelope, "payload": payload, "export_line": json!({ "seq": s.seq, "id": s.id, "chain": s.chain, "envelope": s.envelope }).to_string() })))
+}
+
+async fn artifacts_list(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let core = shared.lock();
+    Ok(Json(json!({ "artifacts": crate::artifacts::list(&core, &id).map_err(internal)? })))
+}
+
+#[derive(Deserialize)]
+struct Attach {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    /// The file's bytes, base64.
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    block: Option<String>,
+}
+
+/// Keep a file or a link on a docket: `wh attach`, or the app.
+async fn artifacts_attach(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<Attach>) -> ApiResult {
+    use base64::Engine;
+    let mut core = shared.lock();
+    if core.store.state(&id).map_err(internal)?.is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
+    }
+    let from = crate::messages::caller(&core, req.block.as_deref());
+    let bytes = match &req.content {
+        Some(c) => Some(base64::engine::general_purpose::STANDARD.decode(c).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("content isn't base64: {e}")))?),
+        None => None,
+    };
+    let name = req.name.clone().or_else(|| req.url.as_ref().map(|u| u.rsplit('/').find(|p| !p.is_empty()).unwrap_or("link").to_string())).unwrap_or_else(|| "file".into());
+    let source = if matches!(from.who, Who::Agent { .. }) { "agent" } else { "you" };
+    let title = req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| crate::artifacts::clean_name(&name));
+    let a = crate::artifacts::New { title, name, bytes, url: req.url.clone(), source: source.into(), group: Some("Attached".into()), extra: json!({}) };
+    let (seq, new) = crate::artifacts::attach(&mut core, &id, &from.who, a).map_err(bad)?;
+    Ok(Json(json!({ "seq": seq, "new": new })))
+}
+
+#[derive(Deserialize)]
+struct BlobQ {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    download: Option<String>,
+}
+
+/// A kept file, by its hash. It can't act as the app: HTML and SVG are
+/// sandboxed (scripts, if any, run with no access to this origin), and
+/// nothing is sniffed into another type.
+async fn blob(State(shared): State<Shared>, Path(digest): Path<String>, axum::extract::Query(q): axum::extract::Query<BlobQ>) -> Response {
+    let hex = digest.strip_prefix("sha256:").unwrap_or(&digest).to_string();
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return (StatusCode::BAD_REQUEST, "not a sha256 digest").into_response();
+    }
+    let bytes = match shared.lock().store.blob(&hex) {
+        Ok(Some(b)) => b,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no such file").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    };
+    let name = crate::artifacts::clean_name(q.name.as_deref().unwrap_or("file"));
+    let mut ty = crate::artifacts::media_type(&name).to_string();
+    if ty.starts_with("text/") || ty == "application/json" || ty == "image/svg+xml" {
+        ty.push_str("; charset=utf-8");
+    }
+    let disposition = format!("{}; filename=\"{}\"", if q.download.is_some() { "attachment" } else { "inline" }, name.replace('"', ""));
+    // A PDF or a raster image can't script, and a sandbox stops the
+    // browser's PDF viewer; everything else is sandboxed.
+    let plain = ty.starts_with("application/pdf") || (ty.starts_with("image/") && !ty.starts_with("image/svg"));
+    let csp = if plain { "frame-ancestors 'self'" } else { "sandbox allow-scripts allow-popups; frame-ancestors 'self'" };
+    (
+        [
+            (header::CONTENT_TYPE, ty),
+            (header::CONTENT_DISPOSITION, disposition),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+            (header::CONTENT_SECURITY_POLICY, csp.into()),
+            (header::CACHE_CONTROL, "private, max-age=31536000, immutable".into()),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]

@@ -6,6 +6,7 @@ macro_rules! say {
 }
 
 mod agents;
+mod artifacts;
 mod build;
 mod brief;
 mod linear;
@@ -168,6 +169,18 @@ enum Cmd {
     SetupLinear,
     /// Add a note to a docket. From an agent's pane, the note is the agent's.
     Note { docket: String, text: String },
+    /// Keep a file (a report, a page, an image) or a link (a Claude artifact)
+    /// with a docket: the record pins a file by its hash. From an agent's
+    /// pane, its own docket.
+    Attach {
+        /// A file, or an https:// link.
+        what: String,
+        /// What it is, for people. Defaults to the file's name.
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        docket: Option<String>,
+    },
     /// Rename a docket, or set its status (todo, in_progress, done, dropped).
     Set {
         docket: String,
@@ -292,6 +305,7 @@ fn main() {
                 println!("{d} #{}", v["seq"]);
             })
         }
+        Some(Cmd::Attach { what, title, docket }) => attach(&what, title, docket),
         Some(Cmd::Set { docket, title, status }) => {
             let d = normalize(&docket);
             client::json("POST", &format!("/api/dockets/{d}/set"), Some(&json!({ "title": title, "status": status }))).map(|v| {
@@ -664,6 +678,39 @@ fn intent(d: &str, text: Option<String>) -> Result<()> {
     }
 }
 
+fn attach(what: &str, title: Option<String>, docket: Option<String>) -> Result<()> {
+    use base64::Engine;
+    let block = std::env::var("REX_BLOCK").ok();
+    let d = match docket {
+        Some(d) => normalize(&d),
+        None => {
+            let b = block.clone().ok_or_else(|| anyhow::anyhow!("name a docket (--docket D-12), or run this from an agent's pane"))?;
+            client::json("GET", &format!("/api/whoami?block={b}"), None)?["docket"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| anyhow::anyhow!("this pane has no docket; name one with --docket"))?
+        }
+    };
+    let body = if what.starts_with("https://") {
+        json!({ "url": what, "title": title, "block": block })
+    } else {
+        let path = std::path::Path::new(what);
+        let bytes = std::fs::read(path).with_context(|| format!("reading {what}"))?;
+        anyhow::ensure!(bytes.len() <= artifacts::MAX, "{what} is {} MB; artifacts are at most {} MB", bytes.len() >> 20, artifacts::MAX >> 20);
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+        json!({ "name": name, "content": base64::engine::general_purpose::STANDARD.encode(&bytes), "title": title, "block": block })
+    };
+    let (status, out) = client::call("POST", &format!("/api/dockets/{d}/artifacts"), Some(&body), std::time::Duration::from_secs(120))?;
+    let v: Value = serde_json::from_slice(&out).unwrap_or_default();
+    anyhow::ensure!((200..300).contains(&status), "{}", v["error"].as_str().unwrap_or("the hub refused it"));
+    if v["new"].as_bool() == Some(true) {
+        println!("{d} #{}: kept", v["seq"]);
+    } else {
+        println!("{d}: already kept, as #{}", v["seq"]);
+    }
+    Ok(())
+}
+
 fn brief(d: Option<String>) -> Result<()> {
     let path = match d {
         Some(d) => format!("/api/dockets/{d}/brief"),
@@ -804,7 +851,7 @@ fn verify(docket: Option<String>, file: Option<PathBuf>) -> Result<()> {
         return verify_file(&file);
     }
     let reports: Vec<Value> = match docket {
-        Some(d) => vec![client::json("GET", &format!("/api/dockets/{d}"), None)?["verify"].clone()],
+        Some(d) => vec![client::json("GET", &format!("/api/dockets/{d}/verify"), None)?],
         None => client::json("GET", "/api/verify", None)?["dockets"].as_array().cloned().unwrap_or_default(),
     };
     let mut bad = 0;

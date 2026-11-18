@@ -201,7 +201,7 @@ export function useMenu() {
 export function Modal(p: { children: ReactNode; onClose: () => void; className?: string }) {
   const phone = usePhone();
   if (phone && !p.className?.includes("pane-sheet")) {
-    const tall = /palette|new-docket|linear-modal|history-modal|preview-modal/.test(p.className ?? "");
+    const tall = /palette|new-docket|linear-modal|history-modal|preview-modal|artifact-modal|record-modal/.test(p.className ?? "");
     return (
       <Sheet onClose={p.onClose} className={`modal-sheet ${p.className ?? ""}`} tall={tall}>
         {p.children}

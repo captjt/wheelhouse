@@ -2,6 +2,7 @@
 //! tracks, behind one lock. Every entry goes through `Core::append`, which
 //! signs it as its actor, chains it, and folds it into the docket's state.
 
+use sha2::Digest;
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -102,11 +103,17 @@ impl Core {
 
     /// Sign, chain, store and fold one entry.
     pub fn append(&mut self, docket: &str, kind: &str, who: &Who, body: Option<String>, data: Value) -> Result<Stored> {
+        self.append_with(docket, kind, who, body, data, Vec::new())
+    }
+
+    /// `append`, naming files (`sha256:<hex>`, already in the blob store).
+    pub fn append_with(&mut self, docket: &str, kind: &str, who: &Who, body: Option<String>, data: Value, blobs: Vec<String>) -> Result<Stored> {
         let (actor, key_name) = self.actor(who);
         let at = crate::time::now_ms();
         let mut e = Entry::new(docket, kind, &at, actor);
         e.body = body;
         e.data = data;
+        e.blobs = blobs;
         let (envelope, keyid, new_key) = {
             let (key, new) = self.keys.get_or_create(&key_name)?;
             (Envelope::sign(&e.to_bytes(), key).to_string_compact(), key.keyid(), new)
@@ -134,10 +141,40 @@ impl Core {
         let _ = self.events.send(json!({ "type": "live" }));
     }
 
+    /// Check a docket's record, and that every file it names is kept.
     pub fn verify(&self, docket: &str) -> Result<verify::Report> {
+        self.check(docket, false)
+    }
+
+    /// `verify`, and every file's bytes against the hash the record names.
+    pub fn verify_full(&self, docket: &str) -> Result<verify::Report> {
+        self.check(docket, true)
+    }
+
+    fn check(&self, docket: &str, hash: bool) -> Result<verify::Report> {
         let known: BTreeSet<String> = self.store.keys()?.into_iter().map(|(id, _)| id).collect();
         let entries = self.store.entries(docket)?;
-        Ok(verify::verify(docket, &entries, |k| known.contains(k)))
+        let mut r = verify::verify(docket, &entries, |k| known.contains(k));
+        for s in &entries {
+            let Ok(e) = s.entry() else { continue };
+            for b in &e.blobs {
+                let hex = b.strip_prefix("sha256:").unwrap_or(b);
+                let problem = if hash {
+                    match self.store.blob(hex)? {
+                        None => Some("is missing"),
+                        Some(bytes) if crate::record::hex::encode(&sha2::Sha256::digest(&bytes)) != hex => Some("doesn't match its hash: it was changed"),
+                        Some(_) => None,
+                    }
+                } else {
+                    (!self.store.has_blob(hex)?).then_some("is missing")
+                };
+                if let Some(p) = problem {
+                    r.problems.push(format!("#{}: its file {} {p}", s.seq, &b[..b.len().min(19)]));
+                }
+            }
+        }
+        r.ok = r.problems.is_empty();
+        Ok(r)
     }
 
     /// Fold every docket again from its entries, and say which saved states

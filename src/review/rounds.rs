@@ -1032,9 +1032,49 @@ pub async fn post(shared: &Shared, key: &str, dry: bool, asker: Asker) -> Result
     if let (Some(d), Some(url)) = (super::docket_of(&core, key), res["url"].as_str()) {
         core.append(&d, "link", &Who::Hub, None, json!({ "kind": "github-review", "url": url, "round": e.round, "review_id": res["review_id"] }))?;
     }
+    keep_round(&mut core, &e, res["preview"].as_str());
     core.review.attention.remove(key);
     core.review.check_now.notify_one();
     Ok(res)
+}
+
+/// Keep the round's work on its docket before cleanup removes the
+/// worktrees: each reviewer's report and draft, the checked review, the
+/// checker's notes, the merge risk, and the review as it was posted. A
+/// file that isn't there is skipped; a failure is logged, never the post's.
+fn keep_round(core: &mut crate::hub::Core, e: &Pr, posted: Option<&str>) {
+    let Some(docket) = super::docket_of(core, &e.key()) else { return };
+    let Some(primary) = e.worktree.as_deref().map(PathBuf::from) else { return };
+    let round = e.round;
+    let dir = primary.join(format!(".tmp/rounds/{round}"));
+    let mut files: Vec<(PathBuf, String, String, &str, Option<String>)> = Vec::new();
+    for (i, r) in e.round_reviewer_list().iter().enumerate() {
+        let copied = dir.join("reviewers").join(&r.name);
+        let own = r.worktree.as_deref().map(|w| PathBuf::from(w).join(format!(".tmp/rounds/{round}")));
+        let base = if i == 0 { dir.clone() } else if copied.exists() { copied } else { own.unwrap_or(copied) };
+        files.push((base.join("report.md"), format!("{}'s report", r.name), format!("{}-report.md", r.name), "report", Some(r.name.clone())));
+        files.push((base.join("review.json"), format!("{}'s draft review", r.name), format!("{}-review.json", r.name), "draft", Some(r.name.clone())));
+    }
+    files.push((dir.join("review.verified.json"), "The checked review".into(), "review.verified.json".into(), "checked", None));
+    files.push((dir.join("checker.md"), "The checker's notes".into(), "checker.md".into(), "checker", None));
+    files.push((dir.join("merge-risk.json"), "Merge risk".into(), "merge-risk.json".into(), "merge-risk", None));
+    let group = Some(format!("Round {round}"));
+    let mut keep = |title: String, name: String, bytes: Vec<u8>, role: &str, reviewer: Option<String>| {
+        let a = crate::artifacts::New { title, name, bytes: Some(bytes), url: None, source: "review".into(), group: group.clone(), extra: json!({ "round": round, "role": role, "reviewer": reviewer }) };
+        if let Err(err) = crate::artifacts::attach(core, &docket, &Who::Hub, a) {
+            say!("review: {}: keeping round {round}'s files: {err:#}", e.short());
+        }
+    };
+    if let Some(text) = posted.filter(|t| !t.trim().is_empty()) {
+        keep("The review as posted".into(), format!("round-{round}-posted.md"), text.as_bytes().to_vec(), "posted", None);
+    }
+    for (path, title, name, role, reviewer) in files {
+        if let Ok(bytes) = std::fs::read(&path)
+            && !bytes.is_empty()
+        {
+            keep(title, name, bytes, role, reviewer);
+        }
+    }
 }
 
 /// Drop the round's review: nothing goes to GitHub.
@@ -1069,6 +1109,7 @@ pub async fn dismiss(shared: &Shared, key: &str) -> Result<Value> {
     let mut core = shared.lock();
     super::save(&mut core, &mut e)?;
     super::event(&mut core, &e, "dismissed", json!({ "round": e.round, "head": head }), &Who::Owner)?;
+    keep_round(&mut core, &e, None);
     core.review.attention.remove(key);
     core.review.check_now.notify_one();
     Ok(json!({ "dismissed": true, "round": e.round }))
@@ -1203,6 +1244,52 @@ pub async fn pickup(shared: &Shared, repo: &str, n: i64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rounds_work_is_kept_on_its_docket() {
+        let dir = std::env::temp_dir().join(format!("wh-keep-{}", std::process::id()));
+        let (main, other) = (dir.join("main"), dir.join("other"));
+        let out = main.join(".tmp/rounds/2");
+        std::fs::create_dir_all(out.join("reviewers/codex")).unwrap();
+        std::fs::create_dir_all(other.join(".tmp/rounds/2")).unwrap();
+        std::fs::write(out.join("report.md"), "# claude\nAll good.").unwrap();
+        std::fs::write(out.join("review.json"), r#"{"event":"APPROVE","verdict":"Fine.","findings":[]}"#).unwrap();
+        std::fs::write(out.join("reviewers/codex/report.md"), "# codex\nOne nit.").unwrap();
+        std::fs::write(out.join("review.verified.json"), r#"{"event":"APPROVE","verdict":"Fine, checked.","findings":[]}"#).unwrap();
+        std::fs::write(out.join("merge-risk.json"), r#"{"alignment":{"verdict":"good","gaps":[]}}"#).unwrap();
+        let mut e = Pr::new("o/api", 7);
+        e.round = 2;
+        e.state = "reviewing".into();
+        e.worktree = Some(main.display().to_string());
+        for (name, wt, primary) in [("claude", &main, true), ("codex", &other, false)] {
+            e.reviewers.insert(name.into(), super::super::pr::Reviewer { name: name.into(), agent: name.into(), primary, worktree: Some(wt.display().to_string()), ..Default::default() });
+            e.round_reviewers.push(name.into());
+        }
+        let mut core = crate::hub::test_core();
+        let d = super::super::save(&mut core, &mut e).unwrap();
+        keep_round(&mut core, &e, Some("APPROVE on abc\n\nFine, checked."));
+        let l = crate::artifacts::list(&core, &d).unwrap();
+        let mut got: Vec<(String, String)> = l.iter().map(|a| (a["title"].as_str().unwrap().to_string(), a["name"].as_str().unwrap().to_string())).collect();
+        got.sort();
+        assert_eq!(
+            got,
+            [
+                ("Merge risk", "merge-risk.json"),
+                ("The checked review", "review.verified.json"),
+                ("The review as posted", "round-2-posted.md"),
+                ("claude's draft review", "claude-review.json"),
+                ("claude's report", "claude-report.md"),
+                ("codex's report", "codex-report.md"),
+            ]
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+        );
+        assert!(l.iter().all(|a| a["group"] == "Round 2" && a["round"] == 2 && a["source"] == "review"));
+        // Kept twice (a post after a dry run, say): once.
+        keep_round(&mut core, &e, Some("APPROVE on abc\n\nFine, checked."));
+        assert_eq!(crate::artifacts::list(&core, &d).unwrap().len(), 6);
+        assert!(core.verify_full(&d).unwrap().ok);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn labels_fit_and_ports_follow_the_reviewer() {
