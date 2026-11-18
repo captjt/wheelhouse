@@ -237,9 +237,17 @@ Not filed (Rune takes issues only; Jordan's call):
 6. Headless runs and work off the UI thread: a way to hold the virtual clock
    until a request (`Latest`, a thread's `AppHandle::update`) lands.
 
+### Trying it on your own dockets
+
+Since the trial, Wheelhouse Dev (`just dev-install`, on `main`) runs a
+second hub on :7600 with a copy of your dockets and nothing live. The
+panel's bundle follows it: `rune/scripts/bundle.sh`, then `open
+"rune/target/Wheelhouse Rune.app"`. It shows the panel, wears the hub's DEV
+badge, and ⌃⌥⌘K brings it back, beside Wheelhouse.app's ⌥⌘K and Wheelhouse
+Dev's ⇧⌥⌘K. What it answers there stays in the copy.
+
 ### Left by hand
 
-Typing with a real keyboard and input method, and listening to VoiceOver:
-with the world up (`PORT=7458 scripts/screenshots.sh --serve`), `cd rune &&
-cargo run --release -- --show`, then ⌃⌥⌘K from any app. Type in Japanese
-(にほん, then Return), turn VoiceOver on (⌘F5), and arrow through the list.
+Typing with a real keyboard and input method, and listening to VoiceOver,
+in the panel opened as above: type in Japanese (にほん, then Return), turn
+VoiceOver on (⌘F5), and arrow through the list.
