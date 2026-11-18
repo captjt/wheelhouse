@@ -102,6 +102,18 @@ struct RecapScreen: View {
                     }
                 }
             }
+            let bs = d["builds"]
+            if !bs["list"].array.isEmpty {
+                section("Builds") {
+                    Text("\(plural(bs["opened"].int ?? 0, "PR")) opened · \(plural(bs["rounds"].int ?? 0, "address round")) (\(bs["replies"].int ?? 0) \((bs["replies"].int ?? 0) == 1 ? "reply" : "replies")) · \(bs["merged"].int ?? 0) merged").font(.system(size: 12.5)).foregroundStyle(K.muted)
+                    ForEach(Array(bs["list"].array.enumerated()), id: \.offset) { _, x in
+                        let meta = [x["pr"].int.map { "#\($0)" }, x["opened"].bool ? "opened" : nil, (x["rounds"].int ?? 0) > 0 ? plural(x["rounds"].int ?? 0, "round") : nil, x["outcome"].str].compactMap { $0 }.joined(separator: " · ")
+                        RecapRow(icon: AnyView(Image(systemName: "hammer").foregroundStyle(x["outcome"].str == "merged" ? K.working : K.accent)), key: x["id"].str ?? "", title: x["title"].str ?? "", meta: meta, detail: nil, at: x["at"].str) {
+                            if let id = x["id"].str { nav.show(id, store: store) }
+                        }
+                    }
+                }
+            }
             section("You") {
                 let decisions = you["decisions"].array
                 Text("\(plural(decisions.count, "decision")) · \(plural(you["approved"].int ?? 0, "approval")) · \(you["denied"].int ?? 0) denied · \(plural(you["intents"].int ?? 0, "intent edit"))\((you["asked"].int ?? 0) > 0 ? " · agents asked you \(plural(you["asked"].int!, "time"))" : "")").font(.system(size: 12.5)).foregroundStyle(K.muted)

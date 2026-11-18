@@ -130,12 +130,17 @@ pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value
     let mut turns_per_day = vec![0; days];
     let mut done = Vec::new();
     let mut decisions = Vec::new();
+    // Builds: PRs opened, address rounds pushed (and their replies), and how
+    // each ended, from the events Build puts on its docket.
+    let mut builds = Vec::new();
+    let (mut b_opened, mut b_rounds, mut b_replies, mut b_merged) = (0, 0, 0, 0);
     for st in core.store.states()? {
         if at(Some(&st.updated_at)).is_some_and(|u| u < w.since) {
             continue;
         }
         let mut d_turns = 0;
         let mut finished = None;
+        let mut b: Option<Value> = None;
         for s in core.store.entries(&st.id)? {
             let Ok(e) = s.entry() else { continue };
             let t = at(Some(&e.at));
@@ -143,6 +148,33 @@ pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value
                 continue;
             }
             let you = e.actor.typ == "person";
+            if e.kind == "observed" && e.data["what"] == "build-event" {
+                let x = b.get_or_insert_with(|| json!({ "id": st.id, "title": st.title, "opened": false, "rounds": 0, "replies": 0, "outcome": null, "at": e.at }));
+                x["at"] = json!(e.at);
+                match e.data["event"].as_str() {
+                    Some("opened") => {
+                        b_opened += 1;
+                        x["opened"] = json!(true);
+                        x["pr"] = e.data["pr"].clone();
+                        x["url"] = e.data["url"].clone();
+                    }
+                    Some("pushed-round") => {
+                        b_rounds += 1;
+                        let r = e.data["replies"].as_i64().unwrap_or(0);
+                        b_replies += r;
+                        x["rounds"] = json!(x["rounds"].as_i64().unwrap_or(0) + 1);
+                        x["replies"] = json!(x["replies"].as_i64().unwrap_or(0) + r);
+                    }
+                    Some(o @ ("merged" | "closed" | "discarded")) => {
+                        if o == "merged" {
+                            b_merged += 1;
+                        }
+                        x["outcome"] = json!(o);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             match e.kind.as_str() {
                 "open" if e.data["protocol"] == "agent" => started += 1,
                 "turn" => {
@@ -171,6 +203,17 @@ pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value
                 _ => {}
             }
         }
+        if let Some(mut x) = b {
+            if let Ok(Some(t)) = crate::build::get(core, &st.id) {
+                x["key"] = json!(t.key);
+                x["repo"] = json!(t.repo);
+                if x["url"].is_null() {
+                    x["url"] = json!(t.pr_url);
+                    x["pr"] = json!(t.pr_number);
+                }
+            }
+            builds.push(x);
+        }
         if let Some(when) = finished
             && st.status == "done"
             && st.protocol != "review"
@@ -179,6 +222,7 @@ pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value
         }
     }
     done.sort_by(|a, b| b["at"].as_str().cmp(&a["at"].as_str()));
+    builds.sort_by(|a, b| b["at"].as_str().cmp(&a["at"].as_str()));
     decisions.sort_by(|a, b| b["at"].as_str().cmp(&a["at"].as_str()));
 
     let mut out = json!({
@@ -192,6 +236,7 @@ pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value
             "prs": { "merged": merged, "open": open, "closed": closed },
         },
         "agents": { "started": started, "turns": turns, "per_day": turns_per_day, "prompts": prompts, "done": done },
+        "builds": { "opened": b_opened, "rounds": b_rounds, "replies": b_replies, "merged": b_merged, "list": builds },
         "you": { "decisions": decisions, "approved": ok, "denied": denied, "asked": asked, "answered": answered, "intents": intents },
     });
     out["markdown"] = json!(markdown(&out, label));
@@ -294,6 +339,41 @@ pub fn markdown(r: &Value, label: &str) -> String {
         }
         md.push('\n');
     }
+    let bs = &r["builds"];
+    let list = bs["list"].as_array().cloned().unwrap_or_default();
+    if !list.is_empty() {
+        let s = |k: i64, w: &str| format!("{k} {w}{}", if k == 1 { "" } else { "s" });
+        md.push_str(&format!(
+            "\n**Builds:** {} opened, {} ({}), {} merged\n",
+            s(n(&bs["opened"]), "PR"),
+            s(n(&bs["rounds"]), "address round"),
+            s(n(&bs["replies"]), "reply").replace("replys", "replies"),
+            n(&bs["merged"])
+        ));
+        for x in list.iter().take(15) {
+            let pr = match (x["pr"].as_i64(), x["url"].as_str()) {
+                (Some(p), Some(u)) => format!(" [#{p}]({u})"),
+                (Some(p), None) => format!(" #{p}"),
+                _ => String::new(),
+            };
+            let mut bits = Vec::new();
+            if x["opened"] == true {
+                bits.push("opened".to_string());
+            }
+            if n(&x["rounds"]) > 0 {
+                bits.push(s(n(&x["rounds"]), "round"));
+            }
+            if let Some(o) = x["outcome"].as_str() {
+                bits.push(o.to_string());
+            }
+            md.push_str(&format!(
+                "- {} {}{pr}{}\n",
+                x["id"].as_str().unwrap_or(""),
+                x["title"].as_str().unwrap_or(""),
+                if bits.is_empty() { String::new() } else { format!(": {}", bits.join(", ")) }
+            ));
+        }
+    }
     let you = &r["you"];
     let ds = you["decisions"].as_array().cloned().unwrap_or_default();
     if !ds.is_empty() || n(&you["approved"]) + n(&you["denied"]) > 0 {
@@ -342,6 +422,13 @@ mod tests {
         core.append(&id, "turn", &Who::Hub, Some("Fixed.".into()), json!({})).unwrap();
         core.append(&id, "decision", &Who::Owner, None, json!({ "choice": "Merge", "replies_to": 3 })).unwrap();
         core.append(&id, "set", &Who::Hub, None, json!({ "status": "done" })).unwrap();
+        // A Build: its PR opened, a round pushed with two replies, merged.
+        let b = core.open(&Who::Hub, "Retry the outbox", json!({ "protocol": "build" })).unwrap();
+        for (what, data) in
+            [("opened", json!({ "pr": 45, "url": "https://github.com/acme/api/pull/45" })), ("pushed-round", json!({ "round": 1, "replies": 2 })), ("merged", json!({ "pr": 45 }))]
+        {
+            crate::build::event(&mut core, &b, what, String::new(), data).unwrap();
+        }
 
         let now = OffsetDateTime::now_utc();
         let since = (now - time::Duration::days(7)).format(&Rfc3339).unwrap();
@@ -353,6 +440,16 @@ mod tests {
         assert_eq!(r["agents"]["prompts"], 1);
         assert_eq!(r["agents"]["done"][0]["id"], id.as_str());
         assert_eq!(r["you"]["decisions"][0]["choice"], "Merge");
+        let bs = &r["builds"];
+        assert_eq!((bs["opened"].as_i64(), bs["rounds"].as_i64(), bs["replies"].as_i64(), bs["merged"].as_i64()), (Some(1), Some(1), Some(2), Some(1)));
+        assert_eq!(bs["list"][0]["outcome"], "merged");
+        let md = r["markdown"].as_str().unwrap();
+        assert!(
+            md.contains(&format!(
+                "**Builds:** 1 PR opened, 1 address round (2 replies), 1 merged\n- {b} Retry the outbox [#45](https://github.com/acme/api/pull/45): opened, 1 round, merged\n"
+            )),
+            "{md}"
+        );
 
         let r = recap(&core, "2026-11-10T00:00:00Z", "2026-11-17T00:00:00Z", "Nov 10 to 16").unwrap();
         let rv = &r["reviews"];

@@ -6,6 +6,7 @@ import { go, setTheme, useHub } from "./live";
 import { Kbd, Modal, useToast } from "./ui";
 import { onThisMac, usePane } from "./Pane";
 import { STATUSES } from "./views";
+import { inboxItems } from "./Inbox";
 
 type Cmd = { id: string; group: string; label: string; icon?: ReactNode; hint?: ReactNode; keywords?: string; run: () => void };
 
@@ -49,6 +50,18 @@ export function Palette({
 
   const cmds = useMemo<Cmd[]>(() => {
     const out: Cmd[] = [];
+    // What needs you, answerable right here.
+    for (const it of inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.review?.prs ?? [])) {
+      const d = it.d;
+      if (it.kind === "blocked" && d.live?.answerable) {
+        out.push({ id: `ap-${d.id}`, group: "Needs you", label: `Approve ${d.id}: ${d.live.msg ?? "the prompt"}`, keywords: `approve permission yes ${d.title}`, run: () => hub.answer(d, true) });
+        out.push({ id: `dn-${d.id}`, group: "Needs you", label: `Deny ${d.id}: ${d.live.msg ?? "the prompt"}`, keywords: `deny permission no ${d.title}`, run: () => hub.answer(d, false) });
+      } else if (it.m && it.m.options.length) {
+        const m = it.m;
+        for (const o of m.options)
+          out.push({ id: `op-${m.id}-${o}`, group: "Needs you", label: `${d.id} · ${m.subject || "a question"}: ${o}`, keywords: `answer reply ${d.title}`, run: () => hub.replyTo(m.id, "", o) });
+      }
+    }
     if (context) {
       const d = context;
       if (d.live && onThisMac()) out.push({ id: "rex", group: d.id, label: "Show pane in Rex", icon: <IconTerminal size={15} />, hint: <Kbd>O</Kbd>, run: () => hub.openInRex(d.id) });
