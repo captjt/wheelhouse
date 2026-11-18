@@ -20,7 +20,7 @@ enum Snapshot {
         return Set(a[i + 1].split(separator: ",").map(String.init))
     }
 
-    enum Target { case main, sheet, docketWindow, menuBar }
+    enum Target { case main, sheet, docketWindow, menuBar, quick }
 
     struct Shot {
         let name: String
@@ -42,6 +42,8 @@ enum Snapshot {
         Shot(name: "agent", place: .inbox, target: .sheet) { nav in nav.creating = .agent },
         Shot(name: "window", place: .inbox, target: .docketWindow),
         Shot(name: "menubar", place: .inbox, target: .menuBar),
+        Shot(name: "quick", place: .inbox, target: .quick),
+        Shot(name: "shortcuts", place: .inbox, target: .sheet) { nav in nav.shortcuts = true },
     ]
 
     static func run(into dir: URL) {
@@ -61,6 +63,7 @@ enum Snapshot {
                     try? await Task.sleep(for: .seconds(1.2))
                     if shot.target == .docketWindow { Windows.openDocket?("D-6") }
                     if shot.target == .menuBar { clickStatusItem() }
+                    if shot.target == .quick { QuickPanel.show(key: false) }
                     shot.setup(nav)
                     try? await Task.sleep(for: .seconds(1.8))
                     guard let main = mainWindow else {
@@ -77,15 +80,17 @@ enum Snapshot {
                     case .sheet: w = main.attachedSheet
                     case .docketWindow: w = NSApp.windows.first { $0.isVisible && $0 != main && $0.title.hasPrefix("D-6") }
                     case .menuBar: w = NSApp.windows.first { $0.isVisible && $0 != main && abs($0.frame.width - 380) < 2 }
+                    case .quick: w = QuickPanel.window
                     }
                     if let w {
-                        if shot.target != .menuBar { w.orderBack(nil) }
+                        if shot.target != .menuBar && shot.target != .quick { w.orderBack(nil) }
                         capture(w, to: dir.appendingPathComponent("mac-\(shot.name)-\(theme).png"))
                     } else {
                         print("no window for \(shot.name)")
                     }
                     if shot.target == .docketWindow { NSApp.windows.first { $0.title.hasPrefix("D-6") }?.close() }
                     if shot.target == .menuBar { clickStatusItem() }
+                    if shot.target == .quick { QuickPanel.close() }
                     reset(nav)
                     try? await Task.sleep(for: .seconds(0.6))
                 }
@@ -104,6 +109,7 @@ enum Snapshot {
         nav.palette = false
         nav.record = nil
         nav.creating = nil
+        nav.shortcuts = false
         NotificationCenter.default.post(name: .snapshotTab, object: "docket")
     }
 

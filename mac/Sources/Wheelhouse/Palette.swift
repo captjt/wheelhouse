@@ -29,6 +29,10 @@ private func score(_ q: String, _ text: String) -> Int? {
 
 /// ⌘K: search dockets and run any command, from the keyboard.
 struct PaletteOverlay: View {
+    /// In the floating panel (⌥⌘K from any app), not over the window: what
+    /// needs the window brings it forward first.
+    var floating = false
+    var onClose: () -> Void = {}
     @Environment(Store.self) private var store
     @Environment(Nav.self) private var nav
     @Environment(\.openWindow) private var openWindow
@@ -36,12 +40,30 @@ struct PaletteOverlay: View {
     @State private var sel = 0
     @FocusState private var focused: Bool
 
+    /// Bring the main window forward, when the palette floats over another app.
+    private func reveal() {
+        if floating { Windows.showMain() }
+    }
+
     private var commands: [Command] {
         var out: [Command] = []
-        if let id = nav.current, let d = store.docket(id) {
+        // What needs you, answerable right here.
+        for it in store.inbox {
+            if it.kind == .blocked, let d = it.docket, d.live?.answerable == true {
+                out.append(Command(id: "ap-\(d.id)", group: "Needs you", label: "Approve \(d.id): \(d.live?.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "approve permission yes \(d.title)") { Task { await store.answer(d, approve: true) } })
+                out.append(Command(id: "dn-\(d.id)", group: "Needs you", label: "Deny \(d.id): \(d.live?.msg ?? "the prompt")", symbol: "xmark.circle", keywords: "deny permission no \(d.title)") { Task { await store.answer(d, approve: false) } })
+            } else if let m = it.msg, !m.options.isEmpty {
+                for o in m.options {
+                    out.append(Command(id: "op-\(m.id)-\(o)", group: "Needs you", label: "\(it.docketId) · \(m.title): \(o)", symbol: "arrowshape.turn.up.left", keywords: "answer reply \(m.who) \(it.title)") { Task { _ = await store.reply(m, "", choice: o) } })
+                }
+            } else if let p = it.pr, p.ready, p.draft?.digest != nil {
+                out.append(Command(id: "post-\(p.fullKey)", group: "Needs you", label: "Post the review of \(p.key)", symbol: "paperplane", keywords: "review post github \(p.title ?? "")") { Task { _ = await store.post(p, digest: nil) } })
+            }
+        }
+        if !floating, let id = nav.current, let d = store.docket(id) {
             if d.live != nil {
                 out.append(Command(id: "rex", group: d.id, label: "Show pane in Rex", symbol: "terminal", hint: "O") { store.openInRex(d.id) })
-                out.append(Command(id: "peek", group: d.id, label: "Peek at pane", symbol: "eye", keywords: "screen terminal message send") { nav.pane = d.id })
+                out.append(Command(id: "peek", group: d.id, label: "Peek at pane", symbol: "eye", keywords: "screen terminal message send") { reveal(); nav.pane = d.id })
             }
             if d.live?.answerable == true {
                 out.append(Command(id: "approve", group: d.id, label: "Approve: \(d.live?.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "permission yes allow") { Task { await store.answer(d, approve: true) } })
@@ -51,15 +73,15 @@ struct PaletteOverlay: View {
                 out.append(Command(id: "st-\(s.rawValue)", group: d.id, label: "Move to \(s.label)", status: s, keywords: "status") { store.setStatus(d.id, s, undo: d.status) })
             }
             out.append(Command(id: "win", group: d.id, label: "Open in new window", symbol: "macwindow") { openWindow(id: "docket", value: d.id) })
-            out.append(Command(id: "rec", group: d.id, label: "Read the record", symbol: "checkmark.shield", keywords: "verify signed chain") { nav.record = d.id })
+            out.append(Command(id: "rec", group: d.id, label: "Read the record", symbol: "checkmark.shield", keywords: "verify signed chain") { reveal(); nav.record = d.id })
         }
         out += [
-            Command(id: "new", group: "Create", label: "New docket", symbol: "square.and.pencil", hint: "⌘N") { nav.creating = .blank },
-            Command(id: "new-agent", group: "Create", label: "Start an agent on a new docket", symbol: "terminal", hint: "⇧⌘N", keywords: "claude codex start run") { nav.creating = .agent },
-            Command(id: "new-linear", group: "Create", label: "New docket from a Linear issue", symbol: "circle.hexagongrid", keywords: "linear issue import") { nav.creating = .linear },
+            Command(id: "new", group: "Create", label: "New docket", symbol: "square.and.pencil", hint: "⌘N") { reveal(); nav.creating = .blank },
+            Command(id: "new-agent", group: "Create", label: "Start an agent on a new docket", symbol: "terminal", hint: "⇧⌘N", keywords: "claude codex start run") { reveal(); nav.creating = .agent },
+            Command(id: "new-linear", group: "Create", label: "New docket from a Linear issue", symbol: "circle.hexagongrid", keywords: "linear issue import") { reveal(); nav.creating = .linear },
         ]
         for (i, (p, key)) in Place.order.enumerated() {
-            out.append(Command(id: "go-\(key)", group: "Go to", label: p.title, symbol: p.symbol, hint: "⌘\(i + 1)") { nav.go(p) })
+            out.append(Command(id: "go-\(key)", group: "Go to", label: p.title, symbol: p.symbol, hint: "⌘\(i + 1)") { reveal(); nav.go(p) })
         }
         out += [
             Command(id: "verify", group: "Record", label: "Verify every docket's record", symbol: "checkmark.shield", keywords: "check chain signatures") { store.verifyAll() },
@@ -68,7 +90,7 @@ struct PaletteOverlay: View {
             Command(id: "th-dark", group: "Theme", label: "Theme: Dark", symbol: "moon", keywords: "appearance mode") { UserDefaults.standard.set("dark", forKey: "theme") },
         ]
         for d in store.dockets {
-            out.append(Command(id: "d-\(d.id)", group: "Dockets", label: d.title, status: d.status, hint: d.id, keywords: "\(d.id) \(d.agent?.cwd ?? "") \(d.agent?.rexSession ?? "")") { nav.show(d.id, store: store) })
+            out.append(Command(id: "d-\(d.id)", group: "Dockets", label: d.title, status: d.status, hint: d.id, keywords: "\(d.id) \(d.agent?.cwd ?? "") \(d.agent?.rexSession ?? "")") { reveal(); nav.show(d.id, store: store) })
         }
         return out
     }
@@ -76,7 +98,11 @@ struct PaletteOverlay: View {
     private var shown: [Command] {
         let all = commands
         let query = q.trimmingCharacters(in: .whitespaces).lowercased()
-        if query.isEmpty { return all.filter { $0.group != "Dockets" } + all.filter { $0.group == "Dockets" }.prefix(6) }
+        if query.isEmpty {
+            // Floating, the palette is mostly for what needs you and finding a docket.
+            let keep = floating ? all.filter { ["Needs you", "Create"].contains($0.group) } : all.filter { $0.group != "Dockets" }
+            return keep + all.filter { $0.group == "Dockets" }.prefix(floating ? 8 : 6)
+        }
         return all.compactMap { c -> (Command, Int)? in
             let s = max(score(query, c.label) ?? -1, (score(query, c.keywords) ?? -100) - 20)
             return s >= 0 ? (c, s) : nil
@@ -87,13 +113,26 @@ struct PaletteOverlay: View {
     }
 
     var body: some View {
+        if floating {
+            card.padding(24)
+        } else {
+            ZStack(alignment: .top) {
+                Color.black.opacity(0.18).ignoresSafeArea().onTapGesture { close() }
+                card.padding(.top, 90)
+            }
+        }
+    }
+
+    private var card: some View {
         let list = shown
-        ZStack(alignment: .top) {
-            Color.black.opacity(0.18).ignoresSafeArea().onTapGesture { close() }
-            VStack(spacing: 0) {
+        return VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    if let id = nav.current { Text(id).font(.system(size: 11.5, design: .monospaced)).padding(.horizontal, 6).padding(.vertical, 2).background(K.recessed, in: Capsule()) }
+                    if floating {
+                        Logo().frame(width: 16, height: 16)
+                    } else if let id = nav.current {
+                        Text(id).font(.system(size: 11.5, design: .monospaced)).padding(.horizontal, 6).padding(.vertical, 2).background(K.recessed, in: Capsule())
+                    }
                     TextField("Type a command or search dockets…", text: $q)
                         .textFieldStyle(.plain)
                         .font(.system(size: 16))
@@ -142,15 +181,19 @@ struct PaletteOverlay: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(K.line2))
             .shadow(color: .black.opacity(0.25), radius: 30, y: 12)
-            .padding(.top, 90)
-        }
-        .onAppear { focused = true }
-        .onChange(of: q) { sel = 0 }
+            .onAppear { focused = true }
+            .onReceive(NotificationCenter.default.publisher(for: .paletteShown)) { _ in
+                q = ""
+                sel = 0
+                focused = true
+            }
+            .onChange(of: q) { sel = 0 }
     }
 
     private func close() {
-        nav.palette = false
+        if !floating { nav.palette = false }
         q = ""
+        onClose()
     }
 
     private func run(_ c: Command?) {
@@ -162,6 +205,11 @@ struct PaletteOverlay: View {
 
 extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
+extension Notification.Name {
+    /// The floating palette opened again: empty and focused.
+    static let paletteShown = Notification.Name("wheelhouse.paletteShown")
 }
 
 // ---- new dockets ----

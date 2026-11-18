@@ -37,6 +37,7 @@ struct RootView: View {
         }
         .overlay(alignment: .bottom) { ToastStack() }
         .sheet(item: $nav.creating) { mode in NewDocketSheet(mode: mode) }
+        .sheet(isPresented: $nav.shortcuts) { ShortcutsSheet() }
         .sheet(item: Binding(get: { nav.pane.map(IdBox.init) }, set: { nav.pane = $0?.id })) { b in PaneSheet(id: b.id) }
         .sheet(item: Binding(get: { nav.record.map(IdBox.init) }, set: { nav.record = $0?.id })) { b in RecordSheet(id: b.id) }
         .sheet(item: Binding(get: { nav.linking.map(IdBox.init) }, set: { nav.linking = $0?.id })) { b in LinkIssueSheet(docket: b.id) }
@@ -264,5 +265,52 @@ struct ToastStack: View {
         }
         .padding(.bottom, 18)
         .animation(.spring(duration: 0.3), value: store.toasts.map(\.id))
+    }
+}
+
+/// Every key, in one place (⌘/).
+struct ShortcutsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private let groups: [(String, [(String, String)])] = [
+        ("Anywhere", [("⌥⌘K", "Wheelhouse over any app: approve, answer, find a docket, start one")]),
+        ("Go", [("⌘K  or  /", "Search dockets and commands"), ("⌘1 … ⌘8", "Inbox, Reviews, Builds, Active, All, Done, Agents, Recap"), ("G, then I R B A D X N P", "The same, as in the web app"), ("⌘R", "Refresh")]),
+        ("Create", [("⌘N  or  C", "New docket"), ("⇧⌘N", "Start an agent on a new docket")]),
+        ("A list", [("J K  or  ↑ ↓", "Move"), ("↩  or  double-click", "Open the docket in its own window"), ("O", "Show the agent's pane in Rex"), ("S, then 1–4", "Change status"), ("E", "In the Inbox: done"), ("Swipe", "Done, Drop, Status; Approve, Deny, File in the Inbox")]),
+        ("A docket", [("⇧⌘O", "Open in Rex"), ("⇧⌘P", "Peek at the pane"), ("⇧⌘R", "Read the record"), ("⌥⌘1 … ⌥⌘4", "To do, In progress, Done, Dropped"), ("Double-click the title", "Rename"), ("Drop a file", "Keep it with the docket, pinned by its hash")]),
+        ("Writing", [("⌘↩", "Send, save, or note"), ("↩  /  ⇧↩", "In Chat: send / a new line"), ("Esc", "Cancel"), ("⌘B  ⌘I", "Bold, italic (Markdown)")]),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Keyboard Shortcuts").font(.system(size: 15, weight: .semibold))
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(16)
+            Divider()
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 24, alignment: .topLeading), GridItem(.flexible(), alignment: .topLeading)], alignment: .leading, spacing: 22) {
+                    ForEach(groups, id: \.0) { title, keys in
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text(title).sectionLabel()
+                            ForEach(keys, id: \.0) { k, what in
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    Text(k).font(.system(size: 12, weight: .medium, design: .rounded)).foregroundStyle(K.text)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(K.recessed, in: RoundedRectangle(cornerRadius: 5))
+                                        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(K.line))
+                                    Text(what).font(.system(size: 12.5)).foregroundStyle(K.text2).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .frame(width: 720, height: 520)
     }
 }

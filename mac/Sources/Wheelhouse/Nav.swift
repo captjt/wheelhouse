@@ -82,6 +82,7 @@ final class Nav {
     var record: String?
     var linking: String?
     var inspector = true
+    var shortcuts = false
     /// The docket the window is about now: the one selected and shown.
     var current: String?
 

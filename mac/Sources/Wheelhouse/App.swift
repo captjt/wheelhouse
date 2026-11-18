@@ -65,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         Notifier.shared.setUp()
         MarkdownKeys.install()
+        if Snapshot.requested == nil { QuickPanel.apply() }
         Store.shared.start()
         Appearance.apply(UserDefaults.standard.string(forKey: "theme") ?? "system")
         if let dir = Snapshot.requested { Snapshot.run(into: dir) }
@@ -164,5 +165,8 @@ struct AppCommands: Commands {
             Button("Verify Every Record") { store.verifyAll() }
         }
         InspectorCommands()
+        CommandGroup(after: .help) {
+            Button("Keyboard Shortcuts") { Windows.showMain(); nav.shortcuts = true }.keyboardShortcut("/")
+        }
     }
 }
