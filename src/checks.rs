@@ -125,7 +125,7 @@ async fn run_one(spec: &CheckSpec, dir: &Path, path: &[String]) -> (Option<i32>,
 /// hub saw. `run` names this run, so its entries can be found together.
 async fn run(shared: &Shared, docket: &str, t: &Target, run: &str, why: &str) -> Result<Vec<Value>> {
     if t.specs.is_empty() {
-        bail!("{} has no checks: add `checks` to its table in build.lua", t.repo);
+        bail!("{} has no checks yet: add them in Settings, under Repos, or in build.lua", t.repo);
     }
     run_inner(shared, docket, t, run, why).await
 }

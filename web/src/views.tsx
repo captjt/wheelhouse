@@ -4,7 +4,7 @@ import { AppAvatar, IconBoard, IconChevronDown, IconEye, SessionChip, SessionIco
 import { ago, go, lastList, store, useHub } from "./live";
 import { useKeys, useMenu, usePhone, type MenuItem } from "./ui";
 import { LargeTitle, SwipeRow, type SwipeAction } from "./mobile";
-import { IconCheck, IconX } from "./icons";
+import { IconCheck, IconPause, IconPlay, IconX } from "./icons";
 import { onThisMac, usePane } from "./Pane";
 
 export const STATUSES: { key: Docket["status"]; label: string }[] = [
@@ -39,6 +39,9 @@ export function rowMenu(d: Docket, hub: ReturnType<typeof useHub>, pane: ReturnT
   }
   items.push(
     ...statusItems(d, (s) => hub.setStatus(d.id, s)).map((i) => ({ ...i, key: `s-${i.key}`, hint: undefined })),
+    d.hold
+      ? { key: "resume", label: <>Resume <span className="menu-sub">on hold: {d.hold}</span></>, icon: <IconPlay size={14} />, onPick: () => void hub.resume(d.id).catch(() => {}) }
+      : { key: "hold", label: "Hold…", icon: <IconPause size={14} />, onPick: () => hub.setDialog({ kind: "hold", id: d.id }) },
     { key: "copy", label: "Copy ID", icon: <IconCopy size={14} />, onPick: () => navigator.clipboard?.writeText(d.id) },
   );
   return items;

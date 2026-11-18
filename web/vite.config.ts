@@ -12,7 +12,20 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: Number(process.env.PORT ?? 5180),
-    proxy: { "/api": { target: hub, changeOrigin: true } },
+    // The hub takes a write only from its own origin: it checks the page's
+    // Origin against the host it was asked for, so the proxy says which
+    // host that was (this server's), as `x-forwarded-host`.
+    proxy: {
+      "/api": {
+        target: hub,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyReq", (out, req) => {
+            if (req.headers.host) out.setHeader("x-forwarded-host", req.headers.host);
+          });
+        },
+      },
+    },
   },
   build: { outDir: "dist", emptyOutDir: true },
 });

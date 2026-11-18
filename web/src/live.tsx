@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { getText, post, type Docket, type HubState } from "./api";
+import { getText, post, type ApiError, type Docket, type HubState } from "./api";
 import { useToast } from "./ui";
 
 // One stream of the hub's events for the whole app. Each event bumps a
@@ -73,8 +73,18 @@ export function useData<T>(path: string | null): { data: T | null; error: string
   // One fetch at a time; what changes meanwhile is fetched once after it.
   // An answer the same as the last isn't re-rendered, except on the clock's
   // tick, when ages move on.
-  const flight = useRef<{ busy: boolean; again: boolean; text: string | null; path: string | null }>({ busy: false, again: false, text: null, path: null });
+  // A fetch that's in flight when the version moves still lands, and the one
+  // asked for meanwhile runs after it, as the newest ask (`f.run`): neither
+  // is dropped because the effect re-ran.
+  const flight = useRef<{ busy: boolean; again: boolean; text: string | null; path: string | null; run: (() => void) | null; mounted: boolean }>({ busy: false, again: false, text: null, path: null, run: null, mounted: true });
   const ticked = useRef(0);
+  useEffect(() => {
+    const f = flight.current;
+    f.mounted = true;
+    return () => {
+      f.mounted = false;
+    };
+  }, []);
   useEffect(() => {
     if (!path) return;
     const f = flight.current;
@@ -84,29 +94,26 @@ export function useData<T>(path: string | null): { data: T | null; error: string
     }
     const tick = version.tick !== ticked.current;
     ticked.current = version.tick;
-    let live = true;
     const run = () => {
       f.busy = true;
       f.again = false;
       getText(path)
         .then((text) => {
-          if (live && f.path === path && (tick || text !== f.text)) {
+          if (f.mounted && f.path === path && (tick || text !== f.text)) {
             f.text = text;
             setData(JSON.parse(text) as T);
           }
-          if (live) setError(null);
+          if (f.mounted && f.path === path) setError(null);
         })
-        .catch((e: Error) => live && setError(e.message))
+        .catch((e: Error) => f.mounted && f.path === path && setError(e.message))
         .finally(() => {
           f.busy = false;
-          if (live && f.again) run();
+          if (f.mounted && f.again) f.run?.();
         });
     };
+    f.run = run;
     if (f.busy) f.again = true;
     else run();
-    return () => {
-      live = false;
-    };
   }, [path, version, nonce]);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   return { data, error, reload };
@@ -128,13 +135,27 @@ type Hub = {
   replyTo: (id: number, body: string, choice?: string) => Promise<void>;
   fileMessage: (id: number) => Promise<void>;
   create: (title: string, note?: string) => Promise<string>;
+  /** Hold it (Build and Review take no steps) with why, or resume it. */
+  hold: (id: string, reason?: string) => Promise<void>;
+  resume: (id: string) => Promise<void>;
+  /** Run its repo's witnessed checks now; the results arrive as entries. */
+  runChecks: (id: string) => Promise<void>;
+  /** Close it with nothing witnessed behind it, on your word, with why. */
+  closeOnWord: (id: string, reason: string) => Promise<void>;
+  /** A dialog the app shows: done refused for want of evidence, or asking why to hold. */
+  dialog: HubDialog;
+  setDialog: (d: HubDialog) => void;
 };
+
+/** What the app asks you in a dialog, from anywhere a docket's actions are. */
+export type HubDialog = { kind: "refused"; id: string; message: string } | { kind: "hold"; id: string } | null;
 
 const HubCtx = createContext<Hub | null>(null);
 
 export function HubProvider({ children }: { children: ReactNode }) {
   const { data, error, reload } = useData<HubState>("/api/state");
   const toast = useToast();
+  const [dialog, setDialog] = useState<HubDialog>(null);
   const byId = useMemo(() => new Map((data?.dockets ?? []).map((d) => [d.id, d])), [data]);
   const words = { todo: "To do", in_progress: "In progress", done: "Done", dropped: "Dropped" };
   const fail = (e: Error) => {
@@ -147,16 +168,46 @@ export function HubProvider({ children }: { children: ReactNode }) {
     reload,
     byId,
     setStatus: (id, status, undo) =>
-      post(`/api/dockets/${id}/set`, { status }).then(() => {
-        toast(
-          `${id} moved to ${words[status]}`,
-          undefined,
-          undo && undo !== status
-            ? { label: "Undo", run: () => void post(`/api/dockets/${id}/set`, { status: undo }).then(() => (toast(`${id} is back in ${words[undo]}`), reload()), fail) }
-            : undefined,
-        );
+      post(`/api/dockets/${id}/set`, { status }).then(
+        () => {
+          toast(
+            `${id} moved to ${words[status]}`,
+            undefined,
+            undo && undo !== status
+              ? { label: "Undo", run: () => void post(`/api/dockets/${id}/set`, { status: undo }).then(() => (toast(`${id} is back in ${words[undo]}`), reload()), fail) }
+              : undefined,
+          );
+          reload();
+        },
+        (e: ApiError) => {
+          // Done, refused: its acceptance items have nothing witnessed or
+          // checkable behind them. The app explains, and offers the ways on.
+          if (status === "done" && e.status === 409) return setDialog({ kind: "refused", id, message: e.message });
+          return fail(e);
+        },
+      ),
+    hold: (id, reason) =>
+      post(`/api/dockets/${id}/hold`, reason?.trim() ? { reason: reason.trim() } : {}).then(() => {
+        toast(`${id} is on hold: Build and Review take no steps on it until you resume`, undefined, { label: "Undo", run: () => void post(`/api/dockets/${id}/hold`, { off: true }).then(() => (toast(`${id} resumed`), reload()), fail) });
         reload();
       }, fail),
+    resume: (id) =>
+      post(`/api/dockets/${id}/hold`, { off: true }).then(() => {
+        toast(`${id} resumed`);
+        reload();
+      }, fail),
+    runChecks: (id) =>
+      post<{ run: string; checks: string[] }>(`/api/dockets/${id}/check`, {}).then((r) => {
+        toast(`Running ${r.checks.map((c) => c).join(", ")} on ${id}`);
+        reload();
+      }, fail),
+    closeOnWord: (id, reason) =>
+      post(`/api/dockets/${id}/set`, { status: "done", anyway: true, reason }).then(() => {
+        toast(`${id} closed on your word`, undefined, { label: "Undo", run: () => void post(`/api/dockets/${id}/set`, { status: "in_progress" }).then(() => (toast(`${id} is back in In progress`), reload()), fail) });
+        reload();
+      }, fail),
+    dialog,
+    setDialog,
     rename: (id, title) => post(`/api/dockets/${id}/set`, { title }).then(reload, fail),
     note: (id, body) => post(`/api/dockets/${id}/note`, { body }).then(reload, fail),
     openInRex: (id) =>

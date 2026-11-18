@@ -62,6 +62,8 @@ shaped like the Lua configs and laid over them as they're read:
 
 A value here wins over `build.lua` or `review.lua`; removing it (Settings'
 **Use build.lua's**, or `null` through the API) brings back the file's.
+A check `build.lua` lists can be turned off here too: Settings writes it
+as `false`.
 Every change is checked by the same code that reads the Lua, so one that
 wouldn't load is refused with the reason, and nothing is written.
 

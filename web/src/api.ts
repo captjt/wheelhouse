@@ -52,6 +52,71 @@ export type Docket = {
   /** Other issues linked beside it: a PR can address more than one. */
   linear_also?: { key: string; url?: string | null; title?: string | null }[];
   review?: ReviewRef;
+  /** Why it's on hold (Build and Review take no steps), or null. */
+  hold?: string | null;
+  /** Closed with nothing witnessed behind it: your reason. */
+  closed_on?: string | null;
+  /** Its witnessed checks, the latest of each. */
+  checks?: Record<string, { ok: boolean; head: string; at: string; required: boolean }> | null;
+};
+
+/** One witnessed check: the hub ran it itself, at a commit (src/checks.rs). */
+export type CheckRun = {
+  name: string;
+  command: string;
+  required: boolean;
+  /** null: it timed out. */
+  exit: number | null;
+  ok: boolean;
+  ms: number;
+  head: string;
+  dirty?: boolean;
+  /** `sha256:<hex>` of what it printed. */
+  output?: string | null;
+  run?: string;
+  why?: string | null;
+  seq: number;
+  at: string;
+  repo?: string | null;
+};
+
+/** A checker's judgment, said by the checker. */
+export type VerdictView = {
+  seq: number;
+  at: string;
+  n?: number | null;
+  verdict?: string | null;
+  findings?: number | null;
+  summary?: string | null;
+  by: string;
+  role?: string | null;
+  /** From a session other than the builder's; null when it can't say. */
+  independent?: boolean | null;
+  head?: string | null;
+  mark: Mark;
+};
+
+/** What a docket's done rests on, and what checks it (src/evidence.rs). */
+export type Evidence = {
+  /** Its intent has acceptance items, so done needs evidence. */
+  needs: boolean;
+  evidence: { how: "witnessed" | "checkable"; what: string; seq?: number | null; at?: string | null }[];
+  checks: CheckRun[];
+  repo?: string | null;
+  configured: { name: string; run: string; required: boolean }[];
+  running: boolean;
+  verdicts: VerdictView[];
+  hold?: string | null;
+  closed_on?: string | null;
+};
+
+/** What needs your attention beyond your asks, worst first. */
+export type Attention = {
+  docket?: string | null;
+  title: string;
+  kind: "build" | "review" | "failing" | "held" | "long" | "quiet" | "word" | string;
+  text: string;
+  at?: string | null;
 };
 
 export type LinearRef = {
@@ -247,6 +312,7 @@ export type HubState = {
   dockets: Docket[];
   asks: Ask[];
   agents: (Live & { docket?: string | null })[];
+  attention?: Attention[];
 };
 
 export type Mark = "said" | "witnessed" | "checkable";
@@ -300,7 +366,10 @@ export type Decision = {
   at?: string | null;
 };
 
-export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify; queued?: { id: number; body: string; at: string }[]; decisions?: Decision[] };
+export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify; queued?: { id: number; body: string; at: string }[]; decisions?: Decision[]; evidence?: Evidence };
+
+/** A refusal from the hub: its sentence, and its status (409: not now, or not on what was said). */
+export type ApiError = Error & { status?: number };
 
 async function handle<T>(res: Response): Promise<T> {
   const text = await res.text();
@@ -312,7 +381,9 @@ async function handle<T>(res: Response): Promise<T> {
   }
   if (!res.ok) {
     const msg = typeof body === "object" && body && "error" in body ? String((body as { error: unknown }).error) : text;
-    throw new Error(msg || `${res.status}`);
+    const err: ApiError = new Error(msg || `${res.status}`);
+    err.status = res.status;
+    throw err;
   }
   return body as T;
 }

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { get, post, type Docket } from "./api";
 import { LinearPicker } from "./Linear";
-import { IconActive, IconAgents, IconDone, IconEye, IconIssue, IconInbox, IconLayers, IconMonitor, IconMoon, IconPlus, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
+import { IconActive, IconAgents, IconDone, IconEye, IconIssue, IconInbox, IconLayers, IconMonitor, IconMoon, IconPause, IconPlay, IconPlus, IconSettings, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
+import { AttentionIcon } from "./Verify";
+import { attentionShown } from "./evidence";
 import { go, setTheme, useHub } from "./live";
 import { Kbd, Modal, useToast } from "./ui";
 import { onThisMac, usePane } from "./Pane";
@@ -51,7 +53,8 @@ export function Palette({
   const cmds = useMemo<Cmd[]>(() => {
     const out: Cmd[] = [];
     // What needs you, answerable right here.
-    for (const it of inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.review?.prs ?? [])) {
+    const asks = inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.review?.prs ?? []);
+    for (const it of asks) {
       const d = it.d;
       if (it.kind === "blocked" && d.live?.answerable) {
         out.push({ id: `ap-${d.id}`, group: "Needs you", label: `Approve ${d.id}: ${d.live.msg ?? "the prompt"}`, keywords: `approve permission yes ${d.title}`, run: () => hub.answer(d, true) });
@@ -73,7 +76,14 @@ export function Palette({
       for (const s of STATUSES)
         if (s.key !== d.status)
           out.push({ id: `st-${s.key}`, group: d.id, label: `Move to ${s.label}`, icon: <StatusIcon status={s.key} />, keywords: "status", run: () => hub.setStatus(d.id, s.key) });
+      if (d.hold) out.push({ id: "resume", group: d.id, label: `Resume: it's on hold (${d.hold})`, icon: <IconPlay size={15} />, keywords: "hold unhold resume", run: () => void hub.resume(d.id).catch(() => {}) });
+      else out.push({ id: "hold", group: d.id, label: "Hold…", icon: <IconPause size={15} />, keywords: "hold pause stop wait", run: () => hub.setDialog({ kind: "hold", id: d.id }) });
+      out.push({ id: "checks", group: d.id, label: "Run checks", icon: <IconShield size={15} />, keywords: "verify test lint witnessed", run: () => void hub.runChecks(d.id).catch(() => {}) });
     }
+    // What else needs a look: held, failing, quiet, closed on your word.
+    for (const a of attentionShown(hub.state?.attention, asks.map((i) => ({ docket: i.d.id, kind: i.kind }))))
+      if (a.docket)
+        out.push({ id: `at-${a.docket}-${a.kind}`, group: "Attention", label: `${a.docket} · ${a.text}`, icon: <AttentionIcon kind={a.kind} size={15} />, keywords: `${a.title} ${a.kind}`, run: () => go(`/d/${a.docket}`) });
     out.push(
       { id: "new", group: "Create", label: "New docket", icon: <IconPlus size={15} />, hint: <Kbd>C</Kbd>, run: onNew },
       { id: "new-agent", group: "Create", label: "Start an agent on a new docket", icon: <IconAgents size={15} />, keywords: "claude codex start run", run: () => onNewAgent() },
@@ -83,6 +93,12 @@ export function Palette({
       { id: "all", group: "Go to", label: "All dockets", icon: <IconLayers size={15} />, hint: <><Kbd>G</Kbd><Kbd>D</Kbd></>, run: () => go("/view/all") },
       { id: "done", group: "Go to", label: "Done", icon: <IconDone size={15} />, run: () => go("/view/done") },
       { id: "agents", group: "Go to", label: "Agents", icon: <IconAgents size={15} />, hint: <><Kbd>G</Kbd><Kbd>N</Kbd></>, run: () => go("/agents") },
+      { id: "settings", group: "Go to", label: "Settings", icon: <IconSettings size={15} />, hint: <Kbd>⌘,</Kbd>, keywords: "preferences config options", run: () => go("/settings") },
+      { id: "set-orders", group: "Settings", label: "Standing orders", icon: <IconSettings size={15} />, keywords: "settings pause resume post auto", run: () => go("/settings/orders") },
+      { id: "set-gates", group: "Settings", label: "Gates: where a Build asks you", icon: <IconSettings size={15} />, keywords: "settings ask auto plan open push", run: () => go("/settings/gates") },
+      { id: "set-agents", group: "Settings", label: "Agents: builder, checker, reviewers", icon: <IconSettings size={15} />, keywords: "settings claude codex fix rounds", run: () => go("/settings/agents") },
+      { id: "set-repos", group: "Settings", label: "Repos: notes, checks, review guide", icon: <IconSettings size={15} />, keywords: "settings rules notes checks base branch plan", run: () => go("/settings/repos") },
+      { id: "set-guides", group: "Settings", label: "Guides & briefs", icon: <IconSettings size={15} />, keywords: "settings guide brief prompt style", run: () => go("/settings/guides") },
       {
         id: "verify",
         group: "Record",
@@ -116,7 +132,8 @@ export function Palette({
 
   const shown = useMemo(() => {
     const query = q.trim().toLowerCase();
-    if (!query) return cmds.filter((c) => c.group !== "Dockets").concat(cmds.filter((c) => c.group === "Dockets").slice(0, 6));
+    // Settings' sections come up when you type; Go to holds Settings itself.
+    if (!query) return cmds.filter((c) => c.group !== "Dockets" && c.group !== "Settings").concat(cmds.filter((c) => c.group === "Dockets").slice(0, 6));
     return cmds
       .map((c) => ({ c, s: Math.max(score(query, c.label), score(query, `${c.keywords ?? ""}`) - 20) }))
       .filter((x) => x.s >= 0)

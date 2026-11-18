@@ -5,6 +5,7 @@ import { agoLong, stamp } from "./live";
 import { Kbd, Modal, Prose, useToast } from "./ui";
 import { MarkdownEditor, type EditorHandle } from "./Editor";
 import { renderMarkdown, toggleTask } from "./markdown";
+import { lineDiff } from "./diff";
 
 /** Who wrote an intent version, in words. */
 function author(e: { actor: EntryView["actor"]; data: EntryView["data"] }, d: Docket) {
@@ -207,33 +208,32 @@ function IntentHistory({ d, versions, onClose }: { d: Docket; versions: EntryVie
   );
 }
 
-type DiffLine = { op: "same" | "add" | "del"; text: string };
-
-/** A line diff (longest common subsequence): enough for a spec's versions. */
-export function lineDiff(a: string, b: string): DiffLine[] {
-  const x = a ? a.split("\n") : [];
-  const y = b ? b.split("\n") : [];
-  const n = x.length;
-  const m = y.length;
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) lcs[i][j] = x[i] === y[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
-  const out: DiffLine[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (x[i] === y[j]) (out.push({ op: "same", text: x[i] }), i++, j++);
-    else if (lcs[i + 1][j] >= lcs[i][j + 1]) out.push({ op: "del", text: x[i++] });
-    else out.push({ op: "add", text: y[j++] });
-  }
-  while (i < n) out.push({ op: "del", text: x[i++] });
-  while (j < m) out.push({ op: "add", text: y[j++] });
-  return out;
-}
-
-/** Decisions in force: what an agent asked you, and the answer that stands. */
-export function DecisionsSection({ decisions }: { decisions: Decision[] }) {
+/** Decisions in force: what an agent asked you, and the answer that stands.
+ * An answered one can stand for its repo: it goes in the repo's notes, so
+ * later briefs there carry it. */
+export function DecisionsSection({ decisions, docket, repo }: { decisions: Decision[]; docket?: string; repo?: string | null }) {
+  const toast = useToast();
+  // What you made standing here, and what the hub refused, by decision.
+  const [made, setMade] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<Record<string, string>>({});
   if (!decisions.length) return null;
   const open = decisions.filter((d) => !d.answer).length;
+  const stand = (key: string) => {
+    if (!docket || busy) return;
+    setBusy(key);
+    post<{ seq: number; repo: string; rule: string }>(`/api/dockets/${docket}/standing`, { key }).then(
+      (r) => {
+        setBusy(null);
+        setMade((m) => ({ ...m, [key]: r.repo }));
+        toast(`Standing in ${r.repo}: ${r.rule}`);
+      },
+      (e: Error) => {
+        setBusy(null);
+        setErr((x) => ({ ...x, [key]: e.message }));
+      },
+    );
+  };
   return (
     <section className="decisions">
       <div className="intent-head">
@@ -253,7 +253,17 @@ export function DecisionsSection({ decisions }: { decisions: Decision[] }) {
               {d.answer ? (d.by === "stood" ? "the recommendation stood" : d.by === "you" ? "you" : d.by) : ""}
               {d.at ? ` · ${agoLong(d.at)}` : ""}
             </span>
+            {d.answer && docket && repo && (
+              made[d.key] ? (
+                <span className="dec-standing">standing in {made[d.key]}</span>
+              ) : (
+                <button className="dec-stand" disabled={busy === d.key} onClick={() => stand(d.key)} title={`Add it to ${repo}'s notes as a standing rule: later briefs in ${repo} carry it`}>
+                  {busy === d.key ? "Making it standing…" : `Make standing for ${repo}`}
+                </button>
+              )
+            )}
             {d.note && <span className="dec-note">“{d.note}”</span>}
+            {err[d.key] && <span className="dec-err">{err[d.key]}</span>}
           </li>
         ))}
       </ul>

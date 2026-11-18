@@ -435,7 +435,7 @@ async fn set(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Js
                 return Err(fail(
                     StatusCode::CONFLICT,
                     format!(
-                        "{id} has acceptance items, and nothing witnessed or checkable says they're met: no passing checks, no merged PR. Run its checks (wh check {id}), or close it on your word (--anyway, with a reason)"
+                        "{id} has acceptance items, and nothing witnessed or checkable says they're met yet: no passing checks, no merged PR. Run its checks, or close it on your word, with a reason."
                     ),
                 ));
             }
@@ -487,6 +487,9 @@ async fn standing(State(shared): State<Shared>, Path(id): Path<String>, Json(req
         let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
         let read: Vec<record::Entry> = core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| s.entry().ok()).collect();
         let d = crate::decisions::of(&read).into_iter().find(|d| d.key == req.key).ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no decision {}", req.key)))?;
+        if let Some(r) = &d.standing {
+            return Err(fail(StatusCode::CONFLICT, format!("it stands for {r} already")));
+        }
         let repo = crate::build::get(&core, &id)
             .ok()
             .flatten()
@@ -523,7 +526,7 @@ async fn standing(State(shared): State<Shared>, Path(id): Path<String>, Json(req
 async fn run_checks(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
     let t = crate::checks::target(&shared, &id).map_err(bad)?;
     if t.specs.is_empty() {
-        return Err(fail(StatusCode::CONFLICT, format!("{} has no checks: add them to its table in build.lua (checks = {{ test = \"…\" }})", t.repo)));
+        return Err(fail(StatusCode::CONFLICT, format!("{} has no checks yet: add them in Settings, under Repos, or in build.lua", t.repo)));
     }
     if crate::checks::running(&id) {
         return Err(fail(StatusCode::CONFLICT, format!("{id}'s checks are already running")));
