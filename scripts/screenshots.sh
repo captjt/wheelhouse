@@ -29,7 +29,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
 images="$root/docs/images"
 demo=$(mktemp -d)
-port=7438
+port=${PORT:-7438}
 base="http://127.0.0.1:$port"
 hub=""
 cleanup() {

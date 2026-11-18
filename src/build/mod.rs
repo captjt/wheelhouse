@@ -199,6 +199,11 @@ impl Hub {
         self.config.as_ref().and_then(|(c, _, _)| c.repos.get(repo).map(|r| r.checks.clone()))
     }
 
+    /// A repo's notes for agents (its rules, standing decisions included).
+    pub fn notes(&self, repo: &str) -> Option<String> {
+        self.config.as_ref().and_then(|(c, _, _)| c.repos.get(repo).map(|r| r.notes.trim().to_string())).filter(|n| !n.is_empty())
+    }
+
     /// The repo whose checkout holds `dir`, and its checks.
     pub fn repo_of(&self, dir: &std::path::Path) -> Option<(String, Vec<config::CheckSpec>)> {
         self.config.as_ref().and_then(|(c, _, _)| c.repos.iter().find(|(_, r)| dir.starts_with(&r.checkout)).map(|(k, r)| (k.clone(), r.checks.clone())))

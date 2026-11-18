@@ -313,7 +313,10 @@ fn vars(cfg: &Config, e: &Pr, round: i64, r: Option<&Reviewer>, rs: &[Reviewer],
     v.insert("PORT", port(r.map_or(1, |r| r.index), e.pr).to_string());
     v.insert("DRAFT_SCHEMA", super::draft_schema().display().to_string());
     let notes = cfg.repos.get(&e.repo).map(|r| r.notes.trim().to_string()).unwrap_or_default();
-    v.insert("REPO_NOTES", if notes.is_empty() { String::new() } else { format!("## Notes for this repo\n\n{notes}\n") });
+    v.insert(
+        "REPO_NOTES",
+        if notes.is_empty() { String::new() } else { format!("## Notes for this repo\n\n{}\n", notes.replace("## Standing decisions", "### Standing decisions")) },
+    );
     v.insert("N", rs.len().to_string());
     v.insert("PRIMARY", rs.first().map(|r| r.name.clone()).unwrap_or_default());
     let review = match cfg.guide(&e.repo, "review", r.map(|r| r.name.as_str()), &entry)? {

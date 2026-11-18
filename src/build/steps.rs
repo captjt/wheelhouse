@@ -279,7 +279,13 @@ pub(super) fn vars(cfg: &Config, t: &Task, login: &str) -> crate::review::briefs
     for (slot, var, title) in [("plan", "PLAN_GUIDE", "planning"), ("build", "BUILD_GUIDE", "building"), ("check", "CHECK_GUIDE", "checking")] {
         v.insert(var, cfg.guide(slot).map(|g| format!("## More on {title}\n\n{g}\n")).unwrap_or_default());
     }
-    v.insert("REPO_NOTES", repo.map(|r| r.notes.trim()).filter(|n| !n.is_empty()).map(|n| format!("## Notes on {}\n\n{n}\n", t.repo)).unwrap_or_default());
+    v.insert(
+        "REPO_NOTES",
+        repo.map(|r| r.notes.trim())
+            .filter(|n| !n.is_empty())
+            .map(|n| format!("## Notes on {}\n\n{}\n", t.repo, n.replace("## Standing decisions", "### Standing decisions")))
+            .unwrap_or_default(),
+    );
     // The witnessed checks, so the builder runs what the hub will.
     v.insert(
         "CHECKS",
