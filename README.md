@@ -90,6 +90,14 @@ and words in the system's own controls:
     <td><img src="docs/images/mac-window-light.png" alt="A docket in a window of its own"></td>
     <td><img src="docs/images/mac-shortcuts-dark.png" alt="Every keyboard shortcut, from ⌘/"></td>
   </tr>
+  <tr>
+    <td><img src="docs/images/mac-verify-light.png" alt="A docket's Verify section: done rests on test passing at its commit, witnessed; lint failed but is optional; each check's output a click away"></td>
+    <td><img src="docs/images/mac-settings-guides-dark.png" alt="Settings, Guides and Briefs in dark mode: built-in guides and each protocol's briefs beside the Markdown editor, with Compare with Built-in"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/mac-settings-orders-light.png" alt="Settings, Standing Orders: what Wheelhouse does on its own, as sentences, with Review's and Build's switches and each gate as Ask or Auto"></td>
+    <td><img src="docs/images/settings-dark.png" alt="The web app's Settings in dark mode: the standing orders as sentences, then each gate"></td>
+  </tr>
 </table>
 
 </details>
