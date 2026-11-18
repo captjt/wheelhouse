@@ -80,6 +80,14 @@ icon!(HALF, "half", 14.0, r#"<circle cx="7" cy="7" r="6" stroke="currentColor" s
 icon!(TICK, "tick", 14.0, r#"<path d="M4.3 7.2L6.2 9L9.8 5.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#);
 icon!(CROSS, "cross", 14.0, r#"<path d="M5 5L9 9M9 5L5 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/>"#);
 
+// Wheelhouse Dev's: the same wheel in blue, as a nightly recolors its mark.
+icon!(
+    LOGO_DEV,
+    "logo-dev",
+    32.0,
+    r##"<g stroke="#2f7dff" fill="none"><circle cx="16" cy="16" r="11" stroke-width="3.2"/><path d="M16 5V2M25.53 10.5L28.12 9M25.53 21.5L28.12 23M16 27V30M6.47 21.5L3.88 23M6.47 10.5L3.88 9" stroke-width="2.6" stroke-linecap="round"/></g><circle cx="16" cy="16" r="3.4" fill="#2f7dff"/>"##
+);
+
 // The Logo: a wheel, in Cloudflare orange.
 icon!(
     LOGO,

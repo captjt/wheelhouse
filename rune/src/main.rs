@@ -534,7 +534,8 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let show_at_launch = rune::tooling::extra_args().iter().any(|a| a == "--show");
+    // `--show`, or WH_RUNE_SHOW=1 (the bundle's, so opening the app shows the panel).
+    let show_at_launch = rune::tooling::extra_args().iter().any(|a| a == "--show") || std::env::var_os("WH_RUNE_SHOW").is_some_and(|v| v == "1");
 
     rune::run_windows_with(RunOptions { accessory: true }, move |_| {
         let spec = AppSpec { setup: Some(setup), poll: Some(poll), ..AppSpec::new("Wheelhouse", view::SIZE, || unreachable!(), view::view) };

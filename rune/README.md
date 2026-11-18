@@ -19,9 +19,23 @@ cargo test --release                             # the model: inbox order, scori
 ```
 
 Its identity never meets the installed app's: binary `wheelhouse-rune`,
-bundle id `dev.wheelhouse.rune` (`scripts/bundle.sh` makes
-`target/Wheelhouse Rune.app`; nothing is installed), no URL scheme, and ⌃⌥⌘K
-rather than ⌥⌘K. Never `cargo install` it.
+bundle id `dev.wheelhouse.rune`, no URL scheme, and ⌃⌥⌘K rather than ⌥⌘K
+(or Wheelhouse Dev's ⇧⌥⌘K). Never `cargo install` it.
+
+## Trying it on your own dockets
+
+Beside your everyday Wheelhouse, against Wheelhouse Dev's hub (`just
+dev-install`: a copy of your dockets with nothing live, on :7600):
+
+```sh
+rune/scripts/bundle.sh                      # target/Wheelhouse Rune.app, following :7600
+open "rune/target/Wheelhouse Rune.app"      # the panel shows; ⌃⌥⌘K brings it back
+```
+
+On a flavored hub it wears the hub's badge (DEV, a blue wheel). Answering
+an ask or a prompt there answers Wheelhouse Dev's copy, never the agent.
+`WH_HUB=… scripts/bundle.sh` points the app elsewhere, but never at :7500.
+Quit it from Activity Monitor or with `pkill -x wheelhouse-rune`.
 
 ## Checking it headlessly
 

@@ -60,6 +60,8 @@ pub struct World {
     pub needs: Vec<Need>,
     /// Folders agents work in, for Start an agent.
     pub folders: Vec<String>,
+    /// A second hub's flavor (Wheelhouse Dev's `dev`), which the panel wears.
+    pub flavor: Option<String>,
 }
 
 fn s(v: &Value) -> Option<String> {
@@ -160,7 +162,7 @@ impl World {
         folders.sort();
         folders.dedup();
 
-        World { dockets, needs: needs.into_iter().map(|n| n.2).collect(), folders }
+        World { dockets, needs: needs.into_iter().map(|n| n.2).collect(), folders, flavor: s(&j["flavor"]["name"]) }
     }
 }
 

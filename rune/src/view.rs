@@ -72,6 +72,12 @@ pub fn k(dark: bool) -> K {
     }
 }
 
+/// The wheel: orange, or blue on a second hub.
+fn logo(s: &Panel) -> El {
+    let dev = s.world.as_ref().is_some_and(|w| w.flavor.is_some());
+    icon(if dev { &icons::LOGO_DEV } else { &icons::LOGO }, 16.0).a11y_hidden()
+}
+
 /// A row's key: ids can hold `/`, which a key path would split on.
 pub fn row_key(id: &str) -> String {
     format!("row:{}", id.replace('/', "∕"))
@@ -131,14 +137,23 @@ fn palette(s: &Panel, k: &K) -> (El, El) {
         .on_input_key(|s: &mut Panel, ev, tx| s.palette_key(ev, tx))
         .on_input_change(|s: &mut Panel, _| s.sel = 0)
         .on_submit(|s: &mut Panel, tx| s.run_selected(tx));
-    let header = row()
-        .key("header")
-        .padding(14.0)
-        .gap(10.0)
-        .center_y()
-        .child(icon(&icons::SEARCH, 14.0).color(k.muted).a11y_hidden())
-        .child(icon(&icons::LOGO, 16.0).a11y_hidden())
-        .child(field);
+    let header = row().key("header").padding(14.0).gap(10.0).center_y().child(icon(&icons::SEARCH, 14.0).color(k.muted).a11y_hidden()).child(logo(s));
+    // On a second hub, its badge: DEV in white on blue, as Wheelhouse Dev wears it.
+    let header = match s.world.as_ref().and_then(|w| w.flavor.as_deref()) {
+        Some(f) => header.child(
+            row()
+                .key("flavor")
+                .h(15.0)
+                .px(6.0)
+                .radius(7.5)
+                .center()
+                .fill(hex("#2f7dff"))
+                .label(format!("Wheelhouse {}", if f == "dev" { "Dev" } else { f }))
+                .child(text(f.to_uppercase()).font(TextStyle::new(9.5, 800.0).family(SYS).lh(12.0).tracking(0.6)).color(Color::WHITE)),
+        ),
+        None => header,
+    };
+    let header = header.child(field);
 
     // The rows are the scroll view's own children, as Rune's gallery has them:
     // a content column inside it would shrink to the viewport.
