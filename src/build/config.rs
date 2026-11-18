@@ -46,6 +46,10 @@ pub struct Config {
     pub linear: Option<LinearSource>,
     pub builder: Role,
     pub checker: Role,
+    /// Reviewers who review the branch blind before the PR opens (none: no
+    /// pre-review), and how many times they may send it back.
+    pub prereview: Vec<Role>,
+    pub prereview_loops: i64,
     /// `ask` or `auto`, by gate: `start`, `plan`, `preview`, `open`, and
     /// after it opens, `address` (start a round) and `push` (push a round
     /// and post its replies).
@@ -188,6 +192,11 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
         linear,
         builder: role(&raw["builder"], "claude")?,
         checker: role(&raw["checker"], "claude")?,
+        prereview: match &raw["prereview"] {
+            Value::Object(o) => o.get("reviewers").and_then(Value::as_array).into_iter().flatten().map(|r| role(r, "claude")).collect::<Result<Vec<_>>>()?,
+            _ => Vec::new(),
+        },
+        prereview_loops: raw["prereview"]["loops"].as_i64().unwrap_or(1).max(0),
         gates,
         fix_loops: raw["fix_loops"].as_i64().unwrap_or(2).max(0),
         max_decisions: raw["max_decisions"].as_i64().unwrap_or(3).max(1),

@@ -11,6 +11,7 @@ pub mod config;
 pub mod decide;
 pub mod intake;
 pub mod plan;
+pub mod prereview;
 pub mod steps;
 pub mod watch;
 
@@ -156,6 +157,10 @@ pub struct Task {
     /// latest comment, a review, a comment, a failing head, a base.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub seen: Vec<String>,
+    /// Pre-review: `{n, reviewers: {name: Agent}, last: {blocking,
+    /// non_blocking, findings}}`, once it's run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prereview: Option<Value>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -169,10 +174,15 @@ impl Task {
         self.phase.as_deref().unwrap_or("")
     }
 
-    /// A pane label for a role: `d-41`, `d-41-check`.
+    /// A pane label for a role: `d-41`, `d-41-check`, `d-41-codex` for a
+    /// pre-reviewer.
     pub fn label(&self, role: &str) -> String {
         let id = self.docket.to_lowercase();
-        if role == "builder" { id } else { format!("{id}-check") }
+        match role {
+            "builder" => id,
+            "checker" => format!("{id}-check"),
+            r => format!("{id}-{}", r.rsplit(':').next().unwrap_or("review")),
+        }
     }
 }
 
@@ -251,6 +261,7 @@ pub fn summary(t: &Task) -> Value {
         "asks": t.asks.keys().collect::<Vec<_>>(),
         "why": t.why, "start_error": t.start_error, "updated_at": t.updated_at,
         "rounds": t.rounds, "round": t.round.as_ref().map(|r| json!({ "n": r["n"], "summary": r["summary"], "update": r["update"] })),
+        "prereview": t.prereview.as_ref().map(|p| json!({ "n": p["n"], "reviewers": p["reviewers"].as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()), "blocking": p["last"]["blocking"], "non_blocking": p["last"]["non_blocking"] })),
         "pending": t.extra.get("pending").map(|p| p["ids"].as_array().map_or(0, Vec::len)),
         "tokens": t.tokens.as_ref().and_then(|x| x["total"].as_i64()),
     })

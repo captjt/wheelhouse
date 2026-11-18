@@ -194,6 +194,8 @@ export type BuildTask = {
   round?: { n: number; summary?: string | null; update?: string | null } | null;
   /** Things open on the PR waiting on "address it?". */
   pending?: number | null;
+  /** Reviewers who review the branch blind before the PR opens. */
+  prereview?: { n: number; reviewers?: string[] | null; blocking?: number | null; non_blocking?: number | null } | null;
 };
 
 export type BuildStatus = {

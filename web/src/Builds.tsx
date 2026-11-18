@@ -26,6 +26,7 @@ export function buildPhase(t: BuildTask): string {
       plan_gate: "Plan: your call",
       building: "Building",
       checking: `Checking (check ${t.check_n})`,
+      prereview: `Pre-review${t.prereview?.n ? ` ${t.prereview.n}` : ""}`,
       preview_gate: "Preview: your call",
       open_gate: "Ready to open",
       opening: "Opening",
@@ -50,7 +51,7 @@ const STEPS: [string, string[]][] = [
   ["Plan", ["planning", "not_ready"]],
   ["Your call", ["plan_gate"]],
   ["Build", ["building"]],
-  ["Check", ["checking", "preview_gate"]],
+  ["Check", ["checking", "prereview", "preview_gate"]],
   ["Open", ["open_gate", "opening"]],
 ];
 

@@ -273,7 +273,7 @@ func buildPhase(_ t: BuildTask) -> String {
     }
     return [
         "planning": "Planning", "not_ready": "Not ready: your call", "plan_gate": "Plan: your call", "building": "Building",
-        "checking": "Checking (check \(t.checkN))", "preview_gate": "Preview: your call", "open_gate": "Ready to open", "opening": "Opening",
+        "checking": "Checking (check \(t.checkN))", "prereview": "Pre-review \(t.j["prereview"]["n"].int ?? 1)", "preview_gate": "Preview: your call", "open_gate": "Ready to open", "opening": "Opening",
         "addressing": "Round \(t.round["n"].int ?? t.rounds): addressing", "push_gate": "Round \(t.round["n"].int ?? t.rounds): your call", "pushing": "Pushing",
     ][t.phase ?? ""] ?? "Working"
 }
@@ -314,7 +314,7 @@ struct BuildPanel: View {
                             .font(.system(size: 12)).foregroundStyle(K.muted)
                     }
                 } else if ["active", "queued", "open"].contains(t.state) {
-                    let steps: [(String, [String])] = [("Plan", ["planning", "not_ready"]), ("Your call", ["plan_gate"]), ("Build", ["building"]), ("Check", ["checking", "preview_gate"]), ("Open", ["open_gate", "opening"])]
+                    let steps: [(String, [String])] = [("Plan", ["planning", "not_ready"]), ("Your call", ["plan_gate"]), ("Build", ["building"]), ("Check", ["checking", "prereview", "preview_gate"]), ("Open", ["open_gate", "opening"])]
                     let at = t.state == "open" || t.state == "merged" ? steps.count : t.state == "queued" ? -1 : steps.firstIndex { $0.1.contains(t.phase ?? "") } ?? 0
                     Steps(steps: steps.enumerated().map { i, s in s.0 == "Check" && i == at && t.checkN > 0 ? "Check \(t.checkN)" : s.0 == "Your call" && i == at ? "Plan: your call" : s.0 }, at: at)
                 } else {

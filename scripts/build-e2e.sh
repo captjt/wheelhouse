@@ -8,7 +8,8 @@
 #   scripts/build-e2e.sh           # run it; exits non-zero on the first failure
 #   KEEP=1 scripts/build-e2e.sh    # keep the scratch directory to look at
 #
-# It goes: plan → approve → build → check → open the PR; then a round on
+# It goes: plan → approve → build → check → a pre-review that sends it
+# back, then passes it → open the PR; then a round on
 # review feedback and a failing check (a reply that speaks in the first
 # person is refused first), pushed with its replies; then a round on a base
 # that moved, merged in and pushed; then the merge, which cleans up. Then
@@ -66,6 +67,7 @@ cat >"$t/build.lua" <<EOF
 return {
   repos = { ["acme/api"] = { checkout = "$t/checkout" } },
   sources = { linear = { teams = { ENG = "acme/api" }, label = "agent", cycle = true, skip_label = "no-agent" } },
+  prereview = { reviewers = { "codex" } },
 }
 EOF
 # Linear: a stand-in server, with no issues until the last part.
@@ -111,6 +113,13 @@ answer() { # option
 wt="$t/build/worktrees/D-1"
 say() { printf '%s\n' "$1" >"$wt/.tmp/$2"; } # text file: an agent's status line
 commit() { git -C "$wt" add -A -- . ':!.tmp' && git -C "$wt" commit --quiet -m "$1" && git -C "$wt" rev-parse --short HEAD; }
+checked() { # summary: the checker passes the check it's on
+  local n
+  n=$(task | jq -r .check_n)
+  mkdir -p "$wt/.tmp/check"
+  jq -nc --arg s "$1" '{verdict: "pass", summary: $s, findings: []}' >"$wt/.tmp/check/check-$n.json"
+  say CHECKED checker-status.txt
+}
 
 # --- Plan, build, check, open ------------------------------------------------
 
@@ -141,17 +150,39 @@ answer Approve
 until_ "the builder builds" '.phase == "building"'
 ok "approved; building"
 
-step "the build, the check, and opening the PR"
+step "the build, and the check"
 printf 'export function deliver() { /* retries 5xx up to 3 times */ }\n' >"$wt/deliver.ts"
 commit "fix(webhooks): retry failed deliveries" >/dev/null
 echo '{"title": "fix(webhooks): retry failed deliveries", "body": "A 5xx or a timeout is retried up to 3 times, with backoff."}' >"$wt/.tmp/pr.json"
 echo "Built the retry loop." >"$wt/.tmp/report.md"
 say BUILT status.txt
 until_ "the checker checks" '.phase == "checking"'
-mkdir -p "$wt/.tmp/check"
-echo '{"verdict": "pass", "summary": "The retry loop matches the plan.", "findings": []}' >"$wt/.tmp/check/check-1.json"
-say CHECKED checker-status.txt
+checked "The retry loop matches the plan."
+ok "checked"
+
+step "pre-review: a blind reviewer sends it back, then passes it"
+until_ "pre-review starts" '.phase == "prereview" and .prereview.n == 1'
+[ -f "$wt/.tmp/tasks/prereview-codex.md" ] || fail "the pre-reviewer has no brief"
+cat >"$wt/.tmp/prereview/1/codex.json" <<'EOF'
+{"event": "REQUEST_CHANGES", "summary": "Retries never stop on a down endpoint.", "findings": [
+  {"id": "B1", "severity": "blocking", "path": "deliver.ts", "line": 1, "what": "Nothing caps the retries.", "evidence": "a probe against a dead endpoint loops", "fix": "Stop after the third."}]}
+EOF
+echo REVIEWED >"$wt/.tmp/prereview/1/codex.status"
+until_ "the blocking finding goes back to the builder" '.phase == "building" and .prereview.blocking == 1'
+printf 'export function deliver() { /* retries 5xx up to 3 times, then stops */ }\n' >"$wt/deliver.ts"
+commit "fix(webhooks): cap the retries" >/dev/null
+say BUILT status.txt
+until_ "the fix is checked" '.phase == "checking"'
+checked "The cap holds."
+until_ "the reviewer looks again" '.phase == "prereview" and .prereview.n == 2'
+echo '{"event": "APPROVE", "summary": "Capped at three; looks right.", "findings": []}' >"$wt/.tmp/prereview/2/codex.json"
+echo REVIEWED >"$wt/.tmp/prereview/2/codex.status"
 until_ "the PR reaches its gate" '.phase == "open_gate"'
+id=$(ask_id "Open PR")
+api "$base/api/messages/$id" | jq -e '.body | contains("Pre-review 2: 0 blocking, 0 non-blocking")' >/dev/null || fail "the open gate doesn't say how pre-review went"
+ok "sent back once, fixed, checked, passed; the open gate says so"
+
+step "opening the PR"
 answer "Open PR"
 until_ "the PR opens" '.state == "open"'
 head1=$(git -C "$wt" rev-parse HEAD)
@@ -197,8 +228,8 @@ grep -q "Merge it in" "$wt/.tmp/tasks/address.md" && fail "the brief asks for a 
 ok "open.json, the failing log, and the brief are in place"
 
 step "a reply in the first person is refused"
-printf 'export function deliver() { /* retries 5xx up to 3 times, then stops */ }\n' >"$wt/deliver.ts"
-sha=$(commit "fix(webhooks): stop after the third retry")
+printf 'export function deliver() { /* retries 5xx up to 3 times, then stops; logs each attempt */ }\n' >"$wt/deliver.ts"
+sha=$(commit "fix(webhooks): log each retry")
 cat >"$r1/replies.json" <<EOF
 {"replies": [{"comment_id": 100, "body": "I capped it at three in $sha."}],
  "answers": [{"url": "https://github.com/acme/api/pull/45#pullrequestreview-7", "label": "dana's review", "body": "Covered in $sha."}],
@@ -218,8 +249,7 @@ cat >"$r1/replies.json" <<EOF
 EOF
 say BUILT status.txt
 until_ "the round is checked" '.phase == "checking"'
-echo '{"verdict": "pass", "summary": "The cap holds, and both replies are true.", "findings": []}' >"$wt/.tmp/check/check-2.json"
-say CHECKED checker-status.txt
+checked "The cap holds, and both replies are true."
 until_ "the round reaches its push gate" '.phase == "push_gate"'
 id=$(ask_id "Push and reply")
 api "$base/api/messages/$id" | jq -e --arg s "$sha" '.body | contains("Fixed in " + $s) and contains("on behalf of @you") and contains("requested again from dana")' >/dev/null ||
@@ -262,8 +292,7 @@ git -C "$wt" merge --quiet --no-edit origin/main
 echo '{"replies": [], "answers": [], "rerequest": []}' >"$wt/.tmp/address/round-2/replies.json"
 say BUILT status.txt
 until_ "round 2 is checked" '.phase == "checking"'
-echo '{"verdict": "pass", "summary": "main merges in cleanly.", "findings": []}' >"$wt/.tmp/check/check-3.json"
-say CHECKED checker-status.txt
+checked "main merges in cleanly."
 until_ "round 2 reaches its gate" '.phase == "push_gate"'
 answer "Push and reply"
 until_ "round 2 is pushed" '.state == "open" and .round == null and .rounds == 2'
