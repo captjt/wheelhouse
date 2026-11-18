@@ -28,8 +28,9 @@ enum K {
     static let text2 = dyn(0x3d3d3d, 0xd1d1d1)
     static let muted = dyn(0x737373, 0xa1a1a1)
     static let faint = dyn(0xa1a1a1, 0x737373)
-    static let brand = Color(nsColor: rgb(0xf6821f))
-    static let brand2 = Color(nsColor: rgb(0xfbad41))
+    /// Cloudflare orange; Wheelhouse Dev's is blue, as a nightly build recolors its mark.
+    static let brand = Color(nsColor: rgb(Flavor.isDev ? 0x2f7dff : 0xf6821f))
+    static let brand2 = Color(nsColor: rgb(Flavor.isDev ? 0x8fb8ff : 0xfbad41))
     static let accent = dyn(0x056dff, 0x2f7dff)
     static let accentSoft = dyn(0xdbeafe, 0x1c398e, 0.65, 0.28)
     static let link = dyn(0x193cb8, 0x51a2ff)
@@ -204,7 +205,25 @@ struct HubAvatar: View {
             .fill(LinearGradient(colors: [K.brand2, K.brand], startPoint: .topLeading, endPoint: .bottomTrailing))
             .overlay(Logo(color: .white).padding(size * 0.19))
             .frame(width: size, height: size)
-            .help("Wheelhouse")
+            .help(Flavor.name)
+    }
+}
+
+/// DEV, as a nightly build marks itself: on Wheelhouse Dev's toolbar, sidebar
+/// and quick panel, with the build it is under the pointer. Nothing on the daily app.
+struct DevBadge: View {
+    var body: some View {
+        if Flavor.isDev {
+            Text("DEV")
+                .font(.system(size: 9.5, weight: .heavy))
+                .tracking(0.6)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(LinearGradient(colors: [K.brand2, K.brand], startPoint: .topLeading, endPoint: .bottomTrailing), in: Capsule())
+                .help("Wheelhouse Dev\(Flavor.build.map { ": \($0)" } ?? ""). A copy of your dockets, with nothing live.")
+                .accessibilityLabel("Wheelhouse Dev")
+        }
     }
 }
 

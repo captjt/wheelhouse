@@ -121,3 +121,15 @@ private func boxes(_ text: String) -> [(Int, Bool)] {
     #expect(ago(iso(3 * 3600), now: now) == "3h")
     #expect(ago(iso(2 * 86400), now: now) == "2d")
 }
+
+/// Unbundled (tests, `swift run`, `--snapshot`) it's the daily Wheelhouse:
+/// only Wheelhouse Dev's Info.plist (`build.sh --dev`) makes it Dev.
+@Test func isTheDailyFlavorUnbundled() {
+    #expect(!Flavor.isDev)
+    #expect(Flavor.name == "Wheelhouse")
+    #expect(Flavor.scheme == "wheelhouse")
+    #expect(Flavor.defaultHub == "http://127.0.0.1:7500")
+    #expect(Flavor.command == nil)
+    #expect(Flavor.chord == "⌥⌘K")
+    #expect(HubClient.defaultAddress == "http://127.0.0.1:7500")
+}

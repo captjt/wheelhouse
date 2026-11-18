@@ -5,6 +5,8 @@
 import AppKit
 
 let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.iconset")
+/// `swift Icon.swift DIR dev`: Wheelhouse Dev's, a blue wheel marked DEV.
+let dev = CommandLine.arguments.count > 2 && CommandLine.arguments[2] == "dev"
 try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
 func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> NSColor {
@@ -31,7 +33,7 @@ func draw(_ px: Int) -> Data {
     ctx.saveGState()
     shape.addClip()
     NSGradient(colors: [rgb(0x26272b), rgb(0x0c0c0e)])!.draw(in: body, angle: -90)
-    let glow = NSGradient(colors: [rgb(0xf6821f, 0.28), rgb(0xf6821f, 0)])!
+    let glow = dev ? NSGradient(colors: [rgb(0x2f7dff, 0.3), rgb(0x2f7dff, 0)])! : NSGradient(colors: [rgb(0xf6821f, 0.28), rgb(0xf6821f, 0)])!
     glow.draw(fromCenter: NSPoint(x: body.midX, y: body.midY), radius: 0, toCenter: NSPoint(x: body.midX, y: body.midY), radius: 430 * s, options: [])
     // A hairline on the top edge, as glass catches light.
     let rim = NSBezierPath(roundedRect: body.insetBy(dx: 1.5 * s, dy: 1.5 * s), xRadius: 184 * s, yRadius: 184 * s)
@@ -43,7 +45,7 @@ func draw(_ px: Int) -> Data {
     // The wheel, on the web logo's 32-unit grid.
     let u = 824 * s * 0.66 / 32
     let c = CGPoint(x: body.midX, y: body.midY)
-    let orange = NSGradient(colors: [rgb(0xfbad41), rgb(0xf6821f), rgb(0xe8650c)])!
+    let orange = dev ? NSGradient(colors: [rgb(0x8fb8ff), rgb(0x2f7dff), rgb(0x1652c8)])! : NSGradient(colors: [rgb(0xfbad41), rgb(0xf6821f), rgb(0xe8650c)])!
     let mark = NSBezierPath()
     mark.appendOval(in: CGRect(x: c.x - 11 * u, y: c.y - 11 * u, width: 22 * u, height: 22 * u))
     let ring = mark.copy() as! NSBezierPath
@@ -63,7 +65,7 @@ func draw(_ px: Int) -> Data {
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -6 * s), blur: 18 * s, color: rgb(0x000000, 0.45).cgColor)
     ctx.beginTransparencyLayer(auxiliaryInfo: nil)
-    rgb(0xf6821f).setFill()
+    (dev ? rgb(0x2f7dff) : rgb(0xf6821f)).setFill()
     parts.forEach { $0.fill() }
     ctx.endTransparencyLayer()
     ctx.restoreGState()
@@ -72,6 +74,15 @@ func draw(_ px: Int) -> Data {
         p.addClip()
         orange.draw(in: span, angle: -90)
         ctx.restoreGState()
+    }
+
+    // Dev: DEV under the wheel, where the daily icon has none (too small to read below 64 px).
+    if dev, px >= 64 {
+        let text = NSAttributedString(string: "DEV", attributes: [
+            .font: NSFont.systemFont(ofSize: 112 * s, weight: .heavy), .foregroundColor: rgb(0xffffff, 0.92), .kern: 10 * s,
+        ])
+        let size = text.size()
+        text.draw(at: NSPoint(x: body.midX - size.width / 2, y: body.minY + 34 * s))
     }
 
     NSGraphicsContext.restoreGraphicsState()

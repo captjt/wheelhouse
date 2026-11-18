@@ -10,6 +10,8 @@ struct MenuBarLabel: View {
         let n = store.urgent
         HStack(spacing: 3) {
             Image(nsImage: Self.wheel(alert: n > 0))
+            // Beside the daily one, Dev says which it is: a blue wheel and a DEV pill.
+            if Flavor.isDev { Image(nsImage: Self.devPill) }
             if n > 0 { Text("\(n)").monospacedDigit() }
         }
     }
@@ -21,7 +23,7 @@ struct MenuBarLabel: View {
         let img = NSImage(size: size, flipped: false) { r in
             let u = r.width / 32
             let c = NSPoint(x: r.midX, y: r.midY)
-            (alert ? NSColor(srgbRed: 0.965, green: 0.51, blue: 0.122, alpha: 1) : NSColor.black).set()
+            (alert ? NSColor(srgbRed: 0.965, green: 0.51, blue: 0.122, alpha: 1) : Flavor.isDev ? Self.devBlue : NSColor.black).set()
             let ring = NSBezierPath(ovalIn: NSRect(x: c.x - 10.5 * u, y: c.y - 10.5 * u, width: 21 * u, height: 21 * u))
             ring.lineWidth = 3.4 * u
             ring.stroke()
@@ -37,9 +39,25 @@ struct MenuBarLabel: View {
             }
             return true
         }
-        img.isTemplate = !alert
+        // Dev's stays blue in a light or dark bar; the daily one follows the bar.
+        img.isTemplate = !alert && !Flavor.isDev
         return img
     }
+
+    static let devBlue = NSColor(srgbRed: 0.184, green: 0.49, blue: 1, alpha: 1)
+
+    /// Dev's pill: DEV in white on blue, drawn once.
+    static let devPill: NSImage = {
+        let text = NSAttributedString(string: "DEV", attributes: [.font: NSFont.systemFont(ofSize: 9, weight: .heavy), .foregroundColor: NSColor.white, .kern: 0.5])
+        let t = text.size()
+        let size = NSSize(width: ceil(t.width) + 9, height: 13)
+        return NSImage(size: size, flipped: false) { r in
+            devBlue.setFill()
+            NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
+            text.draw(at: NSPoint(x: (r.width - t.width) / 2, y: (r.height - t.height) / 2 + 0.5))
+            return true
+        }
+    }()
 }
 
 /// The menu bar's panel: what needs you, answerable in place.
@@ -53,7 +71,8 @@ struct MenuBarPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 HubAvatar(size: 20)
-                Text("Wheelhouse").font(.system(size: 13, weight: .semibold))
+                Text(Flavor.name).font(.system(size: 13, weight: .semibold))
+                DevBadge()
                 Spacer()
                 Text(items.isEmpty ? "All caught up" : "\(items.count) for you").font(.system(size: 12)).foregroundStyle(.secondary)
             }
@@ -94,13 +113,13 @@ struct MenuBarPanel: View {
                 Circle().fill(store.state?.rexConnected == true && store.live ? K.working : K.blocked).frame(width: 6, height: 6)
                 Text(store.state == nil ? "Hub unreachable" : store.state?.rexConnected == true ? "Following Rex" : "Rex: connecting").font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
-                Button { Windows.showMain() } label: { Text("Open Wheelhouse") }.buttonStyle(.borderless).font(.system(size: 12))
+                Button { Windows.showMain() } label: { Text("Open \(Flavor.name)") }.buttonStyle(.borderless).font(.system(size: 12))
                 Menu {
                     Button("New Docket…") { Windows.showMain(); Nav.main.creating = .blank }
                     Button("Start an Agent…") { Windows.showMain(); Nav.main.creating = .agent }
                     Divider()
                     Button("Settings…") { NSApp.activate(); openSettings() }
-                    Button("Quit Wheelhouse") { NSApp.terminate(nil) }
+                    Button("Quit \(Flavor.name)") { NSApp.terminate(nil) }
                 } label: { Image(systemName: "ellipsis.circle") }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             }
@@ -195,7 +214,7 @@ private struct GeneralSettings: View {
             }
             .pickerStyle(.segmented)
             Toggle("Show Wheelhouse in the menu bar", isOn: $menuBar)
-            Toggle("Open Wheelhouse from any app with ⌥⌘K", isOn: $quickPanel)
+            Toggle("Open \(Flavor.name) from any app with \(Flavor.chord)", isOn: $quickPanel)
                 .onChange(of: quickPanel) { QuickPanel.apply() }
             Toggle("Open at login", isOn: Binding(get: { login }, set: { on in
                 do {

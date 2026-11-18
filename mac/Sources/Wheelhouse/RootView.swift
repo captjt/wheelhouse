@@ -83,9 +83,9 @@ struct RootView: View {
         })
     }
 
-    /// `wheelhouse://docket/D-12`: show it.
+    /// `wheelhouse://docket/D-12` (Dev's `wheelhouse-dev://`): show it.
     private func open(_ url: URL) {
-        guard url.scheme == "wheelhouse" else { return }
+        guard url.scheme == Flavor.scheme else { return }
         let parts = ([url.host] + url.pathComponents).compactMap { $0 }.filter { $0 != "/" }
         if parts.first == "docket", let id = parts.dropFirst().first {
             nav.show(id, store: store)
@@ -142,6 +142,9 @@ struct Sidebar: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) { SidebarFoot() }
         .toolbar {
+            if Flavor.isDev {
+                ToolbarItem(placement: .navigation) { DevBadge() }
+            }
             ToolbarItem {
                 Button { nav.palette = true } label: { Label("Search", systemImage: "magnifyingglass") }
                     .help("Search dockets and commands (⌘K)")
@@ -168,6 +171,13 @@ struct SidebarFoot: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Which Wheelhouse, and the build: Dev's is a nightly's foot.
+            if Flavor.isDev {
+                HStack(spacing: 6) {
+                    DevBadge()
+                    Text(Flavor.build ?? "Wheelhouse Dev").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+            }
             if let s = store.state {
                 if !s.hooks { hint("Hooks off", "wh hooks install", "Claude Code's hooks are off, so dockets are named after their panes and turns carry no message.", symbol: "link") }
                 if !s.linear { hint("Linear off", "wh setup-linear", "Connect Linear to start dockets from issues and link issues to dockets.", symbol: "circle.hexagongrid") }
@@ -230,7 +240,9 @@ struct HubDownView: View {
         ContentUnavailableView {
             Label("The hub isn't running", systemImage: "bolt.horizontal.circle")
         } description: {
-            Text("Wheelhouse.app shows what the hub (wh serve) keeps. Start it here, or with `wh up` in a terminal. It runs at login from then on.")
+            Text(Flavor.isDev
+                ? "Wheelhouse Dev shows what its own hub keeps: a copy of your dockets. Start it here, or with `wh-dev up` in a terminal. It runs at login from then on."
+                : "Wheelhouse.app shows what the hub (wh serve) keeps. Start it here, or with `wh up` in a terminal. It runs at login from then on.")
         } actions: {
             Button(store.startingHub ? "Starting…" : "Start the hub") { store.startHub() }
                 .buttonStyle(.borderedProminent)
@@ -278,7 +290,7 @@ struct ShortcutsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private let groups: [(String, [(String, String)])] = [
-        ("Anywhere", [("⌥⌘K", "Wheelhouse over any app: approve, answer, find a docket, start one")]),
+        ("Anywhere", [(Flavor.chord, "\(Flavor.name) over any app: approve, answer, find a docket, start one")]),
         ("Go", [("⌘K  or  /", "Search dockets and commands"), ("⌘1 … ⌘8", "Inbox, Reviews, Builds, Active, All, Done, Agents, Recap"), ("G, then I R B A D X N P", "The same, as in the web app"), ("⌘R", "Refresh"), ("⌘,", "Settings: standing orders, agents, repos, guides")]),
         ("Create", [("⌘N  or  C", "New docket"), ("⇧⌘N", "Start an agent on a new docket")]),
         ("A list", [("J K  or  ↑ ↓", "Move"), ("↩  or  double-click", "Open the docket in its own window"), ("O", "Show the agent's pane in Rex"), ("S, then 1–4", "Change status"), ("E", "In the Inbox: done"), ("Swipe", "Done, Drop, Status; Approve, Deny, File in the Inbox")]),

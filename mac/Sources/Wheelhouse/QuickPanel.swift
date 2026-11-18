@@ -2,7 +2,7 @@ import AppKit
 import Carbon
 import SwiftUI
 
-/// ⌥⌘K from any app: Wheelhouse's palette, floating over whatever you're
+/// ⌥⌘K from any app (⇧⌥⌘K for Wheelhouse Dev): Wheelhouse's palette, floating over whatever you're
 /// in. Approve a prompt, pick an agent's answer, find a docket, or start
 /// one, without switching apps. The hot key is the system's own (Carbon),
 /// so it needs no Accessibility permission. Settings › General turns it off.
@@ -27,7 +27,8 @@ enum QuickPanel {
             return noErr
         }, 1, &spec, nil, &handler)
         let id = EventHotKeyID(signature: OSType(0x5748_4B31), id: 1) // "WHK1"
-        RegisterEventHotKey(UInt32(kVK_ANSI_K), UInt32(cmdKey | optionKey), id, GetApplicationEventTarget(), 0, &hotKey)
+        // Dev's adds Shift, so the two never take each other's.
+        RegisterEventHotKey(UInt32(kVK_ANSI_K), UInt32(cmdKey | optionKey | (Flavor.isDev ? shiftKey : 0)), id, GetApplicationEventTarget(), 0, &hotKey)
     }
 
     private static func unregister() {
