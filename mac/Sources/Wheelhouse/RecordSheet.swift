@@ -11,6 +11,9 @@ struct RecordSheet: View {
     @State private var mark = "all"
     @State private var q = ""
     @State private var explain = false
+    /// The entries, parsed once, and what Find searches in each.
+    @State private var entries: [Entry] = []
+    @State private var haystack: [Int: String] = [:]
 
     private func keyName(_ k: String?) -> String {
         switch k {
@@ -23,11 +26,10 @@ struct RecordSheet: View {
     }
 
     var body: some View {
-        let entries = rec?["entries"].array.map(Entry.init) ?? []
         let v = Verify(j: rec?["verify"] ?? .null)
         let shown = entries.filter { e in
             (mark == "all" || e.mark == mark || (mark == "problems" && !e.problems.isEmpty))
-                && (q.isEmpty || "\(e.kind) \(e.body ?? "") \(e.data.pretty) #\(e.seq)".localizedCaseInsensitiveContains(q))
+                && (q.isEmpty || (haystack[e.seq] ?? "").localizedCaseInsensitiveContains(q))
         }.reversed()
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -39,6 +41,7 @@ struct RecordSheet: View {
             }
             .padding(16)
             Divider()
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if let error { Text(error).foregroundStyle(K.error) }
@@ -90,7 +93,9 @@ struct RecordSheet: View {
                             Spacer()
                             TextField("Find in the record…", text: $q).textFieldStyle(.roundedBorder).frame(width: 240)
                         }
-                        LazyVStack(spacing: 0) {
+                        // A plain stack, not a lazy one: rows grow as they open,
+                        // and a lazy stack re-placing them could loop (it hung).
+                        VStack(spacing: 0) {
                             ForEach(Array(shown)) { e in RecordRow(id: id, e: e, owner: store.state?.owner ?? "you", keyName: keyName(e.key)) }
                         }
                         .background(K.elev, in: RoundedRectangle(cornerRadius: 10))
@@ -101,10 +106,28 @@ struct RecordSheet: View {
                 }
                 .padding(18)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .snapshotEnvelope)) { n in
+                // The oldest entry with that mark, scrolled to and opened.
+                guard let m = n.object as? String, let target = entries.first(where: { $0.mark == m }) else { return }
+                proxy.scrollTo(target.seq, anchor: .center)
+                Task {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    NotificationCenter.default.post(name: .snapshotEnvelopeRow, object: target.seq)
+                    try? await Task.sleep(for: .milliseconds(400))
+                    proxy.scrollTo(target.seq, anchor: .top)
+                }
+            }
+            }
         }
         .frame(minWidth: 820, idealWidth: 920, minHeight: 600, idealHeight: 760)
         .task {
-            do { rec = try await store.hub.get("/api/dockets/\(id)/record") } catch { self.error = Store.words(error) }
+            do {
+                let r = try await store.hub.get("/api/dockets/\(id)/record")
+                let es = r["entries"].array.map(Entry.init)
+                haystack = Dictionary(es.map { ($0.seq, "\($0.kind) \($0.body ?? "") \($0.data.pretty) #\($0.seq)") }, uniquingKeysWith: { a, _ in a })
+                entries = es
+                rec = r
+            } catch { self.error = Store.words(error) }
         }
     }
 
@@ -172,6 +195,11 @@ private struct RecordRow: View {
             }
             Divider().opacity(0.6)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .snapshotEnvelopeRow)) { n in
+            guard (n.object as? Int) == e.seq, !open else { return }
+            open = true
+            Task { envelope = try? await store.hub.get("/api/dockets/\(id)/record/\(e.seq)") }
+        }
     }
 
     private var summary: String {
@@ -186,11 +214,14 @@ private struct RecordRow: View {
         }
     }
 
+    /// Code, wrapped. Not a sideways scroll: with a mouse plugged in, its
+    /// scroll bar takes room as it appears, the row's height changes, and
+    /// the list re-lays it out (that hung the app on long links).
     private func code(_ s: String) -> some View {
-        ScrollView(.horizontal) {
-            Text(s).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(K.text2).fixedSize().padding(10)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(K.recessed, in: RoundedRectangle(cornerRadius: 8))
+        Text(s).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(K.text2)
+            .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(K.recessed, in: RoundedRectangle(cornerRadius: 8))
     }
 }

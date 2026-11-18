@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use super::Entry;
 
@@ -52,6 +53,25 @@ pub struct DocketState {
     /// The PR a Review docket is about, as rex-reviewer last said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewRef>,
+    /// On hold, and why: its protocol takes no steps until you resume it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<String>,
+    /// Closed with nothing witnessed or checkable behind it: on your word.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_on: Option<String>,
+    /// Each witnessed check's latest result, by name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub checks: BTreeMap<String, CheckBrief>,
+}
+
+/// A witnessed check's latest result, in brief.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct CheckBrief {
+    pub ok: bool,
+    pub head: String,
+    pub at: String,
+    #[serde(default)]
+    pub required: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -187,7 +207,17 @@ impl DocketState {
                 }
                 if let Some(st) = s(&d["status"]) {
                     self.ended_at = matches!(st.as_str(), "done" | "dropped").then(|| e.at.clone());
+                    self.closed_on = (st == "done" && d["on"] == "word").then(|| s(&d["reason"]).unwrap_or_else(|| "your word".into()));
                     self.status = st;
+                }
+                if d.get("hold").is_some() {
+                    self.hold = s(&d["hold"]);
+                }
+            }
+            "check" => {
+                if let Some(n) = s(&d["name"]) {
+                    let c = CheckBrief { ok: d["ok"] == true, head: s(&d["head"]).unwrap_or_default(), at: e.at.clone(), required: d["required"] != false };
+                    self.checks.insert(n, c);
                 }
             }
             "claim" => {

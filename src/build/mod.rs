@@ -193,9 +193,16 @@ pub struct Attention {
     pub text: String,
 }
 
+impl Hub {
+    /// A repo's witnessed checks, as Build's config (last read) has them.
+    pub fn specs(&self, repo: &str) -> Option<Vec<config::CheckSpec>> {
+        self.config.as_ref().and_then(|(c, _, _)| c.repos.get(repo).map(|r| r.checks.clone()))
+    }
+}
+
 #[derive(Default)]
 pub struct Hub {
-    config: Option<(Arc<config::Config>, Option<std::time::SystemTime>, Option<std::time::SystemTime>)>,
+    pub(crate) config: Option<(Arc<config::Config>, Option<std::time::SystemTime>, Option<std::time::SystemTime>)>,
     pub config_error: Option<String>,
     pub attention: BTreeMap<String, Attention>,
     pub check_now: Arc<tokio::sync::Notify>,
@@ -212,7 +219,8 @@ pub fn paused(core: &Core) -> bool {
 /// The config, read again when build.lua or review.lua changes.
 pub fn config(shared: &Shared) -> Result<Arc<config::Config>> {
     let m = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-    let (bm, rm) = (m(config::path()), m(crate::review::config::path()));
+    // Settings lie over both files: a change to any of them reloads.
+    let (bm, rm) = (m(config::path()).max(crate::settings::mtime()), m(crate::review::config::path()));
     if let Some((c, b, r)) = &shared.lock().build.config
         && *b == bm
         && *r == rm

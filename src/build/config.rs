@@ -17,6 +17,41 @@ pub struct Repo {
     pub base: Option<String>,
     /// `full`, `summary`, or `off`: how much of the plan goes on the PR.
     pub plan: Option<String>,
+    /// The repo's own checks, which the hub runs itself and witnesses.
+    pub checks: Vec<CheckSpec>,
+}
+
+/// A check the hub runs in a worktree, at a commit (`checks` in a repo's
+/// table): `test = "cargo test"`, or `lint = { run = "…", required = false,
+/// timeout = 600 }`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckSpec {
+    pub name: String,
+    pub run: String,
+    /// A required check that fails keeps the PR from opening, and a round
+    /// from pushing, unless you say so.
+    pub required: bool,
+    pub timeout: u64,
+}
+
+fn checks(v: &Value) -> Result<Vec<CheckSpec>> {
+    let mut out = Vec::new();
+    for (name, c) in v.as_object().into_iter().flatten() {
+        let (run, required, timeout) = match c {
+            Value::String(s) => (s.clone(), true, 1200),
+            Value::Object(o) => (
+                o.get("run").and_then(Value::as_str).map(str::to_string).ok_or_else(|| anyhow::anyhow!("checks.{name} needs `run`, the command"))?,
+                o.get("required").and_then(Value::as_bool).unwrap_or(true),
+                o.get("timeout").and_then(Value::as_u64).unwrap_or(1200),
+            ),
+            _ => bail!("checks.{name} is a command, or {{ run = …, required = …, timeout = … }}"),
+        };
+        if run.trim().is_empty() {
+            bail!("checks.{name} has no command");
+        }
+        out.push(CheckSpec { name: name.clone(), run, required, timeout: timeout.clamp(10, 7200) });
+    }
+    Ok(out)
 }
 
 /// `sources.linear`: Linear issues assigned to you that start a Build (with
@@ -92,7 +127,7 @@ fn role(v: &Value, default: &str) -> Result<Role> {
 
 pub fn load() -> Result<Config> {
     let p = path();
-    let raw = if p.exists() { lua::dump(&p)? } else { Value::Object(Default::default()) };
+    let raw = crate::settings::overlaid(if p.exists() { lua::dump(&p)? } else { Value::Object(Default::default()) }, "build");
     let review = crate::review::config::load().ok();
     from_value(p.exists().then_some(p), raw, review.as_ref())
 }
@@ -101,7 +136,7 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
     let mut repos = BTreeMap::new();
     if let Some(rc) = review {
         for (slug, r) in &rc.repos {
-            repos.insert(slug.clone(), Repo { checkout: r.checkout.clone(), notes: r.notes.clone(), base: None, plan: None });
+            repos.insert(slug.clone(), Repo { checkout: r.checkout.clone(), notes: r.notes.clone(), base: None, plan: None, checks: Vec::new() });
         }
     }
     for (slug, r) in raw["repos"].as_object().into_iter().flatten() {
@@ -119,7 +154,13 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
         };
         repos.insert(
             slug.clone(),
-            Repo { checkout, notes: r["notes"].as_str().map(str::to_string).or(prev.map(|p| p.notes)).unwrap_or_default(), base: r["base"].as_str().map(str::to_string), plan },
+            Repo {
+                checkout,
+                notes: r["notes"].as_str().map(str::to_string).or(prev.as_ref().map(|p| p.notes.clone())).unwrap_or_default(),
+                base: r["base"].as_str().map(str::to_string),
+                plan,
+                checks: checks(&r["checks"]).map_err(|e| anyhow::anyhow!("repos[\"{slug}\"].{e}"))?,
+            },
         );
     }
     let mut gates: BTreeMap<String, String> =

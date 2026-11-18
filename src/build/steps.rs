@@ -231,20 +231,23 @@ pub async fn prep(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     Ok(())
 }
 
+/// Build's briefs, built in. A file of the same name in
+/// `~/.config/wheelhouse/briefs/build/` (Settings → Guides & briefs) replaces one.
+pub(crate) const BRIEFS: [(&str, &str); 6] = [
+    ("ground-rules.md", include_str!("../../briefs/build/ground-rules.md")),
+    ("plan.md", include_str!("../../briefs/build/plan.md")),
+    ("build.md", include_str!("../../briefs/build/build.md")),
+    ("check.md", include_str!("../../briefs/build/check.md")),
+    ("address.md", include_str!("../../briefs/build/address.md")),
+    ("prereview.md", include_str!("../../briefs/build/prereview.md")),
+];
+
 pub(super) fn brief(name: &str) -> String {
     let own = crate::review::config::dir().join("briefs/build").join(name);
     if let Ok(s) = std::fs::read_to_string(own) {
         return s;
     }
-    match name {
-        "ground-rules.md" => include_str!("../../briefs/build/ground-rules.md"),
-        "plan.md" => include_str!("../../briefs/build/plan.md"),
-        "build.md" => include_str!("../../briefs/build/build.md"),
-        "address.md" => include_str!("../../briefs/build/address.md"),
-        "prereview.md" => include_str!("../../briefs/build/prereview.md"),
-        _ => include_str!("../../briefs/build/check.md"),
-    }
-    .to_string()
+    BRIEFS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s).unwrap_or(BRIEFS[3].1).to_string()
 }
 
 pub(super) fn vars(cfg: &Config, t: &Task, login: &str) -> crate::review::briefs::Vars {
@@ -261,8 +264,8 @@ pub(super) fn vars(cfg: &Config, t: &Task, login: &str) -> crate::review::briefs
     v.insert("PORT", t.port.unwrap_or(4310).to_string());
     v.insert("MAX_DECISIONS", cfg.max_decisions.to_string());
     v.insert("CLOSES", closes(t).unwrap_or_else(|| "the issue link".into()));
-    v.insert("PLAN_FORMAT", cfg.guide("plan_format").unwrap_or_else(|| include_str!("../../guides/plan-format.md").to_string()));
-    v.insert("PR_STYLE", cfg.guide("pr_style").unwrap_or_else(|| include_str!("../../guides/pr-style.md").to_string()));
+    v.insert("PLAN_FORMAT", cfg.guide("plan_format").unwrap_or_else(|| crate::settings::guide_text("plan-format.md")));
+    v.insert("PR_STYLE", cfg.guide("pr_style").unwrap_or_else(|| crate::settings::guide_text("pr-style.md")));
     let mode = repo.and_then(|r| r.plan.clone()).unwrap_or_else(|| "full".into());
     v.insert(
         "PLAN_MODE",
@@ -527,6 +530,7 @@ pub async fn step(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<Option<
             return super::address::step(shared, cfg, t, &bstat, free, idle).await;
         }
         "prereview" => return super::prereview::step(shared, cfg, t).await,
+        "verifying" => return verifying(shared, cfg, t).await,
         "pushing" => {
             if let Err(e) = super::address::push(shared, cfg, t).await.and_then(|a| a.map_or(Ok(()), |a| Err(anyhow!(a.text)))) {
                 let e = format!("{e:#}");
@@ -688,7 +692,7 @@ async fn answer(shared: &Shared, cfg: &Config, t: &mut Task, what: &str, r: Repl
             t.previewed_head = t.checked_head.clone();
             ask_open(shared, t, None)?;
             t.phase = Some("open_gate".into());
-            gate_open(cfg, t);
+            gate_open(shared, cfg, t);
         }
         ("preview", _) => {
             t.phase = Some("building".into());
@@ -696,8 +700,13 @@ async fn answer(shared: &Shared, cfg: &Config, t: &mut Task, what: &str, r: Repl
                 .await?;
         }
         ("open", Some(0)) => {
+            // Approving over failing checks is your word against them: kept.
+            let over = checks_ok(shared, cfg, t, t.checked_head.as_deref().unwrap_or("")).err();
+            if over.is_some() {
+                t.extra.insert("checks_override".into(), json!(t.checked_head));
+            }
             let mut core = shared.lock();
-            core.append(&t.docket, "approval", &Who::Owner, None, json!({ "what": "open-pr", "gate": "open", "head": t.checked_head, "branch": t.branch }))?;
+            core.append(&t.docket, "approval", &Who::Owner, None, json!({ "what": "open-pr", "gate": "open", "head": t.checked_head, "branch": t.branch, "over_checks": over }))?;
             drop(core);
             t.approved_head = t.checked_head.clone();
             t.phase = Some("opening".into());
@@ -918,12 +927,20 @@ async fn after_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     t.tokens = Some(agentcli::tokens(&w));
     {
         let mut core = shared.lock();
+        // The checker's judgment, said by the checker. It's independent when
+        // a session and pane other than the builder's made it (agents of one
+        // app share a key today, so this rests on the session, not the key).
+        let independent = t.checker.session.is_some() && t.checker.session != t.builder.session && t.checker.block != t.builder.block;
+        let who = Who::Agent { app: app_of(&t.checker.agent).into(), block: t.checker.block.clone().unwrap_or_default(), session: t.checker.session.clone() };
         core.append(
             &t.docket,
             "verdict",
-            &Who::Hub,
+            &who,
             c["summary"].as_str().map(str::to_string),
-            json!({ "role": "checker", "n": n, "verdict": verdict, "findings": findings.len(), "head": head }),
+            json!({
+                "role": "checker", "n": n, "verdict": verdict, "findings": findings.len(), "head": head, "independent": independent,
+                "builder": { "session": t.builder.session, "block": t.builder.block }, "round": t.round.as_ref().map(|r| r["n"].clone()),
+            }),
         )?;
         for (file, title, role) in [(format!("check-{n}.json"), format!("Check {n}"), "check"), (format!("report-{n}.md"), format!("Check {n}'s report"), "check-report")] {
             let path = w.join(".tmp/check").join(&file);
@@ -944,7 +961,7 @@ async fn after_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
             );
             return tell_builder(shared, t, &text, "WORKING addressing").await;
         }
-        return super::address::ask_push(shared, t);
+        return checked(shared, cfg, t).await;
     }
     if verdict == "fix" && !findings.is_empty() && t.fix_used < cfg.fix_loops {
         t.fix_used += 1;
@@ -955,11 +972,92 @@ async fn after_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
         );
         return tell_builder(shared, t, &text, "WORKING building").await;
     }
+    checked(shared, cfg, t).await
+}
+
+/// The repo's witnessed checks, as Build's config has them.
+fn specs(cfg: &Config, t: &Task) -> Vec<super::config::CheckSpec> {
+    cfg.repos.get(&t.repo).map(|r| r.checks.clone()).unwrap_or_default()
+}
+
+/// Whether the required checks passed at `head` (or there are none), or why not.
+pub(super) fn checks_ok(shared: &Shared, cfg: &Config, t: &Task, head: &str) -> std::result::Result<(), String> {
+    let sp = specs(cfg, t);
+    if sp.iter().all(|s| !s.required) {
+        return Ok(());
+    }
+    let entries: Vec<crate::record::Entry> = shared.lock().store.entries(&t.docket).map(|v| v.iter().filter_map(|s| s.entry().ok()).collect()).unwrap_or_default();
+    crate::checks::passed_at(&sp, &entries, head)
+}
+
+/// The checker passed it (or the fix rounds ran out): run the repo's
+/// witnessed checks at that commit, unless they already ran there.
+async fn checked(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
+    let head = t.checked_head.clone().unwrap_or_default();
+    let sp = specs(cfg, t);
+    if !sp.is_empty() && t.extra.get("verified_head").and_then(Value::as_str) != Some(head.as_str()) {
+        let target = crate::checks::Target { repo: t.repo.clone(), dir: wt(t), base: t.base_head.clone(), specs: sp };
+        let run = crate::checks::spawn(shared, &t.docket, target, "build");
+        t.extra.insert("check_run".into(), json!(run));
+        t.extra.insert("verified_head".into(), json!(head));
+        t.phase = Some("verifying".into());
+        return Ok(());
+    }
+    after_verified(shared, cfg, t).await
+}
+
+/// After the witnessed checks: a round's push gate, or pre-review, or the gates.
+async fn after_verified(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
+    if t.round.is_some() {
+        return super::address::ask_push(shared, t);
+    }
     // Reviewers, blind, before it opens.
     if super::prereview::due(cfg, t) {
         return super::prereview::start(shared, cfg, t).await;
     }
     gates(shared, cfg, t).await
+}
+
+/// The witnessed checks' step: once they've run, a required failure goes
+/// back to the builder (within its fix rounds); then on.
+async fn verifying(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<Option<Attention>> {
+    if crate::checks::running(&t.docket) {
+        return Ok(None);
+    }
+    let run = t.extra.get("check_run").and_then(Value::as_str).unwrap_or("").to_string();
+    let entries: Vec<crate::record::Entry> = shared.lock().store.entries(&t.docket)?.iter().filter_map(|s| s.entry().ok()).collect();
+    let got = crate::checks::of_run(&entries, &run);
+    if got.is_empty() {
+        // They didn't run (the entry says why): on to the gates, which hold
+        // the PR until they pass or you say so.
+        after_verified(shared, cfg, t).await?;
+        return Ok(att("error", "the witnessed checks didn't run; look at the docket"));
+    }
+    let failed: Vec<&&crate::record::Entry> = got.iter().filter(|e| e.data["required"] != false && e.data["ok"] != true).collect();
+    if failed.is_empty() {
+        after_verified(shared, cfg, t).await?;
+        return Ok(None);
+    }
+    if t.fix_used < cfg.fix_loops {
+        t.fix_used += 1;
+        let mut text = format!("The witnessed checks failed at {}: Wheelhouse ran them itself, behind the wall.\n", short(t.checked_head.as_deref().unwrap_or("")));
+        for e in &failed {
+            text.push_str(&format!(
+                "\n`{}` (`{}`) {}. Its output ends:\n```\n{}\n```\n",
+                e.data["name"].as_str().unwrap_or("?"),
+                e.data["command"].as_str().unwrap_or(""),
+                e.data["exit"].as_i64().map(|c| format!("exited {c}")).unwrap_or_else(|| "timed out".into()),
+                crate::checks::tail(shared, &e.data["output"], 40)
+            ));
+        }
+        let (phase, status) = if t.round.is_some() { ("addressing", "WORKING addressing") } else { ("building", "WORKING building") };
+        text.push_str(&format!("\nFix it, run the same commands, commit, and write BUILT. This is fix round {} of {}.", t.fix_used, cfg.fix_loops));
+        t.phase = Some(phase.into());
+        tell_builder(shared, t, &text, status).await?;
+        return Ok(None);
+    }
+    after_verified(shared, cfg, t).await?;
+    Ok(None)
 }
 
 /// After the check (and pre-review): the preview gate when there's
@@ -998,13 +1096,13 @@ pub(super) async fn gates(shared: &Shared, cfg: &Config, t: &mut Task) -> Result
     }
     ask_open(shared, t, None)?;
     t.phase = Some("open_gate".into());
-    gate_open(cfg, t);
+    gate_open(shared, cfg, t);
     Ok(())
 }
 
 /// With the open gate on auto, it opens at once.
-fn gate_open(cfg: &Config, t: &mut Task) {
-    if cfg.gate("open") == "auto" {
+fn gate_open(shared: &Shared, cfg: &Config, t: &mut Task) {
+    if cfg.gate("open") == "auto" && checks_ok(shared, cfg, t, t.checked_head.as_deref().unwrap_or("")).is_ok() {
         t.approved_head = t.checked_head.clone();
         t.phase = Some("opening".into());
     }
@@ -1065,6 +1163,13 @@ fn ask_open(shared: &Shared, t: &mut Task, failed: Option<&str>) -> Result<()> {
     if let Some(p) = super::prereview::summary(t) {
         body.push_str(&p);
     }
+    let checked_at = t.checked_head.clone().unwrap_or_default();
+    if let Some(cfg) = super::config(shared).ok().filter(|c| !specs(c, t).is_empty()) {
+        match checks_ok(shared, &cfg, t, &checked_at) {
+            Ok(()) => body.push_str(&format!("\nWitnessed checks: passed at {} (the hub ran them itself).\n", short(&checked_at))),
+            Err(why) => body.push_str(&format!("\nWitnessed checks: {why} at {}. Open PR opens it anyway, on your word, and the record says so.\n", short(&checked_at))),
+        }
+    }
     body.push_str(&format!(
         "\nOpen PR pushes {} and opens it {}on {} with the plan attached. Needs changes sends your words to the builder.",
         t.branch.clone().unwrap_or_default(),
@@ -1102,6 +1207,11 @@ pub async fn open_pr(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     let tmp = git(&w, &["diff", "--name-only", &format!("{base_head}..HEAD")]).await?;
     if tmp.lines().any(|l| l.starts_with(".tmp/")) {
         bail!("the commits include .tmp/ files; nothing was pushed");
+    }
+    if let Err(why) = checks_ok(shared, cfg, t, &head)
+        && t.extra.get("checks_override").and_then(Value::as_str) != Some(head.as_str())
+    {
+        bail!("the witnessed checks don't pass at {} ({why}); nothing was pushed", short(&head));
     }
     let prj: Value = std::fs::read_to_string(w.join(".tmp/pr.json"))
         .ok()

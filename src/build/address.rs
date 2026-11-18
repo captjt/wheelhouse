@@ -672,13 +672,18 @@ pub fn ask_push(shared: &Shared, t: &mut Task) -> Result<()> {
 pub async fn answer_push(shared: &Shared, cfg: &Config, t: &mut Task, r: Reply) -> Result<()> {
     match r.choice {
         Some(0) => {
+            // Approving over failing checks is your word against them: kept.
+            let over = steps::checks_ok(shared, cfg, t, t.checked_head.as_deref().unwrap_or("")).err();
+            if over.is_some() {
+                t.extra.insert("checks_override".into(), json!(t.checked_head));
+            }
             let mut core = shared.lock();
             core.append(
                 &t.docket,
                 "approval",
                 &Who::Owner,
                 None,
-                json!({ "what": "push-round", "gate": "push", "round": t.rounds, "head": t.checked_head, "replies": t.extra.get("asked_replies") }),
+                json!({ "what": "push-round", "gate": "push", "round": t.rounds, "head": t.checked_head, "replies": t.extra.get("asked_replies"), "over_checks": over }),
             )?;
             drop(core);
             t.approved_head = t.checked_head.clone();
@@ -687,7 +692,6 @@ pub async fn answer_push(shared: &Shared, cfg: &Config, t: &mut Task, r: Reply) 
         Some(2) => drop_round(shared, t, "you dropped it").await?,
         _ => {
             t.phase = Some("addressing".into());
-            let _ = cfg;
             steps::tell_builder(
                 shared,
                 t,
@@ -752,6 +756,11 @@ pub async fn push(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<Option<
     let open = open_of(t);
     if let Some(p) = check_replies(&open, &d) {
         bail!("the replies don't hold up ({p}); nothing was pushed");
+    }
+    if let Err(why) = steps::checks_ok(shared, cfg, t, &head)
+        && t.extra.get("checks_override").and_then(Value::as_str) != Some(head.as_str())
+    {
+        bail!("the witnessed checks don't pass at {} ({why}); nothing was pushed", short(&head));
     }
     let checkout = cfg.repos.get(&t.repo).map(|r| r.checkout.clone()).unwrap_or_default();
     let url = format!("{}/{}.git", std::env::var("WH_GIT_BASE").unwrap_or_else(|_| "https://github.com".into()), t.repo);

@@ -152,6 +152,14 @@ pub async fn advance(shared: &Shared, cfg: &Config) {
     let mut active = prs.iter().filter(|p| p.state == "reviewing" && p.phase() != "awaiting").count();
     for p in prs.into_iter().filter(|p| p.state != "cleaned" && cfg.repos.contains_key(&p.repo)) {
         let key = p.key();
+        // On hold: no rounds, no polls, until you resume it.
+        let held = {
+            let core = shared.lock();
+            super::docket_of(&core, &key).and_then(|d| core.store.state(&d).ok().flatten()).is_some_and(|s| s.hold.is_some())
+        };
+        if held {
+            continue;
+        }
         let lock = super::lock(shared, &key);
         let _g = lock.lock().await;
         let Ok(Some(e)) = super::get(&shared.lock(), &key) else { continue };
