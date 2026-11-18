@@ -11,11 +11,15 @@ struct InboxScreen: View {
 
     var body: some View {
         let items = store.inbox
-        let current = items.first { $0.id == nav.selected(.inbox) } ?? items.first
+        let concerns = store.concerns
+        let sel = nav.selected(.inbox)
+        let concern = concerns.first { $0.id == sel }
+        let current = concern != nil ? nil : items.first { $0.id == sel } ?? items.first
+        let selected = concern?.id ?? current?.id ?? concerns.first?.id
         let blocked = items.filter { $0.kind == .blocked }.count
         let failed = items.filter { $0.kind == .error }.count
         Group {
-            if store.state != nil && items.isEmpty {
+            if store.state != nil && items.isEmpty && concerns.isEmpty {
                 ContentUnavailableView {
                     Label("You're all caught up", systemImage: "tray")
                 } description: {
@@ -23,36 +27,74 @@ struct InboxScreen: View {
                 }
             } else {
                 SplitPane {
-                    List(selection: Binding<String?>(get: { current?.id }, set: { nav.select($0, in: .inbox) })) {
-                        ForEach(items) { it in
-                            InboxRow(it: it)
-                                .tag(it.id)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: it.kind != .blocked) { trailing(it) }
-                                .swipeActions(edge: .leading) { leading(it) }
+                    List(selection: Binding<String?>(get: { selected }, set: { nav.select($0, in: .inbox) })) {
+                        if !items.isEmpty {
+                            Section {
+                                ForEach(items) { it in
+                                    InboxRow(it: it)
+                                        .tag(it.id)
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: it.kind != .blocked) { trailing(it) }
+                                        .swipeActions(edge: .leading) { leading(it) }
+                                }
+                            } header: {
+                                if !concerns.isEmpty { InboxHeader(label: "Needs you", count: items.count) { LiveIcon(state: .blocked, size: 13) } }
+                            }
+                        }
+                        if !concerns.isEmpty {
+                            Section {
+                                ForEach(concerns) { c in
+                                    ConcernRow(c: c)
+                                        .tag(c.id)
+                                        .swipeActions(edge: .trailing) { concernSwipe(c) }
+                                }
+                            } header: {
+                                InboxHeader(label: "Attention", count: concerns.count) {
+                                    Image(systemName: "eye").font(.system(size: 11, weight: .semibold)).foregroundStyle(K.muted).frame(width: 13)
+                                }
+                                .help("Worth a look, though nothing is asking you: failing checks, holds, long or quiet work, and what you closed on your word this week")
+                            }
                         }
                     }
                     .listStyle(.inset)
                     .scrollContentBackground(.hidden)
                     .contextMenu(forSelectionType: String.self) { sel in
-                        if let it = items.first(where: { $0.id == sel.first }), let d = it.docket { DocketMenu(d: d) }
+                        if let id = docketId(sel.first, items, concerns), let d = store.docket(id) { DocketMenu(d: d) }
                     } primaryAction: { sel in
-                        if let it = items.first(where: { $0.id == sel.first }), it.docket != nil { openWindow(id: "docket", value: it.docketId) }
+                        if let id = docketId(sel.first, items, concerns), store.docket(id) != nil { openWindow(id: "docket", value: id) }
                     }
-                    .onKeyPress(characters: .init(charactersIn: "jkoe"), phases: .down) { press in
-                        let ids = items.map(\.id)
-                        guard press.modifiers.isEmpty, !typing(), !ids.isEmpty else { return .ignored }
-                        let i = current.flatMap { ids.firstIndex(of: $0.id) } ?? 0
+                    .onKeyPress(characters: .init(charactersIn: "jkoead123456"), phases: .down) { press in
+                        let ids = items.map(\.id) + concerns.map(\.id)
+                        // The key after G goes somewhere: the window's, not the list's.
+                        guard press.modifiers.isEmpty, !typing(), !ids.isEmpty, !Chord.afterG else { return .ignored }
+                        let i = selected.flatMap { ids.firstIndex(of: $0) } ?? 0
+                        let d = store.docket(docketId(selected, items, concerns))
+                        let item = items.first { $0.id == (selected ?? ids.first) }
                         switch press.characters {
                         case "j": nav.select(ids[min(ids.count - 1, i + 1)], in: .inbox)
                         case "k": nav.select(ids[max(0, i - 1)], in: .inbox)
-                        case "o": if let d = current?.docket, d.live != nil { store.openInRex(d.id) }
-                        case "e": if let d = current?.docket { store.setStatus(d.id, .done, undo: d.status) }
-                        default: return .ignored
+                        case "o": if let d, d.live != nil { store.openInRex(d.id) }
+                        case "e": if let d, d.isOpen { store.setStatus(d.id, .done, undo: d.status) }
+                        // A prompt: approve or deny it.
+                        case "a", "d":
+                            guard let it = item, it.kind == .blocked, let pd = it.docket, pd.live?.answerable == true else { return .ignored }
+                            let yes = press.characters == "a"
+                            Task { await store.answer(pd, approve: yes) }
+                        // A message with options: 1 to 6 picks one.
+                        default:
+                            guard let n = Int(press.characters), let m = item?.msg, n >= 1, n <= m.options.count else { return .ignored }
+                            let choice = m.options[n - 1]
+                            Task { _ = await store.reply(m, "", choice: choice) }
                         }
                         return .handled
                     }
                 } detail: {
-                    if let it = current {
+                    if let c = concern ?? (current == nil ? concerns.first : nil) {
+                        if let id = c.docket, store.docket(id) != nil {
+                            DocketView(id: id, embedded: true).id(id)
+                        } else {
+                            ContentUnavailableView(c.title, systemImage: c.symbol, description: Text(inlineMarkdown(c.text)))
+                        }
+                    } else if let it = current {
                         if let d = it.docket, d.entries > 0 {
                             DocketView(id: d.id, embedded: true).id(d.id)
                         } else if let m = it.msg {
@@ -64,7 +106,26 @@ struct InboxScreen: View {
                 }
             }
         }
-        .navigationSubtitle(items.isEmpty ? "" : [blocked > 0 ? "\(blocked) waiting on you" : nil, failed > 0 ? "\(failed) failed" : nil, "\(items.count) in all"].compactMap { $0 }.joined(separator: " · "))
+        .navigationSubtitle(items.isEmpty && concerns.isEmpty ? "" : [blocked > 0 ? "\(blocked) waiting on you" : nil, failed > 0 ? "\(failed) failed" : nil, items.isEmpty ? nil : "\(items.count) in all", concerns.isEmpty ? nil : "\(concerns.count) worth a look"].compactMap { $0 }.joined(separator: " · "))
+    }
+
+    /// The docket a row in the Inbox is about.
+    private func docketId(_ id: String?, _ items: [InboxItem], _ concerns: [Concern]) -> String? {
+        if let c = concerns.first(where: { $0.id == id }) { return c.docket }
+        return items.first { $0.id == id }.map(\.docketId)
+    }
+
+    @ViewBuilder
+    private func concernSwipe(_ c: Concern) -> some View {
+        if let id = c.docket, let d = store.docket(id) {
+            if c.kind == "held" {
+                Button { store.resume(id) } label: { Label("Resume", systemImage: "play") }.tint(K.working)
+            } else if c.kind == "failing" {
+                Button { Task { await store.runChecks(id) } } label: { Label("Run Checks", systemImage: "arrow.clockwise") }.tint(K.accent)
+            } else if c.kind == "quiet", d.isOpen {
+                Button { store.setStatus(id, .dropped, undo: d.status) } label: { Label("Drop", systemImage: "xmark") }.tint(K.faint)
+            }
+        }
     }
 
     @ViewBuilder
@@ -132,6 +193,59 @@ struct InboxRow: View {
         case .error: "Failed: "
         default: ""
         }
+    }
+}
+
+/// A group's header in the Inbox: what it is, and how many.
+struct InboxHeader<Icon: View>: View {
+    let label: String
+    let count: Int
+    @ViewBuilder var icon: Icon
+    var body: some View {
+        HStack(spacing: 7) {
+            icon
+            Text(label).font(.system(size: 12, weight: .semibold)).foregroundStyle(K.text)
+            Text("\(count)").font(.system(size: 11.5)).foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// Something worth a look: what it is, on which docket, and since when.
+struct ConcernRow: View {
+    let c: Concern
+
+    static func tint(_ kind: String) -> Color {
+        switch kind {
+        case "failing": K.error
+        case "held", "build", "review": K.blocked
+        case "long": K.progress
+        case "word": K.accent
+        default: K.faint
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: c.symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Self.tint(c.kind))
+                .frame(width: 24, height: 24)
+                .background(K.recessed, in: RoundedRectangle(cornerRadius: 6))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(c.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(ago(c.at)).font(.system(size: 11.5)).foregroundStyle(.tertiary)
+                }
+                (Text(c.docket ?? "").font(.system(size: 11.5, design: .monospaced)) + Text(c.docket == nil ? "" : "  ") + Text(inlineMarkdown(c.text)))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, 5)
+        .help(c.label)
     }
 }
 

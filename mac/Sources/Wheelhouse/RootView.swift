@@ -41,6 +41,9 @@ struct RootView: View {
         .sheet(item: Binding(get: { nav.pane.map(IdBox.init) }, set: { nav.pane = $0?.id })) { b in PaneSheet(id: b.id) }
         .sheet(item: Binding(get: { nav.record.map(IdBox.init) }, set: { nav.record = $0?.id })) { b in RecordSheet(id: b.id) }
         .sheet(item: Binding(get: { nav.linking.map(IdBox.init) }, set: { nav.linking = $0?.id })) { b in LinkIssueSheet(docket: b.id) }
+        .sheet(item: Binding(get: { nav.holding.map(IdBox.init) }, set: { nav.holding = $0?.id })) { b in HoldSheet(id: b.id) }
+        .sheet(item: $nav.closing) { c in CloseOnWordSheet(closing: c) }
+        .background(WindowReader { Windows.register($0, nav) })
         // G, then a letter: go there, as in the web app.
         .onKeyPress(phases: .down) { press in
             guard press.modifiers.isEmpty, !nav.palette, nav.creating == nil, !typing() else { return .ignored }
@@ -55,6 +58,7 @@ struct RootView: View {
             switch press.characters {
             case "g":
                 pendingG = true
+                Chord.gAt = .now
                 Task { try? await Task.sleep(for: .milliseconds(900)); pendingG = false }
                 return .handled
             case "/":
@@ -274,10 +278,10 @@ struct ShortcutsSheet: View {
 
     private let groups: [(String, [(String, String)])] = [
         ("Anywhere", [("⌥⌘K", "Wheelhouse over any app: approve, answer, find a docket, start one")]),
-        ("Go", [("⌘K  or  /", "Search dockets and commands"), ("⌘1 … ⌘8", "Inbox, Reviews, Builds, Active, All, Done, Agents, Recap"), ("G, then I R B A D X N P", "The same, as in the web app"), ("⌘R", "Refresh")]),
+        ("Go", [("⌘K  or  /", "Search dockets and commands"), ("⌘1 … ⌘8", "Inbox, Reviews, Builds, Active, All, Done, Agents, Recap"), ("G, then I R B A D X N P", "The same, as in the web app"), ("⌘R", "Refresh"), ("⌘,", "Settings: standing orders, agents, repos, guides")]),
         ("Create", [("⌘N  or  C", "New docket"), ("⇧⌘N", "Start an agent on a new docket")]),
         ("A list", [("J K  or  ↑ ↓", "Move"), ("↩  or  double-click", "Open the docket in its own window"), ("O", "Show the agent's pane in Rex"), ("S, then 1–4", "Change status"), ("E", "In the Inbox: done"), ("Swipe", "Done, Drop, Status; Approve, Deny, File in the Inbox")]),
-        ("A docket", [("⇧⌘O", "Open in Rex"), ("⇧⌘P", "Peek at the pane"), ("⇧⌘R", "Read the record"), ("⌥⌘1 … ⌥⌘4", "To do, In progress, Done, Dropped"), ("Double-click the title", "Rename"), ("Drop a file", "Keep it with the docket, pinned by its hash")]),
+        ("A docket", [("⇧⌘O", "Open in Rex"), ("⇧⌘P", "Peek at the pane"), ("⇧⌘R", "Read the record"), ("⌥⌘1 … ⌥⌘4", "To do, In progress, Done, Dropped"), ("⇧⌘U", "Run its checks"), ("⇧⌘H", "Hold, or resume"), ("Double-click the title", "Rename"), ("Drop a file", "Keep it with the docket, pinned by its hash")]),
         ("Writing", [("⌘↩", "Send, save, or note"), ("↩  /  ⇧↩", "In Chat: send / a new line"), ("Esc", "Cancel"), ("⌘B  ⌘I", "Bold, italic (Markdown)")]),
     ]
 

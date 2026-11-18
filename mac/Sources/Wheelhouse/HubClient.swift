@@ -3,6 +3,8 @@ import Foundation
 /// The hub's HTTP API (src/server.rs), on this Mac by default.
 struct HubError: LocalizedError {
     let message: String
+    /// The HTTP status it came with (409: refused as things stand).
+    var status = 0
     var errorDescription: String? { message }
 }
 
@@ -60,7 +62,7 @@ final class HubClient: @unchecked Sendable {
     private func check(_ res: URLResponse, _ data: Data) throws {
         guard let h = res as? HTTPURLResponse, !(200 ..< 300).contains(h.statusCode) else { return }
         let msg = (try? JSON.parse(data))?["error"].text ?? String(decoding: data, as: UTF8.self)
-        throw HubError(message: msg.isEmpty ? "The hub answered \(h.statusCode)" : msg)
+        throw HubError(message: msg.isEmpty ? "The hub answered \(h.statusCode)" : msg, status: h.statusCode)
     }
 
     /// What changes, as it happens: the hub's server-sent events, one JSON

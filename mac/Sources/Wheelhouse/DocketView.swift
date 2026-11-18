@@ -28,6 +28,9 @@ struct DocketWindow: View {
             .sheet(item: Binding(get: { nav.pane.map(IdBox.init) }, set: { nav.pane = $0?.id })) { b in PaneSheet(id: b.id) }
             .sheet(item: Binding(get: { nav.record.map(IdBox.init) }, set: { nav.record = $0?.id })) { b in RecordSheet(id: b.id) }
             .sheet(item: Binding(get: { nav.linking.map(IdBox.init) }, set: { nav.linking = $0?.id })) { b in LinkIssueSheet(docket: b.id) }
+            .sheet(item: Binding(get: { nav.holding.map(IdBox.init) }, set: { nav.holding = $0?.id })) { b in HoldSheet(id: b.id) }
+            .sheet(item: Binding(get: { nav.closing }, set: { nav.closing = $0 })) { c in CloseOnWordSheet(closing: c) }
+            .background(WindowReader { Windows.register($0, nav) })
             .navigationTitle(store.docket(id).map { "\($0.id) · \($0.title)" } ?? id)
     }
 }
@@ -55,12 +58,17 @@ struct DocketView: View {
                     if chatting {
                         ChatView(d: d, page: page)
                     } else {
-                        ScrollView {
-                            DocketBody(page: page, embedded: embedded)
-                                .padding(.horizontal, embedded ? 24 : 36)
-                                .padding(.vertical, 24)
-                                .frame(maxWidth: 820)
-                                .frame(maxWidth: .infinity)
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                DocketBody(page: page, embedded: embedded)
+                                    .padding(.horizontal, embedded ? 24 : 36)
+                                    .padding(.vertical, 24)
+                                    .frame(maxWidth: 820)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .onReceive(NotificationCenter.default.publisher(for: .snapshotScroll)) { n in
+                                if let to = n.object as? String { proxy.scrollTo(to, anchor: .top) }
+                            }
                         }
                     }
                 }
@@ -155,6 +163,7 @@ struct DocketBody: View {
                 TitleView(d: d)
                 Chips(d: d)
             }
+            HoldBanner(d: d)
             if let l = d.live, l.state == .blocked {
                 Callout(tone: .blocked) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -177,7 +186,8 @@ struct DocketBody: View {
             BuildPanel(d: d)
             ForEach((store.state?.messages ?? []).filter { $0.docket == d.id }) { m in MessageCard(m: m) }
             IntentSection(d: d, entries: page.entries)
-            DecisionsSection(decisions: page.decisions)
+            DecisionsSection(decisions: page.decisions, docket: d.id, repo: page.evidence.repo)
+            VerifySection(page: page)
             ArtifactsSection(d: d, entries: page.entries)
 
             VStack(alignment: .leading, spacing: 12) {
@@ -293,6 +303,14 @@ struct Chips: View {
             }
             if store.state?.task(for: d.id) != nil {
                 HStack(spacing: 5) { Image(systemName: "hammer"); Text("Building") }.modifier(ChipLook())
+            }
+            if d.hold != nil {
+                HStack(spacing: 5) { Image(systemName: "pause.circle"); Text("On hold") }.modifier(ChipLook(tint: K.blocked))
+                    .help(d.hold ?? "")
+            }
+            if d.status == .done, let why = d.closedOn {
+                HStack(spacing: 5) { Image(systemName: "quote.bubble"); Text("On your word") }.modifier(ChipLook())
+                    .help("Closed on your word: \(why)")
             }
         }
         .font(.system(size: 11.5, weight: .medium))
@@ -420,6 +438,17 @@ struct Properties: View {
                     }
                 }
                 prop("Protocol") { Text(task != nil ? "Build" : d.proto == "agent" ? "Agent" : d.proto == "review" ? "Review" : "By hand") }
+                prop("Hold") {
+                    if let why = d.hold {
+                        HStack(spacing: 8) {
+                            Text("On hold").foregroundStyle(K.blocked).help(why)
+                            Button("Resume") { store.resume(d.id) }.buttonStyle(.link)
+                        }
+                    } else {
+                        Button("Hold…") { nav.holding = d.id }.buttonStyle(.link)
+                            .help("Build and Review take no steps on it until you resume it")
+                    }
+                }
                 if d.proto != "review", task == nil {
                     prop("Work") { Text("\(plural(d.prompts, "prompt")) · \(plural(d.turns, "turn"))") }
                 }

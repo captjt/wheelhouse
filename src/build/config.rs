@@ -115,14 +115,14 @@ fn strings(v: &Value) -> Vec<String> {
     v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default()
 }
 
-fn role(v: &Value, default: &str) -> Result<Role> {
+fn role(v: &Value, field: &str, default: &str) -> Result<Role> {
     let r = match v {
         Value::String(s) => Role { agent: s.clone(), extra_args: Vec::new(), effort: Value::Null },
         Value::Object(_) => Role { agent: v["agent"].as_str().unwrap_or(default).to_string(), extra_args: strings(&v["extra_args"]), effort: v["effort"].clone() },
         _ => Role { agent: default.to_string(), extra_args: Vec::new(), effort: Value::Null },
     };
     if !matches!(r.agent.as_str(), "claude" | "codex") {
-        bail!("{} must be claude or codex, not {}", default, r.agent);
+        bail!("{field} is claude or codex, not {}", r.agent);
     }
     Ok(r)
 }
@@ -233,10 +233,17 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
         repos,
         github_label: raw["sources"]["github"]["label"].as_str().map(str::to_string),
         linear,
-        builder: role(&raw["builder"], "claude")?,
-        checker: role(&raw["checker"], "claude")?,
+        builder: role(&raw["builder"], "builder", "claude")?,
+        checker: role(&raw["checker"], "checker", "claude")?,
         prereview: match &raw["prereview"] {
-            Value::Object(o) => o.get("reviewers").and_then(Value::as_array).into_iter().flatten().map(|r| role(r, "claude")).collect::<Result<Vec<_>>>()?,
+            Value::Object(o) => o
+                .get("reviewers")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(i, r)| role(r, &format!("prereview.reviewers[{}]", i + 1), "claude"))
+                .collect::<Result<Vec<_>>>()?,
             _ => Vec::new(),
         },
         prereview_loops: raw["prereview"]["loops"].as_i64().unwrap_or(1).max(0),

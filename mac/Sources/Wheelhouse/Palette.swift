@@ -36,6 +36,7 @@ struct PaletteOverlay: View {
     @Environment(Store.self) private var store
     @Environment(Nav.self) private var nav
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @State private var q = ""
     @State private var sel = 0
     @FocusState private var focused: Bool
@@ -69,6 +70,12 @@ struct PaletteOverlay: View {
                 out.append(Command(id: "approve", group: d.id, label: "Approve: \(d.live?.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "permission yes allow") { Task { await store.answer(d, approve: true) } })
                 out.append(Command(id: "deny", group: d.id, label: "Deny the prompt", symbol: "xmark.circle", keywords: "permission no reject") { Task { await store.answer(d, approve: false) } })
             }
+            if d.hold != nil {
+                out.append(Command(id: "resume", group: d.id, label: "Resume: take it off hold", symbol: "play.circle", hint: "⇧⌘H", keywords: "hold unpause continue") { store.resume(d.id) })
+            } else {
+                out.append(Command(id: "hold", group: d.id, label: "Hold…", symbol: "pause.circle", hint: "⇧⌘H", keywords: "pause stop wait build review") { reveal(); nav.holding = d.id })
+            }
+            out.append(Command(id: "checks", group: d.id, label: "Run checks", symbol: "checklist", hint: "⇧⌘U", keywords: "verify test lint witnessed") { Task { await store.runChecks(d.id) } })
             for s in Status.allCases where s != d.status {
                 out.append(Command(id: "st-\(s.rawValue)", group: d.id, label: "Move to \(s.label)", status: s, keywords: "status") { store.setStatus(d.id, s, undo: d.status) })
             }
@@ -85,6 +92,10 @@ struct PaletteOverlay: View {
         }
         out += [
             Command(id: "verify", group: "Record", label: "Verify every docket's record", symbol: "checkmark.shield", keywords: "check chain signatures") { store.verifyAll() },
+            Command(id: "settings", group: "Settings", label: "Standing orders and gates", symbol: "list.bullet.clipboard", hint: "⌘,", keywords: "settings preferences gates ask auto pause post") { openSettingsTab("orders") },
+            Command(id: "settings-agents", group: "Settings", label: "Agents: builder, checker, reviewers", symbol: "person.2", keywords: "settings claude codex fix rounds pre-review") { openSettingsTab("agents") },
+            Command(id: "settings-repos", group: "Settings", label: "Repos: notes, checks, review guide", symbol: "folder", keywords: "settings checks base branch plan notes rules") { openSettingsTab("repos") },
+            Command(id: "settings-guides", group: "Settings", label: "Guides and briefs", symbol: "text.book.closed", keywords: "settings guide brief prompt markdown pr style plan format") { openSettingsTab("guides") },
             Command(id: "th-system", group: "Theme", label: "Theme: System", symbol: "circle.lefthalf.filled", keywords: "appearance mode auto") { UserDefaults.standard.set("system", forKey: "theme") },
             Command(id: "th-light", group: "Theme", label: "Theme: Light", symbol: "sun.max", keywords: "appearance mode") { UserDefaults.standard.set("light", forKey: "theme") },
             Command(id: "th-dark", group: "Theme", label: "Theme: Dark", symbol: "moon", keywords: "appearance mode") { UserDefaults.standard.set("dark", forKey: "theme") },
@@ -188,6 +199,13 @@ struct PaletteOverlay: View {
                 focused = true
             }
             .onChange(of: q) { sel = 0 }
+    }
+
+    /// Settings, on one of its tabs.
+    private func openSettingsTab(_ tab: String) {
+        UserDefaults.standard.set(tab, forKey: "settingsTab")
+        NSApp.activate()
+        openSettings()
     }
 
     private func close() {

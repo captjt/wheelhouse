@@ -229,6 +229,26 @@ final class Store {
         return items.sorted { a, b in a.kind.rawValue != b.kind.rawValue ? a.kind.rawValue < b.kind.rawValue : (a.at ?? "") > (b.at ?? "") }
     }
 
+    /// What needs a look beyond your asks: the Inbox's Attention.
+    var concerns: [Concern] { Self.concerns(state, inbox: inbox) }
+
+    /// The hub's attention list, less what's already an ask: a Review's or
+    /// a Build's stop shows in the Inbox as its ask (a review to post, a
+    /// message from Wheelhouse), so it isn't listed twice.
+    nonisolated static func concerns(_ state: HubState?, inbox: [InboxItem]) -> [Concern] {
+        guard let state else { return [] }
+        return state.attention.filter { c in
+            switch c.kind {
+            case "review":
+                return !inbox.contains { $0.kind == .review && ($0.docketId == c.docket || $0.pr?.key == c.title || $0.pr?.fullKey == c.title) }
+            case "build":
+                return !inbox.contains { $0.docketId == c.docket }
+            default:
+                return true
+            }
+        }
+    }
+
     /// What needs you now: the Dock badge and the menu bar's count.
     var urgent: Int {
         guard let s = state else { return 0 }
@@ -272,7 +292,20 @@ final class Store {
 
     func setStatus(_ id: String, _ status: Status, undo: Status? = nil) {
         Task {
-            guard await act("/api/dockets/\(id)/set", ["status": status.rawValue]) != nil else { return }
+            do {
+                try await hub.post("/api/dockets/\(id)/set", ["status": status.rawValue])
+                reload()
+            } catch let e as HubError where e.status == 409 && status == .done {
+                // The rule for done: it needs evidence. Say why, in the
+                // window you're in, and offer its checks or your word.
+                reload()
+                Windows.presenting().closing = Closing(id: id, why: e.message, from: undo ?? docket(id)?.status ?? .in_progress)
+                return
+            } catch {
+                toast(Self.words(error), error: true)
+                reload()
+                return
+            }
             if let undo, undo != status {
                 toast("\(id) moved to \(status.label)", action: ("Undo", { [weak self] in
                     Task { await self?.act("/api/dockets/\(id)/set", ["status": undo.rawValue], done: "\(id) is back in \(undo.label)") }
@@ -280,6 +313,62 @@ final class Store {
             } else {
                 toast("\(id) moved to \(status.label)")
             }
+        }
+    }
+
+    /// Close it with nothing witnessed or checkable behind it: on your word,
+    /// with why. The record keeps the reason.
+    /// Throws the hub's refusal, for the sheet to show.
+    func closeOnWord(_ id: String, reason: String, undo: Status? = nil) async throws {
+        defer { reload() }
+        try await hub.post("/api/dockets/\(id)/set", ["status": Status.done.rawValue, "anyway": true, "reason": reason])
+        if let undo, undo != .done {
+            toast("\(id) closed on your word", action: ("Undo", { [weak self] in
+                Task { await self?.act("/api/dockets/\(id)/set", ["status": undo.rawValue], done: "\(id) is back in \(undo.label)") }
+            }))
+        } else {
+            toast("\(id) closed on your word")
+        }
+    }
+
+    /// Hold it: Build and Review take no steps on it until you resume.
+    /// Throws the hub's refusal, for the sheet to show.
+    func hold(_ id: String, reason: String) async throws {
+        let r = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        defer { reload() }
+        try await hub.post("/api/dockets/\(id)/hold", r.isEmpty ? [:] : ["reason": r])
+        toast("\(id) is on hold: Build and Review take no steps on it")
+    }
+
+    func resume(_ id: String) {
+        Task { await act("/api/dockets/\(id)/hold", ["off": true], done: "\(id) resumed") }
+    }
+
+    /// Run its witnessed checks now; their results arrive as entries.
+    @discardableResult
+    func runChecks(_ id: String) async -> Bool {
+        do {
+            try await startChecks(id)
+            return true
+        } catch {
+            toast(Self.words(error), error: true)
+            return false
+        }
+    }
+
+    /// The same, throwing the hub's refusal (no checks, or running already).
+    func startChecks(_ id: String) async throws {
+        defer { reload() }
+        let names = try await hub.post("/api/dockets/\(id)/check")["checks"].strings
+        toast("Running \(id)'s checks\(names.isEmpty ? "" : ": " + names.joined(separator: ", "))")
+    }
+
+    /// An answered decision, as a standing rule in its repo's notes: later
+    /// briefs there carry it.
+    func makeStanding(_ id: String, key: String) {
+        Task {
+            guard let r = await act("/api/dockets/\(id)/standing", ["key": key]) else { return }
+            toast("Standing in \(r["repo"].str ?? "the repo")'s notes: \(r["rule"].str ?? key)")
         }
     }
 
