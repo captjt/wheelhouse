@@ -209,8 +209,9 @@ struct HubAvatar: View {
     }
 }
 
-/// DEV, as a nightly build marks itself: on Wheelhouse Dev's toolbar, sidebar
-/// and quick panel, with the build it is under the pointer. Nothing on the daily app.
+/// DEV, as a nightly build marks itself: at Wheelhouse Dev's sidebar foot, in
+/// its quick panel and menu bar panel, with the build it is under the pointer.
+/// Nothing on the daily app.
 struct DevBadge: View {
     var body: some View {
         if Flavor.isDev {

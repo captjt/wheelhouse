@@ -142,9 +142,6 @@ struct Sidebar: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) { SidebarFoot() }
         .toolbar {
-            if Flavor.isDev {
-                ToolbarItem(placement: .navigation) { DevBadge() }
-            }
             ToolbarItem {
                 Button { nav.palette = true } label: { Label("Search", systemImage: "magnifyingglass") }
                     .help("Search dockets and commands (⌘K)")
