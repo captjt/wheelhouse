@@ -50,6 +50,8 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       reports, checked review and merge risk; each Build's plan and
       checks). Agents keep anything else with `wh attach FILE|URL`. The
       record pins each file by its hash.
+- [x] Decisions in force under the intent, and in `wh brief`: what each
+      agent asked, the answer that stands, and who gave it
 - [x] The readable record: open it in the app, see who signed each entry,
       and check every kept file against its hash
 
@@ -146,7 +148,6 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [ ] Codex's permission prompts answered from the app, as Claude Code's
       are
 - [ ] Rex hosts other than this Mac
-- [ ] Decisions in force shown under the intent, with who made each one
 
 ## Later
 

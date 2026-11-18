@@ -20,7 +20,13 @@ if (!url || !out) {
 const chrome = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const port = 9200 + Math.floor(Math.random() * 600);
 const profile = mkdtempSync(join(tmpdir(), "wheelhouse-shot-"));
-const proc = spawn(chrome, ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, "about:blank"], { stdio: "ignore" });
+// A mock keychain and a plain password store: a fresh profile otherwise asks
+// macOS for "Chrome Safe Storage", and you get a Keychain prompt per shot.
+const proc = spawn(
+  chrome,
+  ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--use-mock-keychain", "--password-store=basic", "--no-first-run", `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, "about:blank"],
+  { stdio: "ignore" },
+);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const phone = size === "phone";
 

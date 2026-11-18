@@ -464,13 +464,29 @@ fn build_cmd(action: &str, args: &[String], repo: Option<String>, as_json: bool)
     }
     println!("Build    {}{}", if v["paused"] == true { "paused" } else { "on" }, v["doing"].as_str().map(|d| format!(" · {d}")).unwrap_or_default());
     for t in v["tasks"].as_array().into_iter().flatten() {
+        let mut bits: Vec<String> = Vec::new();
+        if let Some(p) = t["phase"].as_str() {
+            bits.push(p.replace('_', " "));
+        }
+        if let Some(n) = t["round"]["n"].as_i64() {
+            bits.push(format!("round {n}: {}", t["round"]["summary"].as_str().unwrap_or("")));
+        } else if t["rounds"].as_i64().unwrap_or(0) > 0 {
+            bits.push(format!("{} round{} pushed", t["rounds"], if t["rounds"] == 1 { "" } else { "s" }));
+        }
+        if let Some(n) = t["prereview"]["n"].as_i64() {
+            bits.push(format!("pre-review {n}: {} blocking", t["prereview"]["blocking"].as_i64().unwrap_or(0)));
+        }
+        if let Some(u) = t["pr_url"].as_str() {
+            bits.push(u.to_string());
+        }
+        let asks: Vec<&str> = t["asks"].as_array().into_iter().flatten().filter_map(|a| a.as_str()).collect();
         println!(
-            "  {:<6} {:<22} {:<10} {}{}{}",
+            "  {:<6} {:<22} {:<8} {}{}{}",
             t["docket"].as_str().unwrap_or(""),
             t["key"].as_str().unwrap_or(""),
             t["state"].as_str().unwrap_or(""),
-            t["phase"].as_str().unwrap_or(""),
-            t["pr_url"].as_str().map(|u| format!(" · {u}")).unwrap_or_default(),
+            bits.join(" · "),
+            if asks.is_empty() { String::new() } else { format!("  ⚑ waiting on you: {}", asks.join(", ")) },
             t["attention"]["text"].as_str().map(|a| format!("  ⚑ {a}")).unwrap_or_default()
         );
     }
