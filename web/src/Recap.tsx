@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { get } from "./api";
-import { AppAvatar, IconChart, IconClipboard, IconExternal, StatusIcon } from "./icons";
+import { AppAvatar, IconBuild, IconChart, IconClipboard, IconExternal, StatusIcon } from "./icons";
 import { ago, useHub } from "./live";
 import { RiskChip } from "./Reviews";
 import { InlineMd, useToast } from "./ui";
@@ -46,6 +46,13 @@ type RecapData = {
     prs: { merged: PrRecap[]; open: PrRecap[]; closed: PrRecap[] };
   };
   agents: { started: number; turns: number; per_day: number[]; prompts: number; done: { id: string; title: string; app?: string | null; turns: number; at: string; summary?: string | null }[] };
+  builds?: {
+    opened: number;
+    rounds: number;
+    replies: number;
+    merged: number;
+    list: { id: string; title: string; key?: string; pr?: number | null; url?: string | null; opened: boolean; rounds: number; replies: number; outcome?: string | null; at: string }[];
+  };
   you: { decisions: { docket: string; title: string; choice: string; at: string }[]; approved: number; denied: number; asked: number; answered: number; intents: number };
 };
 
@@ -328,6 +335,32 @@ export function RecapView() {
               ))}
             </section>
 
+            {(data.builds?.list.length ?? 0) > 0 && (
+              <section className="rc-section">
+                <h2>Builds</h2>
+                <p className="rc-line">
+                  {data.builds!.opened} PR{data.builds!.opened === 1 ? "" : "s"} opened · {data.builds!.rounds} address round{data.builds!.rounds === 1 ? "" : "s"} ({data.builds!.replies} repl{data.builds!.replies === 1 ? "y" : "ies"}) · {data.builds!.merged} merged
+                </p>
+                {data.builds!.list.map((b) => (
+                  <a key={b.id} className="rc-pr" href={`#/d/${b.id}`}>
+                    <span className="rc-pr-icon">
+                      <IconBuild size={14} />
+                    </span>
+                    <span className="rc-pr-main">
+                      <span className="rc-pr-top">
+                        <span className="rc-pr-key">{b.id}</span>
+                        <span className="rc-pr-title">{b.title}</span>
+                        <span className="spacer" />
+                        <span className="rc-pr-at muted">{ago(b.at)}</span>
+                      </span>
+                      <span className="rc-pr-meta">
+                        {[b.pr ? `#${b.pr}` : null, b.opened ? "opened" : null, b.rounds ? `${b.rounds} round${b.rounds === 1 ? "" : "s"}` : null, b.outcome].filter(Boolean).join(" · ")}
+                      </span>
+                    </span>
+                  </a>
+                ))}
+              </section>
+            )}
             <section className="rc-section">
               <h2>You</h2>
               <p className="rc-line">
