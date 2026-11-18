@@ -239,6 +239,9 @@ func lineDiff(_ a: String, _ b: String) -> [DiffLine] {
 /// Decisions in force: what an agent asked you, and the answer that stands.
 struct DecisionsSection: View {
     let decisions: [JSON]
+    var docket: String?
+    /// The docket's repo: an answered decision can stand in its notes.
+    var repo: String?
 
     var body: some View {
         if !decisions.isEmpty {
@@ -250,7 +253,7 @@ struct DecisionsSection: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(decisions.enumerated()), id: \.offset) { _, d in
-                        DecisionRow(d: d)
+                        DecisionRow(d: d, docket: docket, repo: repo)
                     }
                 }
             }
@@ -260,6 +263,9 @@ struct DecisionsSection: View {
 
 private struct DecisionRow: View {
     let d: JSON
+    var docket: String?
+    var repo: String?
+    @Environment(Store.self) private var store
     @State private var hover = false
 
     var body: some View {
@@ -284,6 +290,14 @@ private struct DecisionRow: View {
                     Text("\(by)\(d["at"].str.map { " · \(agoLong($0))" } ?? "")").font(.system(size: 11.5)).foregroundStyle(K.faint)
                 }
                 Spacer(minLength: 0)
+                if canStand {
+                    // Always laid out, shown on hover: the row never jumps.
+                    Button("Make Standing") { stand() }
+                        .buttonStyle(.borderless).controlSize(.small)
+                        .opacity(hover ? 1 : 0)
+                        .allowsHitTesting(hover)
+                        .help("Add “\(d["question"].str ?? "") \(d["answer"].str ?? "")” to \(repo ?? "")'s notes as a standing rule: later briefs there carry it")
+                }
             }
             if let note = d["note"].text {
                 Text("“\(note)”").font(.system(size: 12)).foregroundStyle(K.muted).padding(.leading, 20)
@@ -294,5 +308,22 @@ private struct DecisionRow: View {
         .background(hover ? K.hover : .clear, in: RoundedRectangle(cornerRadius: 6))
         .onHover { hover = $0 }
         .help("Asked by \(d["asked_by"].str ?? "?"), \(stamp(d["asked_at"].str))\(d["options"].strings.isEmpty ? "" : "\nOptions: \(d["options"].strings.joined(separator: " · "))")")
+        .contextMenu {
+            if canStand {
+                Button("Make Standing for \(repo ?? "the Repo")") { stand() }
+            }
+            Button("Copy Decision") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString("\(d["question"].str ?? "") → \(d["answer"].str ?? "")", forType: .string)
+            }
+        }
+    }
+
+    /// Answered, in a known repo, with a key to name it by.
+    private var canStand: Bool { d["answer"].exists && repo != nil && docket != nil && d["key"].text != nil }
+
+    private func stand() {
+        guard let docket, let key = d["key"].text else { return }
+        store.makeStanding(docket, key: key)
     }
 }

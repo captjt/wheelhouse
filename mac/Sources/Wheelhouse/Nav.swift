@@ -81,6 +81,10 @@ final class Nav {
     var pane: String?
     var record: String?
     var linking: String?
+    /// Holding a docket: asking why.
+    var holding: String?
+    /// Done was refused for want of evidence: its checks, or your word.
+    var closing: Closing?
     var inspector = true
     var shortcuts = false
     /// The docket the window is about now: the one selected and shown.
@@ -139,4 +143,72 @@ extension FocusedValues {
         get { self[DocketFocusKey.self] }
         set { self[DocketFocusKey.self] = newValue }
     }
+}
+
+/// Done, refused: the docket's intent has acceptance items, and nothing
+/// witnessed or checkable says they're met.
+struct Closing: Identifiable {
+    let id: String
+    /// The hub's words.
+    let why: String
+    /// Where it was, to stay there if you cancel.
+    let from: Status
+}
+
+/// Which window shows what the Store has to ask: each window's Nav, by its
+/// window, so a refusal appears where you acted.
+extension Windows {
+    private final class Weak {
+        weak var nav: Nav?
+        init(_ n: Nav) { nav = n }
+    }
+
+    private static var navs: [Int: Weak] = [:]
+
+    static func register(_ window: NSWindow?, _ nav: Nav) {
+        guard let window else { return }
+        navs = navs.filter { $0.value.nav != nil }
+        navs[window.windowNumber] = Weak(nav)
+    }
+
+    /// The key window's Nav, or the main window's (brought forward).
+    static func presenting() -> Nav {
+        if let w = NSApp.keyWindow, let n = navs[w.windowNumber]?.nav { return n }
+        if Snapshot.requested == nil { showMain() }
+        return Nav.main
+    }
+
+    /// Settings, from outside a view.
+    static var openSettings: (() -> Void)?
+}
+
+/// Hands a view its window, once it has one.
+struct WindowReader: NSViewRepresentable {
+    let found: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let v = Probe()
+        v.found = found
+        return v
+    }
+
+    func updateNSView(_ v: NSView, context: Context) {}
+
+    private final class Probe: NSView {
+        var found: ((NSWindow?) -> Void)?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            let w = window
+            DispatchQueue.main.async { [found] in found?(w) }
+        }
+    }
+}
+
+/// When G was last pressed: the key after it goes somewhere (G then D is All
+/// dockets). A focused list sees keys before the window does, so its own
+/// keys check this, or G D in the Inbox would deny the prompt under the cursor.
+@MainActor
+enum Chord {
+    static var gAt = Date.distantPast
+    static var afterG: Bool { Date.now.timeIntervalSince(gAt) < 0.9 }
 }

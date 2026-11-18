@@ -150,14 +150,32 @@ private struct PanelItem: View {
 
 // ---- Settings ----
 
+/// Settings: the app's own (General, Notifications, Hub), and what
+/// Wheelhouse does on its own (Standing Orders, Agents, Repos, Guides &
+/// Briefs), kept by the hub. Each tab sizes the window for itself.
 struct SettingsView: View {
+    @State private var model = SettingsModel()
+    @AppStorage("settingsTab") private var tab = "general"
+
     var body: some View {
-        TabView {
-            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
-            NotificationSettings().tabItem { Label("Notifications", systemImage: "bell.badge") }
-            HubSettings().tabItem { Label("Hub", systemImage: "bolt.horizontal.circle") }
+        TabView(selection: $tab) {
+            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag("general")
+            OrdersSettings().tabItem { Label("Standing Orders", systemImage: "list.bullet.clipboard") }.tag("orders")
+            AgentsSettings().tabItem { Label("Agents", systemImage: "person.2") }.tag("agents")
+            ReposSettings().tabItem { Label("Repos", systemImage: "folder") }.tag("repos")
+            GuidesSettings().tabItem { Label("Guides & Briefs", systemImage: "text.book.closed") }.tag("guides")
+            NotificationSettings().tabItem { Label("Notifications", systemImage: "bell.badge") }.tag("notifications")
+            HubSettings().tabItem { Label("Hub", systemImage: "bolt.horizontal.circle") }.tag("hub")
         }
-        .frame(width: 520)
+        .environment(model)
+        .onReceive(NotificationCenter.default.publisher(for: .snapshotPatch)) { n in
+            // Snapshots: a change the hub refuses, to show where its words go.
+            guard let (key, patch) = n.object as? (String, [String: Any]) else {
+                model.errors = [:]
+                return
+            }
+            Task { await model.change(key, patch) }
+        }
     }
 }
 
@@ -191,7 +209,7 @@ private struct GeneralSettings: View {
             if let loginError { Text(loginError).font(.caption).foregroundStyle(K.error) }
         }
         .formStyle(.grouped)
-        .frame(height: 250)
+        .frame(width: 560, height: 250)
     }
 }
 
@@ -220,7 +238,7 @@ private struct NotificationSettings: View {
             }
         }
         .formStyle(.grouped)
-        .frame(height: 260)
+        .frame(width: 560, height: 260)
         .task { status = await Notifier.shared.status() }
     }
 }
@@ -252,6 +270,6 @@ private struct HubSettings: View {
             }
         }
         .formStyle(.grouped)
-        .frame(height: 260)
+        .frame(width: 560, height: 260)
     }
 }

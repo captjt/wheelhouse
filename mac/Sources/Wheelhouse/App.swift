@@ -52,10 +52,12 @@ extension View {
 
 private struct Opener: ViewModifier {
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     func body(content: Content) -> some View {
         content.onAppear {
             Windows.openWindow = { openWindow(id: $0) }
             Windows.openDocket = { openWindow(id: "docket", value: $0) }
+            Windows.openSettings = { openSettings() }
         }
     }
 }
@@ -161,6 +163,14 @@ struct AppCommands: Commands {
                 }
             }
             .disabled(d == nil)
+            Divider()
+            Button("Run Checks") { if let d { Task { await store.runChecks(d.id) } } }
+                .keyboardShortcut("u", modifiers: [.command, .shift]).disabled(d == nil)
+            if let d, d.hold != nil {
+                Button("Resume") { store.resume(d.id) }.keyboardShortcut("h", modifiers: [.command, .shift])
+            } else {
+                Button("Hold…") { if let d { here.holding = d.id } }.keyboardShortcut("h", modifiers: [.command, .shift]).disabled(d == nil)
+            }
             Divider()
             Button("Verify Every Record") { store.verifyAll() }
         }

@@ -127,6 +127,10 @@ struct Docket: Hashable, Identifiable {
     var linearAlso: [LinearRef] { j["linear_also"].array.map(LinearRef.init) }
     var review: ReviewRef? { j["review"].object == nil ? nil : ReviewRef(j: j["review"]) }
     var isOpen: Bool { status.isOpen }
+    /// On hold: Build and Review take no steps on it. The reason, or nil.
+    var hold: String? { j["hold"].text }
+    /// Closed on your word, with nothing witnessed or checkable: why.
+    var closedOn: String? { j["closed_on"].text }
     var talks: Bool { proto == "agent" && agent != nil }
     var hasIntent: Bool { !(intent?.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }
 }
@@ -306,6 +310,8 @@ struct HubState: Hashable {
     var agents: [Live] { j["agents"].array.map(Live.init) }
     var prs: [ReviewPr] { review?.prs ?? [] }
     var tasks: [BuildTask] { build?.tasks ?? [] }
+    /// What needs a look beyond your asks, worst first.
+    var attention: [Concern] { j["attention"].array.map(Concern.init) }
     func task(for docket: String) -> BuildTask? { tasks.first { $0.docket == docket } }
     func pr(for docket: String) -> ReviewPr? { prs.first { $0.docket == docket } }
 }
@@ -355,9 +361,157 @@ struct DocketPage: Hashable {
     func hash(into h: inout Hasher) { h.combine(j) }
 
     var verify: Verify { Verify(j: j["verify"]) }
+    /// What its done rests on: its checks, the checker's verdicts, its hold.
+    var evidence: Evidence { Evidence(j: j["evidence"]) }
     /// What agents asked, and the answers that stand (src/decisions.rs).
     var decisions: [JSON] { j["decisions"].array }
     var queued: [(id: Int, body: String, at: String)] { j["queued"].array.map { ($0["id"].int ?? 0, $0["body"].str ?? "", $0["at"].str ?? "") } }
+}
+
+// ---- Verify ----
+
+/// What a docket's done rests on (src/evidence.rs): witnessed checks, the
+/// checker's verdicts, and whether it's held or was closed on your word.
+struct Evidence: Hashable {
+    let j: JSON
+    /// The intent has acceptance items, so done needs evidence.
+    var needs: Bool { j["needs"].bool }
+    /// What done can rest on, newest first. Empty: only what was said.
+    var lines: [EvidenceLine] { j["evidence"].array.map(EvidenceLine.init) }
+    /// Each check's latest run.
+    var checks: [CheckRun] { j["checks"].array.map(CheckRun.init) }
+    var repo: String? { j["repo"].text }
+    /// The checks its repo has, run or not.
+    var configured: [(name: String, run: String, required: Bool)] {
+        j["configured"].array.map { ($0["name"].str ?? "", $0["run"].str ?? "", $0["required"].exists ? $0["required"].bool : true) }
+    }
+    var running: Bool { j["running"].bool }
+    var verdicts: [Verdict] { j["verdicts"].array.map(Verdict.init) }
+    var hold: String? { j["hold"].text }
+    var closedOn: String? { j["closed_on"].text }
+
+    /// Nothing to show: no checks run, no verdicts, and done doesn't need
+    /// evidence. Checks its repo has but never ran don't count: Run Checks
+    /// is in the Docket menu, the context menu and the palette.
+    var isEmpty: Bool {
+        !needs && lines.isEmpty && checks.isEmpty && verdicts.isEmpty && closedOn == nil
+    }
+
+    /// Why Run checks can't run now, or nil when it can.
+    var cantRun: String? {
+        if running { return "They're running" }
+        if configured.isEmpty {
+            return repo.map { "\($0) has no checks: add them in Settings › Repos" } ?? "Its folder isn't in one of Build's repos, so it has no checks"
+        }
+        return nil
+    }
+}
+
+struct EvidenceLine: Hashable {
+    let j: JSON
+    /// `witnessed` or `checkable`.
+    var how: String { j["how"].str ?? "said" }
+    var what: String { j["what"].str ?? "" }
+    var seq: Int? { j["seq"].int }
+    var at: String? { j["at"].text }
+}
+
+/// One witnessed check: the hub ran it, at a commit, and kept its output.
+struct CheckRun: Hashable, Identifiable {
+    let j: JSON
+    var id: String { name }
+    var name: String { j["name"].str ?? "" }
+    var command: String { j["command"].str ?? "" }
+    var required: Bool { j["required"].exists ? j["required"].bool : true }
+    var ok: Bool { j["ok"].bool }
+    /// Its exit code; nil when it timed out.
+    var exit: Int? { j["exit"].int }
+    var timedOut: Bool { j["exit"].isNull }
+    var ms: Int? { j["ms"].int }
+    var head: String { j["head"].str ?? "" }
+    var shortHead: String { String(head.prefix(7)) }
+    /// The folder had uncommitted changes: it covered more than the commit.
+    var dirty: Bool { j["dirty"].bool }
+    /// Its output's hash, without `sha256:`.
+    var output: String? { j["output"].text.map { $0.replacingOccurrences(of: "sha256:", with: "") } }
+    var why: String? { j["why"].text }
+    var seq: Int { j["seq"].int ?? 0 }
+    var at: String? { j["at"].text }
+
+    /// How it went, in a few words: passed, failed (exit 1), timed out.
+    var outcome: String {
+        if ok { return dirty ? "passed, with uncommitted changes" : "passed" }
+        if timedOut { return "timed out" }
+        return "failed\(exit.map { ", exit \($0)" } ?? "")"
+    }
+}
+
+/// A checker's verdict: said by the checker, signed for its session.
+struct Verdict: Hashable, Identifiable {
+    let j: JSON
+    var id: Int { seq }
+    var seq: Int { j["seq"].int ?? 0 }
+    var at: String? { j["at"].text }
+    var n: Int? { j["n"].int }
+    var verdict: String { j["verdict"].str ?? "" }
+    var passed: Bool { verdict == "pass" }
+    /// How many findings: a list, or a count.
+    var findings: Int { j["findings"].int ?? j["findings"].array.count }
+    var summary: String? { j["summary"].text }
+    var by: String { j["by"].str ?? "" }
+    var role: String? { j["role"].text }
+    /// From a session other than the builder's; nil when it can't be told.
+    var independent: Bool? { j["independent"].isNull ? nil : j["independent"].bool }
+    var head: String? { j["head"].text }
+    var mark: String { j["mark"].str ?? "said" }
+}
+
+/// Something worth a look that isn't an ask: a failing check, a hold, an
+/// agent working long, a quiet docket, a close on your word.
+struct Concern: Hashable, Identifiable {
+    let j: JSON
+    var id: String { "at:\(docket ?? title):\(kind)" }
+    var docket: String? { j["docket"].text }
+    var title: String { j["title"].str ?? "" }
+    /// build, review, failing, held, long, quiet, or word.
+    var kind: String { j["kind"].str ?? "" }
+    var text: String { j["text"].str ?? "" }
+    var at: String? { j["at"].text }
+
+    var symbol: String {
+        switch kind {
+        case "build": "hammer"
+        case "review": "arrow.triangle.pull"
+        case "failing": "xmark.octagon"
+        case "held": "pause.circle"
+        case "long": "clock"
+        case "quiet": "moon.zzz"
+        case "word": "quote.bubble"
+        default: "exclamationmark.circle"
+        }
+    }
+
+    var label: String {
+        switch kind {
+        case "build": "Build"
+        case "review": "Review"
+        case "failing": "Failing"
+        case "held": "On hold"
+        case "long": "Working long"
+        case "quiet": "Quiet"
+        case "word": "Your word"
+        default: kind.capitalized
+        }
+    }
+}
+
+/// How long a check took: 153 ms, 4.2 s, 3m 05s.
+func duration(ms: Int?) -> String {
+    guard let ms else { return "" }
+    if ms < 1000 { return "\(ms) ms" }
+    if ms < 60000 { return String(format: "%.1f s", Double(ms) / 1000) }
+    let s = ms / 1000
+    return String(format: "%dm %02ds", s / 60, s % 60)
 }
 
 // ---- dates ----

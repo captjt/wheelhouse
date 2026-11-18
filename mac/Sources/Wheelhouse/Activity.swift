@@ -211,8 +211,23 @@ struct ActivityRow: View {
         case "set":
             var parts: [String] = []
             if let t = data["title"].str { parts.append(data["title_source"].str == "prompt" ? "named it from your prompt" : "renamed it to “\(t)”") }
-            if let s = data["status"].str { parts.append("moved it to \(Status(rawValue: s)?.label ?? s)") }
-            return sys(e.actorType == "person" ? you : .hub, [.b(e.actorType == "person" ? "You" : "Wheelhouse"), .t(" \(parts.joined(separator: " and "))")])
+            if let s = data["status"].str {
+                parts.append(s == "done" && data["on"].str == "word" ? "closed it on your word: “\(data["reason"].str ?? e.body ?? "")”" : "moved it to \(Status(rawValue: s)?.label ?? s)")
+            }
+            if let o = data.object, o.keys.contains("hold") {
+                parts.append(data["hold"].text.map { "put it on hold: “\($0)”" } ?? "resumed it")
+            }
+            let tone: String? = data["hold"].text != nil || data["on"].str == "word" ? "blocked" : nil
+            return sys(e.actorType == "person" ? you : .hub, [.b(e.actorType == "person" ? "You" : "Wheelhouse"), .t(" \(parts.joined(separator: " and "))")], tone)
+        case "check":
+            let ok = data["ok"].bool
+            let how = ok ? "passed" : data["exit"].isNull ? "timed out" : "failed, exit \(data["exit"].int ?? 1)"
+            return sys(.hub, [.b("Wheelhouse"), .t(" ran "), .mono(data["name"].str ?? "a check"), .t(data["required"].exists && !data["required"].bool ? " (optional)" : ""), .t(" · \(how) at "), .mono(String((data["head"].str ?? "").prefix(7)))], ok ? "approved" : data["required"].exists && !data["required"].bool ? nil : "error")
+        case "verdict":
+            let passed = data["verdict"].str == "pass"
+            let n = data["findings"].int ?? data["findings"].array.count
+            let ind = data["independent"].isNull ? "" : data["independent"].bool ? ", independent" : ", same session as the builder"
+            return .comment(writerAvatar, writer, "\(data["role"].str ?? "checker")\(data["n"].int.map { ", check \($0)" } ?? ""): \(passed ? "passed" : "found problems")\(n > 0 ? " · \(plural(n, "finding"))" : "")\(ind)", e.body ?? "", nil)
         case "approval":
             if data["what"].str == "post-review" { return sys(you, [.b("You"), .t(" approved posting round \(data["round"].int ?? 0)'s review")], "approved") }
             if data["kind"].str == "review" {

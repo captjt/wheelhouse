@@ -300,6 +300,12 @@ struct DocketMenu: View {
         Picker("Status", selection: Binding(get: { d.status }, set: { s in if s != d.status { store.setStatus(d.id, s, undo: d.status) } })) {
             ForEach(Status.allCases) { s in Text(s.label).tag(s) }
         }
+        if d.hold != nil {
+            Button("Resume") { store.resume(d.id) }
+        } else {
+            Button("Hold…") { nav.holding = d.id }
+        }
+        Button("Run Checks") { Task { await store.runChecks(d.id) } }
         Divider()
         Button("Copy ID") { copy(d.id) }
         Button("Copy Link") { copy("wheelhouse://docket/\(d.id)") }
@@ -343,6 +349,9 @@ struct DocketRow: View {
                 .foregroundStyle(.secondary)
                 if d.live?.state == .blocked, let m = d.live?.msg {
                     Text(m).font(.system(size: 11.5)).foregroundStyle(K.blocked).lineLimit(1)
+                }
+                if let why = d.hold {
+                    Label("On hold: \(why)", systemImage: "pause.circle").font(.system(size: 11.5)).foregroundStyle(K.blocked).lineLimit(1)
                 }
             }
         }
@@ -409,6 +418,9 @@ struct BoardView: View {
                     if let l = d.live {
                         LiveIcon(state: l.state, size: 12)
                         Text(l.state.word).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    }
+                    if let why = d.hold {
+                        Label("On hold", systemImage: "pause.circle").font(.system(size: 11.5)).foregroundStyle(K.blocked).help(why)
                     }
                     Spacer()
                     if let s = d.agent?.rexSession, !s.isEmpty { SessionIcon(name: s, size: 14) }
