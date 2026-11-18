@@ -114,4 +114,43 @@ mod tests {
         assert!(dump(&path).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn posting_reads_as_a_rule_or_a_function() {
+        use super::super::posting::Post;
+        if luajit().is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("wh-lua-post-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("review.lua");
+        std::fs::write(
+            &path,
+            r#"return {
+                repos = {
+                  ["acme/api"] = { checkout = "~/x", post = { auto = { verdict = "approve", merge_risk = "low", not_touching = { "db/" } } } },
+                  ["acme/web"] = { checkout = "~/y" },
+                },
+                post = function(pr)
+                  if pr.verdict == "approve" and pr.blocking == 0 and not pr.touches({ "auth/" }) then return "auto" end
+                  return "ask"
+                end,
+              }"#,
+        )
+        .unwrap();
+        let c = super::super::config::from_value(path.clone(), dump(&path).unwrap()).unwrap();
+        assert_eq!(c.post, Post::Lua("post".into()));
+        assert_eq!(c.post_for("acme/api").kind(), "rule");
+        let ok = json!({ "verdict": "approve", "blocking": 0, "merge_risk": "low", "files": ["src/a.rs"] });
+        assert!(c.post_for("acme/api").decide(&ok, &path).auto);
+        let d = c.post_for("acme/web").decide(&ok, &path);
+        assert_eq!((d.auto, d.why.as_str()), (true, "`post` in review.lua returned auto"));
+        let auth = json!({ "verdict": "approve", "blocking": 0, "files": ["auth/login.rs"] });
+        assert!(!c.post_for("acme/web").decide(&auth, &path).auto);
+        std::fs::write(&path, r#"return { repos = { ["o/a"] = { checkout = "~/x" } }, post = function(pr) error("boom") end }"#).unwrap();
+        let c = super::super::config::from_value(path.clone(), dump(&path).unwrap()).unwrap();
+        let d = c.post.decide(&ok, &path);
+        assert!(!d.auto && d.why.starts_with("`post` in review.lua failed:") && d.why.contains("boom"), "{}", d.why);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -1170,6 +1170,11 @@ async fn settings_change(State(shared): State<Shared>, Json(patch): Json<Value>)
     crate::settings::change(&patch).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
     {
         let mut core = shared.lock();
+        // Posting set in Settings is what you want now: it ends any
+        // `wh review post-mode ask|auto` that would override it.
+        if patch["review"].get("post").is_some() {
+            core.store.meta_set("review.post", "").map_err(internal)?;
+        }
         core.build.config = None;
         core.review.config = None;
         core.build.check_now.notify_one();

@@ -38,6 +38,25 @@ enum SettingsPatch {
         ["run": run.trimmingCharacters(in: .whitespacesAndNewlines), "required": required, "timeout": min(max(timeout, 10), 7200)]
     }
 
+    /// A posting rule (`{auto: {…}}`) from its form, or what's wrong with
+    /// it. Lists are typed comma-separated. docs/review.md#who-posts.
+    static func rule(approve: Bool, risk: String, maxLines: String, authors: String, labels: String, notTouching: String) -> (value: [String: Any]?, error: String?) {
+        var auto: [String: Any] = [:]
+        if approve { auto["verdict"] = "approve" }
+        if risk == "low" || risk == "medium" { auto["merge_risk"] = risk }
+        let n = maxLines.trimmingCharacters(in: .whitespaces)
+        if !n.isEmpty {
+            guard let lines = Int(n), lines >= 1, n.allSatisfy(\.isNumber) else { return (nil, "Lines: a whole number, 1 or more.") }
+            auto["max_lines"] = lines
+        }
+        let items = { (s: String) in s.split(whereSeparator: { $0 == "," || $0 == "\n" }).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+        for (k, v) in [("authors", authors), ("labels", labels), ("not_touching", notTouching)] where !items(v).isEmpty {
+            auto[k] = items(v)
+        }
+        if auto.isEmpty { return (nil, "Pick at least one condition. For a review that always posts itself, choose Auto.") }
+        return (["auto": auto], nil)
+    }
+
     /// A check's name: letters, digits, dashes and underscores.
     static func validCheckName(_ s: String) -> Bool {
         !s.isEmpty && s.count <= 40 && s.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }

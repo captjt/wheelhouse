@@ -339,14 +339,17 @@ struct ReviewsScreen: View {
         .toolbar {
             if let rv, rv.enabled {
                 ToolbarItemGroup {
-                    Picker("Post", selection: Binding(get: { rv.auto ? "auto" : "ask" }, set: { v in
-                        store.reviewSettings(["post": v], done: v == "auto" ? "The checker posts each review" : "You post each review")
+                    Picker("Post", selection: Binding(get: { rv.posting }, set: { v in
+                        // Back to the config's own mode clears the override instead of pinning it.
+                        let post = v == "rule" || (rv.postOverride != nil && !rv.ruled && rv.config["post"].str == v) ? "config" : v
+                        store.reviewSettings(["post": post], done: v == "rule" ? "Each repo posts as your rules say" : v == "auto" ? "The checker posts each review" : "You post each review")
                     })) {
                         Text("Ask").tag("ask")
                         Text("Auto").tag("auto")
+                        if rv.ruled { Text("Rules").tag("rule") }
                     }
                     .pickerStyle(.segmented)
-                    .help("Who posts a checked review: you (Ask), or the checker (Auto)")
+                    .help(rv.ruled ? "Who posts a checked review: you (Ask), the checker (Auto), or your rules, repo by repo (Rules, in Settings)" : "Who posts a checked review: you (Ask), or the checker (Auto)")
                     Button { store.reviewSettings(["paused": !rv.paused], done: rv.paused ? "Reviews resumed" : "Reviews paused: no new rounds start") } label: {
                         Label(rv.paused ? "Resume" : "Pause", systemImage: rv.paused ? "play.fill" : "pause.fill")
                     }
@@ -434,7 +437,7 @@ struct ReviewRow: View {
                     }
                 }
                 if let a = p.attention {
-                    Text(a.kind == "ready" ? draftLine(p) ?? a.text : a.text).font(.system(size: 11.5)).foregroundStyle(K.blocked).lineLimit(2)
+                    Text(a.kind == "ready" ? [draftLine(p) ?? a.text, p.waitsWhy.map { "waits for you: \($0)" }].compactMap { $0 }.joined(separator: " · ") : a.text).font(.system(size: 11.5)).foregroundStyle(K.blocked).lineLimit(2)
                     if a.kind == "ready" { ReviewActions(p: p, small: true) }
                 } else if p.state == "reviewing" || p.state == "queued" {
                     Text(phaseText(p, paused: paused)).font(.system(size: 11.5)).foregroundStyle(K.text2)

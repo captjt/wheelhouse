@@ -2869,6 +2869,11 @@ code {
   line-height: 1.5;
   color: var(--text-2);
 }
+.rv-draft-why {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
 .rv-hist-row {
   display: grid;
   grid-template-columns: 30px 140px 176px 104px minmax(0, 1fr) 68px 52px 24px;
@@ -5533,6 +5538,12 @@ code {
 .set-value > .set-sentence {
   flex: 1 1 240px;
 }
+/* Review's posting: its rule's form and the override's note take the row. */
+.set-value > .set-check-edit,
+.set-value > .set-note {
+  flex-basis: 100%;
+  margin: 0;
+}
 .set-here {
   flex-basis: 100%;
   display: inline-flex;
@@ -5710,6 +5721,15 @@ code {
   margin-top: 6px;
   font-size: 12px;
   color: var(--faint);
+}
+/* Review's posting, under its orders. */
+.set-order-posting {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.set-order-posting .set-order-note {
+  flex-basis: 100%;
+  margin-top: 0;
 }
 
 /* gates */
@@ -6099,14 +6119,6 @@ code {
 }
 .set-field .set-input.set-num {
   width: 80px;
-}
-@media (max-width: 760px) {
-  /* Review's posting goes on its own line under the head, its switch first. */
-  .set-order-head .set-post {
-    order: 9;
-    flex-basis: 100%;
-    width: auto;
-  }
 }
 .phone .set-section {
   scroll-margin-top: calc(56px + env(safe-area-inset-top));

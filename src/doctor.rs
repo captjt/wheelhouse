@@ -127,7 +127,7 @@ pub fn run() -> Result<()> {
             } else if review["paused"] == true {
                 r.note("review", "on, paused", "wh review resume");
             } else {
-                r.ok("review", &format!("on, posting: {}", review["post"].as_str().unwrap_or("ask")));
+                r.ok("review", &format!("on: a checked review {}", review["post_rule"]["text"].as_str().unwrap_or("waits for you to post it")));
             }
         }
         _ => r.note("review", "off", "set up review.lua (docs/review.md), then wh review on"),

@@ -4,7 +4,8 @@
 //!   until you ask the agent something.
 //! - Its hooks (`wh hook`) say which session it's in, what you asked it, and
 //!   what it said when a turn ended. `/clear` starts a new session, so a new
-//!   docket; `--resume` goes back to the docket that session was on.
+//!   docket; `--resume` goes back to the docket that session was on, and
+//!   reopens it, in the same pane or a new one.
 //! - Rex's program status says when it's blocked or failed, and when a turn
 //!   ended, for agents without hooks.
 //! - When the pane closes or the agent exits, the docket is released and done.
@@ -61,20 +62,34 @@ pub struct Tracker {
     pub remote: std::collections::HashSet<String>,
 }
 
-/// Pick up the agent dockets that were open when the hub last stopped.
+/// Pick up the dockets agents held when the hub last stopped: open, not
+/// released, with an agent on the record. That's the hub's own Agent
+/// dockets, and dockets you opened and put an agent on (wh start --docket,
+/// or a resumed session). Review's and Build's panes come back through
+/// their own maps. When two claim one pane, the one with a session wins
+/// over one without: a docket opened for the pane before it was found.
 pub fn load(core: &mut Core) -> Result<()> {
     for st in core.store.states()? {
-        let (true, Some(a), None) = (st.protocol == "agent" && st.is_open(), &st.agent, &st.released) else { continue };
-        core.agents.by_block.entry(a.block.clone()).or_insert(Tracked {
-            docket: st.id.clone(),
-            app: a.app.clone(),
-            session: st.session.clone(),
-            state: None,
-            root: None,
-            blocked_seen: None,
-            missing_since: None,
-            pending_prompt: None,
-        });
+        let Some(a) = &st.agent else { continue };
+        if !st.is_open() || st.released.is_some() || matches!(st.protocol.as_str(), "review" | "build") || core.store.build_task(&st.id)?.is_some() {
+            continue;
+        }
+        if core.agents.by_block.get(&a.block).is_some_and(|cur| cur.session.is_some() || st.session.is_none()) {
+            continue;
+        }
+        core.agents.by_block.insert(
+            a.block.clone(),
+            Tracked {
+                docket: st.id.clone(),
+                app: a.app.clone(),
+                session: st.session.clone(),
+                state: None,
+                root: None,
+                blocked_seen: None,
+                missing_since: None,
+                pending_prompt: None,
+            },
+        );
     }
     Ok(())
 }
@@ -288,22 +303,53 @@ fn flush_turn(core: &mut Core, block: &str) -> Result<()> {
 }
 
 fn release(core: &mut Core, block: &str, reason: &str) -> Result<()> {
+    release_as(core, block, reason, "done")
+}
+
+/// Release the pane's docket and set it to `status`.
+fn release_as(core: &mut Core, block: &str, reason: &str, status: &str) -> Result<()> {
     flush_turn(core, block)?;
     let Some(t) = core.agents.by_block.remove(block) else { return Ok(()) };
     core.append(&t.docket, "release", &Who::Hub, None, json!({ "reason": reason, "block": block }))?;
     // A Review docket outlives any one of its panes: it ends when the PR's
     // review is over and no pane of it is left.
     // A Review's or a Build's docket status is its protocol's to set.
-    let done = core.store.state(&t.docket)?.is_none_or(|s| s.protocol != "review") && core.store.build_task(&t.docket)?.is_none();
-    if done {
-        core.append(&t.docket, "set", &Who::Hub, None, json!({ "status": "done" }))?;
+    let ours = core.store.state(&t.docket)?.is_none_or(|s| s.protocol != "review") && core.store.build_task(&t.docket)?.is_none();
+    if ours {
+        core.append(&t.docket, "set", &Who::Hub, None, json!({ "status": status }))?;
     }
     Ok(())
 }
 
+/// The docket a resumed session was on: the first one it was claimed on
+/// that wasn't dropped. Not one another live pane still holds (the session
+/// resumed twice at once): that pane keeps it.
+fn resumed_docket(core: &Core, block: &str, session: &str) -> Result<Option<crate::record::fold::DocketState>> {
+    // States come newest first.
+    let d = core.store.states()?.into_iter().rfind(|st| st.session.as_deref() == Some(session) && st.status != "dropped");
+    Ok(d.filter(|d| !core.agents.by_block.iter().any(|(b, t)| b != block && t.docket == d.id)))
+}
+
+/// The pane `block` as a docket records it.
+fn pane_ref(core: &Core, block: &str, app: &str, cwd: Option<&str>) -> AgentRef {
+    match core.mirror.panes.get(block).cloned() {
+        Some(pane) => AgentRef { app: app.to_string(), ..agent_ref(core, &pane) },
+        None => AgentRef { app: app.to_string(), host: "local".into(), block: block.to_string(), cwd: cwd.map(crate::paths::tilde), ..Default::default() },
+    }
+}
+
 fn claim(core: &mut Core, block: &str, session: &str, source: &str) -> Result<()> {
+    claim_in(core, block, session, source, None)
+}
+
+/// Claim the session for the pane's docket. `here`: the pane it's in now,
+/// when that may not be the pane the docket last had.
+fn claim_in(core: &mut Core, block: &str, session: &str, source: &str, here: Option<AgentRef>) -> Result<()> {
     let Some(t) = core.agents.by_block.get(block).cloned() else { return Ok(()) };
-    let agent = core.store.state(&t.docket)?.and_then(|s| s.agent);
+    let agent = match here {
+        Some(a) => Some(a),
+        None => core.store.state(&t.docket)?.and_then(|s| s.agent),
+    };
     core.append(&t.docket, "claim", &Who::Hub, None, json!({ "session": session, "source": source, "agent": agent }))?;
     if let Some(tt) = core.agents.by_block.get_mut(block) {
         tt.session = Some(session.to_string());
@@ -315,49 +361,55 @@ fn claim(core: &mut Core, block: &str, session: &str, source: &str) -> Result<()
 pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> Result<Value> {
     let session = p["session_id"].as_str().filter(|s| !s.is_empty());
     let source = p["source"].as_str().unwrap_or("startup");
+    let cwd = p["cwd"].as_str();
+    // A resumed session goes back to the docket it was on, in whichever
+    // pane it's resumed (claude --resume in a new one, after the old closed).
+    let resumed = match (event, source, session) {
+        ("SessionStart", "resume", Some(s)) => resumed_docket(core, block, s)?,
+        _ => None,
+    };
 
     if !core.agents.by_block.contains_key(block) {
-        let a = match core.mirror.panes.get(block).cloned() {
-            Some(pane) => {
-                let mut a = agent_ref(core, &pane);
-                a.app = app.to_string();
-                a
+        let a = pane_ref(core, block, app, cwd);
+        match &resumed {
+            Some(d) => adopt(core, &d.id, &a, None),
+            None => {
+                open_for(core, a, session, Some(source))?;
             }
-            None => AgentRef { app: app.to_string(), host: "local".into(), block: block.to_string(), cwd: p["cwd"].as_str().map(crate::paths::tilde), ..Default::default() },
-        };
-        open_for(core, a, session, Some(source))?;
+        }
     }
 
     match event {
         "SessionStart" => {
             let Some(s) = session else { return Ok(json!({})) };
             let t = core.agents.by_block[block].clone();
+            if let Some(d) = resumed {
+                if d.id != t.docket {
+                    // A docket opened for the pane, with nothing on it yet,
+                    // was never work: it's dropped, not done.
+                    let fresh = core.store.state(&t.docket)?.is_some_and(|st| st.prompts == 0 && st.turns == 0);
+                    release_as(core, block, "resumed another session", if fresh { "dropped" } else { "done" })?;
+                    core.agents.by_block.insert(block.to_string(), Tracked { docket: d.id.clone(), session: None, ..t.clone() });
+                }
+                if !d.is_open() {
+                    core.append(&d.id, "set", &Who::Hub, None, json!({ "status": "in_progress" }))?;
+                }
+                if d.id != t.docket || t.session.as_deref() != Some(s) {
+                    claim_in(core, block, s, source, Some(pane_ref(core, block, app, cwd)))?;
+                }
+                core.live_changed();
+                return Ok(json!({ "docket": d.id }));
+            }
             match t.session.as_deref() {
                 None => claim(core, block, s, source)?,
                 Some(cur) if cur == s => {}
                 Some(_) => {
-                    if source == "resume"
-                        && let Some(d) = core.store.states()?.into_iter().find(|st| st.session.as_deref() == Some(s) && st.id != t.docket)
-                    {
-                        release(core, block, "resumed another session")?;
-                        core.agents.by_block.insert(block.to_string(), Tracked { docket: d.id.clone(), session: None, ..t.clone() });
-                        if !d.is_open() {
-                            core.append(&d.id, "set", &Who::Hub, None, json!({ "status": "in_progress" }))?;
-                        }
-                        claim(core, block, s, source)?;
-                        return Ok(json!({ "docket": d.id }));
-                    }
                     let fresh = core.store.state(&t.docket)?.is_some_and(|st| st.prompts == 0 && st.turns == 0);
                     if fresh {
                         claim(core, block, s, source)?;
                     } else {
                         release(core, block, &format!("new session ({source})"))?;
-                        let a = core.mirror.panes.get(block).cloned().map(|pane| {
-                            let mut a = agent_ref(core, &pane);
-                            a.app = app.to_string();
-                            a
-                        });
-                        let a = a.unwrap_or(AgentRef { app: app.into(), host: "local".into(), block: block.into(), ..Default::default() });
+                        let a = pane_ref(core, block, app, cwd);
                         open_for(core, a, Some(s), Some(source))?;
                     }
                 }
@@ -669,6 +721,99 @@ mod tests {
         assert_eq!(st.status, "in_progress");
         assert_eq!(st.session.as_deref(), Some("s-1"));
         assert!(core.rebuild_check().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_resume_in_a_new_pane_goes_back_to_its_docket() {
+        let mut core = test_core();
+        hook(&mut core, "SessionStart", "claude-code", "b1", &json!({ "session_id": "s-1", "source": "startup" })).unwrap();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b1", &json!({ "session_id": "s-1", "prompt": "Customize reviewers" })).unwrap();
+        let first = docket_of(&core, "b1").unwrap();
+        release(&mut core, "b1", "pane closed").unwrap();
+        assert_eq!(core.store.state(&first).unwrap().unwrap().status, "done");
+        let count = core.store.states().unwrap().len();
+
+        // The hook comes first: no docket is opened for the new pane.
+        let r = hook(&mut core, "SessionStart", "claude-code", "b2", &json!({ "session_id": "s-1", "source": "resume", "cwd": "/Users/you/git/api" })).unwrap();
+        assert_eq!(r["docket"], json!(first));
+        assert_eq!(docket_of(&core, "b2").unwrap(), first);
+        assert_eq!(core.store.states().unwrap().len(), count);
+        let st = core.store.state(&first).unwrap().unwrap();
+        assert_eq!((st.status.as_str(), st.session.as_deref(), st.released.as_deref()), ("in_progress", Some("s-1"), None));
+        assert_eq!(st.agent.unwrap().block, "b2", "the docket follows the session to its new pane");
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b2", &json!({ "session_id": "s-1", "prompt": "Continue" })).unwrap();
+        assert_eq!(core.store.state(&first).unwrap().unwrap().prompts, 2);
+
+        // Rex sees the pane first: the docket opened for it is dropped.
+        release(&mut core, "b2", "pane closed").unwrap();
+        agent_pane(&mut core, "b3", Some("idle"));
+        reconcile(&mut core, ["b3".to_string()]);
+        let opened = docket_of(&core, "b3").unwrap();
+        assert_ne!(opened, first);
+        hook(&mut core, "SessionStart", "claude-code", "b3", &json!({ "session_id": "s-1", "source": "resume" })).unwrap();
+        assert_eq!(docket_of(&core, "b3").unwrap(), first);
+        let st = core.store.state(&opened).unwrap().unwrap();
+        assert_eq!((st.status.as_str(), st.released.as_deref()), ("dropped", Some("resumed another session")));
+        assert_eq!(core.store.state(&first).unwrap().unwrap().status, "in_progress");
+        assert!(core.rebuild_check().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_resume_finds_the_first_docket_of_its_session() {
+        let mut core = test_core();
+        hook(&mut core, "SessionStart", "claude-code", "b1", &json!({ "session_id": "s-1", "source": "startup" })).unwrap();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b1", &json!({ "session_id": "s-1", "prompt": "First" })).unwrap();
+        let first = docket_of(&core, "b1").unwrap();
+        release(&mut core, "b1", "pane closed").unwrap();
+        // Before the fix, a resume in a new pane got a docket of its own
+        // with the same session: the next resume goes to the first.
+        agent_pane(&mut core, "b2", Some("idle"));
+        reconcile(&mut core, ["b2".to_string()]);
+        hook(&mut core, "SessionStart", "claude-code", "b2", &json!({ "session_id": "s-1", "source": "startup" })).unwrap();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b2", &json!({ "session_id": "s-1", "prompt": "Continue" })).unwrap();
+        let second = docket_of(&core, "b2").unwrap();
+        assert_ne!(first, second);
+
+        release(&mut core, "b2", "pane closed").unwrap();
+        hook(&mut core, "SessionStart", "claude-code", "b3", &json!({ "session_id": "s-1", "source": "resume" })).unwrap();
+        assert_eq!(docket_of(&core, "b3").unwrap(), first);
+
+        // A session resumed in a second pane while the first still runs it:
+        // the first keeps its docket, and the second gets its own.
+        hook(&mut core, "SessionStart", "claude-code", "b4", &json!({ "session_id": "s-1", "source": "resume" })).unwrap();
+        let fork = docket_of(&core, "b4").unwrap();
+        assert!(fork != first && fork != second);
+        assert_eq!(docket_of(&core, "b3").unwrap(), first);
+        assert_eq!(core.store.state(&first).unwrap().unwrap().status, "in_progress");
+    }
+
+    #[test]
+    fn a_restarted_hub_finds_each_pane_its_docket() {
+        let mut core = test_core();
+        // A docket you opened, with an agent on it.
+        let yours = core.open(&Who::Owner, "Customization of reviewers", json!({ "protocol": "none" })).unwrap();
+        let a = |b: &str| AgentRef { app: "claude-code".into(), host: "local".into(), block: b.into(), ..Default::default() };
+        adopt(&mut core, &yours, &a("b1"), None);
+        claim_in(&mut core, "b1", "s-1", "resume", Some(a("b1"))).unwrap();
+        // The hub's own Agent docket, in another pane.
+        let own = open_for(&mut core, a("b2"), Some("s-2"), Some("startup")).unwrap();
+        // Released, and a Review docket's pane: not this map's.
+        let gone = open_for(&mut core, a("b3"), Some("s-3"), Some("startup")).unwrap();
+        release(&mut core, "b3", "pane closed").unwrap();
+        let review = core.open(&Who::Hub, "Review acme/api#3", json!({ "protocol": "review" })).unwrap();
+        adopt(&mut core, &review, &a("b4"), None);
+        claim_in(&mut core, "b4", "s-4", "wheelhouse", Some(a("b4"))).unwrap();
+        // A restart that came back before the pane was found: an empty
+        // docket opened for it, newer than yours.
+        let empty = open_for(&mut core, a("b1"), None, None).unwrap();
+
+        core.agents.by_block.clear();
+        load(&mut core).unwrap();
+        assert_eq!(docket_of(&core, "b1").as_deref(), Some(yours.as_str()), "the one with a session, over {empty}");
+        assert_eq!(docket_of(&core, "b2").as_deref(), Some(own.as_str()));
+        assert!(docket_of(&core, "b3").is_none(), "{gone} was released");
+        assert!(docket_of(&core, "b4").is_none(), "Review's panes come back through its own map");
+        assert_eq!(core.agents.by_block["b1"].session.as_deref(), Some("s-1"));
     }
 
     #[test]

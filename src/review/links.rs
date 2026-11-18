@@ -485,7 +485,7 @@ fn issue_link(f: &Found) -> String {
 
 /// The Review docket's intent: what the PR is, what it says it does, what
 /// it addresses, and what the review holds it to.
-pub fn intent(repo: &str, pr: i64, f: &Facts, found: &[Found], mode: &str) -> String {
+pub fn intent(repo: &str, pr: i64, f: &Facts, found: &[Found], post: &super::posting::Post) -> String {
     let pr_ref = match &f.url {
         Some(u) => format!("[{repo}#{pr}]({u})"),
         None => format!("{repo}#{pr}"),
@@ -510,11 +510,12 @@ pub fn intent(repo: &str, pr: i64, f: &Facts, found: &[Found], mode: &str) -> St
         }
     }
     s.push_str("\n## Acceptance\n\n");
-    s.push_str(if mode == "auto" {
-        "- Each request for your review gets a round: blind reviews, then a check. The checked review posts by itself.\n"
-    } else {
-        "- Each request for your review gets a round: blind reviews, then a check. The checked review posts once you approve it.\n"
-    });
+    let posts = match post {
+        super::posting::Post::Ask => "posts once you approve it".to_string(),
+        super::posting::Post::Auto => "posts by itself".to_string(),
+        rule => rule.outcome(),
+    };
+    s.push_str(&format!("- Each request for your review gets a round: blind reviews, then a check. The checked review {posts}.\n"));
     let with_criteria: Vec<(&Found, Vec<String>)> = found.iter().filter_map(|i| Some((i, acceptance(i.description.as_deref()?)))).filter(|(_, a)| !a.is_empty()).collect();
     if with_criteria.is_empty() {
         let against = if found.is_empty() { String::new() } else { format!(", and against {}", join(&found.iter().map(|i| i.key.clone()).collect::<Vec<_>>())) };
@@ -679,8 +680,8 @@ pub async fn integrate(shared: &Shared, key: &str, f: &Facts, ctx: Option<&Path>
         }
         linked.push(fd.key.clone());
     }
-    let mode = cfg.map(|c| super::post_mode(&core, &c)).unwrap_or_else(|| "ask".into());
-    let body = intent(&p.repo, p.pr, f, &found, &mode);
+    let post = cfg.map(|c| super::post_for(&core, &c, Some(&p.repo))).unwrap_or(super::posting::Post::Ask);
+    let body = intent(&p.repo, p.pr, f, &found, &post);
     let ours = st.intent.as_ref().is_none_or(|i| i.source == "review");
     if ours && st.intent.as_ref().is_none_or(|i| i.body.trim() != body.trim()) {
         let keys: Vec<&str> = found.iter().map(|f| f.key.as_str()).collect();
@@ -746,7 +747,7 @@ mod tests {
     #[test]
     fn the_intent_says_what_the_review_holds_the_pr_to() {
         let found = detect(&pr42(), &[]);
-        let i = intent("acme/api", 42, &pr42(), &found, "ask");
+        let i = intent("acme/api", 42, &pr42(), &found, &super::super::posting::Post::Ask);
         assert!(
             i.starts_with("Review [acme/api#42](https://github.com/acme/api/pull/42) by @dana: feat(webhooks): retry failed deliveries with backoff. It addresses [ENG-445](https://linear.app/acme/issue/ENG-445/webhook-retries) (Webhook retries & backoff).\n"),
             "{i}"
@@ -760,9 +761,12 @@ mod tests {
         assert!(i.contains("posts once you approve it"), "{i}");
         assert!(i.contains("- The review holds the PR to its part of ENG-445's acceptance criteria:\n  - ~~The retry design is reviewed.~~ Signed off.\n  - The retry PR is merged, and `just ci` passes for `libs/webhooks`.\n  - Existing behavior is unchanged.\n- Done when"), "{i}");
         assert!(!i.contains("Not this") && !i.contains("Generated with"), "{i}");
-        let bare = intent("o/api", 3, &Facts { title: "Tidy".into(), ..Default::default() }, &[], "auto");
+        let bare = intent("o/api", 3, &Facts { title: "Tidy".into(), ..Default::default() }, &[], &super::super::posting::Post::Auto);
         assert!(bare.starts_with("Review o/api#3: Tidy.\n\n## Acceptance"), "{bare}");
         assert!(bare.contains("posts by itself") && bare.contains("what its description says it does.\n"), "{bare}");
+        let rule = super::super::posting::parse(&serde_json::json!({ "auto": { "verdict": "approve" } }), "post").unwrap().unwrap();
+        let ruled = intent("o/api", 3, &Facts { title: "Tidy".into(), ..Default::default() }, &[], &rule);
+        assert!(ruled.contains("The checked review posts itself if it approves, or else waits for you.\n"), "{ruled}");
     }
 
     #[test]
@@ -779,7 +783,7 @@ mod tests {
         // A colon keeps the list it introduces.
         let s = summary("It refuses a model that hides in:\n\n- a tool\n- middleware,\n  wrapped\n  - nested\n\n## Why\n\nx").unwrap();
         assert_eq!(s, "It refuses a model that hides in:\n\n- a tool\n- middleware, wrapped");
-        let q = intent("o/a", 1, &Facts { title: "T".into(), body: "It covers:\n- a\n- b".into(), ..Default::default() }, &[], "ask");
+        let q = intent("o/a", 1, &Facts { title: "T".into(), body: "It covers:\n- a\n- b".into(), ..Default::default() }, &[], &super::super::posting::Post::Ask);
         assert!(q.contains("> It covers:\n>\n> - a\n> - b\n"), "{q}");
         let long = format!("{}\n\n{}", "a".repeat(600), "b".repeat(600));
         assert_eq!(summary(&long).unwrap(), "a".repeat(600));

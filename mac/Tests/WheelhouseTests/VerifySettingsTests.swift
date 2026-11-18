@@ -80,6 +80,17 @@ private func canon(_ v: Any) throws -> String {
     #expect(Docket(j: state.j["dockets"][0]).hold == "Waiting on the DBA")
 }
 
+@Test func buildsAPostingRule() throws {
+    let r = SettingsPatch.rule(approve: true, risk: "medium", maxLines: "400", authors: "alice, bob", labels: " safe ,, docs\n", notTouching: "db/migrations/")
+    #expect(r.error == nil)
+    #expect(try canon(r.value!) == #"{"auto":{"authors":["alice","bob"],"labels":["safe","docs"],"max_lines":400,"merge_risk":"medium","not_touching":["db\/migrations\/"],"verdict":"approve"}}"#)
+    #expect(SettingsPatch.rule(approve: true, risk: "", maxLines: "40.5", authors: "", labels: "", notTouching: "").error == "Lines: a whole number, 1 or more.")
+    #expect(SettingsPatch.rule(approve: true, risk: "", maxLines: "0", authors: "", labels: "", notTouching: "").error == "Lines: a whole number, 1 or more.")
+    #expect(SettingsPatch.rule(approve: false, risk: "", maxLines: " ", authors: "", labels: ",", notTouching: "").error?.contains("choose Auto") == true)
+    let patch = SettingsPatch.make("review", ["repos", "o/a", "post"], r.value)
+    #expect(try canon(patch).hasPrefix(#"{"review":{"repos":{"o\/a":{"post":{"auto":{"#))
+}
+
 @Test func buildsSettingsPatches() throws {
     #expect(try canon(SettingsPatch.make("build", ["gates", "open"], "auto")) == #"{"build":{"gates":{"open":"auto"}}}"#)
     // Nil is null: what's set here goes, and the Lua's applies again.

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::lua;
+use super::posting::{self, Post};
 
 pub const LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 pub const MAX_REVIEWERS: usize = 4;
@@ -17,6 +18,8 @@ pub const MAX_REVIEWERS: usize = 4;
 pub struct Repo {
     pub checkout: PathBuf,
     pub notes: String,
+    /// This repo's own `post`, over the config's.
+    pub post: Option<Post>,
 }
 
 #[derive(Clone, Debug)]
@@ -43,7 +46,8 @@ pub struct Config {
     pub reviewers: Vec<ReviewerCfg>,
     pub checker: String,
     pub checker_extra_args: Vec<String>,
-    pub post: String,
+    /// Who posts a checked review, unless a repo says otherwise.
+    pub post: Post,
     pub max_rounds: usize,
     pub poll_seconds: u64,
     pub caches: Vec<PathBuf>,
@@ -143,7 +147,8 @@ pub fn from_value(path: PathBuf, raw: Value) -> Result<Config> {
             bail!("repos: {slug} isn't owner/name");
         }
         let checkout = r["checkout"].as_str().ok_or_else(|| anyhow!("repos[\"{slug}\"].checkout is required"))?;
-        repos.insert(slug.clone(), Repo { checkout: crate::paths::expand(checkout), notes: r["notes"].as_str().unwrap_or("").to_string() });
+        let post = posting::parse(&r["post"], &format!("repos[\"{slug}\"].post"))?;
+        repos.insert(slug.clone(), Repo { checkout: crate::paths::expand(checkout), notes: r["notes"].as_str().unwrap_or("").to_string(), post });
     }
     if repos.is_empty() {
         bail!("the config lists no repos");
@@ -190,10 +195,7 @@ pub fn from_value(path: PathBuf, raw: Value) -> Result<Config> {
     if !matches!(checker.as_str(), "codex" | "claude") {
         bail!("checker must be codex or claude, not {checker}");
     }
-    let post = raw["post"].as_str().unwrap_or("ask").to_string();
-    if post != "ask" && post != "auto" {
-        bail!("post must be ask or auto, not {post}");
-    }
+    let post = posting::parse(&raw["post"], "post")?.unwrap_or(Post::Ask);
     let mut caches: Vec<String> = if raw["caches"].is_array() { strings(&raw["caches"]) } else { DEFAULT_CACHES.iter().map(|s| s.to_string()).collect() };
     caches.extend(strings(&raw["extra_caches"]));
     let mut agents = BTreeMap::new();
@@ -232,6 +234,11 @@ impl Config {
 
     pub fn reviewer(&self, name: &str) -> Option<&ReviewerCfg> {
         self.reviewers.iter().find(|r| r.name == name)
+    }
+
+    /// Who posts a checked review in `repo`: its own `post`, or the config's.
+    pub fn post_for(&self, repo: &str) -> &Post {
+        self.repos.get(repo).and_then(|r| r.post.as_ref()).unwrap_or(&self.post)
     }
 
     pub fn agent(&self, name: &str) -> AgentCfg {
@@ -324,7 +331,7 @@ mod tests {
         assert_eq!(c.repo_list(), ["o/api"]);
         assert!(c.repos["o/api"].checkout.ends_with("git/api"));
         assert_eq!(c.reviewers.iter().map(|r| (r.name.as_str(), r.index)).collect::<Vec<_>>(), [("claude", 1), ("claude-2", 2)]);
-        assert_eq!((c.checker.as_str(), c.post.as_str(), c.max_rounds, c.poll_seconds), ("claude", "auto", 2, 180));
+        assert_eq!((c.checker.as_str(), c.post.kind(), c.max_rounds, c.poll_seconds), ("claude", "auto", 2, 180));
         assert_eq!(c.caches.len(), 12);
         let view = json!({ "repo": "o/api", "pr": 1 });
         assert_eq!(c.effort("o/api", "review", &view, Some("claude")).unwrap().as_deref(), Some("high"));
@@ -333,6 +340,20 @@ mod tests {
         assert_eq!(c.guide("o/api", "check", None, &json!({})).unwrap(), None);
         assert!(c.guide("o/api", "style", None, &json!({})).unwrap().unwrap().starts_with("Read `"));
         assert!(c.merge_risk_enabled("o/api", &json!({})));
+    }
+
+    #[test]
+    fn a_repo_can_post_its_own_way() {
+        let mut v = sample();
+        v["post"] = json!("ask");
+        v["repos"]["o/web"] = json!({ "checkout": "~/git/web", "post": { "auto": { "verdict": "approve", "max_lines": 200 } } });
+        let c = from_value("/x".into(), v).unwrap();
+        assert_eq!(c.post_for("o/api"), &Post::Ask);
+        assert_eq!(c.post_for("o/web").kind(), "rule");
+        assert_eq!(c.post_for("o/elsewhere"), &Post::Ask);
+        let mut v = sample();
+        v.as_object_mut().unwrap().remove("post");
+        assert_eq!(from_value("/x".into(), v).unwrap().post, Post::Ask, "ask by default");
     }
 
     #[test]
@@ -346,6 +367,9 @@ mod tests {
         let mut v = sample();
         v["post"] = json!("sometimes");
         assert!(from_value("/x".into(), v).is_err());
+        let mut v = sample();
+        v["repos"]["o/api"]["post"] = json!({ "auto": { "merge_risk": "huge" } });
+        assert_eq!(from_value("/x".into(), v).unwrap_err().to_string(), "repos[\"o/api\"].post.auto.merge_risk must be low or medium, not \"huge\"");
         let mut v = sample();
         v["effort"]["review"] = json!("huge");
         let c = from_value("/x".into(), v).unwrap();

@@ -19,6 +19,8 @@ import {
   usedWord,
   valueAt,
   varChanges,
+  whenDraft,
+  whenValue,
   type SettingsDoc,
 } from "../src/config.ts";
 
@@ -134,4 +136,17 @@ test("every repo either protocol knows, once each", () => {
     review: { lua: "", lua_exists: true, error: null, config: { repos: { "acme/api": {}, "acme/docs": {} } } },
   } as unknown as Parameters<typeof repoSlugs>[0];
   assert.deepEqual(repoSlugs(s), ["acme/api", "acme/docs", "acme/web"]);
+});
+
+test("a posting rule's form reads from the rule and saves as one, or says what's wrong", () => {
+  const fresh = whenDraft(null);
+  assert.deepEqual(whenValue(fresh), { value: { auto: { verdict: "approve", merge_risk: "low" } } });
+  const rule = { verdict: "approve" as const, merge_risk: "medium" as const, max_lines: 400, authors: ["alice", "bob"], not_touching: ["db/migrations/"] };
+  const d = whenDraft(rule);
+  assert.deepEqual(d, { approve: true, risk: "medium", maxLines: "400", authors: "alice, bob", labels: "", notTouching: "db/migrations/" });
+  assert.deepEqual(whenValue(d), { value: { auto: rule } });
+  assert.deepEqual(whenValue({ ...d, labels: " safe ,, docs\n" }), { value: { auto: { ...rule, labels: ["safe", "docs"] } } });
+  assert.deepEqual(whenValue({ ...d, maxLines: "40.5" }), { error: "Lines: a whole number, 1 or more." });
+  assert.deepEqual(whenValue({ ...d, maxLines: "0" }), { error: "Lines: a whole number, 1 or more." });
+  assert.match((whenValue({ approve: false, risk: "", maxLines: " ", authors: "", labels: ",", notTouching: "" }) as { error: string }).error, /choose Auto/);
 });

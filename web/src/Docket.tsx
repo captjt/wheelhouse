@@ -603,7 +603,7 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
     case "observed":
       if (data.what === "review" && data.source === "wheelhouse") return null;
       if (data.what === "review-event") {
-        const tone = data.event === "posted" ? "approved" : data.event === "dismissed" ? "denied" : data.event === "merged" ? "approved" : undefined;
+        const tone = data.event === "posted" ? "approved" : data.event === "dismissed" || data.event === "post-refused" ? "denied" : data.event === "merged" ? "approved" : undefined;
         return sys(<IconPR size={16} />, <>{e.body}</>, tone);
       }
       if (data.what === "review-attention")

@@ -55,7 +55,9 @@ A PR is `OWNER/NAME N` or `OWNER/NAME#N`, such as `acme/api 341`.
 4. **Post.** With `post = "ask"`, the round waits for you: **Post**,
    **Preview** or **Dismiss** in the app (Reviews, the Inbox, or the
    docket), or `wh review post|dismiss`. With `auto`, the checker posts.
-   Either way the post passes the refusals (below).
+   With a rule ([Who posts](#who-posts)), the checker stops at the preview
+   and the hub decides: it posts, or the round waits for you with the
+   reason. Either way the post passes the refusals (below).
 5. **Later rounds.** A re-request starts the next round: the same sessions
    resume with what changed (`delta.diff`). A push mid-round sends the
    reviewers the new commits in the same round, or, if the PR's own diff
@@ -101,10 +103,10 @@ points the hub at another file.
 
 | Key | What | Default |
 | --- | --- | --- |
-| `repos["owner/name"]` | `checkout` (required), `notes` for the briefs, `guides`, `effort` | |
+| `repos["owner/name"]` | `checkout` (required), `notes` for the briefs, `guides`, `effort`, `post` | |
 | `reviewers` | one to four: `"claude"`, `"codex"`, or `{ name, agent, extra_args, guides, effort }` | `{ "codex" }` |
 | `checker` | `"claude"`, `"codex"`, or `{ agent, extra_args, effort }` | `"claude"` |
-| `post` | `"ask"` (you post) or `"auto"` (the checker posts) | `"ask"` |
+| `post` | `"ask"` (you post), `"auto"` (the checker posts), a rule `{ auto = { … } }`, or a function ([Who posts](#who-posts)) | `"ask"` |
 | `max_rounds` | rounds at once (waiting on you doesn't count) | 3 |
 | `poll_seconds` | how often to check GitHub (at least 30) | 180 |
 | `effort` | `{ review = …, check = … }`: a level, or `function(pr)` returning one | the agent's own |
@@ -128,6 +130,56 @@ in `briefs/review/`; a file of the same name in
 
 `wh review post-mode ask|auto|config` overrides the config's `post`.
 
+## Who posts
+
+`post` says who posts a checked review, for every repo, and a repo's own
+`post` (`repos["owner/name"].post`) wins for that repo:
+
+- `"ask"`: it waits for you.
+- `"auto"`: the checker posts it.
+- `{ auto = { … } }`: a rule. It posts itself only when every condition
+  holds; otherwise it waits for you, as with ask.
+- A function of the PR and its checked review, returning `"ask"` or
+  `"auto"`.
+
+```lua
+post = { auto = { verdict = "approve", merge_risk = "low", max_lines = 300 } },
+repos = {
+  ["acme/api"] = { checkout = "~/code/acme-api", post = "ask" },
+  ["acme/docs"] = { checkout = "~/code/acme-docs", post = "auto" },
+},
+```
+
+| Condition | Holds when |
+| --- | --- |
+| `verdict = "approve"` | the review approves; one that requests changes asks |
+| `merge_risk = "low"` or `"medium"` | the merge risk is that or lower; with merge risk off, never |
+| `max_lines = N` | the PR changes at most N lines (additions plus deletions) |
+| `authors = { … }` | the PR is by one of them |
+| `labels = { … }` | the PR has one of these labels |
+| `not_touching = { … }` | no changed path contains any of them |
+
+Under a rule, the checker previews and stops, as with ask, and isn't told
+whether its review will post itself. Once it's done, the hub checks the
+rule once against `review.verified.json`. If the rule holds, the hub posts
+it, through the same refusals and pinned to the checked review it judged.
+If not, the round waits for you, and the Inbox says why ("merge risk is
+medium (auto needs low)"). A post the refusals stop waits for you with
+the reason too. The docket's record keeps each decision, and the rule
+behind it. Changing the rule doesn't decide a round that's already
+waiting again; a new checked review (the head moved) is decided afresh.
+
+A function gets what an effort function gets (`repo`, `pr`, `title`,
+`author`, `lines`, `files`, `labels`, `touches(paths)`, …), and the
+checked review: `verdict` (`"approve"` or `"request_changes"`),
+`blocking`, `non_blocking`, `findings`, and `merge_risk` (`low`, `medium`
+or `high`, when it was rated). One that fails, or returns anything but
+`"auto"`, asks.
+
+`wh review post-mode ask|auto` puts every repo on ask or auto until
+`wh review post-mode config`, or until you change posting in Settings.
+Standing orders, `wh review` and `wh doctor` say what posting does now.
+
 ## The post's refusals
 
 The rules are in `src/review/post.rs`. Nothing posts when:
@@ -140,8 +192,8 @@ The rules are in `src/review/post.rs`. Nothing posts when:
 - any prose speaks in the first person, outside code;
 - the PR isn't open, or its head moved past the round's.
 
-Only you, or the PR's own checker in `auto` mode, can post; only you can
-dismiss. Any other agent is refused.
+Only you, the PR's own checker in `auto` mode, or the hub when your rule
+holds, can post; only you can dismiss. Any other agent is refused.
 
 ## Moving over from rex-reviewer
 

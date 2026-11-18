@@ -481,4 +481,6 @@ struct CloseOnWordSheet: View {
 extension Notification.Name {
     static let snapshotOutput = Notification.Name("wheelhouse.snapshotOutput")
     static let snapshotScroll = Notification.Name("wheelhouse.snapshotScroll")
+    /// Open a posting rule's editor: "" for every repo, or a repo's slug.
+    static let snapshotRule = Notification.Name("wheelhouse.snapshotRule")
 }

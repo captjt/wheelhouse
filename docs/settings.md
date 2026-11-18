@@ -10,7 +10,9 @@ The first thing Settings shows: each rule that starts work without you,
 and how that work runs.
 
 - *When a PR in acme/api requests you, Review it with Claude Code and
-  Codex, check with Claude Code, and ask you before posting.*
+  Codex, check with Claude Code, and post it if it approves and its merge
+  risk is low, or else ask you.*
+- *In acme/docs, a checked review posts itself.*
 - *When an ENG issue assigned to you is labeled `agent`, build it with
   Claude Code, check with Codex, and ask you at plan and open.*
 - *Before a PR in acme/api opens or a round pushes, run `test` and `lint`
@@ -26,7 +28,7 @@ They're worked out from the config, so they always say what will happen.
 | Agents | Build's builder, checker and pre-reviewers; fix rounds; Review's reviewers and checker |
 | Repos | Notes for agents (the repo's rules), the base branch, how much of the plan goes on the PR, witnessed checks ([verify.md](verify.md)), and the repo's review guide |
 | Guides & briefs | The Markdown each agent is given: edit, compare with the built-in, reset, or write a guide of your own |
-| Review | Posting (ask or auto) and pausing, as before |
+| Review | Who posts a checked review: Ask, Auto, or Auto when… (a rule, [review.md](review.md#who-posts)), for every repo and for each one; and pausing |
 
 ## Standing decisions
 
@@ -62,6 +64,9 @@ shaped like the Lua configs and laid over them as they're read:
 
 A value here wins over `build.lua` or `review.lua`; removing it (Settings'
 **Use build.lua's**, or `null` through the API) brings back the file's.
+Review's posting rule (`post`, and each repo's) is replaced whole, not key
+by key, and setting it ends a `wh review post-mode` override. A function
+in `review.lua` stays a function until you set something here.
 A check `build.lua` lists can be turned off here too: Settings writes it
 as `false`.
 Every change is checked by the same code that reads the Lua, so one that

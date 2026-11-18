@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { appName, type Attention, type Docket, type Msg, type ReviewPr } from "./api";
 import { AttentionIcon } from "./Verify";
 import { attentionShown } from "./evidence";
-import { ReviewActions, draftLine } from "./Reviews";
+import { ReviewActions, draftLine, waitsWhy } from "./Reviews";
 import { MessageCard, msgFrom, msgTitle } from "./Messages";
 import { DocketScreen } from "./Docket";
 import { AppAvatar, IconInbox, IconPR, LiveIcon, TitleText } from "./icons";
@@ -35,7 +35,8 @@ export function inboxItems(dockets: Docket[], messages: Msg[] = [], prs: ReviewP
   for (const p of prs) {
     if (!p.attention) continue;
     const d = (p.docket && byId.get(p.docket)) || placeholder(p.key, `Review ${p.key}${p.title ? `: ${p.title}` : ""}`, p.updated_at || "");
-    const what = p.attention.kind === "ready" ? draftLine(p) ?? p.attention.text : p.attention.text;
+    const why = waitsWhy(p);
+    const what = p.attention.kind === "ready" ? [draftLine(p) ?? p.attention.text, why && `waits for you: ${why}`].filter(Boolean).join(" · ") : p.attention.text;
     items.push({ d, kind: "review", p, line: `${ATTENTION[p.attention.kind] ?? "Needs you"} (round ${p.attention.round}): ${what}`, at: p.updated_at, key: `rv:${p.full_key}` });
   }
   for (const m of messages) {
