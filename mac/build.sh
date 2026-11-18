@@ -50,6 +50,8 @@ if [[ -n "$dev" ]]; then
   pb "Add :WHURLScheme string $scheme"
   pb "Add :WHDefaultHub string ${WH_DEV_HUB:-http://127.0.0.1:7600}"
   pb "Add :WHCommand string ${WH_DEV_COMMAND:-~/.local/bin/wh-dev}"
+  # The build, for its DEV badge: branch and commit.
+  pb "Add :WHBuild string $(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git rev-parse --short HEAD 2>/dev/null)"
 fi
 
 # The icon, drawn by Icon.swift at every size macOS asks for (blue for Dev).

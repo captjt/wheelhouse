@@ -27,4 +27,7 @@ enum Flavor {
 
     /// How to install it, for when its `wh` can't be found.
     static let setup = isDev ? "just dev-install" : "just setup"
+
+    /// The build it is (`dev/rune 0011014`), for Dev's badge.
+    static let build = info["WHBuild"] as? String
 }

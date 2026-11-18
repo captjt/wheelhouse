@@ -1,7 +1,7 @@
 import "@fontsource-variable/inter";
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Docket } from "./api";
+import type { Docket, Flavor } from "./api";
 import { DocketScreen } from "./Docket";
 import { InboxView, inboxItems } from "./Inbox";
 import { IconActive, IconAgents, IconBuild, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSettings, IconSun, Logo, SessionIcon } from "./icons";
@@ -123,6 +123,19 @@ const routeOf = (path: string) =>
     .split("/")
     .filter(Boolean);
 
+/** The tab's icon: the wheel, in the flavor's color. */
+const favicon = (color: string) =>
+  `data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='11' fill='none' stroke='${color}' stroke-width='3'/><circle cx='16' cy='16' r='3' fill='${color}'/></svg>`;
+
+/** DEV, as a nightly build marks itself, with the build it is. */
+function FlavorBadge({ flavor }: { flavor: Flavor }) {
+  return (
+    <span className="flavor-badge" title={`Wheelhouse ${flavor.name === "dev" ? "Dev" : flavor.name}: ${flavor.branch} at ${flavor.commit.slice(0, 7)}. A copy of your dockets, with nothing live.`}>
+      {flavor.name.toUpperCase()}
+    </span>
+  );
+}
+
 function App() {
   const hub = useHub();
   const route = useRoute();
@@ -142,8 +155,18 @@ function App() {
     [hub.state, reviewAlerts, buildAlerts],
   );
   const reviewCount = (hub.state?.review?.prs ?? []).filter((p) => p.state === "queued" || p.state === "reviewing").length;
+  const flavor = hub.state?.flavor ?? null;
+  const name = flavor ? `Wheelhouse ${flavor.name === "dev" ? "Dev" : flavor.name}` : "Wheelhouse";
+  // A second hub's web app wears its flavor: the brand in blue, a DEV badge, its name.
   useEffect(() => {
-    document.title = urgent > 0 ? `(${urgent}) Wheelhouse` : "Wheelhouse";
+    const root = document.documentElement;
+    if (flavor) root.dataset.flavor = flavor.name;
+    else delete root.dataset.flavor;
+    const icon = document.querySelector<HTMLLinkElement>("link[rel=icon]");
+    if (icon) icon.href = favicon(flavor ? "%232f7dff" : "%23f6821f");
+  }, [flavor?.name]);
+  useEffect(() => {
+    document.title = urgent > 0 ? `(${urgent}) ${name}` : name;
     // The installed app's Dock or Home Screen badge: what needs you.
     const nav = navigator as Navigator & { setAppBadge?: (n?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
     if (urgent > 0) nav.setAppBadge?.(urgent).catch(() => {});
@@ -274,6 +297,7 @@ function App() {
               <Logo size={14} />
             </span>
             Wheelhouse
+            {flavor && <FlavorBadge flavor={flavor} />}
           </a>
           <span className="spacer" />
           <button className="icon-btn" title="Search (⌘K)" onClick={() => setPalette(true)}>
