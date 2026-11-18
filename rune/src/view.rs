@@ -9,7 +9,7 @@ use rune_kit::{Kit, PaletteSeed, ScrollBar, ScrollBarStyle};
 
 use crate::commands::{CREATE, Command, DOCKETS, Mark, NEEDS_YOU, Status};
 use crate::icons;
-use crate::{Mode, Panel};
+use crate::panel::{Mode, Panel};
 
 /// The window: the card and room for its shadow.
 pub const SIZE: (f32, f32) = (648.0, 520.0);
@@ -277,7 +277,7 @@ pub fn status(st: Status, k: &K) -> El {
 }
 
 /// What the last thing done came to.
-fn note(n: &crate::Note, k: &K) -> El {
+fn note(n: &crate::panel::Note, k: &K) -> El {
     row()
         .key("note")
         .w_full()

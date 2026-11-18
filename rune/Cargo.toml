@@ -19,8 +19,10 @@ path = "src/main.rs"
 # at the new rev (README: "Depending on Rune"); `scripts/bump-rune.sh` does it.
 [dependencies]
 rune = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a" }
-# Only for its scroll bar, which follows "Show scroll bars" (Rune's core draws none).
-rune-kit = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a" }
+# The app shell (sidebar, toolbar, inspector), Markdown, and the scroll bar
+# that follows "Show scroll bars" (Rune's core draws none).
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a", features = ["markdown"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 serde_json = "1"
 # Plain HTTP to the hub on this Mac: no TLS.
 ureq = { version = "3", default-features = false }
