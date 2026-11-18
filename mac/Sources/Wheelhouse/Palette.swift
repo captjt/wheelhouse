@@ -76,6 +76,9 @@ struct PaletteOverlay: View {
                 out.append(Command(id: "hold", group: d.id, label: "Hold…", symbol: "pause.circle", hint: "⇧⌘H", keywords: "pause stop wait build review") { reveal(); nav.holding = d.id })
             }
             out.append(Command(id: "checks", group: d.id, label: "Run checks", symbol: "checklist", hint: "⇧⌘U", keywords: "verify test lint witnessed") { Task { await store.runChecks(d.id) } })
+            if d.canStartAgent {
+                out.append(Command(id: "start-agent", group: d.id, label: "Start an agent…", symbol: "terminal", hint: "⇧⌘A", keywords: "agent claude codex start pane work") { reveal(); nav.starting = d.id })
+            }
             for s in Status.allCases where s != d.status {
                 out.append(Command(id: "st-\(s.rawValue)", group: d.id, label: "Move to \(s.label)", status: s, keywords: "status") { store.setStatus(d.id, s, undo: d.status) })
             }
@@ -370,6 +373,96 @@ struct NewDocketSheet: View {
         Task {
             try? await Task.sleep(for: .milliseconds(300))
             nav.show(id, store: store)
+        }
+    }
+}
+
+/// Start an agent on a docket you already have: it claims this docket, in a
+/// new pane of Rex's wheelhouse session.
+struct StartAgentSheet: View {
+    let id: String
+    @Environment(Store.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var note = ""
+    @State private var cwd = ""
+    @State private var app = "claude-code"
+    @State private var folders: [String] = []
+    @State private var busy = false
+
+    var body: some View {
+        let d = store.docket(id)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Text("Start an agent on \(id)").font(.system(size: 14, weight: .semibold))
+                if let t = d?.title { Text(t).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail) }
+            }
+            Editor(text: $note, placeholder: "What should the agent do first? Leave it empty to start it idle.", minHeight: 80, maxHeight: 220, focus: true, onSubmit: start)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                GridRow {
+                    Text("Folder").foregroundStyle(.secondary)
+                    HStack {
+                        TextField("~/git/project", text: $cwd).textFieldStyle(.roundedBorder)
+                        Menu {
+                            ForEach(folders, id: \.self) { f in Button(shortPath(f)) { cwd = shortPath(f) } }
+                            if !folders.isEmpty { Divider() }
+                            Button("Choose…") { choose() }
+                        } label: { Image(systemName: "folder") }
+                            .menuStyle(.borderlessButton).fixedSize()
+                    }
+                }
+                GridRow {
+                    Text("Agent").foregroundStyle(.secondary)
+                    Picker("", selection: $app) {
+                        Text("Claude Code").tag("claude-code")
+                        Text("Codex").tag("codex")
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                }
+            }
+            HStack {
+                Text("A new tab in Rex's wheelhouse session, named \(id). The agent works on this docket and reads its intent.")
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(busy ? "Starting…" : "Start Agent") { start() }
+                    .buttonStyle(.borderedProminent).tint(K.accent)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(cwd.trimmingCharacters(in: .whitespaces).isEmpty || busy)
+            }
+        }
+        .padding(16)
+        .frame(width: 560)
+        .task {
+            if note.isEmpty { note = "Read wh brief \(id), then work on its intent." }
+            if let a = d?.agent {
+                app = a.app == "codex" ? "codex" : "claude-code"
+                if cwd.isEmpty, let c = a.cwd { cwd = shortPath(c) }
+            }
+            let f = await store.folders(for: id)
+            folders = f.all
+            if cwd.isEmpty, let s = f.suggested { cwd = shortPath(s) }
+        }
+    }
+
+    private func choose() {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true
+        p.canChooseFiles = false
+        p.prompt = "Choose"
+        if p.runModal() == .OK, let u = p.url { cwd = shortPath(u.path) }
+    }
+
+    private func start() {
+        let dir = cwd.trimmingCharacters(in: .whitespaces)
+        guard !dir.isEmpty, !busy else { return }
+        busy = true
+        Task {
+            if await store.startAgent(app: app, cwd: dir, prompt: note.trimmingCharacters(in: .whitespacesAndNewlines), title: nil, docket: id) != nil {
+                store.reload()
+                dismiss()
+            } else {
+                busy = false
+            }
         }
     }
 }

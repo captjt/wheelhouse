@@ -173,6 +173,8 @@ struct AppCommands: Commands {
             } else {
                 Button("Hold…") { if let d { here.holding = d.id } }.keyboardShortcut("h", modifiers: [.command, .shift]).disabled(d == nil)
             }
+            Button("Start an Agent…") { if let d { here.starting = d.id } }
+                .keyboardShortcut("a", modifiers: [.command, .shift]).disabled(d?.canStartAgent != true)
             Divider()
             Button("Verify Every Record") { store.verifyAll() }
         }

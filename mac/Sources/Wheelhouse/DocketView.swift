@@ -29,6 +29,7 @@ struct DocketWindow: View {
             .sheet(item: Binding(get: { nav.record.map(IdBox.init) }, set: { nav.record = $0?.id })) { b in RecordSheet(id: b.id) }
             .sheet(item: Binding(get: { nav.linking.map(IdBox.init) }, set: { nav.linking = $0?.id })) { b in LinkIssueSheet(docket: b.id) }
             .sheet(item: Binding(get: { nav.holding.map(IdBox.init) }, set: { nav.holding = $0?.id })) { b in HoldSheet(id: b.id) }
+            .sheet(item: Binding(get: { nav.starting.map(IdBox.init) }, set: { nav.starting = $0?.id })) { b in StartAgentSheet(id: b.id) }
             .sheet(item: Binding(get: { nav.closing }, set: { nav.closing = $0 })) { c in CloseOnWordSheet(closing: c) }
             .background(WindowReader { Windows.register($0, nav) })
             .navigationTitle(store.docket(id).map { "\($0.id) · \($0.title)" } ?? id)
@@ -408,12 +409,22 @@ struct Properties: View {
                         Button("Link issue…") { nav.linking = d.id }.buttonStyle(.link)
                     }
                 }
+                if d.agent == nil, task == nil, d.canStartAgent {
+                    prop("Agent") {
+                        Button("Start an agent…") { nav.starting = d.id }.buttonStyle(.link)
+                            .help("Start Claude Code or Codex on this docket, in a new Rex pane")
+                    }
+                }
                 if let a = d.agent, d.proto != "review", task == nil {
                     prop("Agent") { HStack(spacing: 6) { AppAvatar(app: a.app, size: 15); Text(appName(a.app)) } }
                     prop("Now") {
                         HStack(spacing: 6) {
                             LiveIcon(state: d.live?.state ?? .idle, size: 12)
                             Text(d.live.map { "\($0.state.word)\($0.since.map { " · \(ago($0))" } ?? "")" } ?? (d.released.map { "Ended · \($0)" } ?? "Not running"))
+                            if d.canStartAgent {
+                                Button("Start one…") { nav.starting = d.id }.buttonStyle(.link)
+                                    .help("Start an agent on this docket again, in a new Rex pane")
+                            }
                         }
                     }
                     prop("Rex") {

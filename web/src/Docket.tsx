@@ -19,10 +19,10 @@ import { LinearChip, LinearModal } from "./Linear";
 import { post } from "./api";
 import { IconIssue, IconPR } from "./icons";
 import { useToast } from "./ui";
-import { STATUSES, statusItems } from "./views";
+import { STATUSES, canStartAgent, statusItems } from "./views";
 import { CheckOutput, VerifySection } from "./Verify";
 import { checkState, checkWord, independence, shortSha, verifyShown } from "./evidence";
-import { IconPause, IconPlay } from "./icons";
+import { IconAgents, IconPause, IconPlay } from "./icons";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
   const hub = useHub();
@@ -154,6 +154,13 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </button>
             )}
           </Prop>
+          {!d.agent && !building && canStartAgent(d) && (
+            <Prop label="Agent">
+              <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title="Start Claude Code or Codex on this docket, in a new Rex pane">
+                <IconAgents size={14} /> Start an agent…
+              </button>
+            </Prop>
+          )}
           {d.agent && d.protocol !== "review" && !building && (
             <>
               <Prop label="Agent">
@@ -163,10 +170,17 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
                 </span>
               </Prop>
               <Prop label="Now">
-                <span className={`prop-val live-${d.live?.state || "gone"}`}>
-                  <LiveIcon state={d.live?.state ?? "idle"} />
-                  {d.live ? `${liveWord(d.live.state)}${d.live.since ? ` · ${ago(d.live.since)}` : ""}` : d.released ? `Ended · ${d.released}` : "Not running"}
-                </span>
+                {canStartAgent(d) ? (
+                  <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title={`${d.released ? `Ended: ${d.released}. ` : ""}Start an agent on this docket again, in a new Rex pane`}>
+                    <LiveIcon state="idle" />
+                    <span className="prop-text">Not running · Start one…</span>
+                  </button>
+                ) : (
+                  <span className={`prop-val live-${d.live?.state || "gone"}`}>
+                    <LiveIcon state={d.live?.state ?? "idle"} />
+                    {d.live ? `${liveWord(d.live.state)}${d.live.since ? ` · ${ago(d.live.since)}` : ""}` : d.released ? `Ended · ${d.released}` : "Not running"}
+                  </span>
+                )}
               </Prop>
               <Prop label="Rex">
                 {d.live ? (

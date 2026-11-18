@@ -72,6 +72,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/panes/name", post(pane_name))
         .route("/api/whoami", get(whoami))
         .route("/api/agents/start", post(start_agent))
+        .route("/api/folders", get(folders_list))
         .route("/api/hub/stop", post(hub_stop))
         .route("/api/push/key", get(push_key))
         .route("/api/push/subscribe", post(push_subscribe))
@@ -943,6 +944,17 @@ async fn start_agent(State(shared): State<Shared>, Json(req): Json<StartReq>) ->
         .await
         .map(Json)
         .map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))
+}
+
+#[derive(Deserialize)]
+struct FoldersQ {
+    #[serde(default)]
+    docket: Option<String>,
+}
+
+/// Where an agent could start, and where this docket's should.
+async fn folders_list(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<FoldersQ>) -> ApiResult {
+    crate::start::folders(&shared, q.docket.as_deref()).await.map(Json).map_err(internal)
 }
 
 /// Stop this hub, so `wh up` can hand over to launchd. Not on the tailnet.

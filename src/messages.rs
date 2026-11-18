@@ -37,7 +37,7 @@ pub fn addr_of(core: &Core, p: &Pane) -> String {
     format!("{session}/{pane}")
 }
 
-fn short(id: &str) -> String {
+pub(crate) fn short(id: &str) -> String {
     let tail: String = id.chars().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
     tail
 }

@@ -9,7 +9,7 @@ import { ReviewsView } from "./Reviews";
 import { RecapView } from "./Recap";
 import { BuildsView } from "./Builds";
 import { HubProvider, LiveProvider, go, useHub, useRoute, useTheme, type Theme } from "./live";
-import { NewDocket, Palette } from "./Palette";
+import { NewDocket, Palette, StartAgent } from "./Palette";
 import { PaneProvider } from "./Pane";
 import { PushHint, registerWorker } from "./Push";
 import { ToastProvider, typing, usePhone, useToast } from "./ui";
@@ -267,6 +267,7 @@ function App() {
       {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} onClose={() => setCreating(false)} />}
       {hub.dialog?.kind === "refused" && <RefusedDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
       {hub.dialog?.kind === "hold" && <HoldDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
+      {hub.dialog?.kind === "agent" && <StartAgent key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
     </>
   );
 
