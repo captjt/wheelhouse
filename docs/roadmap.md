@@ -87,8 +87,11 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       one reply per thread as the `pr-reply` contract writes them, behind a
       **Push and reply** gate. The base merges in (no force-push), or with
       `update = "rebase"` is rebased and pushed with a lease.
+- [x] Linear intake (`sources.linear`): an issue assigned to you with the
+      label starts a Build on Linear's branch; one in your active cycle is
+      offered (**Build it / Not this one**); a skip label leaves it alone
 - [x] `scripts/build-e2e.sh`: a Build end to end on a scratch hub, with
-      stand-in agents, gh and origin
+      stand-in agents, gh, origin and Linear
 
 ### Recap and the phone
 
@@ -122,13 +125,6 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [ ] Pre-review: a Review of the branch before the PR opens, with your
       own reviewers, posting nothing
 - [ ] Build run live on more real repos
-
-### Linear intake for Build
-
-- [ ] Linear issues assigned to you with a label start a Build, as GitHub
-      issues do now (`sources.linear` in `build.lua`)
-- [ ] Cycle offers: an issue that enters your active cycle asks you to
-      **Start** or **Skip**
 
 ### Review
 

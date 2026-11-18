@@ -1,6 +1,10 @@
 //! Wheelhouse: every piece of agent work as a docket, on a record you can
 //! check. `wh serve` runs the hub; everything else talks to it.
 
+// A lock taken in an `if let` or `match` scrutinee is held to the end of
+// the block; locking again inside hangs the hub. Bind the result first.
+#![warn(clippy::significant_drop_in_scrutinee)]
+
 macro_rules! say {
     ($($t:tt)*) => { eprintln!("{} {}", crate::time::now(), format!($($t)*)) };
 }

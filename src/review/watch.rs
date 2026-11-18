@@ -19,7 +19,8 @@ const START_BACKOFF: i64 = 120;
 const COOLDOWN: i64 = 180;
 
 pub async fn run(shared: Shared) {
-    if let Err(e) = super::load(&mut shared.lock()) {
+    let loaded = super::load(&mut shared.lock());
+    if let Err(e) = loaded {
         say!("review: {e:#}");
     }
     tokio::time::sleep(Duration::from_secs(3)).await;

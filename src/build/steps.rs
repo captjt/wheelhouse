@@ -76,10 +76,28 @@ pub async fn start_from(shared: &Shared, spec: &str, repo: Option<&str>) -> Resu
     let mut t = if let Some(d) = spec.strip_prefix("D-").map(|_| spec.to_string()) {
         let core = shared.lock();
         let st = core.store.state(&d)?.ok_or_else(|| anyhow!("no docket {d}"))?;
-        if st.intent.as_ref().is_none_or(|i| i.body.trim().is_empty()) {
-            bail!("{d} has no intent yet: write what it's for first (wh intent {d} - < intent.md)");
+        // A docket linked to a Linear issue builds as that issue: its key,
+        // its branch, and "Closes ENG-142" on the PR. The issue is enough
+        // context without an intent.
+        if let Some(l) = st.linear.clone() {
+            let mut t = Task {
+                docket: d.clone(),
+                key: l.key.clone(),
+                title: l.title.clone().unwrap_or_else(|| st.title.clone()),
+                url: l.url.clone(),
+                source: "linear".into(),
+                trigger: "manual".into(),
+                repo: pick_repo(repo)?,
+                ..Default::default()
+            };
+            t.branch = l.branch.clone().filter(|b| !b.is_empty());
+            t
+        } else {
+            if st.intent.as_ref().is_none_or(|i| i.body.trim().is_empty()) {
+                bail!("{d} has no intent yet: write what it's for first (wh intent {d} - < intent.md)");
+            }
+            Task { docket: d.clone(), key: d.clone(), title: st.title.clone(), source: "docket".into(), trigger: "manual".into(), repo: pick_repo(repo)?, ..Default::default() }
         }
-        Task { docket: d.clone(), key: d.clone(), title: st.title.clone(), source: "docket".into(), trigger: "manual".into(), repo: pick_repo(repo)?, ..Default::default() }
     } else if let Some((r, Some(n))) = gh_issue {
         let v: Value = serde_json::from_str(&github::gh(&["issue", "view", &n.to_string(), "--repo", &r, "--json", "number,title,body,url,state"], None).await?)?;
         if v["state"] != "OPEN" {
