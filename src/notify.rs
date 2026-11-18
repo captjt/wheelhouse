@@ -29,7 +29,7 @@ pub async fn run(shared: Shared) {
             Err(_) => return,
         };
         let kind = ev["type"].as_str().unwrap_or_default();
-        if kind != "needs" && kind != "review" && kind != "build" && !(kind == "message" && ev["to"] == "me") {
+        if kind != "needs" && kind != "review" && kind != "build" && kind != "turn" && !(kind == "message" && ev["to"] == "me") {
             continue;
         }
         if kind == "needs" && rex_inbox_running() {
@@ -79,6 +79,13 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
             let app = crate::mirror::app_name(p.app().unwrap_or("agent")).to_string();
             let what = if h.state == "error" { "failed".to_string() } else { h.kind.clone().map(|k| format!("waits on you ({k})")).unwrap_or("waits on you".into()) };
             Some(Note { title: format!("{app} {what}"), subtitle: format!("{docket} · {title}"), body: h.msg.clone().unwrap_or_default(), path: format!("{base}/#/d/{docket}"), group: format!("wh-{docket}") })
+        }
+        // An agent answered what you sent it from the app.
+        "turn" => {
+            let docket = ev["docket"].as_str()?.to_string();
+            let st = core.store.state(&docket).ok()??;
+            let app = st.agent.as_ref().map(|a| crate::mirror::app_name(&a.app).to_string()).unwrap_or_else(|| "The agent".into());
+            Some(Note { title: format!("{app} replied"), subtitle: format!("{docket} · {}", st.title), body: ev["text"].as_str().unwrap_or_default().to_string(), path: format!("{base}/#/d/{docket}"), group: format!("wh-{docket}") })
         }
         "message" => {
             let m = core.store.message(ev["id"].as_i64()?).ok()??;

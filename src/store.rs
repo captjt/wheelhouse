@@ -7,6 +7,9 @@ use std::path::Path;
 
 use crate::record::{DocketState, Stored, chain, hex};
 
+/// A prompt queued for an agent: (id, docket, block, body, created_at).
+pub type QueuedPrompt = (i64, String, String, String, String);
+
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct Message {
     pub id: i64,
@@ -97,6 +100,15 @@ CREATE TABLE IF NOT EXISTS keys (
   name TEXT NOT NULL,
   added_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS prompt_queue (  -- what you sent an agent while it worked: typed in when its turn ends
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  docket TEXT NOT NULL,
+  block TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL,   -- queued | sent | cancelled
+  created_at TEXT NOT NULL,
+  sent_at TEXT
+);
 CREATE TABLE IF NOT EXISTS blobs (  -- files entries name, by the sha256 of their bytes; never changed
   digest TEXT PRIMARY KEY,
   size INTEGER NOT NULL,
@@ -141,6 +153,28 @@ impl Store {
     #[cfg(test)]
     pub fn conn_for_tests(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Queue a prompt for an agent's pane, for when its turn ends.
+    pub fn queue_prompt(&mut self, docket: &str, block: &str, body: &str) -> Result<i64> {
+        self.conn.execute("INSERT INTO prompt_queue (docket, block, body, status, created_at) VALUES (?1, ?2, ?3, 'queued', ?4)", params![docket, block, body, crate::time::now_ms()])?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Queued prompts, oldest first. One docket's, or all.
+    pub fn queued_prompts(&self, docket: Option<&str>) -> Result<Vec<QueuedPrompt>> {
+        let mut st = self.conn.prepare("SELECT id, docket, block, body, created_at FROM prompt_queue WHERE status = 'queued' AND (?1 IS NULL OR docket = ?1) ORDER BY id")?;
+        let rows = st.query_map(params![docket], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Mark a queued prompt `sent` or `cancelled`; false if it wasn't queued.
+    pub fn set_prompt_status(&mut self, id: i64, docket: &str, status: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE prompt_queue SET status = ?3, sent_at = CASE WHEN ?3 = 'sent' THEN ?4 ELSE sent_at END WHERE id = ?1 AND docket = ?2 AND status = 'queued'",
+            params![id, docket, status, crate::time::now_ms()],
+        )?;
+        Ok(n > 0)
     }
 
     /// Keep a file under the hex sha256 of its bytes (once).

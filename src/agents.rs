@@ -56,6 +56,9 @@ struct PendingTurn {
 pub struct Tracker {
     pub by_block: BTreeMap<String, Tracked>,
     turns: BTreeMap<String, PendingTurn>,
+    /// Dockets whose agent is answering a prompt you sent from the app:
+    /// its reply is pushed to you, since you're away from the terminal.
+    pub remote: std::collections::HashSet<String>,
 }
 
 /// Pick up the agent dockets that were open when the hub last stopped.
@@ -266,7 +269,12 @@ fn flush_turn(core: &mut Core, block: &str) -> Result<()> {
     let docket = t.docket.clone();
     let summary = pt.message.as_deref().and_then(summarize);
     let links = pt.message.clone();
+    let reply = core.agents.remote.remove(&docket).then(|| summary.clone().or_else(|| pt.message.as_deref().map(|m| m.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect())));
     core.append(&docket, "turn", &Who::Hub, pt.message, json!({ "state": pt.status, "summary": summary }))?;
+    // You asked from the app: the reply comes to your phone.
+    if let Some(text) = reply {
+        let _ = core.events.send(json!({ "type": "turn", "docket": docket, "block": block, "text": text }));
+    }
     // A Claude artifact the turn names is kept with the docket, as a link.
     if let Some(text) = links
         && let Err(e) = crate::artifacts::keep_links(core, &docket, &text)
@@ -595,6 +603,49 @@ mod tests {
         let turn = core.store.entries(&d).unwrap().last().unwrap().entry().unwrap();
         assert_eq!(turn.data["state"], "done");
         assert_eq!(turn.data["summary"], "Fixed it. Tests pass.");
+    }
+
+    #[test]
+    fn a_reply_to_what_you_sent_from_the_app_is_pushed_and_no_other() {
+        let mut core = test_core();
+        let mut rx = core.events.subscribe();
+        agent_pane(&mut core, "b1", Some("working"));
+        reconcile(&mut core, ["b1".to_string()]);
+        let d = docket_of(&core, "b1").unwrap();
+        let turns = |rx: &mut tokio::sync::broadcast::Receiver<Value>| std::iter::from_fn(|| rx.try_recv().ok()).filter(|e| e["type"] == "turn").collect::<Vec<_>>();
+        // A turn you started at the terminal: no push.
+        hook(&mut core, "Stop", "claude-code", "b1", &json!({ "last_assistant_message": "Done at the desk." })).unwrap();
+        agent_pane(&mut core, "b1", Some("done"));
+        reconcile(&mut core, ["b1".to_string()]);
+        assert!(turns(&mut rx).is_empty());
+        // You sent it something from the app: its reply comes to you, once.
+        core.agents.remote.insert(d.clone());
+        agent_pane(&mut core, "b1", Some("working"));
+        reconcile(&mut core, ["b1".to_string()]);
+        hook(&mut core, "Stop", "claude-code", "b1", &json!({ "last_assistant_message": "**Fixed.** The retry test passes now." })).unwrap();
+        agent_pane(&mut core, "b1", Some("done"));
+        reconcile(&mut core, ["b1".to_string()]);
+        let t = turns(&mut rx);
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!(t[0]["docket"], d.as_str());
+        assert_eq!(t[0]["text"], "Fixed. The retry test passes now.");
+        assert!(!core.agents.remote.contains(&d));
+    }
+
+    #[test]
+    fn a_prompt_queued_while_the_agent_works_waits_its_turn() {
+        let mut core = test_core();
+        let q1 = core.store.queue_prompt("D-1", "b1", "Also run lint").unwrap();
+        let q2 = core.store.queue_prompt("D-1", "b1", "Then push").unwrap();
+        core.store.queue_prompt("D-2", "b2", "Elsewhere").unwrap();
+        let mine: Vec<String> = core.store.queued_prompts(Some("D-1")).unwrap().into_iter().map(|q| q.3).collect();
+        assert_eq!(mine, ["Also run lint", "Then push"]);
+        assert_eq!(core.store.queued_prompts(None).unwrap().len(), 3);
+        assert!(!core.store.set_prompt_status(q1, "D-2", "cancelled").unwrap(), "only its own docket's");
+        assert!(core.store.set_prompt_status(q1, "D-1", "sent").unwrap());
+        assert!(!core.store.set_prompt_status(q1, "D-1", "cancelled").unwrap(), "already sent: too late to take back");
+        assert!(core.store.set_prompt_status(q2, "D-1", "cancelled").unwrap());
+        assert!(core.store.queued_prompts(Some("D-1")).unwrap().is_empty());
     }
 
     #[test]

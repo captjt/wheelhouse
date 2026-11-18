@@ -355,6 +355,25 @@ function PhoneApp({
   }, [back]);
   useSwipeBack(top, base, shade, docket ?? false, back);
   useScrolledViews(true);
+  // The on-screen keyboard: how much of the screen it covers, so the docket
+  // (and its conversation's box) stays above it. Safari scrolls the page
+  // when a box takes focus; it goes back to the top.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const on = () => {
+      const kb = Math.max(0, Math.round(window.innerHeight - vv.height));
+      document.documentElement.style.setProperty("--kb", kb > 80 ? `${kb}px` : "0px");
+      if (kb > 80 && window.scrollY) window.scrollTo(0, 0);
+    };
+    vv.addEventListener("resize", on);
+    vv.addEventListener("scroll", on);
+    return () => {
+      vv.removeEventListener("resize", on);
+      vv.removeEventListener("scroll", on);
+      document.documentElement.style.removeProperty("--kb");
+    };
+  }, []);
   const page = route[0] || "view";
   usePullToRefresh(base, ptr, !docket, () => {
     window.dispatchEvent(new Event("wh:refresh"));

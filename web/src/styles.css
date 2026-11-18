@@ -4555,3 +4555,331 @@ code {
     overflow: hidden;
   }
 }
+
+/* ---- the conversation with a docket's agent ---- */
+.docket-seg {
+  margin-left: 12px;
+}
+.m-nav .docket-seg {
+  margin: 0;
+  justify-self: center;
+}
+.m-nav .docket-seg button {
+  height: 28px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+.chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px max(16px, calc((100% - 780px) / 2)) 12px;
+}
+.chat-empty {
+  margin: auto;
+  color: var(--muted);
+  text-align: center;
+}
+.chat-you {
+  align-self: flex-end;
+  max-width: 86%;
+  padding: 9px 14px;
+  border-radius: 18px 18px 6px 18px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 14.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.chat-you .prose {
+  color: var(--text);
+}
+.chat-you.note {
+  background: var(--hover);
+  border: 1px dashed var(--line-2);
+}
+.chat-label {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.chat-you.queued {
+  background: transparent;
+  border: 1.5px dashed color-mix(in oklch, var(--accent) 60%, transparent);
+}
+.chat-queued {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-you.sending {
+  opacity: 0.55;
+}
+.chat-you.chose {
+  font-weight: 500;
+}
+.chat-agent {
+  align-self: stretch;
+  min-width: 0;
+}
+.chat-who {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+.chat-who strong {
+  font-weight: 600;
+}
+.chat-at {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.chat-agent .prose {
+  color: var(--text);
+  font-size: 14.5px;
+  line-height: 1.62;
+}
+.chat-fold.folded > div {
+  max-height: 480px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 78%, transparent);
+}
+.chat-more {
+  margin-top: 4px;
+}
+.chat-time {
+  align-self: center;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.chat-break {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-break::before,
+.chat-break::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+.chat-sys {
+  align-self: center;
+  max-width: 90%;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.chat-sys.tone-blocked {
+  color: var(--blocked);
+}
+.chat-sys.tone-error {
+  color: var(--error);
+}
+.chat-file {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--elev);
+  text-align: left;
+  font-size: 13px;
+}
+.chat-ask-card .msg-card {
+  margin: 0;
+}
+.chat-now {
+  align-self: stretch;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+.chat-now.working {
+  background: var(--recessed);
+}
+.chat-now.off {
+  text-align: center;
+  color: var(--muted);
+}
+.chat-now.blocked {
+  background: var(--warning-tint);
+}
+.chat-now.error {
+  background: var(--danger-tint);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.chat-now-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.chat-now-text {
+  min-width: 0;
+}
+.chat-now-msg {
+  margin-top: 2px;
+  font: 12px/1.45 var(--mono);
+  overflow-wrap: anywhere;
+}
+.chat-now-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.chat-peek {
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--main);
+  border: 1px solid var(--line);
+  font: 11px/1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-2);
+}
+.chat-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.chat-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--working);
+  animation: chat-dot 1.2s ease-in-out infinite;
+}
+.chat-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.chat-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes chat-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+.chat-jump {
+  position: absolute;
+  right: 16px;
+  bottom: 74px;
+  z-index: 2;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--popover);
+  box-shadow: var(--shadow);
+  color: var(--text-2);
+}
+.chat-compose {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px max(12px, calc((100% - 780px) / 2)) calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: color-mix(in oklch, var(--main) 90%, transparent);
+  -webkit-backdrop-filter: saturate(1.8) blur(18px);
+  backdrop-filter: saturate(1.8) blur(18px);
+}
+.chat-compose textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  max-height: 160px;
+  resize: none;
+  padding: 9px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--line-2);
+  background: var(--recessed);
+  color: var(--text);
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.4;
+  outline: none;
+}
+.chat-compose textarea:focus {
+  border-color: var(--focus);
+}
+.chat-compose textarea:disabled {
+  opacity: 0.6;
+}
+.chat-send {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.chat-send:disabled {
+  background: var(--line-2);
+  color: var(--muted);
+}
+.chat-send:not(:disabled):active {
+  transform: scale(0.94);
+}
+.chat-state-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.phone .chat-agent .prose,
+.phone .chat-you {
+  font-size: 15px;
+}
+/* The keyboard: the conversation stays above it, its bar in place. */
+.phone .m-top {
+  bottom: var(--kb, 0px);
+}
+.phone .chat-compose {
+  padding-bottom: calc(8px + max(0px, env(safe-area-inset-bottom) - var(--kb, 0px)));
+}
+@media (max-width: 760px) {
+  .ps-screen {
+    font-size: 11.5px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}

@@ -45,6 +45,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/open", post(open_in_rex))
         .route("/api/dockets/{id}/screen", get(screen))
         .route("/api/dockets/{id}/send", post(send))
+        .route("/api/dockets/{id}/queue/{q}/cancel", post(unqueue))
         .route("/api/dockets/{id}/approve", post(approve))
         .route("/api/dockets/{id}/deny", post(deny))
         .route("/api/dockets/{id}/export", get(export))
@@ -327,7 +328,8 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
         }));
     }
     let report = core.verify(&id).map_err(internal)?;
-    Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report })))
+    let queued: Vec<Value> = core.store.queued_prompts(Some(&id)).map_err(internal)?.into_iter().map(|(q, _, _, body, at)| json!({ "id": q, "body": body, "at": at })).collect();
+    Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued })))
 }
 
 #[derive(Deserialize)]
@@ -442,6 +444,20 @@ async fn screen(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
 #[derive(Deserialize)]
 struct SendReq {
     text: String,
+    /// When the agent is busy: queue it for when its turn ends, instead of refusing.
+    #[serde(default)]
+    queue: bool,
+}
+
+/// Take back a prompt queued for the agent, before it goes in.
+async fn unqueue(State(shared): State<Shared>, Path((id, q)): Path<(String, i64)>) -> ApiResult {
+    let mut core = shared.lock();
+    if !core.store.set_prompt_status(q, &id, "cancelled").map_err(internal)? {
+        return Err(fail(StatusCode::CONFLICT, "it already went in"));
+    }
+    core.live_changed();
+    let _ = core.events.send(json!({ "type": "docket", "docket": id }));
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Type a message into the docket's agent and press Enter, if it's between
@@ -455,10 +471,19 @@ async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
         return Err(fail(StatusCode::BAD_REQUEST, "that's too long to paste into a pane"));
     }
     let (session, block, app, agent_session) = {
-        let core = shared.lock();
+        let mut core = shared.lock();
         let (s, b) = pane_of(&core, &id)?;
         let pane = core.mirror.panes.get(&b).ok_or_else(|| fail(StatusCode::CONFLICT, "the pane closed"))?;
-        agents::can_send(pane).map_err(|why| fail(StatusCode::CONFLICT, why))?;
+        if let Err(why) = agents::can_send(pane) {
+            // Busy, or waiting on a prompt: it goes in when the turn ends.
+            if req.queue && matches!(pane.root().map(|r| r.state.as_str()), Some("working" | "blocked")) {
+                let q = core.store.queue_prompt(&id, &b, &text).map_err(internal)?;
+                core.live_changed();
+                let _ = core.events.send(json!({ "type": "docket", "docket": id }));
+                return Ok(Json(json!({ "ok": true, "queued": q })));
+            }
+            return Err(fail(StatusCode::CONFLICT, why));
+        }
         let session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
         (s, b, pane.app().unwrap_or("agent").to_string(), session)
     };
@@ -471,7 +496,9 @@ async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
         let mut core = shared.lock();
         agents::note_prompt(&mut core, &id, &text, agent_session.as_deref(), Some("wheelhouse")).map_err(internal)?;
     }
-    shared.lock().live_changed();
+    let mut core = shared.lock();
+    core.agents.remote.insert(id.clone());
+    core.live_changed();
     Ok(Json(json!({ "ok": true })))
 }
 
