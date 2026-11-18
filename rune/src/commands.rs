@@ -5,34 +5,8 @@
 
 use serde_json::Value;
 
-/// A docket's status, as Linear draws it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Status {
-    Todo,
-    InProgress,
-    Done,
-    Dropped,
-}
-
-impl Status {
-    fn parse(s: &str) -> Status {
-        match s {
-            "in_progress" => Status::InProgress,
-            "done" => Status::Done,
-            "dropped" => Status::Dropped,
-            _ => Status::Todo,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Status::Todo => "To do",
-            Status::InProgress => "In progress",
-            Status::Done => "Done",
-            Status::Dropped => "Dropped",
-        }
-    }
-}
+/// A docket's status: the model's, shared with the main window.
+pub use crate::model::Status;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Docket {
@@ -202,6 +176,8 @@ pub enum Action {
     FromLinear,
     Open(String),
     Theme(Option<bool>),
+    /// A command only the main window's palette has: `go:inbox`, `rex:D-6`…
+    Main(String),
 }
 
 /// The mark at a row's start.
@@ -218,6 +194,8 @@ pub enum Mark {
     System,
     Light,
     Dark,
+    /// A mark by name, for the main window's own commands.
+    Glyph(&'static str),
 }
 
 #[derive(Clone, Debug, PartialEq)]

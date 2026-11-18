@@ -4,7 +4,10 @@
 
 mod activity;
 mod docket;
+mod forms;
 mod lists;
+mod menus;
+mod palette;
 mod sidebar;
 pub mod widgets;
 
@@ -78,12 +81,22 @@ pub struct Toast {
     pub at: f64,
 }
 
+/// What a new docket starts as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewMode {
+    Blank,
+    Linear,
+    Agent,
+}
+
 /// What's open over the window.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Sheet {
     Record(String),
     Hold(String),
-    NewDocket,
+    NewDocket(NewMode),
+    StartAgent(String),
+    LinkIssue(String),
 }
 
 pub struct Main {
@@ -105,6 +118,8 @@ pub struct Main {
     pub intent_edit: Option<TextEdit>,
     pub hold_why: TextEdit,
     pub sheet: Option<Sheet>,
+    pub form: forms::Form,
+    pub palette: Option<palette::Palette>,
     pub toasts: Vec<Toast>,
     pub theme: Option<bool>,
     pub clock: f64,
@@ -132,6 +147,8 @@ impl Main {
             intent_edit: None,
             hold_why: TextEdit::new(""),
             sheet: None,
+            form: forms::Form::default(),
+            palette: None,
             toasts: Vec::new(),
             theme: match std::env::var("WH_RUNE_THEME").as_deref() {
                 Ok("light") => Some(false),
@@ -229,6 +246,11 @@ impl Main {
         }
         self.place = Place::All;
         self.select(id.to_string());
+    }
+
+    /// A docket in a window of its own; until that window exists, here.
+    pub fn open_window(&mut self, id: &str) {
+        self.show(id);
     }
 
     /// Fetch a docket's page: inline in a headless run, else off the UI thread.
@@ -453,6 +475,25 @@ pub fn on_key(s: &mut Main, ev: &KeyEvent, _: &mut Tx) -> bool {
                 s.go(Place::ORDER[n as usize - 1].clone());
                 return true;
             }
+            let cur = s.current();
+            match (c, ev.mods.shift) {
+                ('k', false) => s.open_palette(),
+                ('n', false) => s.open_form(Sheet::NewDocket(NewMode::Blank)),
+                ('n', true) => s.open_form(Sheet::NewDocket(NewMode::Agent)),
+                ('h', true) => {
+                    if let Some(id) = cur {
+                        let held = s.state().and_then(|st| st.docket(&id).map(|d| d.hold().is_some())).unwrap_or(false);
+                        if held { s.resume(&id) } else { s.sheet = Some(Sheet::Hold(id)) }
+                    }
+                }
+                ('u', true) => {
+                    if let Some(id) = cur {
+                        s.run_checks(&id);
+                    }
+                }
+                _ => return false,
+            }
+            return true;
         }
         return false;
     }
@@ -484,7 +525,8 @@ pub fn on_key(s: &mut Main, ev: &KeyEvent, _: &mut Tx) -> bool {
     match t.as_str() {
         "g" => s.pending_g = true,
         "j" | "k" => lists::step(s, if t == "j" { 1 } else { -1 }),
-        "c" => s.sheet = Some(Sheet::NewDocket),
+        "c" => s.open_form(Sheet::NewDocket(NewMode::Blank)),
+        "/" => s.open_palette(),
         _ => return false,
     }
     true
@@ -517,6 +559,9 @@ pub fn view(s: &Main, cx: &mut Cx<Main>) -> El {
     let mut root = col().key("root").w_full().h_full().fill(if dark { theme::hex("#1b1b1d") } else { theme::hex("#f1f1f3") }).child(split);
     if let Some(sheet) = &s.sheet {
         root = root.child(docket::sheet(s, sheet, &k, &kit));
+    }
+    if let (Some(_), Some(st)) = (&s.palette, &state) {
+        root = root.child(palette::view(s, st, &k));
     }
     if !s.toasts.is_empty() {
         root = root.child(widgets::toasts(&s.toasts, &k));
@@ -653,6 +698,18 @@ pub const SCENES: &[(&str, fn(&mut Main))] = &[
     }),
     ("new", |s| {
         scene(s, Place::Inbox, None);
-        s.sheet = Some(Sheet::NewDocket);
+        s.open_form(Sheet::NewDocket(NewMode::Blank));
+    }),
+    ("agent", |s| {
+        scene(s, Place::Inbox, None);
+        s.open_form(Sheet::NewDocket(NewMode::Agent));
+    }),
+    ("palette", |s| {
+        scene(s, Place::Inbox, None);
+        s.open_palette();
+    }),
+    ("hold", |s| {
+        scene(s, Place::Active, Some("D-6"));
+        s.sheet = Some(Sheet::Hold("D-6".into()));
     }),
 ];

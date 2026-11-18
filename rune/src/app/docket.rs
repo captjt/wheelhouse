@@ -5,7 +5,7 @@
 use rune::{Color, El, ScrollSpec, col, el, icon, row, spacer, text, text_input};
 use rune_kit::{Kit, Markdown, ScrollBar};
 
-use super::{Main, Place, Sheet, activity, lists, widgets};
+use super::{Main, Place, Sheet, activity, forms, lists, menus, widgets};
 use crate::icons;
 use crate::model::{self, Docket, DocketPage, HubState, LiveState, Status};
 use crate::theme::{self, K, font, mono};
@@ -68,6 +68,23 @@ fn header(s: &Main, d: &Docket, k: &K) -> El {
         let a = id.clone();
         top = top.child(widgets::button("open-rex", "Open in Rex", false, true, k, move |s: &mut Main, _| s.open_in_rex(&a)));
     }
+    let b = id.clone();
+    top = top.child(widgets::button("open-window", "Open Docket", false, true, k, move |s: &mut Main, _| s.open_window(&b)));
+    // Everything else you can do to it: the docket's menu, as its context menu.
+    let d2 = d.clone();
+    top = top.child(
+        row()
+            .key("docket-menu")
+            .size(24.0, 22.0)
+            .radius(6.0)
+            .center()
+            .hover(k.hover)
+            .role("button")
+            .label("More")
+            .help("More")
+            .on_press_tx(move |_: &mut Main, tx| menus::open(&d2, "docket-menu", tx))
+            .child(text("⋯").font(font(14.0, 600.0).lh(16.0)).color(k.muted)),
+    );
     let mut chips = row().gap(6.0).center_y().child(theme::mark_chip(theme::status_icon(d.status(), 12.0, k), d.status().label(), k.text2, k));
     if let Some(l) = d.live() {
         chips = chips.child(theme::mark_chip(theme::live_icon(Some(l.state()), 12.0, k), l.state().word(), k.live(Some(l.state())), k));
@@ -614,10 +631,13 @@ pub fn sheet(s: &Main, sheet: &Sheet, k: &K, kit: &Kit) -> El {
     let card = match sheet {
         Sheet::Hold(id) => hold_sheet(s, id, k),
         Sheet::Record(id) => record_sheet(s, id, k, kit),
-        Sheet::NewDocket => new_docket_sheet(s, k),
+        Sheet::NewDocket(mode) => forms::new_docket(s, *mode, k),
+        Sheet::StartAgent(id) => forms::start_agent(s, id, k),
+        Sheet::LinkIssue(id) => forms::link_issue(s, id, k),
     };
     col()
         .key("sheet-scrim")
+        .raise()
         .absolute(0.0, 0.0)
         .w_full()
         .h_full()
@@ -709,15 +729,4 @@ fn record_sheet(s: &Main, id: &str, k: &K, kit: &Kit) -> El {
         return sheet_card(&format!("{id}'s record"), body, k);
     }
     sheet_card(&format!("{id}'s record"), text("Loading…").font(font(12.5, 400.0).lh(16.0)).color(k.muted).padding(18.0), k)
-}
-
-fn new_docket_sheet(s: &Main, k: &K) -> El {
-    let _ = s;
-    let body = col()
-        .w_full()
-        .padding(18.0)
-        .gap(12.0)
-        .child(text("Start a docket from the quick panel (⌃⌥⌘K): a blank docket, an agent on a new one, or one from a Linear issue.").font(font(12.5, 400.0).lh(17.0)).color(k.muted).wrap())
-        .child(row().w_full().child(spacer()).child(widgets::button("new-done", "Done", true, true, k, |s: &mut Main, _| s.sheet = None)));
-    sheet_card("New docket", body, k)
 }

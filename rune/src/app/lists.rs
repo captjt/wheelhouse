@@ -130,7 +130,14 @@ fn selected_id(s: &Main, st: &HubState) -> Option<String> {
 }
 
 fn list_row(key: String, on: bool, k: &K, content: El, select: String) -> El {
+    let menu_id = select.clone();
     row()
+        .on_secondary_press(move |s: &mut Main, press, tx| {
+            let d = s.state().and_then(|st| docket_for(&st, &menu_id));
+            if let Some(d) = d {
+                super::menus::open(&d, press, tx);
+            }
+        })
         .key(key)
         .w_full()
         .px(10.0)
@@ -142,6 +149,18 @@ fn list_row(key: String, on: bool, k: &K, content: El, select: String) -> El {
         .focus_selected(on)
         .on_press(move |s: &mut Main| s.select(select.clone()))
         .child(content.grow(1.0).min_w(0.0))
+}
+
+/// The docket a row is about: its id, an Inbox item's, or a concern's.
+fn docket_for(st: &HubState, id: &str) -> Option<Docket> {
+    if let Some(d) = st.docket(id) {
+        return Some(d.clone());
+    }
+    let items = model::inbox(st);
+    if let Some(it) = items.iter().find(|i| i.id == id) {
+        return st.docket(&it.docket_id).cloned();
+    }
+    model::concerns(st, &items).into_iter().find(|c| c.id() == id).and_then(|c| c.docket).and_then(|d| st.docket(&d).cloned())
 }
 
 fn scroll(key: &str, rows: El, k: &K) -> El {

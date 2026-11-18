@@ -131,7 +131,7 @@ pub fn empty(i: &'static Icon, title: &str, why: &str, k: &K) -> El {
 
 /// What just happened, at the window's foot.
 pub fn toasts(list: &[Toast], k: &K) -> El {
-    let mut c = col().key("toasts").absolute(0.0, 0.0).w_full().h_full().justify_end().items_center().pb(24.0).gap(6.0).inert();
+    let mut c = col().key("toasts").raise().absolute(0.0, 0.0).w_full().h_full().justify_end().items_center().pb(24.0).gap(6.0).inert();
     for (i, t) in list.iter().enumerate() {
         c = c.child(
             row()

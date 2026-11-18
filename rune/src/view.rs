@@ -261,6 +261,7 @@ fn mark(m: Mark, k: &K) -> El {
         Mark::System => glyph(&icons::SYSTEM),
         Mark::Light => glyph(&icons::LIGHT),
         Mark::Dark => glyph(&icons::DARK),
+        Mark::Glyph(_) => glyph(&icons::SEARCH),
         Mark::Status(st) => status(st, k),
     };
     row().w(18.0).h(16.0).center().a11y_hidden().child(inner)

@@ -240,6 +240,7 @@ impl Panel {
                     tx.close_window();
                 }
             }
+            Action::Main(_) => {}
             Action::Theme(t) => {
                 self.theme = t;
                 tx.color_motion(rune::tok::motion::CALM);
