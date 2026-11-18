@@ -52,6 +52,9 @@ and words in the system's own controls:
   and the docket's properties in an inspector. Chat with an agent, read
   the record, tick the intent's boxes, and ⌘K for everything. Double-click
   a docket for a window of its own.
+- **⌥⌘K from any app.** Wheelhouse's palette floats over whatever you're
+  in: approve a prompt, pick an agent's answer, post a review, find a
+  docket, or start an agent, without switching apps.
 - **The menu bar.** The wheel turns orange with a count when something needs
   you, and its panel answers it in place: Approve, Deny, an agent's
   options, Post.
@@ -65,8 +68,28 @@ and words in the system's own controls:
 
 <p align="center">
   <img src="docs/images/mac-menubar-light.png" width="340" alt="The menu bar panel: a prompt to approve, a question with its two answers as buttons, a failed migration, and a finished turn">
-  <img src="docs/images/mac-palette-dark.png" width="520" alt="The ⌘K palette over the Inbox: the selected docket's actions, then Create and Go to">
+  <img src="docs/images/mac-quick-dark.png" width="520" alt="⌥⌘K over any app: what needs you first (approve or deny a prompt, an agent's two answers), then Create and your dockets">
 </p>
+
+<details>
+<summary>More of Wheelhouse.app</summary>
+
+<table>
+  <tr>
+    <td><img src="docs/images/mac-chat-light.png" alt="Chat with an agent: your prompt, its plan with a table, the files it kept, and a box to queue the next message while it works"></td>
+    <td><img src="docs/images/mac-board-dark.png" alt="All dockets as a board in dark mode, grouped by status; drag a card to change its status"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/mac-record-light.png" alt="A docket's record: verified intact, who signed, and every entry, filtered by how it's known"></td>
+    <td><img src="docs/images/mac-reviews-dark.png" alt="Reviews in dark mode: the protocol's state, PRs by what they need, and a Review docket's round history"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/mac-window-light.png" alt="A docket in a window of its own"></td>
+    <td><img src="docs/images/mac-shortcuts-dark.png" alt="Every keyboard shortcut, from ⌘/"></td>
+  </tr>
+</table>
+
+</details>
 
 The web app is the same Wheelhouse at http://127.0.0.1:7500, and on your
 phone over Tailscale.
@@ -143,6 +166,7 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh link D-4 ENG-142` | Link a Linear issue |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or a link with a docket |
 | `wh start [--codex] [-C DIR] "prompt"` | Start an agent on a new docket, in Rex |
+| `wh open [D-4]` | Open a docket (or the Inbox) in Wheelhouse.app, or the web app without it |
 | `wh verify [D-4]`, `wh export D-4 > D-4.jsonl`, `wh verify --file D-4.jsonl` | Check a record, every kept file included; one that checks without the hub |
 | `wh review`, `on`, `off`, `pause`, `resume`, `check` | The Review protocol, and its switches |
 | `wh review post-mode ask\|auto\|config` | Who posts a checked review: you, or the checker |
@@ -162,7 +186,8 @@ skill (`wh skill`) teaches them how.
 ## The app
 
 The same keys in Wheelhouse.app and the web app; on the Mac, the menus
-have them too (⌘N new docket, ⌘K search, ⌘1–⌘8 go, ⌥⌘1–4 status).
+have them too (⌘N new docket, ⌘K search, ⌘1–⌘8 go, ⌥⌘1–4 status), ⌥⌘K
+works from any app, and ⌘/ lists them all.
 
 | Keys | |
 | --- | --- |

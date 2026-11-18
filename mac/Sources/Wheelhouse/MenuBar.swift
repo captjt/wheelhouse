@@ -164,6 +164,7 @@ struct SettingsView: View {
 private struct GeneralSettings: View {
     @AppStorage("theme") private var theme = "system"
     @AppStorage("menuBar") private var menuBar = true
+    @AppStorage("quickPanel") private var quickPanel = true
     @State private var login = SMAppService.mainApp.status == .enabled
     @State private var loginError: String?
 
@@ -176,6 +177,8 @@ private struct GeneralSettings: View {
             }
             .pickerStyle(.segmented)
             Toggle("Show Wheelhouse in the menu bar", isOn: $menuBar)
+            Toggle("Open Wheelhouse from any app with ⌥⌘K", isOn: $quickPanel)
+                .onChange(of: quickPanel) { QuickPanel.apply() }
             Toggle("Open at login", isOn: Binding(get: { login }, set: { on in
                 do {
                     if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
@@ -188,7 +191,7 @@ private struct GeneralSettings: View {
             if let loginError { Text(loginError).font(.caption).foregroundStyle(K.error) }
         }
         .formStyle(.grouped)
-        .frame(height: 220)
+        .frame(height: 250)
     }
 }
 

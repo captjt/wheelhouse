@@ -215,6 +215,9 @@ enum Cmd {
     },
     /// Whether the hub runs, and what it sees.
     Status,
+    /// Open a docket (or the Inbox) in Wheelhouse.app, or in the web app
+    /// without it
+    Open { docket: Option<String> },
     /// The app's address on your tailnet; --publish serves it there.
     Web {
         #[arg(long)]
@@ -240,6 +243,7 @@ fn main() {
         Some(Cmd::Logs { lines }) => service::logs(lines),
         Some(Cmd::Status) => status(),
         Some(Cmd::Web { publish }) => tailnet::cli(publish),
+        Some(Cmd::Open { docket }) => open(docket.as_deref().map(normalize)),
         Some(Cmd::Ls { all }) => ls(all),
         None => ls(false),
         Some(Cmd::Show { docket }) => show(&normalize(&docket)),
@@ -327,6 +331,23 @@ fn main() {
 }
 
 /// `12` and `d-12` both mean `D-12`.
+/// `wh open D-12`: the docket in Wheelhouse.app if it's installed, else the
+/// web app on this Mac.
+fn open(docket: Option<String>) -> Result<()> {
+    let app = ["/Applications/Wheelhouse.app".into(), crate::paths::home().join("Applications/Wheelhouse.app")].into_iter().any(|p: std::path::PathBuf| p.exists());
+    let url = match (&docket, app) {
+        (Some(d), true) => format!("wheelhouse://docket/{d}"),
+        (None, true) => "wheelhouse://inbox".to_string(),
+        (Some(d), false) => format!("http://{}/#/d/{d}", server::http_addr().map(|a| a.to_string()).unwrap_or_else(|| "127.0.0.1:7500".into())),
+        (None, false) => format!("http://{}/#/inbox", server::http_addr().map(|a| a.to_string()).unwrap_or_else(|| "127.0.0.1:7500".into())),
+    };
+    let ok = std::process::Command::new("/usr/bin/open").arg(&url).status().is_ok_and(|s| s.success());
+    if !ok {
+        anyhow::bail!("couldn't open {url}");
+    }
+    Ok(())
+}
+
 fn normalize(d: &str) -> String {
     let n = d.trim().trim_start_matches(['D', 'd']).trim_start_matches('-');
     if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() { format!("D-{n}") } else { d.to_string() }

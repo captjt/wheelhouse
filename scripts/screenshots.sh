@@ -260,7 +260,7 @@ done
 if swift --version 2>/dev/null | grep -qE "Swift version (6\.[2-9]|[7-9])"; then
   (cd "$root/mac" && swift build -c release --product Wheelhouse >/dev/null)
   WH_APP_HUB="$base" "$root/mac/.build/release/Wheelhouse" --snapshot "$images" \
-    --only "${MAC_SHOTS:-docket,inbox,chat,reviews,board,record,palette,window,menubar}" | sed "s|$root/||"
+    --only "${MAC_SHOTS:-docket,inbox,chat,reviews,board,record,quick,shortcuts,window,menubar}" | sed "s|$root/||"
 else
   echo "skipped Wheelhouse.app's shots: they need Xcode 26 (Swift 6.2)"
 fi
