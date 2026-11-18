@@ -25,9 +25,10 @@ pub fn vapid() -> Result<ES256KeyPair> {
     }
     let kp = ES256KeyPair::generate();
     std::fs::create_dir_all(crate::paths::state_dir())?;
-    std::fs::write(&path, B64.encode(kp.to_bytes()))?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    // Private from the first byte, not chmodded after.
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?.write_all(B64.encode(kp.to_bytes()).as_bytes())?;
     Ok(kp)
 }
 
@@ -41,6 +42,13 @@ pub fn subscribe(shared: &Shared, sub: &Value, agent: Option<&str>) -> Result<()
     let auth = sub["keys"]["auth"].as_str().ok_or_else(|| anyhow!("subscription.keys.auth is required"))?;
     if !endpoint.starts_with("https://") {
         bail!("push endpoints are https URLs");
+    }
+    // The keys a browser gives: a 16-byte secret and a 65-byte P-256 point.
+    if B64.decode(auth).map(|b| b.len()).ok() != Some(16) {
+        bail!("subscription.keys.auth isn't a 16-byte key");
+    }
+    if B64.decode(p256dh).map(|b| b.len()).ok() != Some(65) {
+        bail!("subscription.keys.p256dh isn't a P-256 public key");
     }
     shared.lock().store.push_subscribe(endpoint, p256dh, auth, agent)
 }
@@ -96,11 +104,11 @@ pub async fn send_all(shared: &Shared, note: &Value) -> Result<usize> {
     for (endpoint, p256dh, auth) in subs {
         let outcome = async {
             let ua_public = PublicKey::from_sec1_bytes(&B64.decode(&p256dh)?)?;
-            let ua_auth = Auth::clone_from_slice(&B64.decode(&auth)?);
-            let request = WebPushBuilder::new(endpoint.parse()?, ua_public, ua_auth)
-                .with_valid_duration(Duration::from_secs(3600))
-                .with_vapid(&kp, &contact)
-                .build(body.clone())?;
+            let raw = B64.decode(&auth)?;
+            anyhow::ensure!(raw.len() == 16, "a subscription's auth key isn't 16 bytes");
+            let ua_auth = Auth::clone_from_slice(&raw);
+            let request =
+                WebPushBuilder::new(endpoint.parse()?, ua_public, ua_auth).with_valid_duration(Duration::from_secs(3600)).with_vapid(&kp, &contact).build(body.clone())?;
             let request: reqwest::Request = request.try_into()?;
             anyhow::Ok(client.execute(request).await?.status())
         }

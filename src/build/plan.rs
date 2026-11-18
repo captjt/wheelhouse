@@ -146,7 +146,10 @@ pub fn block(key: &str, intent_md: &str, notes: Option<&str>, decisions: &[Decid
         for d in decisions {
             let what = match (&d.answer, d.by.as_deref()) {
                 (Some(a), Some("stood")) => format!("{a}. The recommendation stood; nobody answered."),
-                (Some(a), _) => format!("{a}. Chosen by {approved_by}{}.", d.note.as_deref().filter(|n| !n.trim().is_empty()).map(|n| format!(": \"{}\"", n.chars().take(300).collect::<String>())).unwrap_or_default()),
+                (Some(a), _) => format!(
+                    "{a}. Chosen by {approved_by}{}.",
+                    d.note.as_deref().filter(|n| !n.trim().is_empty()).map(|n| format!(": \"{}\"", n.chars().take(300).collect::<String>())).unwrap_or_default()
+                ),
                 (None, _) => "Open: not answered yet.".into(),
             };
             b.push_str(&format!("- **{} · {}** {what}\n", d.id, d.question));
@@ -178,12 +181,12 @@ pub fn strip(body: &str) -> String {
 mod tests {
     use super::*;
 
-    const PLAN: &str = "# Plan: GRD-142 Retry failed webhooks\n\n## Intent\nRetry failed deliveries with backoff, so a\nflaky endpoint doesn't drop events.\n\n## Acceptance\n- A 5xx is retried up to 3 times (`webhooks::retry::backs_off`).\n- A 4xx isn't retried,\n  and is logged.\n\n## Decisions\n- D1: Should retries cover 4xx? Recommended: no.\n- D2. Cap? Recommended: 3.\n\n## Approach\nAdd a retry loop in `deliver`.\n\n## Out of scope\n- Dead-letter queue.\n\n## Notes\n- Backoff doubles, the usual choice.\n";
+    const PLAN: &str = "# Plan: ENG-142 Retry failed webhooks\n\n## Intent\nRetry failed deliveries with backoff, so a\nflaky endpoint doesn't drop events.\n\n## Acceptance\n- A 5xx is retried up to 3 times (`webhooks::retry::backs_off`).\n- A 4xx isn't retried,\n  and is logged.\n\n## Decisions\n- D1: Should retries cover 4xx? Recommended: no.\n- D2. Cap? Recommended: 3.\n\n## Approach\nAdd a retry loop in `deliver`.\n\n## Out of scope\n- Dead-letter queue.\n\n## Notes\n- Backoff doubles, the usual choice.\n";
 
     #[test]
     fn a_plan_parses_and_proposes_its_intent() {
         let p = parse(PLAN);
-        assert_eq!(p.title.as_deref(), Some("GRD-142 Retry failed webhooks"));
+        assert_eq!(p.title.as_deref(), Some("ENG-142 Retry failed webhooks"));
         assert!(problems(&p).is_empty(), "{:?}", problems(&p));
         assert_eq!(p.acceptance(), ["A 5xx is retried up to 3 times (`webhooks::retry::backs_off`).", "A 4xx isn't retried, and is logged."]);
         assert_eq!(p.decisions(), ["D1", "D2"]);
@@ -207,13 +210,13 @@ mod tests {
             Decided { id: "D1".into(), question: "Should retries cover 4xx?".into(), answer: Some("No".into()), by: Some("you".into()), note: Some("log them".into()) },
             Decided { id: "D2".into(), question: "Cap?".into(), answer: Some("3".into()), by: Some("stood".into()), note: None },
         ];
-        let b = block("GRD-142", &intent(&p), p.get("Notes"), &ds, "@captjt", "full");
-        assert!(b.starts_with("<!-- wheelhouse:plan v1 GRD-142 -->\n<details open><summary><b>Plan</b> · GRD-142 · approved by @captjt</summary>"), "{b}");
+        let b = block("ENG-142", &intent(&p), p.get("Notes"), &ds, "@you", "full");
+        assert!(b.starts_with("<!-- wheelhouse:plan v1 ENG-142 -->\n<details open><summary><b>Plan</b> · ENG-142 · approved by @you</summary>"), "{b}");
         assert!(b.contains("**Intent**\n\nRetry failed deliveries"), "{b}");
-        assert!(b.contains("- **D1 · Should retries cover 4xx?** No. Chosen by @captjt: \"log them\"."), "{b}");
+        assert!(b.contains("- **D1 · Should retries cover 4xx?** No. Chosen by @you: \"log them\"."), "{b}");
         assert!(b.contains("- **D2 · Cap?** 3. The recommendation stood; nobody answered."), "{b}");
         assert!(b.contains("**Notes**\n\n- Backoff doubles"), "{b}");
-        let s = block("GRD-142", &intent(&p), p.get("Notes"), &ds, "@captjt", "summary");
+        let s = block("ENG-142", &intent(&p), p.get("Notes"), &ds, "@you", "summary");
         assert!(!s.contains("**Notes**"));
         let body = format!("Why.\n\n{b}\n\n---\nfooter");
         assert_eq!(strip(&body), "Why.\n\n\n\n---\nfooter");

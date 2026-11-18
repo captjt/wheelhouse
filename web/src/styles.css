@@ -4883,3 +4883,7 @@ code {
     overflow-wrap: anywhere;
   }
 }
+.act-earlier {
+  align-self: center;
+  margin: 4px 0 8px;
+}

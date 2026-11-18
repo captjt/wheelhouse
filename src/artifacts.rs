@@ -218,8 +218,11 @@ mod tests {
         core.store.conn_for_tests().execute("UPDATE blobs SET bytes = x'00'", []).unwrap();
         let r = core.verify_full(&d).unwrap();
         assert!(!r.ok && r.problems[0].contains("was changed"), "{:?}", r.problems);
-        assert!(core.verify(&d).unwrap().ok, "the quick check only looks for the file");
+        assert!(core.verify(&d).unwrap().ok, "the quick check only looks for the file, and is kept until the record moves");
         core.store.conn_for_tests().execute("DELETE FROM blobs", []).unwrap();
+        assert!(core.verify_full(&d).unwrap().problems[0].contains("is missing"));
+        // The record moves: the quick check looks again, and sees it gone.
+        core.append(&d, "note", &Who::Owner, Some("later".into()), json!({})).unwrap();
         assert!(core.verify(&d).unwrap().problems[0].contains("is missing"));
     }
 

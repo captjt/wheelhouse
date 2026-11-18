@@ -127,17 +127,56 @@ pub fn agent_path(first: &[String]) -> String {
 
 /// The pane's program: `env` with gh signed out, your shell's PATH (the
 /// config's `path` first), and Cargo's caches shared; then the agent.
+/// Where every push from an agent's pane goes: nowhere.
+pub const NEVER: &str = "wheelhouse-agents-never-push:///";
+
+/// A git ignore file with yours and `.tmp/`, for the agents' git.
+fn agent_gitignore() -> std::path::PathBuf {
+    let p = super::cache_dir().join("agent-gitignore");
+    let mine = ["~/.config/git/ignore", "~/.gitignore_global", "~/.gitignore"]
+        .iter()
+        .map(|f| crate::paths::expand(f))
+        .find(|f| f.exists())
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .unwrap_or_default();
+    let text = format!("{mine}\n# Wheelhouse's, never committed\n.tmp/\n");
+    if std::fs::read_to_string(&p).ok().as_deref() != Some(&text) {
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(&p, &text);
+    }
+    p
+}
+
+/// The pane's program for any agent Wheelhouse starts: `env` with the wall
+/// up. No GitHub or tracker tokens, no SSH agent, `gh` signed out, and every
+/// git push rewritten to fail, so an agent's mistake can't reach GitHub;
+/// only the hub writes there, with what you approved. This stops mistakes,
+/// not a determined agent running as you: see docs/security.md.
 pub fn env_wrapper(wt: &Path, path: &[String]) -> Vec<String> {
-    vec![
-        "env".into(),
-        "-u".into(),
-        "GH_TOKEN".into(),
-        "-u".into(),
-        "GITHUB_TOKEN".into(),
-        format!("PATH={}", agent_path(path)),
-        format!("GH_CONFIG_DIR={}", wt.join(".tmp/gh-empty").display()),
-        format!("CARGO_HOME={}", super::cache_dir().join("cargo").display()),
-    ]
+    let mut v: Vec<String> =
+        ["env", "-u", "GH_TOKEN", "-u", "GITHUB_TOKEN", "-u", "LINEAR_API_KEY", "-u", "WH_LINEAR_KEY", "-u", "SSH_AUTH_SOCK"].iter().map(|s| s.to_string()).collect();
+    let instead = format!("url.{NEVER}.pushInsteadOf");
+    let git: Vec<(String, String)> = vec![
+        ("remote.origin.pushurl".into(), NEVER.into()),
+        ("credential.helper".into(), String::new()),
+        (instead.clone(), "https://".into()),
+        (instead.clone(), "git@".into()),
+        (instead, "ssh://".into()),
+        ("core.excludesFile".into(), agent_gitignore().display().to_string()),
+    ];
+    v.push(format!("PATH={}", agent_path(path)));
+    v.push(format!("GH_CONFIG_DIR={}", wt.join(".tmp/gh-empty").display()));
+    v.push("GIT_TERMINAL_PROMPT=0".into());
+    v.push("GIT_SSH_COMMAND=false".into());
+    v.push(format!("GIT_CONFIG_COUNT={}", git.len()));
+    for (i, (k, val)) in git.iter().enumerate() {
+        v.push(format!("GIT_CONFIG_KEY_{i}={k}"));
+        v.push(format!("GIT_CONFIG_VALUE_{i}={val}"));
+    }
+    v.push(format!("CARGO_HOME={}", super::cache_dir().join("cargo").display()));
+    v
 }
 
 /// What starts an agent, and the session it will have (Claude Code's is
@@ -537,8 +576,9 @@ mod tests {
             },
         );
         let a = l.argv.join(" ");
-        assert!(a.starts_with("env -u GH_TOKEN -u GITHUB_TOKEN PATH="), "{a}");
-        assert!(a.contains(" GH_CONFIG_DIR=/w/pr-7/.tmp/gh-empty CARGO_HOME="), "{a}");
+        assert!(a.starts_with("env -u GH_TOKEN -u GITHUB_TOKEN -u LINEAR_API_KEY -u WH_LINEAR_KEY -u SSH_AUTH_SOCK PATH="), "{a}");
+        assert!(a.contains("GIT_CONFIG_KEY_2=url.wheelhouse-agents-never-push:///.pushInsteadOf GIT_CONFIG_VALUE_2=https://"), "{a}");
+        assert!(a.contains(" GH_CONFIG_DIR=/w/pr-7/.tmp/gh-empty GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND=false"), "{a}");
         assert!(a.contains(&format!("/bin/claude --session-id {} --permission-mode auto --model claude-opus-5-5 --effort xhigh --add-dir /r/.git/worktrees --settings {{\"permissions\":{{\"additionalDirectories\":[\"/c/npm\"]}}}} -n", l.session.as_deref().unwrap())), "{a}");
         let c = checker(&cfg, &wt, &[], Some("high"), false, "t");
         let a = c.argv.join(" ");

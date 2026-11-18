@@ -363,15 +363,19 @@ export function Sheet({
  * box's index and new state, and resolves false to put the box back.
  */
 export function Prose({ text, onTask }: { text: string; onTask?: (index: number, checked: boolean) => Promise<boolean> | boolean }) {
-  const html = useMemo(() => renderMarkdown(text), [text]);
+  const frag = useMemo(() => renderMarkdown(text), [text]);
   const ref = useRef<HTMLDivElement>(null);
+  // The sanitized nodes go in as nodes: no HTML string is parsed here.
+  useLayoutEffect(() => {
+    ref.current?.replaceChildren(frag.cloneNode(true));
+  }, [frag]);
   useEffect(() => {
     const boxes = ref.current?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') ?? [];
     boxes.forEach((b) => {
       b.disabled = !onTask;
       if (onTask) b.title = b.checked ? "Done: untick it" : "Tick it off";
     });
-  }, [html, onTask]);
+  }, [frag, onTask]);
   const click = (e: React.MouseEvent<HTMLDivElement>) => {
     const t = e.target as HTMLElement;
     const a = t.closest("a");
@@ -391,11 +395,15 @@ export function Prose({ text, onTask }: { text: string; onTask?: (index: number,
       );
     }
   };
-  return <div ref={ref} className="prose" onClick={click} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div ref={ref} className="prose" onClick={click} />;
 }
 
 /** One line of Markdown, inline: for summaries and rows. */
 export function InlineMd({ text, links = true, className }: { text: string; links?: boolean; className?: string }) {
-  const html = useMemo(() => renderInline(text, links), [text, links]);
-  return <span className={`md-inline${className ? ` ${className}` : ""}`} dangerouslySetInnerHTML={{ __html: html }} />;
+  const frag = useMemo(() => renderInline(text, links), [text, links]);
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    ref.current?.replaceChildren(frag.cloneNode(true));
+  }, [frag]);
+  return <span ref={ref} className={`md-inline${className ? ` ${className}` : ""}`} />;
 }

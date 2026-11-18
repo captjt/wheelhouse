@@ -50,12 +50,20 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
     };
     let mut argv = vec![bin.to_string()];
     if let Some(p) = prompt {
+        // After `--`, a prompt that starts with `-` is a prompt, never a flag.
+        argv.push("--".into());
         argv.push(p.to_string());
     }
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     let created = crate::rex::Rex.start(session.as_deref(), SESSION, &docket, &cwd, &argv).await.with_context(|| format!("starting {bin} in Rex"))?;
     let mut core = shared.lock();
     let agent = AgentRef { app: app.into(), host: "local".into(), block: created.block_id.clone(), rex_session: SESSION.into(), pane: docket.clone(), cwd: Some(shown) };
+    // Rex may have shown the new pane to the mirror first, and it got a
+    // docket of its own: that one goes, and the pane is this docket's.
+    if let Some(other) = core.agents.by_block.get(&created.block_id).map(|t| t.docket.clone()).filter(|d| *d != docket) {
+        core.append(&other, "set", &Who::Hub, None, json!({ "status": "dropped" }))?;
+        core.append(&other, "release", &Who::Hub, None, json!({ "reason": format!("it's {docket}, started from Wheelhouse") }))?;
+    }
     agents::adopt(&mut core, &docket, &agent, prompt);
     core.append(&docket, "claim", &Who::Hub, None, json!({ "source": "wheelhouse", "agent": agent }))?;
     if let Some(p) = prompt {

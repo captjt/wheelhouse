@@ -98,9 +98,7 @@ pub fn cli(publish: bool) -> Result<()> {
             return Ok(());
         }
         let target = format!("http://127.0.0.1{backend}");
-        let out = std::process::Command::new(tailscale_bin().unwrap())
-            .args(["serve", "--bg", &format!("--https={TAILNET_PORT}"), &target])
-            .output()?;
+        let out = std::process::Command::new(tailscale_bin().unwrap()).args(["serve", "--bg", &format!("--https={TAILNET_PORT}"), &target]).output()?;
         if !out.status.success() {
             bail!("tailscale serve: {}", String::from_utf8_lossy(&out.stderr).trim());
         }

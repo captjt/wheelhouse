@@ -226,7 +226,13 @@ pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option
         reply_to: Some(id),
         choice: choice.clone(),
         // The hub reads a reply to its ask off the record; nothing to deliver.
-        status: if to.0 == ME { "open".into() } else if to.0 == HUB { "done".into() } else { "queued".into() },
+        status: if to.0 == ME {
+            "open".into()
+        } else if to.0 == HUB {
+            "done".into()
+        } else {
+            "queued".into()
+        },
         created_at: crate::time::now_ms(),
         ..Default::default()
     };
@@ -299,9 +305,16 @@ pub async fn deliver_loop(shared: Shared) {
     // The root record each pane had when it last got a message: nothing more
     // goes in until it changes, or a minute passes.
     let mut last: std::collections::HashMap<String, (Option<String>, Instant)> = Default::default();
+    // Tries per message (and queued prompt), so one that keeps failing stops.
+    let mut tries: std::collections::HashMap<String, u32> = Default::default();
     let mut tick = tokio::time::interval(Duration::from_secs(1));
+    let mut swept = Instant::now();
     loop {
         tick.tick().await;
+        if swept.elapsed() > Duration::from_secs(600) {
+            swept = Instant::now();
+            expire(&shared);
+        }
         let due = {
             let core = shared.lock();
             plan(&core, &last)
@@ -316,16 +329,27 @@ pub async fn deliver_loop(shared: Shared) {
             }
             .await;
             let mut core = shared.lock();
+            // Tried this turn, whatever happened: a paste that went in but
+            // whose Enter failed isn't pasted again a second later.
+            last.insert(block.clone(), (root, Instant::now()));
             match ok {
                 Ok(()) => {
+                    tries.remove(&format!("m{}", m.id));
                     let _ = core.store.set_message_status(m.id, "delivered", None);
-                    last.insert(block.clone(), (root, Instant::now()));
+                    core.live_changed();
                 }
-                Err(e) => say!("deliver #{}: {e:#}", m.id),
+                Err(e) => {
+                    let n = tries.entry(format!("m{}", m.id)).or_default();
+                    *n += 1;
+                    say!("deliver #{} (try {n}): {e:#}", m.id);
+                    if *n >= MAX_TRIES {
+                        let _ = core.store.set_message_status(m.id, "failed", Some(&format!("couldn't type it into the pane: {e:#}")));
+                        core.live_changed();
+                    }
+                }
             }
-            core.live_changed();
         }
-        deliver_prompts(&shared, &mut last).await;
+        deliver_prompts(&shared, &mut last, &mut tries).await;
     }
 }
 
@@ -353,6 +377,11 @@ fn plan(core: &Core, last: &std::collections::HashMap<String, (Option<String>, I
 /// for a moment, that hasn't had something typed this turn. Its session, and
 /// its root record's time.
 fn ready(core: &Core, block: &str, last: &std::collections::HashMap<String, (Option<String>, Instant)>) -> Option<(String, Option<String>)> {
+    // A mirror that lost Rex may be stale: the agent may have exited and
+    // left a shell, which would run the message's lines as commands.
+    if !core.mirror.connected {
+        return None;
+    }
     let p = core.mirror.panes.get(block)?;
     if !p.is_agent() {
         return None;
@@ -376,7 +405,28 @@ fn ready(core: &Core, block: &str, last: &std::collections::HashMap<String, (Opt
 
 /// Type the prompts you queued for agents that were working, as each one's
 /// turn ends: oldest first, one per pane per turn, after any message.
-async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<String, (Option<String>, Instant)>) {
+/// Tries before a message or a queued prompt is given up on.
+const MAX_TRIES: u32 = 5;
+
+/// A day on: messages and queued prompts for panes that never came back are
+/// given up, so they don't wait (and get checked) forever.
+fn expire(shared: &Shared) {
+    let mut core = shared.lock();
+    let cutoff = 24 * 3600;
+    let old = |at: &str| crate::time::secs_since(at).is_some_and(|s| s > cutoff);
+    for m in core.store.messages_where("status = 'queued' AND to_block IS NOT NULL", []).unwrap_or_default() {
+        if old(&m.created_at) && m.to_block.as_ref().is_none_or(|b| !core.mirror.panes.contains_key(b)) {
+            let _ = core.store.set_message_status(m.id, "failed", Some("its pane closed, and didn't come back in a day"));
+        }
+    }
+    for (id, docket, block, _, at) in core.store.queued_prompts(None).unwrap_or_default() {
+        if old(&at) && !core.mirror.panes.contains_key(&block) {
+            let _ = core.store.set_prompt_status(id, &docket, "cancelled");
+        }
+    }
+}
+
+async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<String, (Option<String>, Instant)>, tries: &mut std::collections::HashMap<String, u32>) {
     let due: Vec<(i64, String, String, String, String, Option<String>)> = {
         let core = shared.lock();
         let mut seen = std::collections::HashSet::new();
@@ -397,10 +447,11 @@ async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<S
         }
         .await;
         let mut core = shared.lock();
+        last.insert(block.clone(), (root, Instant::now()));
         match ok {
             Ok(()) => {
+                tries.remove(&format!("p{id}"));
                 let _ = core.store.set_prompt_status(id, &docket, "sent");
-                last.insert(block.clone(), (root, Instant::now()));
                 let app = core.mirror.panes.get(&block).and_then(|p| p.app()).unwrap_or("agent").to_string();
                 let session_id = core.agents.by_block.get(&block).and_then(|t| t.session.clone());
                 if !(app == "claude-code" && crate::hooks::claude_installed()) {
@@ -408,7 +459,14 @@ async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<S
                 }
                 core.agents.remote.insert(docket.clone());
             }
-            Err(e) => say!("{docket}: typing a queued prompt: {e:#}"),
+            Err(e) => {
+                let n = tries.entry(format!("p{id}")).or_default();
+                *n += 1;
+                say!("{docket}: typing a queued prompt (try {n}): {e:#}");
+                if *n >= MAX_TRIES {
+                    let _ = core.store.set_prompt_status(id, &docket, "cancelled");
+                }
+            }
         }
         core.live_changed();
     }

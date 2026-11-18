@@ -52,10 +52,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/record", get(record_view))
         .route("/api/dockets/{id}/record/{seq}", get(record_entry))
         .route("/api/dockets/{id}/verify", get(verify_one))
-        .route(
-            "/api/dockets/{id}/artifacts",
-            get(artifacts_list).post(artifacts_attach).layer(axum::extract::DefaultBodyLimit::max(crate::artifacts::MAX * 4 / 3 + (1 << 20))),
-        )
+        .route("/api/dockets/{id}/artifacts", get(artifacts_list).post(artifacts_attach).layer(axum::extract::DefaultBodyLimit::max(crate::artifacts::MAX * 4 / 3 + (1 << 20))))
         .route("/api/blobs/{digest}", get(blob))
         .route("/api/verify", get(verify_all))
         .route("/api/dockets/{id}/intent", post(set_intent))
@@ -227,7 +224,24 @@ fn view(core: &crate::hub::Core, st: &DocketState) -> Value {
 async fn state(State(shared): State<Shared>) -> ApiResult {
     let core = shared.lock();
     let states = core.store.states().map_err(internal)?;
-    let dockets: Vec<Value> = states.iter().map(|st| view(&core, st)).collect();
+    // Every client fetches this on every change: lists need an intent's
+    // start, not its body, and no Linear description (a docket's own page
+    // has them whole).
+    let dockets: Vec<Value> = states
+        .iter()
+        .map(|st| {
+            let mut v = view(&core, st);
+            if let Some(b) = v["intent"]["body"].as_str()
+                && b.chars().count() > 280
+            {
+                v["intent"]["body"] = json!(format!("{}…", b.chars().take(280).collect::<String>()));
+            }
+            if v["linear"].is_object() {
+                v["linear"]["description"] = Value::Null;
+            }
+            v
+        })
+        .collect();
 
     // What needs you: a blocked or failed agent. One that finished its turn
     // shows as finished on its docket's row, not here.
@@ -269,13 +283,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
     let build = crate::build::watch::status(&shared);
     let core = shared.lock();
 
-    let messages: Vec<Value> = core
-        .store
-        .messages_where("to_addr = 'me' AND status = 'open'", [])
-        .map_err(internal)?
-        .iter()
-        .map(|m| crate::messages::view(&core, m))
-        .collect();
+    let messages: Vec<Value> = core.store.messages_where("to_addr = 'me' AND status = 'open'", []).map_err(internal)?.iter().map(|m| crate::messages::view(&core, m)).collect();
     Ok(Json(json!({
         "review": review,
         "build": build,
@@ -307,7 +315,7 @@ async fn status(State(shared): State<Shared>) -> ApiResult {
 }
 
 async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
-    let core = shared.lock();
+    let mut core = shared.lock();
     let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
     let keys: std::collections::BTreeMap<String, String> = core.store.keys().map_err(internal)?.into_iter().collect();
     let mut entries = Vec::new();
@@ -365,11 +373,9 @@ async fn note(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
         return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
     }
     let who = match req.block.as_deref().and_then(|b| core.mirror.panes.get(b)).filter(|p| p.is_agent()) {
-        Some(p) => Who::Agent {
-            app: p.app().unwrap_or("agent").to_string(),
-            block: p.block_id.clone(),
-            session: core.agents.by_block.get(&p.block_id).and_then(|t| t.session.clone()),
-        },
+        Some(p) => {
+            Who::Agent { app: p.app().unwrap_or("agent").to_string(), block: p.block_id.clone(), session: core.agents.by_block.get(&p.block_id).and_then(|t| t.session.clone()) }
+        }
         None => Who::Owner,
     };
     let s = core.append(&id, "note", &who, Some(body.to_string()), Value::Null).map_err(internal)?;
@@ -554,9 +560,7 @@ async fn set_intent(State(shared): State<Shared>, Path(id): Path<String>, Json(r
         let l = st.linear.clone().ok_or_else(|| fail(StatusCode::CONFLICT, format!("{id} has no Linear issue")))?;
         let body = l.description.clone().unwrap_or_default();
         let owner = core.owner.clone();
-        let s = core
-            .append(&id, "intent", &Who::Hub, Some(body), json!({ "source": "linear", "key": l.key, "updated_at": l.updated_at, "taken_by": owner }))
-            .map_err(internal)?;
+        let s = core.append(&id, "intent", &Who::Hub, Some(body), json!({ "source": "linear", "key": l.key, "updated_at": l.updated_at, "taken_by": owner })).map_err(internal)?;
         return Ok(Json(json!({ "seq": s.seq })));
     }
     let body = req.body.trim_end().to_string();
@@ -593,9 +597,7 @@ async fn from_linear(State(shared): State<Shared>, Json(req): Json<LinearKey>) -
     if let Some(d) = core.store.states().map_err(internal)?.into_iter().find(|s| s.linear.as_ref().is_some_and(|l| l.key == issue.identifier) && s.is_open()) {
         return Ok(Json(json!({ "docket": d.id, "existing": true })));
     }
-    let id = core
-        .open(&Who::Owner, &issue.title, json!({ "protocol": "none", "title_source": "linear", "linear": issue.identifier }))
-        .map_err(internal)?;
+    let id = core.open(&Who::Owner, &issue.title, json!({ "protocol": "none", "title_source": "linear", "linear": issue.identifier })).map_err(internal)?;
     crate::linear::link(&mut core, &id, &issue, &Who::Owner).map_err(internal)?;
     Ok(Json(json!({ "docket": id })))
 }
@@ -760,8 +762,11 @@ struct NameReq {
 /// Name a pane, so others can reach it by that name.
 async fn pane_name(State(shared): State<Shared>, Json(req): Json<NameReq>) -> ApiResult {
     let name = req.name.trim().to_string();
-    if name.is_empty() || name.contains(['/', ' ', ':']) {
-        return Err(fail(StatusCode::BAD_REQUEST, "a name is one word, without / or :"));
+    // A name goes into message headers pasted into other agents' panes, and
+    // onto Rex's command line: letters, digits, `.`, `_` and `-`, not leading.
+    let ok = !name.is_empty() && name.len() <= 40 && !name.starts_with(['-', '.']) && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !ok {
+        return Err(fail(StatusCode::BAD_REQUEST, "a name is one word of letters, digits, '.', '_' or '-', up to 40, not starting with '-' or '.'"));
     }
     let session = {
         let core = shared.lock();
@@ -855,7 +860,7 @@ async fn build_status(State(shared): State<Shared>) -> ApiResult {
 
 #[derive(Deserialize)]
 struct BuildStart {
-    /// `D-12`, `owner/name#45`, a GitHub issue URL, or `GRD-142`.
+    /// `D-12`, `owner/name#45`, a GitHub issue URL, or `ENG-142`.
     from: String,
     #[serde(default)]
     repo: Option<String>,
@@ -964,7 +969,10 @@ struct ReviewSettings {
 async fn review_settings(State(shared): State<Shared>, Json(req): Json<ReviewSettings>) -> ApiResult {
     if req.enabled == Some(true) {
         if crate::review::rex_reviewer_running() && !req.force {
-            return Err(fail(StatusCode::CONFLICT, "rex-reviewer's watcher is still running (paused or not): stop it first with rex-reviewer down, so two tools don't review the same PRs"));
+            return Err(fail(
+                StatusCode::CONFLICT,
+                "rex-reviewer's watcher is still running (paused or not): stop it first with rex-reviewer down, so two tools don't review the same PRs",
+            ));
         }
         crate::review::config(&shared).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
     }
@@ -1033,6 +1041,9 @@ struct ReviewAct {
     /// The pane asking, from `wh` (`$REX_BLOCK`); none from the app.
     #[serde(default)]
     block: Option<String>,
+    /// The digest of the draft the asker saw: a post refuses a changed one.
+    #[serde(default)]
+    digest: Option<String>,
 }
 
 /// Who's asking to post: you, the PR's checker, or another agent.
@@ -1043,8 +1054,7 @@ fn asker(shared: &Shared, key: &str, block: Option<&str>) -> crate::review::roun
     let e = crate::review::get(&core, key).ok().flatten();
     let pane = core.mirror.panes.get(b);
     let is_checker = e.as_ref().is_some_and(|e| {
-        e.checker_block.as_deref() == Some(b)
-            || pane.is_some_and(|p| Some(p.label.as_str()) == e.checker_pane.as_deref() && Some(p.session_id.as_str()) == e.session_id.as_deref())
+        e.checker_block.as_deref() == Some(b) || pane.is_some_and(|p| Some(p.label.as_str()) == e.checker_pane.as_deref() && Some(p.session_id.as_str()) == e.session_id.as_deref())
     });
     if is_checker {
         return Asker::Checker;
@@ -1067,8 +1077,8 @@ async fn review_act(shared: Shared, req: ReviewAct, what: &str) -> ApiResult {
     let lock = crate::review::lock(&shared, &key);
     let _g = lock.lock().await;
     let r = match what {
-        "preview" => crate::review::rounds::post(&shared, &key, true, who).await,
-        "post" => crate::review::rounds::post(&shared, &key, false, who).await,
+        "preview" => crate::review::rounds::post(&shared, &key, true, who, None).await,
+        "post" => crate::review::rounds::post(&shared, &key, false, who, req.digest.as_deref()).await,
         _ => crate::review::rounds::dismiss(&shared, &key).await,
     };
     r.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
@@ -1174,7 +1184,9 @@ async fn record_entry(State(shared): State<Shared>, Path((id, seq)): Path<(Strin
     let s = core.store.entries(&id).map_err(internal)?.into_iter().find(|s| s.seq == seq).ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no entry #{seq}")))?;
     let env: record::Envelope = serde_json::from_str(&s.envelope).map_err(|e| internal(e.into()))?;
     let payload = env.payload_bytes().map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-    Ok(Json(json!({ "seq": s.seq, "id": s.id, "chain": s.chain, "envelope": s.envelope, "payload": payload, "export_line": json!({ "seq": s.seq, "id": s.id, "chain": s.chain, "envelope": s.envelope }).to_string() })))
+    Ok(Json(
+        json!({ "seq": s.seq, "id": s.id, "chain": s.chain, "envelope": s.envelope, "payload": payload, "export_line": json!({ "seq": s.seq, "id": s.id, "chain": s.chain, "envelope": s.envelope }).to_string() }),
+    ))
 }
 
 async fn artifacts_list(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
@@ -1296,7 +1308,7 @@ async fn asset(uri: Uri) -> Response {
         let safe = !path.split('/').any(|p| p == ".." || p.starts_with('.'));
         let file = if safe && !path.is_empty() && dir.join(path).is_file() { dir.join(path) } else { dir.join("index.html") };
         return match tokio::fs::read(&file).await {
-            Ok(bytes) => ([(header::CONTENT_TYPE, mime_of(&file.to_string_lossy())), (header::CACHE_CONTROL, "no-cache")], bytes).into_response(),
+            Ok(bytes) => page(&file.to_string_lossy(), "no-cache", bytes),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {e}", file.display())).into_response(),
         };
     }
@@ -1306,7 +1318,26 @@ async fn asset(uri: Uri) -> Response {
     let name = file.path().to_string_lossy();
     // Built assets have hashed names and never change; the page always might.
     let cache = if name.starts_with("assets/") { "public, max-age=31536000, immutable" } else { "no-cache" };
-    ([(header::CONTENT_TYPE, mime_of(&name)), (header::CACHE_CONTROL, cache)], file.contents()).into_response()
+    page(&name, cache, file.contents().to_vec())
+}
+
+/// The app's own scripts and nothing else run in it; no other site can
+/// frame it (a click on Approve or Post is always yours); the files agents
+/// keep open only in sandboxed frames of their own.
+const APP_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; \
+     font-src 'self' data:; connect-src 'self'; frame-src 'self'; worker-src 'self'; manifest-src 'self'; \
+     object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+fn page(name: &str, cache: &'static str, bytes: Vec<u8>) -> Response {
+    let ty = mime_of(name);
+    let mut r = ([(header::CONTENT_TYPE, ty), (header::CACHE_CONTROL, cache), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], bytes).into_response();
+    if ty.starts_with("text/html") {
+        let h = r.headers_mut();
+        h.insert(header::CONTENT_SECURITY_POLICY, axum::http::HeaderValue::from_static(APP_CSP));
+        h.insert(header::X_FRAME_OPTIONS, axum::http::HeaderValue::from_static("DENY"));
+        h.insert(header::REFERRER_POLICY, axum::http::HeaderValue::from_static("same-origin"));
+    }
+    r
 }
 
 fn mime_of(name: &str) -> &'static str {

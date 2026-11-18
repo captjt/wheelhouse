@@ -45,6 +45,18 @@ pub fn command_path() -> String {
 
 /// `gh ARGS…`, with `stdin` if given; its stdout.
 pub async fn gh(args: &[&str], stdin: Option<String>) -> Result<String> {
+    gh_run(args, stdin, false).await
+}
+
+/// `gh api graphql …`: GitHub answers what it can, with `errors` beside the
+/// partial `data` (one tracked repo deleted or out of reach), and `gh`
+/// exits 1. The partial answer is kept, so one bad repo doesn't blind the
+/// scan to every other PR.
+pub async fn gh_graphql(args: &[&str]) -> Result<String> {
+    gh_run(args, None, true).await
+}
+
+async fn gh_run(args: &[&str], stdin: Option<String>, partial: bool) -> Result<String> {
     let mut c = Command::new(gh_bin());
     c.args(args).env("PATH", command_path()).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1").current_dir(crate::paths::home());
     c.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).kill_on_drop(true);
@@ -54,11 +66,18 @@ pub async fn gh(args: &[&str], stdin: Option<String>) -> Result<String> {
         si.write_all(input.as_bytes()).await?;
         drop(si);
     }
-    let out = tokio::time::timeout(std::time::Duration::from_secs(120), child.wait_with_output()).await.map_err(|_| anyhow!("gh {} took over 2 minutes", args.first().unwrap_or(&"")))??;
+    let out = tokio::time::timeout(std::time::Duration::from_secs(120), child.wait_with_output())
+        .await
+        .map_err(|_| anyhow!("gh {} took over 2 minutes", args.first().unwrap_or(&"")))??;
     if !out.status.success() {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if partial && serde_json::from_str::<Value>(&stdout).is_ok_and(|v| v["data"].is_object()) {
+            say!("gh: a partial answer: {}", String::from_utf8_lossy(&out.stderr).trim());
+            return Ok(stdout.into_owned());
+        }
         let err = String::from_utf8_lossy(&out.stderr);
         let err = err.trim();
-        bail!("{}", if err.is_empty() { String::from_utf8_lossy(&out.stdout).trim().to_string() } else { err.to_string() });
+        bail!("{}", if err.is_empty() { stdout.trim().to_string() } else { err.to_string() });
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -105,7 +124,7 @@ pub async fn scan(repos: &[String], tracked: &[(String, i64)]) -> Result<(String
         aliases.push((alias, repo.to_string()));
     }
     q.push('}');
-    let out = gh(&["api", "graphql", "-f", &format!("q={search}"), "-f", &format!("query={q}")], None).await?;
+    let out = gh_graphql(&["api", "graphql", "-f", &format!("q={search}"), "-f", &format!("query={q}")]).await?;
     let v: Value = serde_json::from_str(&out).context("reading GitHub's answer")?;
     let data = &v["data"];
     let login = data["viewer"]["login"].as_str().ok_or_else(|| anyhow!("gh returned no signed-in user; run gh auth login"))?.to_string();
@@ -210,7 +229,15 @@ pub async fn fetch_context(repo: &str, pr: i64, dir: &Path) -> Result<()> {
     let jobs: Vec<(&str, Vec<&str>, bool)> = vec![
         (
             "pr.json",
-            vec!["pr", "view", &n, "-R", repo, "--json", "number,title,body,author,url,baseRefName,headRefName,headRefOid,isDraft,labels,files,commits,additions,deletions,changedFiles"],
+            vec![
+                "pr",
+                "view",
+                &n,
+                "-R",
+                repo,
+                "--json",
+                "number,title,body,author,url,baseRefName,headRefName,headRefOid,isDraft,labels,files,commits,additions,deletions,changedFiles",
+            ],
             false,
         ),
         ("pr.diff", vec!["pr", "diff", &n, "-R", repo], false),

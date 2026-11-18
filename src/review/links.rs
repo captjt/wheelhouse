@@ -2,8 +2,8 @@
 //! addresses, and the Review docket's intent.
 //!
 //! Linear's own link on the PR (its linkback comment) is the surest sign an
-//! issue is addressed. Then come Linear's closing words ("Closes GRD-12"), its
-//! other magic words ("Part of GRD-12", "Refs GRD-12"), the branch name, and
+//! issue is addressed. Then come Linear's closing words ("Closes ENG-12"), its
+//! other magic words ("Part of ENG-12", "Refs ENG-12"), the branch name, and
 //! the title. A bare mention in the description doesn't count: PRs name
 //! the issues around them all the time. Without a Linear key, the linkback
 //! still gives the issue's title, link and description; with one, Linear
@@ -73,7 +73,7 @@ impl Facts {
 /// An issue the PR addresses.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Found {
-    /// `GRD-445`.
+    /// `ENG-445`.
     pub key: String,
     pub url: Option<String>,
     pub title: Option<String>,
@@ -84,16 +84,15 @@ pub struct Found {
     pub state: Option<String>,
 }
 
-const CLOSING: [&str; 16] = [
-    "close", "closes", "closed", "closing", "fix", "fixes", "fixed", "fixing", "resolve", "resolves", "resolved", "resolving", "complete", "completes", "completed", "completing",
-];
+const CLOSING: [&str; 16] =
+    ["close", "closes", "closed", "closing", "fix", "fixes", "fixed", "fixing", "resolve", "resolves", "resolved", "resolving", "complete", "completes", "completed", "completing"];
 const REFERRING: [&str; 8] = ["ref", "refs", "references", "part of", "related to", "contributes to", "toward", "towards"];
 
 fn rank(how: &str) -> usize {
     ["linkback", "closes", "refs", "branch", "title"].iter().position(|h| *h == how).unwrap_or(9)
 }
 
-/// `GRD-445` at the start of `s` (any case), and its length: a team key of a
+/// `ENG-445` at the start of `s` (any case), and its length: a team key of a
 /// letter and up to nine letters or digits, a dash, and up to seven digits.
 fn key_at(s: &str) -> Option<(String, usize)> {
     let b = s.as_bytes();
@@ -176,7 +175,7 @@ fn magic_before(before: &str) -> Option<&'static str> {
     None
 }
 
-/// Only separators between two keys: "GRD-1, GRD-2 and GRD-3".
+/// Only separators between two keys: "ENG-1, ENG-2 and ENG-3".
 fn just_separators(between: &str) -> bool {
     let t = between.replace(" and ", " ").replace('&', " ");
     let t = t.trim_matches(|c: char| c.is_whitespace() || matches!(c, ',' | '[' | ']' | '(' | ')' | '*' | '_' | '`' | '#'));
@@ -184,7 +183,7 @@ fn just_separators(between: &str) -> bool {
 }
 
 /// Keys Linear's magic words point at in the text, with which kind. Keys
-/// in prose are written in capitals ("Fixes GRD-12"), so "fix: utf-8
+/// in prose are written in capitals ("Fixes ENG-12"), so "fix: utf-8
 /// names" isn't one; a team Linear has shown counts in any case.
 fn magic(text: &str, teams: &[String]) -> Vec<(String, &'static str)> {
     let urls = linear_urls(text);
@@ -293,7 +292,7 @@ pub fn detect(f: &Facts, teams: &[String]) -> Vec<Found> {
     out
 }
 
-/// Linear workspaces named in the PR's links: `eqty-lab`.
+/// Linear workspaces named in the PR's links: `acme`.
 pub fn workspaces(f: &Facts) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for text in std::iter::once(f.body.as_str()).chain(f.comments.iter().filter(|(l, _)| from_linear(l)).map(|(_, b)| b.as_str())) {
@@ -386,7 +385,7 @@ pub fn summary(body: &str) -> Option<String> {
             }
             continue;
         }
-        // "Closes GRD-12." alone, or "Part of GRD-12." leading a paragraph:
+        // "Closes ENG-12." alone, or "Part of ENG-12." leading a paragraph:
         // the issue is named above it.
         if !started && cur.is_empty() && magic(t, &[]).first().is_some_and(|_| magic_before_line(t)) {
             continue;
@@ -434,8 +433,8 @@ fn clip(s: &str, n: usize) -> String {
     if s.chars().count() > n { format!("{}…", s.chars().take(n - 1).collect::<String>().trim_end()) } else { s.to_string() }
 }
 
-/// A line that's only the issue line: "Closes GRD-12.", "Part of GRD-12."
-/// or "Closes https://linear.app/acme/issue/GRD-12/slug".
+/// A line that's only the issue line: "Closes ENG-12.", "Part of ENG-12."
+/// or "Closes https://linear.app/acme/issue/ENG-12/slug".
 fn magic_before_line(t: &str) -> bool {
     let keys = keys_in(t);
     let Some(last) = keys.last() else { return false };
@@ -474,10 +473,7 @@ pub fn acceptance(description: &str) -> Vec<String> {
             _ => {}
         }
     }
-    out.into_iter()
-        .take(10)
-        .map(|i| if i.chars().count() > 320 { format!("{}…", i.chars().take(300).collect::<String>().trim_end()) } else { i })
-        .collect()
+    out.into_iter().take(10).map(|i| if i.chars().count() > 320 { format!("{}…", i.chars().take(300).collect::<String>().trim_end()) } else { i }).collect()
 }
 
 fn issue_link(f: &Found) -> String {
@@ -547,7 +543,9 @@ fn join(xs: &[String]) -> String {
 /// `linear.md` for the reviewers: each issue, how it's linked, and what it
 /// asks for.
 pub fn linear_md(found: &[Found]) -> String {
-    let mut s = String::from("# The Linear issues this PR addresses\n\nHold the PR to what they ask for. An issue's description may cover more than this PR; its own description says which part is this PR's.\n");
+    let mut s = String::from(
+        "# The Linear issues this PR addresses\n\nHold the PR to what they ask for. An issue's description may cover more than this PR; its own description says which part is this PR's.\n",
+    );
     for i in found {
         let how = match i.how {
             "linkback" => "Linear links it to the PR",
@@ -696,49 +694,49 @@ pub async fn integrate(shared: &Shared, key: &str, f: &Facts, ctx: Option<&Path>
 mod tests {
     use super::*;
 
-    const LINKBACK: &str = "<!-- linear-linkback -->\n<details>\n<summary><a href=\"https://linear.app/eqty-lab/issue/GRD-445/w1-contracts\">GRD-445 W1 contracts: catalog &amp; keys</a></summary>\n<p>\n\n## Outcome\n\nThe shapes land as Go types.\n\n## Acceptance criteria\n\n* ~~The design doc is reviewed.~~ Signed off.\n* The profile PR is merged, and `just ci` passes\n  for `libs/servicekit`.\n* Existing behavior is unchanged.\n\n## Docs\n\n* Not this.\n\n</p>\n</details>\n<!-- linear-review-link -->\n<p><a href=\"https://linear.app/eqty-lab/review/x\">Review in Linear</a></p>";
+    const LINKBACK: &str = "<!-- linear-linkback -->\n<details>\n<summary><a href=\"https://linear.app/acme/issue/ENG-445/webhook-retries\">ENG-445 Webhook retries &amp; backoff</a></summary>\n<p>\n\n## Outcome\n\nFailed deliveries retry with backoff.\n\n## Acceptance criteria\n\n* ~~The retry design is reviewed.~~ Signed off.\n* The retry PR is merged, and `just ci` passes\n  for `libs/webhooks`.\n* Existing behavior is unchanged.\n\n## Docs\n\n* Not this.\n\n</p>\n</details>\n<!-- linear-review-link -->\n<p><a href=\"https://linear.app/acme/review/x\">Review in Linear</a></p>";
 
-    fn pr742() -> Facts {
+    fn pr42() -> Facts {
         Facts {
-            title: "feat(agent-profile): add the models list to the operating profile".into(),
-            body: "## What\n\nThis adds an optional `models` list to the agent operating profile. It's the second GRD-445 PR, after #733. GRD-448 then enforces it.\n\n```json\n{}\n```\n\n## Not in this PR\n\n- **Gateway enforcement**: GRD-448.\n\nRefs GRD-445\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n".into(),
-            branch: "feat/grd-445-profile-models".into(),
-            author: Some("luke-moss-dev".into()),
-            url: Some("https://github.com/eqtylab/guardian/pull/742".into()),
-            comments: vec![("vercel".into(), "[vc]: #x".into()), ("linear-code".into(), LINKBACK.into()), ("luke-moss-dev".into(), "Fixed in 18f7e91.".into())],
+            title: "feat(webhooks): retry failed deliveries with backoff".into(),
+            body: "## What\n\nThis adds an optional `retries` setting to webhook delivery. It's the second ENG-445 PR, after #33. ENG-448 then turns it on.\n\n```json\n{}\n```\n\n## Not in this PR\n\n- **Turning it on**: ENG-448.\n\nRefs ENG-445\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n".into(),
+            branch: "feat/eng-445-retries".into(),
+            author: Some("dana".into()),
+            url: Some("https://github.com/acme/api/pull/42".into()),
+            comments: vec![("ci-bot".into(), "[vc]: #x".into()), ("linear-code".into(), LINKBACK.into()), ("dana".into(), "Fixed in 18f7e91.".into())],
         }
     }
 
     #[test]
     fn linears_link_on_the_pr_is_the_issue_and_bare_mentions_arent() {
-        let found = detect(&pr742(), &[]);
+        let found = detect(&pr42(), &[]);
         assert_eq!(found.len(), 1, "{found:?}");
         let f = &found[0];
-        assert_eq!((f.key.as_str(), f.how), ("GRD-445", "linkback"));
-        assert_eq!(f.title.as_deref(), Some("W1 contracts: catalog & keys"));
-        assert_eq!(f.url.as_deref(), Some("https://linear.app/eqty-lab/issue/GRD-445/w1-contracts"));
+        assert_eq!((f.key.as_str(), f.how), ("ENG-445", "linkback"));
+        assert_eq!(f.title.as_deref(), Some("Webhook retries & backoff"));
+        assert_eq!(f.url.as_deref(), Some("https://linear.app/acme/issue/ENG-445/webhook-retries"));
         assert!(f.description.as_deref().unwrap().starts_with("## Outcome"));
         assert!(f.description.as_deref().unwrap().ends_with("* Not this."), "{:?}", f.description);
-        assert_eq!(workspaces(&pr742()), ["eqty-lab"]);
+        assert_eq!(workspaces(&pr42()), ["acme"]);
     }
 
     #[test]
     fn magic_words_branches_and_titles() {
         let f = |title: &str, body: &str, branch: &str| Facts { title: title.into(), body: body.into(), branch: branch.into(), ..Default::default() };
         let keys = |f: &Facts, teams: &[&str]| detect(f, &teams.iter().map(|t| t.to_string()).collect::<Vec<_>>()).into_iter().map(|x| (x.key, x.how)).collect::<Vec<_>>();
-        assert_eq!(keys(&f("x", "Closes GRD-12.", ""), &[]), [("GRD-12".into(), "closes")]);
-        assert_eq!(keys(&f("x", "Part of [GRD-438](https://linear.app/acme/issue/GRD-438/x). GRD-9 is next.", ""), &[]), [("GRD-438".into(), "refs")]);
+        assert_eq!(keys(&f("x", "Closes ENG-12.", ""), &[]), [("ENG-12".into(), "closes")]);
+        assert_eq!(keys(&f("x", "Part of [ENG-438](https://linear.app/acme/issue/ENG-438/x). ENG-9 is next.", ""), &[]), [("ENG-438".into(), "refs")]);
         assert_eq!(keys(&f("x", "Fixes ENG-1, ENG-2 and ENG-3", ""), &[]), [("ENG-1".into(), "closes"), ("ENG-2".into(), "closes"), ("ENG-3".into(), "closes")]);
         assert_eq!(keys(&f("x", "fixed: https://linear.app/acme/issue/ENG-7/slug", ""), &[]), [("ENG-7".into(), "closes")]);
         assert_eq!(keys(&f("x", "This prefixes ENG-4 and resolves nothing; see ENG-5.", ""), &[]), Vec::<(String, &str)>::new());
         // The branch and title count for a team Linear has shown.
-        assert_eq!(keys(&f("fix: utf-8 names", "", "fix/utf-8-names"), &["GRD"]), Vec::<(String, &str)>::new());
-        assert_eq!(keys(&f("x", "closes grd-3", ""), &["GRD"]), [("GRD-3".into(), "closes")]);
-        assert_eq!(keys(&f("x", "", "feat/GRD-386-skeletons"), &["GRD"]), [("GRD-386".into(), "branch")]);
-        assert_eq!(keys(&f("feat(GRD-9): y", "", "main"), &["grd"]), [("GRD-9".into(), "title")]);
-        assert_eq!(keys(&f("x", "Refs GRD-5", "feat/grd-6-y"), &[]), [("GRD-5".into(), "refs"), ("GRD-6".into(), "branch")]);
+        assert_eq!(keys(&f("fix: utf-8 names", "", "fix/utf-8-names"), &["ENG"]), Vec::<(String, &str)>::new());
+        assert_eq!(keys(&f("x", "closes eng-3", ""), &["ENG"]), [("ENG-3".into(), "closes")]);
+        assert_eq!(keys(&f("x", "", "feat/ENG-386-skeletons"), &["ENG"]), [("ENG-386".into(), "branch")]);
+        assert_eq!(keys(&f("feat(ENG-9): y", "", "main"), &["eng"]), [("ENG-9".into(), "title")]);
+        assert_eq!(keys(&f("x", "Refs ENG-5", "feat/eng-6-y"), &[]), [("ENG-5".into(), "refs"), ("ENG-6".into(), "branch")]);
         // A linkback from anyone but Linear is only a comment.
-        let mut spoof = pr742();
+        let mut spoof = pr42();
         spoof.comments = vec![("someone".into(), LINKBACK.into())];
         spoof.body = String::new();
         spoof.branch = String::new();
@@ -747,15 +745,20 @@ mod tests {
 
     #[test]
     fn the_intent_says_what_the_review_holds_the_pr_to() {
-        let found = detect(&pr742(), &[]);
-        let i = intent("eqtylab/guardian", 742, &pr742(), &found, "ask");
+        let found = detect(&pr42(), &[]);
+        let i = intent("acme/api", 42, &pr42(), &found, "ask");
         assert!(
-            i.starts_with("Review [eqtylab/guardian#742](https://github.com/eqtylab/guardian/pull/742) by @luke-moss-dev: feat(agent-profile): add the models list to the operating profile. It addresses [GRD-445](https://linear.app/eqty-lab/issue/GRD-445/w1-contracts) (W1 contracts: catalog & keys).\n"),
+            i.starts_with("Review [acme/api#42](https://github.com/acme/api/pull/42) by @dana: feat(webhooks): retry failed deliveries with backoff. It addresses [ENG-445](https://linear.app/acme/issue/ENG-445/webhook-retries) (Webhook retries & backoff).\n"),
             "{i}"
         );
-        assert!(i.contains("What it says it does:\n\n> This adds an optional `models` list to the agent operating profile. It's the second GRD-445 PR, after #733. GRD-448 then enforces it.\n"), "{i}");
+        assert!(
+            i.contains(
+                "What it says it does:\n\n> This adds an optional `retries` setting to webhook delivery. It's the second ENG-445 PR, after #33. ENG-448 then turns it on.\n"
+            ),
+            "{i}"
+        );
         assert!(i.contains("posts once you approve it"), "{i}");
-        assert!(i.contains("- The review holds the PR to its part of GRD-445's acceptance criteria:\n  - ~~The design doc is reviewed.~~ Signed off.\n  - The profile PR is merged, and `just ci` passes for `libs/servicekit`.\n  - Existing behavior is unchanged.\n- Done when"), "{i}");
+        assert!(i.contains("- The review holds the PR to its part of ENG-445's acceptance criteria:\n  - ~~The retry design is reviewed.~~ Signed off.\n  - The retry PR is merged, and `just ci` passes for `libs/webhooks`.\n  - Existing behavior is unchanged.\n- Done when"), "{i}");
         assert!(!i.contains("Not this") && !i.contains("Generated with"), "{i}");
         let bare = intent("o/api", 3, &Facts { title: "Tidy".into(), ..Default::default() }, &[], "auto");
         assert!(bare.starts_with("Review o/api#3: Tidy.\n\n## Acceptance"), "{bare}");
@@ -764,13 +767,13 @@ mod tests {
 
     #[test]
     fn the_summary_skips_the_issue_line_and_the_footer() {
-        let s = summary("Part of GRD-438. This is the Guardian part.\n\n**Draft.** It deploys after X.\n\n## Why\n\nMore.").unwrap();
-        assert_eq!(s, "Part of GRD-438. This is the Guardian part.\n\n**Draft.** It deploys after X.");
-        let s = summary("Closes GRD-12.\n\nRetries failed webhooks.\n\n---\nfooter").unwrap();
+        let s = summary("Part of ENG-438. This is the API part.\n\n**Draft.** It deploys after X.\n\n## Why\n\nMore.").unwrap();
+        assert_eq!(s, "Part of ENG-438. This is the API part.\n\n**Draft.** It deploys after X.");
+        let s = summary("Closes ENG-12.\n\nRetries failed webhooks.\n\n---\nfooter").unwrap();
         assert_eq!(s, "Retries failed webhooks.");
         assert_eq!(summary("<!-- x -->\n🤖 Generated with [Claude Code](x)"), None);
         // A Linear link as the issue line; a rule ends the summary.
-        let s = summary("Closes https://linear.app/acme/issue/GRD-293/use-pnpm\n\nSwitches to pnpm.\n\n---\n\nScreenshots").unwrap();
+        let s = summary("Closes https://linear.app/acme/issue/ENG-293/use-pnpm\n\nSwitches to pnpm.\n\n---\n\nScreenshots").unwrap();
         assert_eq!(s, "Switches to pnpm.");
         assert_eq!(summary("It refuses models like these:\n\n```py\nx\n```").unwrap(), "It refuses models like these…");
         // A colon keeps the list it introduces.
@@ -787,45 +790,50 @@ mod tests {
         // SAFETY: no test reads this but Linear's key lookup.
         unsafe { std::env::set_var("WH_LINEAR_OFF", "1") };
         let shared = Shared::new(crate::hub::test_core());
-        let key = "eqtylab/guardian#742";
-        let mut p = crate::review::pr::Pr { repo: "eqtylab/guardian".into(), pr: 742, state: "queued".into(), title: Some(pr742().title), ..Default::default() };
+        let key = "acme/api#42";
+        let mut p = crate::review::pr::Pr { repo: "acme/api".into(), pr: 42, state: "queued".into(), title: Some(pr42().title), ..Default::default() };
         let d = crate::review::save(&mut shared.lock(), &mut p).unwrap();
         let ctx = std::env::temp_dir().join(format!("wh-links-{}", std::process::id()));
         std::fs::create_dir_all(&ctx).unwrap();
-        integrate(&shared, key, &pr742(), Some(&ctx)).await.unwrap();
+        integrate(&shared, key, &pr42(), Some(&ctx)).await.unwrap();
         let st = |s: &Shared| s.lock().store.state(&d).unwrap().unwrap();
         let s1 = st(&shared);
         let l = s1.linear.as_ref().unwrap();
-        assert_eq!((l.key.as_str(), l.title.as_deref()), ("GRD-445", Some("W1 contracts: catalog & keys")));
+        assert_eq!((l.key.as_str(), l.title.as_deref()), ("ENG-445", Some("Webhook retries & backoff")));
         let i = s1.intent.as_ref().unwrap();
         assert_eq!(i.source, "review");
-        assert!(i.body.starts_with("Review [eqtylab/guardian#742]"), "{}", i.body);
+        assert!(i.body.starts_with("Review [acme/api#42]"), "{}", i.body);
         let md = std::fs::read_to_string(ctx.join("linear.md")).unwrap();
-        assert!(md.contains("## GRD-445: W1 contracts: catalog & keys\n\n- How it's linked: Linear links it to the PR\n- Link: https://linear.app/eqty-lab/issue/GRD-445/w1-contracts\n"), "{md}");
-        assert_eq!(shared.lock().store.meta_get("linear.teams").unwrap().as_deref(), Some("GRD"));
+        assert!(
+            md.contains("## ENG-445: Webhook retries & backoff\n\n- How it's linked: Linear links it to the PR\n- Link: https://linear.app/acme/issue/ENG-445/webhook-retries\n"),
+            "{md}"
+        );
+        assert_eq!(shared.lock().store.meta_get("linear.teams").unwrap().as_deref(), Some("ENG"));
 
         // Nothing new: nothing written.
-        integrate(&shared, key, &pr742(), None).await.unwrap();
+        integrate(&shared, key, &pr42(), None).await.unwrap();
         assert_eq!(st(&shared).entries, s1.entries);
 
         // The PR closes a second issue: linked beside the first. The new
         // description makes a new version of the intent.
-        let mut f = pr742();
-        f.body = format!("Closes GRD-450.\n\n{}", f.body);
+        let mut f = pr42();
+        f.body = format!("Closes ENG-450.\n\n{}", f.body);
         integrate(&shared, key, &f, None).await.unwrap();
         let s2 = st(&shared);
-        assert_eq!(s2.linear.as_ref().unwrap().key, "GRD-445");
-        assert_eq!(s2.linear_also.iter().map(|l| l.key.as_str()).collect::<Vec<_>>(), ["GRD-450"]);
-        assert_eq!(s2.linear_also[0].url.as_deref(), Some("https://linear.app/eqty-lab/issue/GRD-450"));
+        assert_eq!(s2.linear.as_ref().unwrap().key, "ENG-445");
+        assert_eq!(s2.linear_also.iter().map(|l| l.key.as_str()).collect::<Vec<_>>(), ["ENG-450"]);
+        assert_eq!(s2.linear_also[0].url.as_deref(), Some("https://linear.app/acme/issue/ENG-450"));
         assert_eq!(s2.intent_versions, 2);
-        assert!(s2.intent.as_ref().unwrap().body.contains("It addresses [GRD-445](https://linear.app/eqty-lab/issue/GRD-445/w1-contracts) (W1 contracts: catalog & keys) and [GRD-450](https://linear.app/eqty-lab/issue/GRD-450)."));
+        assert!(s2.intent.as_ref().unwrap().body.contains(
+            "It addresses [ENG-445](https://linear.app/acme/issue/ENG-445/webhook-retries) (Webhook retries & backoff) and [ENG-450](https://linear.app/acme/issue/ENG-450)."
+        ));
 
         // Once you edit the intent, it's yours.
         shared.lock().append(&d, "intent", &Who::Owner, Some("Mine.".into()), json!({ "source": "person" })).unwrap();
         f.title = "feat: renamed".into();
         integrate(&shared, key, &f, None).await.unwrap();
         assert_eq!(st(&shared).intent.unwrap().body, "Mine.");
-        let core = shared.lock();
+        let mut core = shared.lock();
         assert!(core.verify(&d).unwrap().ok);
         assert!(core.rebuild_check().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&ctx);
@@ -833,7 +841,7 @@ mod tests {
 
     #[test]
     fn keys_are_whole_words() {
-        assert_eq!(keys_in("x GRD-1, sha256-2x eng-42 a-1b").into_iter().map(|k| k.2).collect::<Vec<_>>(), ["GRD-1", "ENG-42"]);
-        assert_eq!(keys_in("feat/grd-445-profile").into_iter().map(|k| k.2).collect::<Vec<_>>(), ["GRD-445"]);
+        assert_eq!(keys_in("x ENG-1, sha256-2x eng-42 a-1b").into_iter().map(|k| k.2).collect::<Vec<_>>(), ["ENG-1", "ENG-42"]);
+        assert_eq!(keys_in("feat/eng-445-profile").into_iter().map(|k| k.2).collect::<Vec<_>>(), ["ENG-445"]);
     }
 }

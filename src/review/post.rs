@@ -82,7 +82,14 @@ pub fn risk_level(m: &Value) -> Result<String, String> {
         weights += w;
     }
     let score = sum / weights;
-    Ok(if score < 1.5 { "low" } else if score < 2.25 { "medium" } else { "high" }.to_string())
+    Ok(if score < 1.5 {
+        "low"
+    } else if score < 2.25 {
+        "medium"
+    } else {
+        "high"
+    }
+    .to_string())
 }
 
 const FIRST_PERSON: [&str; 15] = ["I", "I'm", "I've", "I'd", "I'll", "my", "My", "me", "we", "We", "we're", "We're", "our", "Our", "us"];
@@ -186,10 +193,7 @@ pub fn check(d: &Value, require_risk: bool) -> Result<Option<String>, String> {
     };
     let hits = first_person(d);
     if !hits.is_empty() {
-        return Err(format!(
-            "the draft speaks in the first person; the footer already says who reviewed. Rewrite these lines:\n{}",
-            hits.join("\n")
-        ));
+        return Err(format!("the draft speaks in the first person; the footer already says who reviewed. Rewrite these lines:\n{}", hits.join("\n")));
     }
     Ok(risk)
 }
@@ -383,12 +387,7 @@ pub fn render(d: &Value, b: &Byline, head: &str, lines: &HashSet<(String, i64)>,
     if !comments.is_empty() {
         payload["comments"] = json!(comments);
     }
-    let replies = d["replies"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|r| (r["comment_id"].clone(), format!("{}\n\n{}", text(&r["body"]), footer(b.by, b.me, ""))))
-        .collect();
+    let replies = d["replies"].as_array().into_iter().flatten().map(|r| (r["comment_id"].clone(), format!("{}\n\n{}", text(&r["body"]), footer(b.by, b.me, "")))).collect();
     Rendered { payload, replies }
 }
 
@@ -422,9 +421,7 @@ pub struct Args<'a> {
 pub async fn run(a: &Args<'_>, draft: &Value) -> Result<Value, Refusal> {
     let risk = check(draft, a.require_risk).map_err(Refusal::Rule)?;
     let pr = a.pr.to_string();
-    let live = github::gh(&["pr", "view", &pr, "-R", a.repo, "--json", "headRefOid,state"], None)
-        .await
-        .map_err(|e| Refusal::Other(format!("can't read #{pr}: {e:#}")))?;
+    let live = github::gh(&["pr", "view", &pr, "-R", a.repo, "--json", "headRefOid,state"], None).await.map_err(|e| Refusal::Other(format!("can't read #{pr}: {e:#}")))?;
     let live: Value = serde_json::from_str(&live).map_err(|e| Refusal::Other(format!("can't read #{pr}: {e}")))?;
     let state = text(&live["state"]);
     let live_head = text(&live["headRefOid"]);
@@ -450,21 +447,44 @@ pub async fn run(a: &Args<'_>, draft: &Value) -> Result<Value, Refusal> {
     if a.dry {
         return Ok(json!({ "dry_run": true, "preview": preview_text(&r), "warning": warning }));
     }
+    // Posted already (a retry after a timeout, or a crash before it was
+    // recorded): the review GitHub has is the post, not a second one.
+    if let Some(m) = a.marker.filter(|m| !m.is_empty()) {
+        let tag = format!("<!-- pr-review {m} -->");
+        let path = format!("repos/{}/pulls/{pr}/reviews", a.repo);
+        if let Ok(out) = github::gh(&["api", "--paginate", &path, "--jq", ".[] | {id, state, html_url, body, user: .user.login}"], None).await {
+            for line in out.lines() {
+                let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+                if v["user"].as_str() == Some(me.as_str()) && v["body"].as_str().is_some_and(|b| b.contains(&tag)) {
+                    let inline = r.payload["comments"].as_array().map_or(0, Vec::len);
+                    return Ok(
+                        json!({ "review_id": v["id"], "state": v["state"], "url": v["html_url"], "inline": inline, "replies": 0, "merge_risk": risk, "preview": preview_text(&r), "already": true }),
+                    );
+                }
+            }
+        }
+    }
+    // The review first: if it fails, nothing went out, and a retry doesn't
+    // post the replies twice.
+    let path = format!("repos/{}/pulls/{pr}/reviews", a.repo);
+    let out =
+        github::gh(&["api", "-X", "POST", &path, "--input", "-"], Some(r.payload.to_string())).await.map_err(|e| Refusal::Other(format!("GitHub refused the review: {e:#}")))?;
+    let out: Value = serde_json::from_str(&out).unwrap_or_default();
+    // The review is up; a reply GitHub refuses is said, not a failed post.
     let mut replied = 0;
+    let mut refused = Vec::new();
     for (id, body) in &r.replies {
         let path = format!("repos/{}/pulls/{pr}/comments/{}/replies", a.repo, text(id));
-        github::gh(&["api", "-X", "POST", &path, "--input", "-"], Some(json!({ "body": body }).to_string()))
-            .await
-            .map_err(|e| Refusal::Other(format!("GitHub refused the reply to comment {}: {e:#}", text(id))))?;
-        replied += 1;
+        match github::gh(&["api", "-X", "POST", &path, "--input", "-"], Some(json!({ "body": body }).to_string())).await {
+            Ok(_) => replied += 1,
+            Err(e) => refused.push(format!("comment {}: {e:#}", text(id))),
+        }
     }
-    let path = format!("repos/{}/pulls/{pr}/reviews", a.repo);
-    let out = github::gh(&["api", "-X", "POST", &path, "--input", "-"], Some(r.payload.to_string()))
-        .await
-        .map_err(|e| Refusal::Other(format!("GitHub refused the review: {e:#}")))?;
-    let out: Value = serde_json::from_str(&out).unwrap_or_default();
     let inline = r.payload["comments"].as_array().map_or(0, Vec::len);
-    Ok(json!({ "review_id": out["id"], "state": out["state"], "url": out["html_url"], "inline": inline, "replies": replied, "merge_risk": risk, "preview": preview_text(&r) }))
+    let warning = (!refused.is_empty()).then(|| format!("GitHub refused {} repl{}: {}", refused.len(), if refused.len() == 1 { "y" } else { "ies" }, refused.join("; ")));
+    Ok(
+        json!({ "review_id": out["id"], "state": out["state"], "url": out["html_url"], "inline": inline, "replies": replied, "merge_risk": risk, "preview": preview_text(&r), "warning": warning }),
+    )
 }
 
 #[cfg(test)]
@@ -519,9 +539,17 @@ mod tests {
         let r = render(&d, &b, "abcdef1234", &lines, Some("medium"));
         let body = r.payload["body"].as_str().unwrap();
         assert!(body.starts_with("Close, but retries can double-charge.\n\n**Blocking**\n- Retries aren't idempotent; details in the inline comment on `pay.rs:12`."), "{body}");
-        assert!(body.contains("**Non-blocking**\n- The doc comment is stale (`src/pay.rs:99`).\n\n  It still says three tries.\n- +1 to [Sam's point](https://x/1#r2): and add a test"), "{body}");
+        assert!(
+            body.contains("**Non-blocking**\n- The doc comment is stale (`src/pay.rs:99`).\n\n  It still says three tries.\n- +1 to [Sam's point](https://x/1#r2): and add a test"),
+            "{body}"
+        );
         assert!(body.contains("Ran the suite.\n\n**Merge risk: medium**\n\n**Alignment:** good ✅\n**Impact:** medium 👀\n- Payments.\n\n**Verification:** decent 👀\n**Rollback cost:** low ✅\n**Error detection:** N/A ✅"), "{body}");
-        assert!(body.ends_with("<div align=\"right\"><sub><i>Claude Code (Opus 5.5) on behalf of @you · checked by Claude Code (Opus 5.5)</i></sub></div>\n<!-- pr-review round=2 head=abc -->"), "{body}");
+        assert!(
+            body.ends_with(
+                "<div align=\"right\"><sub><i>Claude Code (Opus 5.5) on behalf of @you · checked by Claude Code (Opus 5.5)</i></sub></div>\n<!-- pr-review round=2 head=abc -->"
+            ),
+            "{body}"
+        );
         let c = r.payload["comments"].as_array().unwrap();
         assert_eq!(c.len(), 1, "line 99 isn't in the diff, so N1 goes in the body");
         assert_eq!(c[0]["side"], "RIGHT");

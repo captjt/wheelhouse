@@ -98,15 +98,11 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
         };
         repos.insert(
             slug.clone(),
-            Repo {
-                checkout,
-                notes: r["notes"].as_str().map(str::to_string).or(prev.map(|p| p.notes)).unwrap_or_default(),
-                base: r["base"].as_str().map(str::to_string),
-                plan,
-            },
+            Repo { checkout, notes: r["notes"].as_str().map(str::to_string).or(prev.map(|p| p.notes)).unwrap_or_default(), base: r["base"].as_str().map(str::to_string), plan },
         );
     }
-    let mut gates: BTreeMap<String, String> = [("start", "auto"), ("plan", "ask"), ("preview", "ask"), ("open", "ask")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let mut gates: BTreeMap<String, String> =
+        [("start", "auto"), ("plan", "ask"), ("preview", "ask"), ("open", "ask")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     for (k, v) in raw["gates"].as_object().into_iter().flatten() {
         let v = match v {
             Value::String(s) => s.clone(),
@@ -128,8 +124,13 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
             );
         }
     }
-    let path_dirs = if raw["path"].is_array() { strings(&raw["path"]).iter().map(|d| crate::paths::expand(d).display().to_string()).collect() } else { review.map(|r| r.path_dirs.clone()).unwrap_or_default() };
-    let caches = if raw["caches"].is_array() { strings(&raw["caches"]).iter().map(|c| crate::paths::expand(c)).collect() } else { review.map(|r| r.caches.clone()).unwrap_or_default() };
+    let path_dirs = if raw["path"].is_array() {
+        strings(&raw["path"]).iter().map(|d| crate::paths::expand(d).display().to_string()).collect()
+    } else {
+        review.map(|r| r.path_dirs.clone()).unwrap_or_default()
+    };
+    let caches =
+        if raw["caches"].is_array() { strings(&raw["caches"]).iter().map(|c| crate::paths::expand(c)).collect() } else { review.map(|r| r.caches.clone()).unwrap_or_default() };
     Ok(Config {
         path,
         repos,

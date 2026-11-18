@@ -109,6 +109,8 @@ CREATE TABLE IF NOT EXISTS prompt_queue (  -- what you sent an agent while it wo
   created_at TEXT NOT NULL,
   sent_at TEXT
 );
+CREATE INDEX IF NOT EXISTS messages_status ON messages(status);
+CREATE INDEX IF NOT EXISTS prompt_queue_status ON prompt_queue(status);
 CREATE TABLE IF NOT EXISTS blobs (  -- files entries name, by the sha256 of their bytes; never changed
   digest TEXT PRIMARY KEY,
   size INTEGER NOT NULL,
@@ -157,7 +159,8 @@ impl Store {
 
     /// Queue a prompt for an agent's pane, for when its turn ends.
     pub fn queue_prompt(&mut self, docket: &str, block: &str, body: &str) -> Result<i64> {
-        self.conn.execute("INSERT INTO prompt_queue (docket, block, body, status, created_at) VALUES (?1, ?2, ?3, 'queued', ?4)", params![docket, block, body, crate::time::now_ms()])?;
+        self.conn
+            .execute("INSERT INTO prompt_queue (docket, block, body, status, created_at) VALUES (?1, ?2, ?3, 'queued', ?4)", params![docket, block, body, crate::time::now_ms()])?;
         Ok(self.conn.last_insert_rowid())
     }
 
@@ -241,22 +244,29 @@ impl Store {
     /// The next docket number, as `D-n`.
     pub fn next_docket(&mut self) -> Result<(String, i64)> {
         let tx = self.conn.transaction()?;
-        let n: i64 = tx.query_row("SELECT v FROM meta WHERE k = 'docket_n'", [], |r| r.get::<_, String>(0)).optional()?.map_or(0, |v| {
-            v.parse().unwrap_or(0)
-        }) + 1;
+        let n: i64 = tx.query_row("SELECT v FROM meta WHERE k = 'docket_n'", [], |r| r.get::<_, String>(0)).optional()?.map_or(0, |v| v.parse().unwrap_or(0)) + 1;
         tx.execute("INSERT INTO meta (k, v) VALUES ('docket_n', ?1) ON CONFLICT (k) DO UPDATE SET v = ?1", params![n.to_string()])?;
         tx.commit()?;
         Ok((format!("D-{n}"), n))
     }
 
     /// Append an envelope to a docket: give it the next seq and chain it.
-    pub fn append(&mut self, docket: &str, envelope: &str, kind: &str, at: &str, keyid: &str) -> Result<Stored> {
+    /// Store an entry and the docket's state it folds to, in one
+    /// transaction: a crash or an error leaves both as they were, never the
+    /// entry without its state. `fold` gets the stored entry and the state
+    /// so far, and returns the new state (or none, to leave it).
+    pub fn append_folded(
+        &mut self,
+        docket: &str,
+        envelope: &str,
+        kind: &str,
+        at: &str,
+        keyid: &str,
+        fold: impl FnOnce(&Stored, Option<DocketState>) -> Option<DocketState>,
+    ) -> Result<Stored> {
         let tx = self.conn.transaction()?;
-        let last: Option<(i64, String)> = tx
-            .query_row("SELECT seq, chain FROM entries WHERE docket = ?1 ORDER BY seq DESC LIMIT 1", params![docket], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .optional()?;
+        let last: Option<(i64, String)> =
+            tx.query_row("SELECT seq, chain FROM entries WHERE docket = ?1 ORDER BY seq DESC LIMIT 1", params![docket], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         let (seq, prev) = match last {
             None => (1, chain::GENESIS),
             Some((s, c)) => (s + 1, chain::parse_chain(&c).context("a stored chain value isn't hex")?),
@@ -268,25 +278,24 @@ impl Store {
             "INSERT INTO entries (docket, seq, id, chain, kind, at, keyid, envelope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![docket, seq, id, next, kind, at, keyid, envelope],
         )?;
+        let stored = Stored { docket: docket.to_string(), seq, id, chain: next, envelope: envelope.to_string() };
+        let was: Option<String> = tx.query_row("SELECT state FROM dockets WHERE id = ?1", params![docket], |r| r.get(0)).optional()?;
+        let was = match was {
+            Some(s) => Some(serde_json::from_str(&s)?),
+            None => None,
+        };
+        if let Some(st) = fold(&stored, was) {
+            let n: i64 = st.id.strip_prefix("D-").and_then(|n| n.parse().ok()).unwrap_or(0);
+            tx.execute("INSERT INTO dockets (id, n, state) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO UPDATE SET state = ?3", params![st.id, n, serde_json::to_string(&st)?])?;
+        }
         tx.commit()?;
-        Ok(Stored { docket: docket.to_string(), seq, id, chain: next, envelope: envelope.to_string() })
+        Ok(stored)
     }
 
     pub fn entries(&self, docket: &str) -> Result<Vec<Stored>> {
         let mut st = self.conn.prepare("SELECT docket, seq, id, chain, envelope FROM entries WHERE docket = ?1 ORDER BY seq")?;
-        let rows = st.query_map(params![docket], |r| {
-            Ok(Stored { docket: r.get(0)?, seq: r.get(1)?, id: r.get(2)?, chain: r.get(3)?, envelope: r.get(4)? })
-        })?;
+        let rows = st.query_map(params![docket], |r| Ok(Stored { docket: r.get(0)?, seq: r.get(1)?, id: r.get(2)?, chain: r.get(3)?, envelope: r.get(4)? }))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
-    }
-
-    pub fn save_state(&mut self, st: &DocketState) -> Result<()> {
-        let n: i64 = st.id.strip_prefix("D-").and_then(|n| n.parse().ok()).unwrap_or(0);
-        self.conn.execute(
-            "INSERT INTO dockets (id, n, state) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO UPDATE SET state = ?3",
-            params![st.id, n, serde_json::to_string(st)?],
-        )?;
-        Ok(())
     }
 
     pub fn state(&self, id: &str) -> Result<Option<DocketState>> {
@@ -318,7 +327,21 @@ impl Store {
         self.conn.execute(
             "INSERT INTO messages (docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
-            params![m.docket, m.seq, m.from_addr, m.from_block, m.to_addr, m.to_block, m.subject, m.body, serde_json::to_string(&m.options)?, m.reply_to, m.choice, m.status, m.created_at],
+            params![
+                m.docket,
+                m.seq,
+                m.from_addr,
+                m.from_block,
+                m.to_addr,
+                m.to_block,
+                m.subject,
+                m.body,
+                serde_json::to_string(&m.options)?,
+                m.reply_to,
+                m.choice,
+                m.status,
+                m.created_at
+            ],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -410,8 +433,7 @@ impl Store {
     }
 
     pub fn put_key(&mut self, keyid: &str, name: &str, at: &str) -> Result<()> {
-        let have: Option<String> =
-            self.conn.query_row("SELECT name FROM keys WHERE keyid = ?1", params![keyid], |r| r.get(0)).optional()?;
+        let have: Option<String> = self.conn.query_row("SELECT name FROM keys WHERE keyid = ?1", params![keyid], |r| r.get(0)).optional()?;
         match have {
             Some(n) if n != name => bail!("key {keyid} is already {n}"),
             Some(_) => Ok(()),

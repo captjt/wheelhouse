@@ -56,9 +56,10 @@ async fn integrate_next(shared: &Shared) {
     let next = {
         let core = shared.lock();
         let tried = &core.review.integrate_tried;
-        super::all(&core).unwrap_or_default().into_iter().find(|p| {
-            p.integrated_at.is_none() && super::docket_of(&core, &p.key()).is_some() && tried.get(&p.key()).is_none_or(|t| t.elapsed() > Duration::from_secs(1800))
-        })
+        super::all(&core)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|p| p.integrated_at.is_none() && super::docket_of(&core, &p.key()).is_some() && tried.get(&p.key()).is_none_or(|t| t.elapsed() > Duration::from_secs(1800)))
     };
     let Some(p) = next else { return };
     let key = p.key();
@@ -293,11 +294,17 @@ async fn step(shared: &Shared, cfg: &Config, mut e: Pr, paused: bool, active: &m
                         return Ok(None);
                     }
                     if phase == "checking" && st.starts_with("VERIFYING") {
-                        let block = e.checker_block.clone().filter(|b| super::panes::state(shared, b).is_some()).or_else(|| e.checker_pane.as_deref().and_then(|l| super::panes::find(shared, e.session_id.as_deref(), l)));
+                        let block = e
+                            .checker_block
+                            .clone()
+                            .filter(|b| super::panes::state(shared, b).is_some())
+                            .or_else(|| e.checker_pane.as_deref().and_then(|l| super::panes::find(shared, e.session_id.as_deref(), l)));
                         match block.and_then(|b| super::panes::state(shared, &b)) {
                             None => return Ok(att("pane-closed", "the checker's pane closed before it finished", round)),
                             Some((s, at)) if matches!(s.as_str(), "idle" | "done") => {
-                                let since = at.and_then(|a| time::OffsetDateTime::parse(&a, &time::format_description::well_known::Rfc3339).ok()).map(|t| (time::OffsetDateTime::now_utc() - t).whole_seconds());
+                                let since = at
+                                    .and_then(|a| time::OffsetDateTime::parse(&a, &time::format_description::well_known::Rfc3339).ok())
+                                    .map(|t| (time::OffsetDateTime::now_utc() - t).whole_seconds());
                                 if since.is_some_and(|s| s >= rounds::STALLED) {
                                     return Ok(att("stalled", "the checker went idle without finishing; look at its pane, or dismiss the round", round));
                                 }
@@ -335,11 +342,12 @@ fn draft_summary(p: &Pr) -> Value {
     }
     let Some(wt) = &p.worktree else { return Value::Null };
     let path = Path::new(wt).join(format!(".tmp/rounds/{}/review.verified.json", p.round));
-    let Some(d) = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { return Value::Null };
+    let Ok(text) = std::fs::read_to_string(path) else { return Value::Null };
+    let Ok(d) = serde_json::from_str::<Value>(&text) else { return Value::Null };
     let total = d["findings"].as_array().map_or(0, Vec::len);
     let blocking = super::post::blocking_count(&d);
     let risk = if d["merge_risk"].is_object() { super::post::risk_level(&d["merge_risk"]).ok() } else { None };
-    json!({ "event": d["event"], "verdict": d["verdict"].as_str().or(d["summary"].as_str()), "blocking": blocking, "non_blocking": total - blocking, "merge_risk": risk })
+    json!({ "event": d["event"], "verdict": d["verdict"].as_str().or(d["summary"].as_str()), "blocking": blocking, "non_blocking": total - blocking, "merge_risk": risk, "digest": super::rounds::draft_digest(&text) })
 }
 
 /// The protocol at a glance, for the app and `wh review`.

@@ -1,5 +1,5 @@
-//! Reading rex-reviewer's `config.lua` as it is, with LuaJIT: its settings
-//! as JSON, and its functions (the effort policy) called per PR.
+//! Reading your config (`review.lua`, `build.lua`) with LuaJIT: its
+//! settings as JSON, and its functions (the effort policy) called per PR.
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
@@ -18,22 +18,24 @@ fn luajit() -> Option<std::path::PathBuf> {
 }
 
 fn run(args: &[&str]) -> Result<Value> {
-    let bin = luajit().ok_or_else(|| anyhow!("LuaJIT isn't installed (brew install luajit); it reads your rex-reviewer config"))?;
+    let bin = luajit().ok_or_else(|| anyhow!("LuaJIT isn't installed (brew install luajit); it reads your review.lua and build.lua"))?;
     let mut child = Command::new(bin).arg("-").args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     child.stdin.take().context("luajit's stdin")?.write_all(DRIVER.as_bytes())?;
+    // Its output is read while it runs, on a thread: a big config (long
+    // notes or guides inline) would otherwise fill the pipe and stall it.
+    let pid = child.id();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
     // A config is a few lines of Lua; one that runs on is a mistake in it.
-    let started = std::time::Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            break;
-        }
-        if started.elapsed() > Duration::from_secs(10) {
-            let _ = child.kill();
+    let out = match rx.recv_timeout(Duration::from_secs(10)) {
+        Ok(out) => out?,
+        Err(_) => {
+            let _ = Command::new("kill").arg(pid.to_string()).status();
             bail!("your config took over 10s to run");
         }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let out = child.wait_with_output()?;
+    };
     if !out.status.success() {
         bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
     }

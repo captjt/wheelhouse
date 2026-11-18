@@ -13,7 +13,7 @@ export function TitleText({ d }: { d: Pick<Docket, "title" | "title_source"> }) 
   );
 }
 
-/** The last two parts of a path: `~/git/captjt/rex-hub` → `captjt/rex-hub`. */
+/** The last two parts of a path: `~/git/acme/api` → `acme/api`. */
 export function shortPath(p?: string | null): string {
   if (!p) return "";
   const parts = p.replace(/\/$/, "").split("/");

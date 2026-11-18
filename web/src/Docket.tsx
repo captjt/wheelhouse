@@ -37,6 +37,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   const [record, setRecord] = useState(false);
   // An agent's docket opens to its conversation on a phone; the record is a tap away.
   const [tab, setTab] = useState<"chat" | "docket" | null>(null);
+  // A long record shows its latest entries first; the rest are a tap away.
+  const [earlier, setEarlier] = useState(false);
 
   const ids = lastList.ids;
   const pos = ids.indexOf(id);
@@ -368,7 +370,12 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </button>
           </div>
           <div className="activity">
-            {entries.map((e) => (
+            {!earlier && entries.length > 200 && (
+              <button className="btn btn-small btn-ghost act-earlier" onClick={() => setEarlier(true)}>
+                Show {entries.length - 150} earlier entries
+              </button>
+            )}
+            {(earlier || entries.length <= 200 ? entries : entries.slice(-150)).map((e) => (
               <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} onOpen={setViewing} />
             ))}
           </div>
@@ -621,10 +628,16 @@ function Clamp({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [long, setLong] = useState(false);
   const [open, setOpen] = useState(false);
+  // Measured when its size changes, not on every render.
   useEffect(() => {
     const el = ref.current;
-    if (el) setLong(el.scrollHeight > 260);
-  }, [children]);
+    if (!el) return;
+    const measure = () => setLong(el.scrollHeight > 260);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   return (
     <div className={`clamp${long && !open ? " clamped" : ""}`}>
       <div ref={ref} className="clamp-body">

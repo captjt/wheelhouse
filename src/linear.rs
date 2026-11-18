@@ -13,8 +13,6 @@ use std::time::Duration;
 use crate::hub::{Shared, Who};
 
 const KEYCHAIN: &str = "wheelhouse-linear";
-/// rex-develop's entry, used if Wheelhouse has none of its own.
-const KEYCHAIN_REX_DEVELOP: &str = "rex-develop-linear";
 
 fn endpoint() -> String {
     std::env::var("WH_LINEAR_ENDPOINT").unwrap_or_else(|_| "https://api.linear.app/graphql".into())
@@ -33,16 +31,9 @@ pub fn key() -> Option<String> {
             return Some(k.trim().to_string());
         }
     }
-    for service in [KEYCHAIN, KEYCHAIN_REX_DEVELOP] {
-        let out = std::process::Command::new("security").args(["find-generic-password", "-s", service, "-w"]).output().ok()?;
-        if out.status.success() {
-            let k = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !k.is_empty() {
-                return Some(k);
-            }
-        }
-    }
-    None
+    let out = std::process::Command::new("security").args(["find-generic-password", "-s", KEYCHAIN, "-w"]).output().ok()?;
+    let k = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !k.is_empty()).then_some(k)
 }
 
 /// `wh setup-linear`: store a key in the Keychain. `security` asks for it,
@@ -200,7 +191,13 @@ fn snapshot(i: &Issue) -> Value {
 /// Link an issue to a docket: the link, what Linear says now, its comments,
 /// and the intent if the docket has none yet.
 pub fn link(core: &mut crate::hub::Core, docket: &str, i: &Issue, by: &Who) -> Result<()> {
-    core.append(docket, "link", by, Some(format!("{}: {}", i.identifier, i.title)), json!({ "kind": "linear", "source": "linear", "key": i.identifier, "id": i.id, "url": i.url, "title": i.title }))?;
+    core.append(
+        docket,
+        "link",
+        by,
+        Some(format!("{}: {}", i.identifier, i.title)),
+        json!({ "kind": "linear", "source": "linear", "key": i.identifier, "id": i.id, "url": i.url, "title": i.title }),
+    )?;
     core.append(docket, "observed", &Who::Hub, None, json!({ "what": "linear", "source": "linear", "issue": snapshot(i), "description": i.description }))?;
     let has_intent = core.store.state(docket)?.is_some_and(|s| s.intent.is_some());
     if !has_intent && let Some(d) = &i.description {
@@ -216,7 +213,13 @@ pub fn link(core: &mut crate::hub::Core, docket: &str, i: &Issue, by: &Who) -> R
 /// description, without its comments so far (only new ones come in).
 pub fn observe(core: &mut crate::hub::Core, docket: &str, i: &Issue) -> Result<()> {
     let seen = i.comments.iter().map(|c| c.created_at.as_str()).max();
-    core.append(docket, "observed", &Who::Hub, None, json!({ "what": "linear", "source": "linear", "issue": snapshot(i), "description": i.description, "comments_seen_at": seen }))?;
+    core.append(
+        docket,
+        "observed",
+        &Who::Hub,
+        None,
+        json!({ "what": "linear", "source": "linear", "issue": snapshot(i), "description": i.description, "comments_seen_at": seen }),
+    )?;
     Ok(())
 }
 
@@ -332,7 +335,11 @@ mod tests {
             team: Some("ENG".into()),
             branch: Some("eng-142-retry".into()),
             updated_at: updated.into(),
-            comments: comments.iter().enumerate().map(|(n, (at, body))| Comment { id: format!("c{n}"), author: "Sam".into(), body: body.to_string(), created_at: at.to_string() }).collect(),
+            comments: comments
+                .iter()
+                .enumerate()
+                .map(|(n, (at, body))| Comment { id: format!("c{n}"), author: "Sam".into(), body: body.to_string(), created_at: at.to_string() })
+                .collect(),
         }
     }
 

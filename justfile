@@ -3,21 +3,42 @@
 default:
     @just --list
 
+# The web app's packages, exactly as locked.
+deps:
+    cd ./web && npm ci --no-audit --no-fund
+
+# Build the web app into web/dist.
+web: deps
+    cd ./web && npm run build
+
 # Build the web app, then the binary (the app is built into it).
 build: web
     cargo build --release
 
-# Build the web app into web/dist.
-web:
-    cd ./web && npm install --no-audit --no-fund && npm run build
-
-# Every check: Rust tests, clippy, the web app's types and its tests.
-check:
+# Every check a pull request needs to pass: formatting, the Rust tests and
+# clippy, and the web app's types and tests.
+check: deps
+    cargo fmt --check
     cargo test
     cargo clippy --all-targets -- -D warnings
     cd ./web && npm run typecheck && npm test
 
-# Run the hub from this checkout.
+# Format the Rust code (rustfmt.toml).
+fmt:
+    cargo fmt
+
+# Put `wh` on your PATH (~/.cargo/bin).
+install: web
+    cargo install --path . --locked
+
+# Install, then run the hub at login (a LaunchAgent), with the agents'
+# hooks and skill. Run it again after pulling to update.
+setup: install
+    wh up
+    wh hooks install
+    wh skill install
+
+# Run the hub from this checkout, in the foreground.
 serve: build
     ./target/release/wh serve
 
@@ -25,6 +46,6 @@ serve: build
 dev:
     cd ./web && npm run dev
 
-# Put `wh` on your PATH (~/.cargo/bin).
-install: web
-    cargo install --path .
+# The README's screenshots and the social preview card, from a made-up world.
+screenshots:
+    scripts/screenshots.sh

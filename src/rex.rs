@@ -62,7 +62,11 @@ impl Rex {
             si.write_all(input.as_bytes()).await?;
             drop(si);
         }
-        let out = child.wait_with_output().await?;
+        // A Rex call that hangs mustn't hang the mirror, delivery or a
+        // review: it's killed (kill_on_drop) after this long.
+        let out = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait_with_output())
+            .await
+            .map_err(|_| anyhow::anyhow!("rex {} took over 30s", args.first().unwrap_or(&"")))??;
         if !out.status.success() {
             let err = String::from_utf8_lossy(&out.stderr);
             bail!("rex {}: {}", args.join(" "), err.trim());
@@ -113,6 +117,7 @@ impl Rex {
     /// Paste text into a terminal, the way a person pastes: bracketed, so
     /// newlines don't submit early.
     pub async fn paste(&self, session: &str, block: &str, text: &str) -> Result<()> {
+        let text = plain(text);
         let params = serde_json::json!({ "block_id": block, "event": { "type": "paste", "payload": { "text": text } } });
         self.api(Some(session), "block.event", &params).await.map(|_| ())
     }
@@ -208,5 +213,28 @@ impl Rex {
 
     pub async fn session_list(&self) -> Result<Value> {
         self.api(None, "session.list", &json!({})).await
+    }
+}
+
+/// Text that's only text when pasted into a terminal: no escape sequences
+/// (which could end a bracketed paste and type keys), no other control
+/// characters but newlines and tabs, and carriage returns as newlines.
+pub fn plain(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .chars()
+        .map(|c| if c == '\r' { '\n' } else { c })
+        .filter(|&c| c == '\n' || c == '\t' || !(c.is_control() || ('\u{80}'..='\u{9f}').contains(&c)))
+        .collect()
+}
+
+#[cfg(test)]
+mod paste_tests {
+    #[test]
+    fn a_paste_carries_no_keys() {
+        // An escape that would end a bracketed paste, then Enter and Shift-Tab.
+        let evil = "fix it\x1b[201~\r\x1b[Zrm -rf ~\x07\u{9b}2J";
+        assert_eq!(super::plain(evil), "fix it[201~\n[Zrm -rf ~2J");
+        assert_eq!(super::plain("a\r\nb\tc\u{7f}"), "a\nb\tc");
+        assert_eq!(super::plain("ünïcode ✓ stays"), "ünïcode ✓ stays");
     }
 }

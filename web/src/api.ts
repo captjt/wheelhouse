@@ -156,7 +156,8 @@ export type ReviewPr = {
   updated_at?: string | null;
   history: ReviewRound[];
   /** The checked review of the round in progress, once it's written. */
-  draft?: { event: string; verdict?: string | null; blocking: number; non_blocking: number; merge_risk?: string | null } | null;
+  /** The checked review, in brief; `digest` names its exact text, so a post is of what you saw. */
+  draft?: { event: string; verdict?: string | null; blocking: number; non_blocking: number; merge_risk?: string | null; digest?: string } | null;
 };
 
 /** A docket's Build. */

@@ -213,7 +213,9 @@ impl DocketState {
                 self.intent = Some(IntentRef { body: e.body.clone().unwrap_or_default(), source, by: e.actor.id.clone(), at: e.at.clone(), seq });
                 self.intent_versions += 1;
             }
-            "link" if d["kind"].as_str() == Some("linear") && d["also"].as_bool() == Some(true) && self.linear.as_ref().is_some_and(|l| Some(l.key.as_str()) != d["key"].as_str()) => {
+            "link"
+                if d["kind"].as_str() == Some("linear") && d["also"].as_bool() == Some(true) && self.linear.as_ref().is_some_and(|l| Some(l.key.as_str()) != d["key"].as_str()) =>
+            {
                 let key = s(&d["key"]).unwrap_or_default();
                 if !self.linear_also.iter().any(|l| l.key == key) {
                     self.linear_also.push(IssueLink { key, url: s(&d["url"]), title: s(&d["title"]) });

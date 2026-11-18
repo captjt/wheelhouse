@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use super::{Envelope, Stored, chain, hex};
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Report {
     pub docket: String,
     pub ok: bool,
@@ -52,13 +52,7 @@ pub fn verify(docket: &str, entries: &[Stored], known: impl Fn(&str) -> bool) ->
             }
         }
     }
-    Report {
-        docket: docket.to_string(),
-        ok: problems.is_empty(),
-        entries: entries.len(),
-        head: (chained && !entries.is_empty()).then(|| hex::encode(&prev)),
-        problems,
-    }
+    Report { docket: docket.to_string(), ok: problems.is_empty(), entries: entries.len(), head: (chained && !entries.is_empty()).then(|| hex::encode(&prev)), problems }
 }
 
 #[cfg(test)]
@@ -74,20 +68,13 @@ mod tests {
         let entries = [
             Entry::new("D-1", "open", "2026-11-17T10:00:00.000Z", Actor::new("person", "you")).body("Retry failed webhooks"),
             Entry::new("D-1", "note", "2026-11-17T10:01:00.000Z", Actor::new("person", "you")).body("cap it at 3"),
-            Entry::new("D-1", "set", "2026-11-17T10:02:00.000Z", Actor::new("person", "you"))
-                .data(serde_json::json!({ "status": "done" })),
+            Entry::new("D-1", "set", "2026-11-17T10:02:00.000Z", Actor::new("person", "you")).data(serde_json::json!({ "status": "done" })),
         ];
         for (i, e) in entries.iter().enumerate() {
             let env = Envelope::sign(&e.to_bytes(), key).to_string_compact();
             let id = chain::entry_id(env.as_bytes());
             prev = chain::next(&prev, &id);
-            out.push(Stored {
-                docket: "D-1".into(),
-                seq: i as i64 + 1,
-                id: chain::id_string(&id),
-                chain: hex::encode(&prev),
-                envelope: env,
-            });
+            out.push(Stored { docket: "D-1".into(), seq: i as i64 + 1, id: chain::id_string(&id), chain: hex::encode(&prev), envelope: env });
         }
         out
     }

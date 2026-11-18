@@ -104,7 +104,12 @@ function escape(s: string) {
 }
 
 let hooked = false;
-function purify(html: string, forbid: string[] = []): string {
+
+/**
+ * Sanitized, as DOM nodes: never serialized and parsed again, so nothing
+ * the sanitizer cleared can come back through a second parse (mXSS).
+ */
+function purify(html: string, forbid: string[] = []): DocumentFragment {
   if (!hooked) {
     hooked = true;
     DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -126,48 +131,82 @@ function purify(html: string, forbid: string[] = []): string {
     // Ids (footnotes) get a `user-content-` prefix, as on GitHub, so text
     // can't clobber the page's own names.
     SANITIZE_NAMED_PROPS: true,
+    RETURN_DOM_FRAGMENT: true,
   });
 }
 
 const ALERTS: Record<string, string> = { NOTE: "Note", TIP: "Tip", IMPORTANT: "Important", WARNING: "Warning", CAUTION: "Caution" };
 
-/** GitHub's alerts: a quote whose first line is `[!NOTE]`, `[!TIP]`, … */
-function alerts(html: string): string {
-  return html.replace(/<blockquote>\s*<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(<br>\s*|<\/p>\s*)?/g, (_m, kind: string, after?: string) => {
-    const head = `<blockquote data-alert="${kind.toLowerCase()}"><p data-alert-title="">${ALERTS[kind]}</p>`;
-    return after?.startsWith("</p>") ? head : `${head}<p>`;
+/**
+ * What the app adds to sanitized nodes, on the nodes: a scroller around
+ * each table, a class on each docket link, and GitHub's alerts (a quote
+ * whose first line is `[!NOTE]`, `[!TIP]`, …).
+ */
+function finish(root: DocumentFragment): DocumentFragment {
+  root.querySelectorAll("table").forEach((t) => {
+    const wrap = document.createElement("div");
+    wrap.className = "prose-table";
+    t.replaceWith(wrap);
+    wrap.appendChild(t);
   });
+  root.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((a) => {
+    if (/^#\/d\/D-\d+$/.test(a.getAttribute("href") || "")) a.classList.add("docket-ref");
+  });
+  root.querySelectorAll("blockquote").forEach((q) => {
+    const p = q.firstElementChild;
+    const first = p?.tagName === "P" ? p.firstChild : null;
+    if (!p || !first || first.nodeType !== Node.TEXT_NODE) return;
+    const m = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*/.exec(first.textContent || "");
+    if (!m) return;
+    q.setAttribute("data-alert", m[1].toLowerCase());
+    first.textContent = (first.textContent || "").slice(m[0].length);
+    if (!first.textContent) first.remove();
+    if (p.firstChild?.nodeName === "BR") p.firstChild.remove();
+    const title = document.createElement("p");
+    title.setAttribute("data-alert-title", "");
+    title.textContent = ALERTS[m[1]];
+    q.insertBefore(title, p);
+    if (!p.textContent?.trim() && !p.children.length) p.remove();
+  });
+  return root;
 }
 
-const cache = new Map<string, string>();
+const cache = new Map<string, DocumentFragment>();
 const LIMIT = 400_000;
 
-/** Sanitized HTML for Markdown text, cached by the text. */
-export function renderMarkdown(text: string): string {
+function pre(text: string): DocumentFragment {
+  const f = document.createDocumentFragment();
+  const el = document.createElement("pre");
+  el.textContent = text;
+  f.appendChild(el);
+  return f;
+}
+
+/**
+ * Markdown as sanitized nodes, cached by the text. Callers insert a clone
+ * (`.cloneNode(true)`), never the cached fragment itself.
+ */
+export function renderMarkdown(text: string): DocumentFragment {
   const hit = cache.get(text);
-  if (hit !== undefined) return hit;
-  let html: string;
+  if (hit) return hit;
+  let frag: DocumentFragment;
   if (text.length > LIMIT) {
-    html = `<pre>${escape(text.slice(0, LIMIT))}\n…</pre>`;
+    frag = pre(`${text.slice(0, LIMIT)}\n…`);
   } else {
+    let html: string | null;
     try {
       html = md.parse(linearCollapsibles(text.replace(/\r\n?/g, "\n"))) as string;
     } catch {
-      html = `<pre>${escape(text)}</pre>`;
+      html = null;
     }
-    html = alerts(purify(html))
-      // Wide tables scroll on their own, not the page.
-      .replace(/<table>/g, '<div class="prose-table"><table>')
-      .replace(/<\/table>/g, "</table></div>")
-      // FORBID_ATTR drops class, so the docket links get theirs back here.
-      .replace(/<a href="#\/d\/(D-\d+)">/g, '<a href="#/d/$1" class="docket-ref">');
+    frag = html === null ? pre(text) : finish(purify(html));
   }
   if (cache.size > 400) cache.delete(cache.keys().next().value as string);
-  cache.set(text, html);
-  return html;
+  cache.set(text, frag);
+  return frag;
 }
 
-const inlineCache = new Map<string, string>();
+const inlineCache = new Map<string, DocumentFragment>();
 
 /**
  * One line of Markdown, inline only (`code`, **bold**, _em_, ~~del~~,
@@ -175,21 +214,21 @@ const inlineCache = new Map<string, string>();
  * dropped. With `links: false` (inside a row that's a link itself), links
  * keep their text but aren't links.
  */
-export function renderInline(text: string, links = true): string {
+export function renderInline(text: string, links = true): DocumentFragment {
   const k = `${links ? 1 : 0}${text}`;
   const hit = inlineCache.get(k);
-  if (hit !== undefined) return hit;
+  if (hit) return hit;
   const line = text.slice(0, 4000).replace(/\s*\n\s*/g, " ").replace(/^\s*(#{1,6}\s+|[-*+]\s+|>\s*)/, "");
-  let html: string;
+  let frag: DocumentFragment;
   try {
-    html = md.parseInline(line) as string;
+    frag = purify(md.parseInline(line) as string, links ? [] : ["a"]);
   } catch {
-    html = escape(line);
+    frag = document.createDocumentFragment();
+    frag.appendChild(document.createTextNode(line));
   }
-  html = purify(html, links ? [] : ["a"]);
   if (inlineCache.size > 600) inlineCache.delete(inlineCache.keys().next().value as string);
-  inlineCache.set(k, html);
-  return html;
+  inlineCache.set(k, frag);
+  return frag;
 }
 
 // ---- task lists ----

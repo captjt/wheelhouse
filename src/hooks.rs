@@ -72,11 +72,7 @@ fn read(file: &Path) -> Result<Value> {
 fn installed(config: &Value) -> Vec<&'static str> {
     EVENTS
         .into_iter()
-        .filter(|ev| {
-            config["hooks"][ev].as_array().is_some_and(|groups| {
-                groups.iter().any(|g| g["hooks"].as_array().is_some_and(|hs| hs.iter().any(is_ours)))
-            })
-        })
+        .filter(|ev| config["hooks"][ev].as_array().is_some_and(|groups| groups.iter().any(|g| g["hooks"].as_array().is_some_and(|hs| hs.iter().any(is_ours)))))
         .collect()
 }
 
@@ -93,15 +89,15 @@ fn install_into(config: &mut Value) -> Result<()> {
     let hooks = root.entry("hooks").or_insert_with(|| json!({})).as_object_mut().ok_or_else(|| anyhow!("hooks isn't an object"))?;
     for ev in EVENTS {
         let list = hooks.entry(ev).or_insert_with(|| json!([]));
-        list.as_array_mut()
-            .ok_or_else(|| anyhow!("hooks.{ev} isn't a list"))?
-            .push(json!({ "hooks": [{ "type": "command", "command": command(ev)?, "timeout": HOOK_TIMEOUT }] }));
+        list.as_array_mut().ok_or_else(|| anyhow!("hooks.{ev} isn't a list"))?.push(json!({ "hooks": [{ "type": "command", "command": command(ev)?, "timeout": HOOK_TIMEOUT }] }));
     }
     Ok(())
 }
 
 fn remove_from(config: &mut Value) {
-    let Some(hooks) = config["hooks"].as_object_mut() else { return };
+    // `get_mut`, not `config["hooks"]`: indexing a missing key inserts null,
+    // and a settings file with no hooks yet then can't be installed into.
+    let Some(hooks) = config.get_mut("hooks").and_then(Value::as_object_mut) else { return };
     for ev in EVENTS {
         let Some(groups) = hooks.get_mut(ev).and_then(Value::as_array_mut) else { continue };
         for g in groups.iter_mut() {
@@ -168,6 +164,18 @@ pub fn cli(action: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_into_settings_with_no_hooks_yet() {
+        // A fresh Mac: settings.json is missing, empty, or has other keys only.
+        for start in [json!({}), json!({ "model": "opus" })] {
+            let mut c = start.clone();
+            install_into(&mut c).unwrap();
+            assert!(c["hooks"]["Stop"].as_array().is_some_and(|a| a.len() == 1), "{c}");
+            remove_from(&mut c);
+            assert!(c["hooks"].as_object().is_some_and(|h| h.is_empty()), "{c}");
+        }
+    }
 
     #[test]
     fn install_keeps_other_hooks_and_is_idempotent() {

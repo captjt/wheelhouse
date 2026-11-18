@@ -53,9 +53,5 @@ pub fn expand(path: &str) -> PathBuf {
 /// A program on PATH, or in the usual places a LaunchAgent's PATH lacks.
 pub fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var("PATH").unwrap_or_default();
-    path.split(':')
-        .map(PathBuf::from)
-        .chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from))
-        .map(|d| d.join(name))
-        .find(|p| p.is_file())
+    path.split(':').map(PathBuf::from).chain(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from)).map(|d| d.join(name)).find(|p| p.is_file())
 }

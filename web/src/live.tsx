@@ -12,10 +12,32 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     let timer: number | undefined;
     let es: EventSource | null = null;
     let retry: number | undefined;
+    // Events come in bursts: fetch 150 ms after the last, or at most a
+    // second after the first, so a steady stream can't starve the app.
+    // While the app is hidden nothing fetches; it catches up when it's seen.
+    let first = 0;
+    let missed = false;
+    const fire = () => {
+      first = 0;
+      if (document.hidden) {
+        missed = true;
+        return;
+      }
+      setVersion((v) => ({ ...v, n: v.n + 1 }));
+    };
     const bump = () => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => setVersion((v) => ({ ...v, n: v.n + 1 })), 150);
+      const now = Date.now();
+      if (!first) first = now;
+      timer = window.setTimeout(fire, now - first > 1000 ? 0 : 150);
     };
+    const seen = () => {
+      if (!document.hidden && missed) {
+        missed = false;
+        setVersion((v) => ({ n: v.n + 1, tick: v.tick + 1 }));
+      }
+    };
+    document.addEventListener("visibilitychange", seen);
     const connect = () => {
       es = new EventSource("/api/events");
       es.onmessage = bump;
@@ -30,8 +52,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const refresh = () => setVersion((v) => ({ n: v.n + 1, tick: v.tick + 1 }));
     window.addEventListener("wh:refresh", refresh);
     // Ages ("4m") move on even when nothing happens.
-    const tick = window.setInterval(() => setVersion((v) => ({ n: v.n + 1, tick: v.tick + 1 })), 30000);
+    const tick = window.setInterval(() => (document.hidden ? (missed = true) : setVersion((v) => ({ n: v.n + 1, tick: v.tick + 1 }))), 30000);
     return () => {
+      document.removeEventListener("visibilitychange", seen);
       window.removeEventListener("wh:refresh", refresh);
       es?.close();
       window.clearTimeout(timer);

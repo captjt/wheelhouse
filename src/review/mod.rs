@@ -47,7 +47,32 @@ pub fn cache_dir() -> PathBuf {
     std::env::var_os("WH_REVIEW_CACHE").map(PathBuf::from).unwrap_or_else(|| crate::paths::home().join(".cache/wheelhouse"))
 }
 
+/// The first part of `path`, from its `.tmp` folder down, that's a symbolic
+/// link. Agents can write to their worktree's `.tmp`, and the hub writes,
+/// reads and deletes there: a link would point the hub somewhere else.
+pub fn through_link(path: &Path) -> Option<PathBuf> {
+    let parts: Vec<_> = path.components().collect();
+    let from = parts.iter().position(|c| c.as_os_str() == ".tmp")?;
+    let mut cur = PathBuf::new();
+    for (i, c) in parts.iter().enumerate() {
+        cur.push(c);
+        if i >= from && std::fs::symlink_metadata(&cur).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Some(cur);
+        }
+    }
+    None
+}
+
+/// Refuse a path through a link in a `.tmp` folder (see `through_link`).
+pub fn no_link(path: &Path) -> Result<()> {
+    match through_link(path) {
+        Some(l) => anyhow::bail!("{} is a link; Wheelhouse won't follow it out of the worktree", l.display()),
+        None => Ok(()),
+    }
+}
+
 pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    no_link(path)?;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -374,4 +399,29 @@ pub fn import(core: &mut Core) -> Result<usize> {
         core.store.meta_set("review.paused", if state["paused"] == json!(false) { "0" } else { "1" })?;
     }
     Ok(n)
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn the_hub_wont_write_through_a_link_in_tmp() {
+        let root = std::env::temp_dir().join(format!("wh-links-{}", std::process::id()));
+        let elsewhere = root.join("elsewhere");
+        let wt = root.join("wt");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::create_dir_all(wt.join(".tmp")).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, wt.join(".tmp/context")).unwrap();
+        let err = write_atomic(&wt.join(".tmp/context/round-1/pr.diff"), "x").unwrap_err();
+        assert!(err.to_string().contains("is a link"), "{err}");
+        assert!(!elsewhere.join("round-1").exists());
+        write_atomic(&wt.join(".tmp/status.txt"), "ok\n").unwrap();
+        // A .tmp that's itself a link.
+        let wt2 = root.join("wt2");
+        std::fs::create_dir_all(&wt2).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, wt2.join(".tmp")).unwrap();
+        assert!(write_atomic(&wt2.join(".tmp/status.txt"), "x").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

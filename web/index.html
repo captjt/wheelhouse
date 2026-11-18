@@ -5,13 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="color-scheme" content="light dark" />
     <title>Wheelhouse</title>
-    <script>
-      // A pinned theme (Light or Dark) applies before the first paint; System follows macOS.
-      try {
-        var t = JSON.parse(localStorage.getItem("wh:theme") || '"system"');
-        if (t === "light" || t === "dark") document.documentElement.dataset.mode = t;
-      } catch (e) {}
-    </script>
+    <script src="/theme.js"></script>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icon-180.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

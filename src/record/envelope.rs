@@ -34,11 +34,7 @@ impl Envelope {
     /// Sign `payload` (an entry's exact bytes) with `key`.
     pub fn sign(payload: &[u8], key: &Key) -> Envelope {
         let sig = key.sign(&pae(PAYLOAD_TYPE, payload));
-        Envelope {
-            payload_type: PAYLOAD_TYPE.to_string(),
-            payload: B64.encode(payload),
-            signatures: vec![Signature { keyid: key.keyid(), sig: B64.encode(sig) }],
-        }
+        Envelope { payload_type: PAYLOAD_TYPE.to_string(), payload: B64.encode(payload), signatures: vec![Signature { keyid: key.keyid(), sig: B64.encode(sig) }] }
     }
 
     pub fn payload_bytes(&self) -> Result<Vec<u8>> {

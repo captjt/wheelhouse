@@ -26,7 +26,7 @@ impl Window {
 
     fn before(&self) -> Window {
         let len = self.until - self.since;
-        Window { since: self.since - len, until: self.since }
+        Window { since: self.since.checked_sub(len).unwrap_or(self.since), until: self.since }
     }
 
     fn days(&self) -> usize {
@@ -157,7 +157,8 @@ pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value
                 "question" => asked += 1,
                 "decision" if you => {
                     answered += 1;
-                    decisions.push(json!({ "docket": st.id, "title": st.title, "choice": e.data["choice"], "subject": e.data["subject"], "message": e.data["replies_to"], "at": e.at }));
+                    decisions
+                        .push(json!({ "docket": st.id, "title": st.title, "choice": e.data["choice"], "subject": e.data["subject"], "message": e.data["replies_to"], "at": e.at }));
                 }
                 "approval" if you => {
                     if e.data["decision"] == "deny" || e.data["decision"] == "dismiss" {
@@ -228,12 +229,8 @@ pub fn markdown(r: &Value, label: &str) -> String {
     let n = |v: &Value| v.as_i64().unwrap_or(0);
     let mut md = format!("## Recap: {label}\n\n");
     let diff = n(&rv["posted"]) - n(&rv["prev_posted"]);
-    let mut line = vec![format!(
-        "{} review{} posted ({}{diff} vs the period before)",
-        n(&rv["posted"]),
-        if n(&rv["posted"]) == 1 { "" } else { "s" },
-        if diff >= 0 { "+" } else { "" }
-    )];
+    let mut line =
+        vec![format!("{} review{} posted ({}{diff} vs the period before)", n(&rv["posted"]), if n(&rv["posted"]) == 1 { "" } else { "s" }, if diff >= 0 { "+" } else { "" })];
     line.push(format!("{} approved", n(&rv["approved"])));
     line.push(format!("{} changes requested", n(&rv["changes"])));
     line.push(format!("{} merged", n(&rv["merged"])));
@@ -300,7 +297,14 @@ pub fn markdown(r: &Value, label: &str) -> String {
     let you = &r["you"];
     let ds = you["decisions"].as_array().cloned().unwrap_or_default();
     if !ds.is_empty() || n(&you["approved"]) + n(&you["denied"]) > 0 {
-        md.push_str(&format!("\n**You:** {} decision{}, {} approval{}, {} denied\n", ds.len(), if ds.len() == 1 { "" } else { "s" }, n(&you["approved"]), if n(&you["approved"]) == 1 { "" } else { "s" }, n(&you["denied"])));
+        md.push_str(&format!(
+            "\n**You:** {} decision{}, {} approval{}, {} denied\n",
+            ds.len(),
+            if ds.len() == 1 { "" } else { "s" },
+            n(&you["approved"]),
+            if n(&you["approved"]) == 1 { "" } else { "s" },
+            n(&you["denied"])
+        ));
         for d in ds.iter().take(15) {
             md.push_str(&format!("- {} {}: chose “{}”\n", d["docket"].as_str().unwrap_or(""), d["title"].as_str().unwrap_or(""), d["choice"].as_str().unwrap_or("")));
         }
@@ -361,7 +365,10 @@ mod tests {
         assert_eq!(rv["prs"]["merged"][0]["verdicts"], json!(["CHANGES_REQUESTED", "APPROVED"]));
         assert_eq!(rv["prs"]["merged"][0]["rounds"], 2);
         let md = r["markdown"].as_str().unwrap();
-        assert!(md.starts_with("## Recap: Nov 10 to 16\n\n**Reviews:** 2 reviews posted (+1 vs the period before) · 1 approved · 1 changes requested · 1 merged · median 20m"), "{md}");
+        assert!(
+            md.starts_with("## Recap: Nov 10 to 16\n\n**Reviews:** 2 reviews posted (+1 vs the period before) · 1 approved · 1 changes requested · 1 merged · median 20m"),
+            "{md}"
+        );
         assert!(md.contains("\n**Merged**\n- api#7: ✕ → ✓, 2 rounds"), "{md}");
     }
 }

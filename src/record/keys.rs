@@ -74,8 +74,7 @@ impl Keyring {
             let seed = ed25519_compact::Seed::generate();
             if let Some(dir) = &self.dir {
                 let path = dir.join(format!("{name}.seed"));
-                std::fs::write(&path, format!("{}\n", hex::encode(seed.as_ref())))
-                    .with_context(|| format!("writing {}", path.display()))?;
+                std::fs::write(&path, format!("{}\n", hex::encode(seed.as_ref()))).with_context(|| format!("writing {}", path.display()))?;
                 set_mode(&path, 0o600);
             }
             self.keys.insert(name.to_string(), Key::from_seed(name, seed.as_ref())?);

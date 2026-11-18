@@ -81,12 +81,17 @@ pub fn load(core: &mut Core) -> Result<()> {
 
 /// Bring the dockets in line with these panes, as Rex has them now.
 pub fn reconcile(core: &mut Core, blocks: impl IntoIterator<Item = String>) {
+    let mut agents = false;
     for b in blocks {
+        // A shell running commands in some pane isn't news to the app.
+        agents |= core.agents.by_block.contains_key(&b) || core.mirror.panes.get(&b).is_some_and(|p| p.is_agent());
         if let Err(e) = reconcile_one(core, &b) {
             say!("agents: {b}: {e:#}");
         }
     }
-    core.live_changed();
+    if agents {
+        core.live_changed();
+    }
 }
 
 fn reconcile_one(core: &mut Core, block: &str) -> Result<()> {
@@ -128,13 +133,7 @@ pub fn tick(core: &mut Core) {
             say!("agents: turn {b}: {e:#}");
         }
     }
-    let gone: Vec<String> = core
-        .agents
-        .by_block
-        .iter()
-        .filter(|(_, t)| t.missing_since.is_some_and(|m| m.elapsed() >= GRACE))
-        .map(|(b, _)| b.clone())
-        .collect();
+    let gone: Vec<String> = core.agents.by_block.iter().filter(|(_, t)| t.missing_since.is_some_and(|m| m.elapsed() >= GRACE)).map(|(b, _)| b.clone()).collect();
     for b in gone {
         let reason = if core.mirror.panes.contains_key(&b) { "agent exited" } else { "pane closed" };
         if let Err(e) = release(core, &b, reason) {
@@ -269,7 +268,11 @@ fn flush_turn(core: &mut Core, block: &str) -> Result<()> {
     let docket = t.docket.clone();
     let summary = pt.message.as_deref().and_then(summarize);
     let links = pt.message.clone();
-    let reply = core.agents.remote.remove(&docket).then(|| summary.clone().or_else(|| pt.message.as_deref().map(|m| m.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect())));
+    let reply = core
+        .agents
+        .remote
+        .remove(&docket)
+        .then(|| summary.clone().or_else(|| pt.message.as_deref().map(|m| m.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect())));
     core.append(&docket, "turn", &Who::Hub, pt.message, json!({ "state": pt.status, "summary": summary }))?;
     // You asked from the app: the reply comes to your phone.
     if let Some(text) = reply {
@@ -320,13 +323,7 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
                 a.app = app.to_string();
                 a
             }
-            None => AgentRef {
-                app: app.to_string(),
-                host: "local".into(),
-                block: block.to_string(),
-                cwd: p["cwd"].as_str().map(crate::paths::tilde),
-                ..Default::default()
-            },
+            None => AgentRef { app: app.to_string(), host: "local".into(), block: block.to_string(), cwd: p["cwd"].as_str().map(crate::paths::tilde), ..Default::default() },
         };
         open_for(core, a, session, Some(source))?;
     }
@@ -527,8 +524,7 @@ pub struct Live {
 pub fn live(core: &Core, block: &str) -> Option<Live> {
     let p = core.mirror.panes.get(block)?;
     let h = p.headline();
-    let answerable = h.is_some_and(|r| r.state == "blocked" && r.kind.as_deref() == Some("permission"))
-        && p.app().and_then(crate::approve::prompt_keys).is_some();
+    let answerable = h.is_some_and(|r| r.state == "blocked" && r.kind.as_deref() == Some("permission")) && p.app().and_then(crate::approve::prompt_keys).is_some();
     Some(Live {
         block: block.to_string(),
         record: h.map(|r| r.id.clone()),
@@ -577,8 +573,7 @@ mod tests {
         assert_eq!(st.title, "Claude Code in git/api");
 
         hook(&mut core, "SessionStart", "claude-code", "b1", &json!({ "session_id": "s-1", "source": "startup" })).unwrap();
-        hook(&mut core, "UserPromptSubmit", "claude-code", "b1", &json!({ "session_id": "s-1", "prompt": "Fix the flaky retry test\nIt fails on CI." }))
-            .unwrap();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b1", &json!({ "session_id": "s-1", "prompt": "Fix the flaky retry test\nIt fails on CI." })).unwrap();
         hook(&mut core, "UserPromptSubmit", "claude-code", "b1", &json!({ "session_id": "s-1", "prompt": "Also run lint" })).unwrap();
         let st = core.store.state(&d).unwrap().unwrap();
         assert_eq!(st.title, "Fix the flaky retry test");

@@ -133,7 +133,11 @@ pub fn read(options: &[String], button: Option<&str>, body: &str) -> Reply {
         }
     }
     if let Some(i) = best {
-        let note = t[options[i].len()..].trim_start_matches([',', '.', ':', ';', '-', ' ']).trim();
+        // The words after the label: by its length in the lowercased text,
+        // where it matched (lowercasing can change a letter's byte length).
+        let cut = lower.char_indices().take_while(|(b, _)| *b < options[i].to_lowercase().len()).count();
+        let rest: String = t.chars().skip(cut).collect();
+        let note = rest.trim_start_matches([',', '.', ':', ';', '-', ' ']).trim();
         return Reply { choice: Some(i), text: note.to_string() };
     }
     Reply { choice: None, text: t.to_string() }
@@ -189,8 +193,8 @@ mod tests {
 
     #[test]
     fn the_ask_reads_well() {
-        let (s, b, o) = ask("GRD-142", &parse("D1", &d()).unwrap());
-        assert_eq!(s, "GRD-142 · D1 · Should retries cover 4xx?");
+        let (s, b, o) = ask("ENG-142", &parse("D1", &d()).unwrap());
+        assert_eq!(s, "ENG-142 · D1 · Should retries cover 4xx?");
         assert!(b.contains("1. 5xx and timeouts only (recommended): Safer.\n2. Every non-2xx\n\nMeanwhile: Building with 5xx only."), "{b}");
         assert_eq!(o, ["5xx and timeouts only", "Every non-2xx"]);
     }
@@ -209,5 +213,8 @@ mod tests {
         assert_eq!(read(&o, None, "Approved by the team?"), Reply { choice: None, text: "Approved by the team?".into() });
         let p: Vec<String> = ["Open", "Open PR"].iter().map(|s| s.to_string()).collect();
         assert_eq!(read(&p, None, "open pr now"), Reply { choice: Some(1), text: "now".into() });
+        // A letter whose lowercase is a different length isn't a panic.
+        let k: Vec<String> = ["İstanbul", "Paris"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(read(&k, None, "İstanbul, please").choice, Some(0));
     }
 }
