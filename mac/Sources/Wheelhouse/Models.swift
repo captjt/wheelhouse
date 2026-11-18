@@ -355,6 +355,8 @@ struct DocketPage: Hashable {
     func hash(into h: inout Hasher) { h.combine(j) }
 
     var verify: Verify { Verify(j: j["verify"]) }
+    /// What agents asked, and the answers that stand (src/decisions.rs).
+    var decisions: [JSON] { j["decisions"].array }
     var queued: [(id: Int, body: String, at: String)] { j["queued"].array.map { ($0["id"].int ?? 0, $0["body"].str ?? "", $0["at"].str ?? "") } }
 }
 

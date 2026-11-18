@@ -214,6 +214,10 @@ Deliveries that fail with a 5xx or time out are retried three times, waiting 1s,
 
 After the third failure the delivery is marked failed, and the endpoint's failure count goes up. Five in an hour pauses the endpoint.
 EOF
+# A decision in force on the hero docket: the agent asked, you answered.
+q=$(api -X POST "$base/api/messages" -d "$(jq -n '{to: "me", block: "block:webhooks", subject: "How many retries?",
+  body: "Three keeps a down endpoint to four calls a minute; five rides out longer blips. Which cap?", options: ["3", "5"]}')" | jq -r .id)
+api -X POST "$base/api/messages/$q/reply" -d '{"body": "To match the API docs.", "choice": "3"}' >/dev/null
 "$wh" attach "$demo/retry-design.md" --docket "$W" --title "Retry design" >/dev/null
 "$wh" attach https://claude.ai/artifact/demo-retry-timeline --docket "$W" --title "Retry timeline (Claude artifact)" >/dev/null
 api -X POST "$base/api/messages" -d "$(jq -n '{to: "me", block: "block:search", subject: "Reindex now or tonight?",

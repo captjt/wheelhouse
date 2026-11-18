@@ -30,6 +30,12 @@ pub fn brief(core: &Core, id: &str) -> Result<String> {
         None => out.push_str("None yet. If the work's goal is clear, write it: what must be true when it's done, and what's out of scope.\n"),
     }
     let entries = core.store.entries(id)?;
+    let read: Vec<crate::record::Entry> = entries.iter().filter_map(|s| s.entry().ok()).collect();
+    let ds = crate::decisions::of(&read);
+    if !ds.is_empty() {
+        out.push_str("\n## Decisions in force\n\nWhat you were asked, and what stands. Don't ask again; work from these.\n\n");
+        out.push_str(&crate::decisions::brief(&ds));
+    }
     let mut recent = Vec::new();
     for s in entries.iter().rev() {
         let Ok(e) = s.entry() else { continue };

@@ -283,7 +283,22 @@ export type Verify = {
   problems: string[];
 };
 
-export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify; queued?: { id: number; body: string; at: string }[] };
+/** A question an agent put to you, and the answer that stands (src/decisions.rs). */
+export type Decision = {
+  key: string;
+  question: string;
+  options: string[];
+  asked_by: string;
+  asked_at: string;
+  message?: number | null;
+  answer?: string | null;
+  note?: string | null;
+  /** `you`, an agent's app, or `stood` (the recommendation, with the plan). */
+  by?: string | null;
+  at?: string | null;
+};
+
+export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify; queued?: { id: number; body: string; at: string }[]; decisions?: Decision[] };
 
 async function handle<T>(res: Response): Promise<T> {
   const text = await res.text();

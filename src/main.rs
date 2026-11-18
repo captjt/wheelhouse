@@ -11,6 +11,7 @@ mod artifacts;
 mod brief;
 mod build;
 mod client;
+mod decisions;
 mod follow;
 mod hooks;
 mod hub;

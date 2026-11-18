@@ -177,6 +177,7 @@ struct DocketBody: View {
             BuildPanel(d: d)
             ForEach((store.state?.messages ?? []).filter { $0.docket == d.id }) { m in MessageCard(m: m) }
             IntentSection(d: d, entries: page.entries)
+            DecisionsSection(decisions: page.decisions)
             ArtifactsSection(d: d, entries: page.entries)
 
             VStack(alignment: .leading, spacing: 12) {
