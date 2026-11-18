@@ -236,3 +236,5 @@ icon!(
 icon!(INFO, "info", 16.0, r#"<g fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 7.2V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="5" r="0.85" fill="currentColor"/></g>"#);
 // lightbulb: a Tip's.
 icon!(BULB, "bulb", 16.0, r#"<g fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.6 10.2C4.6 9.4 4 8.3 4 7C4 4.8 5.8 3 8 3C10.2 3 12 4.8 12 7C12 8.3 11.4 9.4 10.4 10.2V11.5H5.6Z"/><path d="M6.2 13.5H9.8"/></g>"#);
+// pause.circle: on hold.
+icon!(PAUSE_CIRCLE, "pause-circle", 16.0, r#"<g fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="8" cy="8" r="6.2"/><path d="M6.5 5.8V10.2M9.5 5.8V10.2"/></g>"#);

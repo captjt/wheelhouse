@@ -497,6 +497,39 @@ impl Main {
         });
     }
 
+    /// Who posts a checked review. Back to the config's own mode clears the
+    /// override instead of pinning it (ReviewsScreen's Picker).
+    pub fn review_posting(&mut self, v: &str) {
+        let Some(st) = self.state() else { return };
+        let rv = st.review();
+        let c = &rv["config"];
+        let ruled = model::str_or(&c["post"], "") == "rule" || c["repo_posts"].as_object().is_some_and(|o| !o.is_empty());
+        let post = if v == "rule" || (rv["post_override"].is_string() && !ruled && model::str_or(&c["post"], "") == v) { "config" } else { v };
+        let done = match v {
+            "rule" => "Each repo posts as your rules say",
+            "auto" => "The checker posts each review",
+            _ => "You post each review",
+        };
+        self.act("review:settings", "/api/review/settings".into(), json!({ "post": post }), move |r| match r {
+            Ok(_) => (done.into(), false),
+            Err(e) => (e, true),
+        });
+    }
+
+    pub fn review_paused(&mut self, paused: bool) {
+        self.act("review:settings", "/api/review/settings".into(), json!({ "paused": paused }), move |r| match r {
+            Ok(_) => (if paused { "Reviews paused: no new rounds start" } else { "Reviews resumed" }.into(), false),
+            Err(e) => (e, true),
+        });
+    }
+
+    pub fn check_github(&mut self) {
+        self.act("review:check", "/api/review/check".into(), json!({}), |r| match r {
+            Ok(_) => ("Checking GitHub".into(), false),
+            Err(e) => (e, true),
+        });
+    }
+
     /// Build it: the docket's intent to a builder and a checker, into `repo`.
     pub fn build(&mut self, id: &str, repo: &str) {
         let (id, repo) = (id.to_string(), repo.to_string());
@@ -777,6 +810,30 @@ fn toolbar(s: &Main, state: Option<&HubState>, k: &K, kit: &rune_kit::Kit) -> To
         );
         trailing = trailing.child(widgets::segmented("layout", &[("List", !s.board()), ("Board", s.board())], |s: &mut Main, i| s.set_board(i == 1), k));
     }
+    // Reviews' own (ReviewsScreen.toolbar): who posts, pause, check GitHub now.
+    if let Some(rv) = state.map(|st| st.review()).filter(|rv| s.place == Place::Reviews && model::flag(&rv["enabled"])) {
+        let c = &rv["config"];
+        let ruled = model::str_or(&c["post"], "") == "rule" || c["repo_posts"].as_object().is_some_and(|o| !o.is_empty());
+        let posting = model::text(&rv["post_override"]).unwrap_or_else(|| if ruled { "rule".into() } else if model::str_or(&c["post"], "") == "auto" { "auto".into() } else { "ask".into() });
+        let mut segs = vec![("Ask", posting == "ask"), ("Auto", posting == "auto")];
+        if ruled {
+            segs.push(("Rules", posting == "rule"));
+        }
+        trailing = trailing.child(
+            widgets::segmented("posting", &segs, |s: &mut Main, i| s.review_posting(["ask", "auto", "rule"][i]), k)
+                .help(if ruled { "Who posts a checked review: you (Ask), the checker (Auto), or your rules, repo by repo (Rules, in Settings)" } else { "Who posts a checked review: you (Ask), or the checker (Auto)" }),
+        );
+        let paused = model::flag(&rv["paused"]);
+        trailing = trailing
+            .child(widgets::icon_button(
+                "review-pause",
+                if paused { &crate::icons::PLAY } else { &crate::icons::PAUSE },
+                if paused { "Resume: new rounds start" } else { "Pause: no new rounds start" },
+                move |s: &mut Main| s.review_paused(!paused),
+                k,
+            ))
+            .child(widgets::icon_button("review-check", &crate::icons::REFRESH, "Check GitHub for review requests now", |s: &mut Main| s.check_github(), k));
+    }
     let Some(d) = s.shown_docket().and_then(|id| state.and_then(|st| st.docket(&id).cloned())) else {
         let _ = kit;
         return Toolbar::new().leading(title).trailing(trailing);
@@ -854,13 +911,19 @@ fn content(s: &Main, st: &HubState, k: &K, kit: &rune_kit::Kit) -> El {
                 Some(id) => docket::detail(s, st, &id, k, kit),
                 None => widgets::empty(&crate::icons::TRAY, "Nothing selected", "Pick something from the list.", k),
             };
-            row()
+            let columns = row()
                 .key("columns")
                 .w_full()
-                .h_full()
+                .grow(1.0)
+                .min_h(0.0)
                 .child(col().key("list-column").w(360.0).h_full().min_h(0.0).child(list))
                 .child(el().w(1.0).h_full().fill(k.line).a11y_hidden())
-                .child(col().key("detail-column").grow(1.0).min_w(0.0).h_full().min_h(0.0).child(detail))
+                .child(col().key("detail-column").grow(1.0).min_w(0.0).h_full().min_h(0.0).child(detail));
+            // Reviews' status runs across both, as ReviewsBar does.
+            match lists::reviews_bar(st, k).filter(|_| s.place == Place::Reviews) {
+                Some(bar) => col().w_full().h_full().child(bar).child(columns),
+                None => columns.h_full(),
+            }
         }
     }
 }

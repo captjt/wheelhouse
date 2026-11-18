@@ -447,22 +447,6 @@ fn reviews(s: &Main, st: &HubState, k: &K) -> El {
         return widgets::empty(&icons::PULL, "No reviews asked of you", "Each PR that requests your review, in the repos review.lua lists, shows up here.", k);
     }
     let paused = model::flag(&rv["paused"]);
-    let c = &rv["config"];
-    let mut bits = vec![theme::chip(if paused { "Paused" } else { "On" }, if paused { k.blocked } else { k.working }, false)];
-    let scan = model::text(&rv["last_scan_at"]);
-    bits.push(
-        text(match scan.as_deref() {
-            None => "Not checked GitHub yet".to_string(),
-            Some(t) if model::ago(Some(t)) == "now" => "Checked GitHub just now".to_string(),
-            Some(t) => format!("Checked GitHub {} ago", model::ago(Some(t))),
-        })
-        .font(font(12.0, 400.0).lh(15.0))
-        .color(k.muted),
-    );
-    if c.is_object() {
-        let reviewers: Vec<String> = model::arr(&c["reviewers"]).iter().filter_map(|r| model::text(&r["name"])).collect();
-        bits.push(text(format!("{} → checker {}", reviewers.join(", "), model::str_or(&c["checker"], ""))).font(font(12.0, 400.0).lh(15.0)).color(k.muted).truncate().shrink());
-    }
     let sel = selected_id(s, st);
     let mut rows = col().role("listbox").label("Reviews").gap(1.0);
     for (key, label, live, items) in groups {
@@ -476,7 +460,48 @@ fn reviews(s: &Main, st: &HubState, k: &K) -> El {
             }
         }
     }
-    col().w_full().h_full().child(bar(bits, k)).child(scroll("review-list", rows, k))
+    scroll("review-list", rows, k)
+}
+
+/// Over Reviews, across its list and its docket (ReviewsBar): on or paused,
+/// GitHub's last check, who reviews and checks, how many at once, the repos.
+pub fn reviews_bar(st: &HubState, k: &K) -> Option<El> {
+    let rv = st.review();
+    if !model::flag(&rv["enabled"]) || review_groups(st).is_empty() {
+        return None;
+    }
+    let paused = model::flag(&rv["paused"]);
+    let c = &rv["config"];
+    let muted = |t: String| text(t).font(font(12.0, 400.0).lh(15.0)).color(k.muted);
+    let dot = || text("·").font(font(12.0, 400.0).lh(15.0)).color(k.faint);
+    let mut bits = vec![theme::chip(if paused { "Paused" } else { "On" }, if paused { k.blocked } else { k.working }, false)];
+    bits.push(if let Some(doing) = model::text(&rv["doing"]) {
+        text(format!("{doing}…")).font(font(12.0, 400.0).lh(15.0)).color(k.text2)
+    } else if let Some(e) = model::text(&rv["scan_error"]) {
+        text(format!("GitHub: {e}")).font(font(12.0, 400.0).lh(15.0)).color(k.error)
+    } else {
+        muted(match model::text(&rv["last_scan_at"]).as_deref() {
+            None => "Not checked GitHub yet".to_string(),
+            Some(t) if model::ago(Some(t)) == "now" => "Checked GitHub just now".to_string(),
+            Some(t) => format!("Checked GitHub {} ago", model::ago(Some(t))),
+        })
+    });
+    if c.is_object() {
+        let reviewers: Vec<String> = model::arr(&c["reviewers"]).iter().filter_map(|r| model::text(&r["name"])).collect();
+        let repos = model::arr(&c["repos"]).len();
+        bits.extend([
+            dot(),
+            muted(format!("{} → checker {}", reviewers.join(", "), model::str_or(&c["checker"], ""))),
+            dot(),
+            muted(format!("up to {} at once", model::int(&c["max_rounds"]).unwrap_or(0))),
+            dot(),
+            muted(model::plural(repos, "repo")),
+        ]);
+    }
+    if let Some(e) = model::text(&rv["config_error"]) {
+        bits.push(text(format!("Config: {e}")).font(font(12.0, 400.0).lh(15.0)).color(k.error));
+    }
+    Some(bar(bits, k))
 }
 
 pub fn review_live(p: &ReviewPr) -> LiveState {
@@ -490,30 +515,16 @@ pub fn review_live(p: &ReviewPr) -> LiveState {
     }
 }
 
-pub fn phase_text(p: &ReviewPr, paused: bool) -> String {
-    match (p.state().as_str(), p.phase().as_deref()) {
-        ("queued", _) if paused => "Queued: reviews are paused".into(),
-        ("queued", _) => "Queued: starts when a slot frees".into(),
-        ("reviewing", Some("reviewers")) => format!("Reviewers {}/{}", p.reviewers_done(), p.reviewers_total()),
-        ("reviewing", Some("checker")) => "The checker is merging the drafts".into(),
-        ("reviewing", Some("awaiting")) => "Checked: ready to post".into(),
-        ("reviewing", Some(ph)) => ph.replace('_', " "),
-        (s, _) => s.replace('_', " "),
-    }
-}
 
+/// VerdictChip: GitHub's word, green when approved, red when changes are
+/// requested, grey otherwise (a reviewer's own word, lowercased).
 fn verdict_chip(v: &str, k: &K) -> El {
-    let l = v.to_lowercase();
-    let c = if l.contains("approve") {
-        k.working
-    } else if l.contains("request") || l.contains("changes") {
-        k.error
-    } else {
-        k.muted
+    let c = match v {
+        "APPROVED" => k.working,
+        "CHANGES_REQUESTED" => k.error,
+        _ => k.muted,
     };
-    let label = l.replace('_', " ");
-    let mut cs = label.chars();
-    theme::chip(&cs.next().map(|f| f.to_uppercase().collect::<String>() + cs.as_str()).unwrap_or_default(), c, false)
+    theme::chip(&super::parts::verdict_word(v), c, false)
 }
 
 fn review_row(s: &Main, p: &ReviewPr, paused: bool, k: &K) -> El {
@@ -552,7 +563,7 @@ fn review_row(s: &Main, p: &ReviewPr, paused: bool, k: &K) -> El {
             body = body.child(review_actions(s, p, k));
         }
     } else if matches!(p.state().as_str(), "reviewing" | "queued") {
-        body = body.child(text(phase_text(p, paused)).font(font(11.5, 400.0).lh(14.0)).color(k.text2));
+        body = body.child(text(super::panels::phase_text(p, paused)).font(font(11.5, 400.0).lh(14.0)).color(k.text2));
     }
     row().w_full().gap(9.0).child(el().pt(1.5).child(theme::live_icon(Some(review_live(p)), 14.0, k))).child(body)
 }

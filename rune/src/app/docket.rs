@@ -2,7 +2,7 @@
 //! intent, decisions, Verify, kept files, activity and the composer; the
 //! inspector beside it; and the sheets it opens.
 
-use rune::{Color, El, ScrollSpec, col, icon, row, spacer, text, text_input};
+use rune::{El, ScrollSpec, col, icon, row, spacer, text, text_input};
 use rune_kit::{Kit, ScrollBar};
 
 use super::{Main, Place, Sheet, activity, chat, forms, lists, panels, parts, record, shortcuts, verify, widgets};
@@ -50,6 +50,16 @@ pub fn detail(s: &Main, st: &HubState, id: &str, k: &K, kit: &Kit) -> El {
     // an agent's ask.
     if let Some(l) = d.live().filter(|l| l.state() == LiveState::Blocked) {
         c = c.child(prompt_callout(s, d, &l, k));
+    }
+    // It failed: what it said (Callout(tone: .error)).
+    if let Some(l) = d.live().filter(|l| l.state() == LiveState::Error) {
+        let mut body = col().gap(4.0).grow(1.0).min_w(0.0).child(
+            text(format!("{} failed", model::app_name(d.agent_app().as_deref()))).font(font(13.0, 600.0).lh(16.0)).color(k.text),
+        );
+        if let Some(m) = l.msg() {
+            body = body.child(text(m).font(font(12.5, 400.0).lh(17.0)).color(k.text2).wrap().selectable(true));
+        }
+        c = c.child(row().key("failed").w_full().padding(14.0).radius(10.0).fill(k.danger_tint).border(1.0, k.error.alpha(0.25)).child(body));
     }
     if let Some(p) = panels::review(s, st, d, k, kit) {
         c = c.child(p);
@@ -101,8 +111,32 @@ fn header(s: &Main, d: &Docket, k: &K) -> El {
     if let Some(l) = d.live() {
         chips = chips.child(theme::mark_chip(theme::live_icon(Some(l.state()), 12.0, k), l.state().word(), k.live(Some(l.state())), k));
     }
+    // A Review's PR, the Linear issues, Building, as Chips does.
+    let pressable = |chip: El, key: String, url: Option<String>| -> El {
+        match url {
+            Some(u) => chip.key(key).role("link").on_press_tx(move |_: &mut Main, tx| {
+                let _ = tx.open_url(&u);
+            }),
+            None => chip.key(key),
+        }
+    };
+    if let Some(key) = model::text(&d.j["review"]["key"]) {
+        chips = chips.child(pressable(theme::mark_chip(icon(&icons::PULL, 11.0).color(k.text2), &key, k.text2, k), "chip-pr".into(), model::text(&d.j["review"]["url"])));
+    }
+    let linear: Vec<&serde_json::Value> = std::iter::once(&d.j["linear"]).filter(|l| l.is_object()).chain(model::arr(&d.j["linear_also"]).iter()).collect();
+    for l in linear {
+        let key = model::text(&l["key"]).or_else(|| model::text(&l["identifier"])).unwrap_or_default();
+        let chip = theme::mark_chip(icon(&icons::LINEAR, 11.0).color(k.text2), &key, k.text2, k).help(model::text(&l["title"]).unwrap_or_else(|| key.clone()));
+        chips = chips.child(pressable(chip, format!("chip-{key}"), model::text(&l["url"])));
+    }
+    if s.state().is_some_and(|st| st.task_for(&d.id()).is_some()) {
+        chips = chips.child(theme::mark_chip(icon(&icons::HAMMER, 11.0).color(k.text2), "Building", k.text2, k));
+    }
     if let Some(why) = d.hold() {
-        chips = chips.child(theme::chip(&format!("On hold: {why}"), k.blocked, false));
+        chips = chips.child(theme::mark_chip(icon(&icons::PAUSE, 11.0).color(k.blocked), "On hold", k.blocked, k).help(why));
+    }
+    if let Some(why) = model::text(&d.j["closed_on"]).filter(|_| d.status() == Status::Done) {
+        chips = chips.child(theme::mark_chip(icon(&icons::QUOTE, 11.0).color(k.text2), "On your word", k.text2, k).help(format!("Closed on your word: {why}")));
     }
     let mut c = col().w_full().gap(8.0);
     if embedded {
@@ -209,12 +243,30 @@ fn intent(s: &Main, d: &Docket, page: Option<&DocketPage>, k: &K, kit: &Kit) -> 
     );
     let content = match body {
         Some(b) => intent_markdown(&id, &b, k, kit),
-        None => row().w_full().padding(14.0).radius(8.0).border(1.0, k.line2).child(
-            text("Write the intent: what this docket is for, how you'll know it's done, and what's out of scope. Agents read it with `wh brief`.")
-                .font(font(13.0, 400.0).lh(18.0))
-                .color(k.muted)
-                .wrap(),
-        ),
+        // Intent.swift's empty state: a dashed box that opens the editor.
+        None => col()
+            .key("intent-empty")
+            .w_full()
+            .padding(14.0)
+            .radius(10.0)
+            .border(1.0, k.line2)
+            .border_dash(4.0, 3.0)
+            .role("button")
+            .label("Write the intent")
+            .on_press(|s: &mut Main| {
+                let mut e = rune::TextEdit::new("");
+                e.focused = true;
+                s.intent_edit = Some(e);
+            })
+            .child(
+                parts::Rich::new()
+                    .push("Write the intent: ", |sp| sp.color(k.muted).weight(700.0))
+                    .md("what this docket is for, how you'll know it's done, and what's out of scope. Agents read it with `wh brief`.", k.muted)
+                    .el()
+                    .font(font(12.5, 400.0).lh(17.0))
+                    .wrap()
+                    .w_full(),
+            ),
     };
     col().w_full().gap(8.0).child(head).child(content)
 }
@@ -324,9 +376,9 @@ fn composer(s: &Main, d: &Docket, to_agent: bool, k: &K) -> El {
         row()
             .w_full()
             .center_y()
-            .child(text(if to_agent { "Sent through Rex, and kept on the record." } else { "Signed as you, on the record." }).font(font(11.5, 400.0).lh(15.0)).color(k.faint))
+            .child(text(if to_agent { "Sent through Rex, and kept on the record." } else { "Signed as you" }).font(font(11.5, 400.0).lh(15.0)).color(k.faint))
             .child(spacer())
-            .child(widgets::button("composer-send", if to_agent { "Send" } else { "Note" }, true, ready, k, move |s: &mut Main, _| if to_agent { s.send(&b) } else { s.note(&b) })),
+            .child(widgets::button("composer-send", if to_agent { "Send  ⌘↩" } else { "Note  ⌘↩" }, true, ready, k, move |s: &mut Main, _| if to_agent { s.send(&b) } else { s.note(&b) })),
     )
 }
 
@@ -376,7 +428,17 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
             line.push_str(&format!(" · {}", v.replace('_', " ").to_lowercase()));
         }
         let url = model::text(&r["url"]);
-        c = c.child(widgets::field("Review", link("inspector-review", &line, Box::new(move |_, tx| if let Some(u) = &url { let _ = tx.open_url(u); })), k));
+        let review = row()
+            .key("inspector-review")
+            .role("link")
+            .label(line.clone())
+            .on_press_tx(move |_: &mut Main, tx| {
+                if let Some(u) = &url {
+                    let _ = tx.open_url(u);
+                }
+            })
+            .child(text(line).font(font(12.5, 400.0).lh(16.0)).color(k.accent).wrap().grow(1.0).min_w(0.0));
+        c = c.child(widgets::field("Review", review, k));
     }
     if proto != "review" {
         let build = if let Some(t) = task {
@@ -595,70 +657,58 @@ pub fn sheet(s: &Main, sheet: &Sheet, k: &K, kit: &Kit) -> El {
         Sheet::Pane(id) => return parts::scrim(chat::pane_sheet(s, id, k, kit), k),
         Sheet::Preview(full) => return parts::scrim(panels::preview_sheet(s, full, k, kit), k),
     };
-    col()
-        .key("sheet-scrim")
-        .raise()
-        .absolute(0.0, 0.0)
-        .w_full()
-        .h_full()
-        .fill(Color::BLACK.alpha(if k.dark { 0.45 } else { 0.18 }))
-        .items_center()
-        .pt(60.0)
-        .modal(true, |s: &mut Main| s.sheet = None)
-        .child(card)
-}
-
-fn sheet_card(title: &str, body: El, k: &K) -> El {
-    col()
-        .key("sheet")
-        .w(560.0)
-        .max_h(640.0)
-        .radius(12.0)
-        .continuous_corners()
-        .fill(if k.dark { theme::hex("#1f1f21") } else { Color::WHITE })
-        .border(1.0, k.line2)
-        .box_shadow(rune::Shadow::core_animation(0.0, 12.0, 28.0, Color::BLACK.alpha(0.3)))
-        .role("dialog")
-        .label(title.to_string())
-        .child(row().w_full().px(18.0).py(14.0).child(text(title.to_string()).font(font(14.0, 600.0).lh(18.0)).color(k.text)))
-        .child(theme::hairline(k))
-        .child(body)
+    parts::scrim(card, k)
 }
 
 fn hold_sheet(s: &Main, id: &str, k: &K) -> El {
     let a = id.to_string();
+    let title = s.state().and_then(|st| st.docket(id).map(|d| d.title())).unwrap_or_default();
     let field = text_input(&s.hold_why, font(13.0, 400.0).lh(18.0))
         .key("hold-why")
-        .single_line()
         .w_full()
+        .min_h(36.0)
+        .max_h(72.0)
         .color(k.text)
-        .placeholder("Why? (optional: Build and Review read it)", k.muted)
+        .placeholder("Why? It goes on the record, and on the docket.", k.muted)
         .label("Why it's on hold")
         .on_edit(|s: &mut Main| &mut s.hold_why)
         .on_submit({
             let a = a.clone();
             move |s: &mut Main, _| s.hold(&a)
         });
+    let busy = s.busy.contains(&format!("hold:{id}"));
     let body = col()
-        .w_full()
-        .padding(18.0)
-        .gap(12.0)
+        .w(460.0)
+        .padding(20.0)
+        .gap(14.0)
         .child(
-            text("On hold, Build and Review take no steps on it, and it shows in the Inbox's Attention until you resume it.")
+            row()
+                .gap(12.0)
+                .child(icon(&icons::PAUSE_CIRCLE, 26.0).color(k.blocked))
+                .child(
+                    col()
+                        .gap(4.0)
+                        .min_w(0.0)
+                        .child(text(format!("Hold {id}")).font(font(14.0, 600.0).lh(18.0)).color(k.text).role("heading").level(2))
+                        .child(text(title).font(font(12.5, 400.0).lh(16.0)).color(k.muted).truncate()),
+                ),
+        )
+        .child(
+            text("Build and Review take no steps on it, polls included, until you resume it. Agents in its panes carry on.")
                 .font(font(12.5, 400.0).lh(17.0))
-                .color(k.muted)
+                .color(k.text2)
                 .wrap(),
         )
-        .child(row().w_full().px(10.0).py(7.0).radius(7.0).fill(k.recessed).border(1.0, k.line2).child(field))
+        .child(row().w_full().px(8.0).py(6.0).radius(6.0).fill(k.elev).border(1.0, k.line2).child(field))
         .child(row().w_full().gap(8.0).child(spacer()).child(widgets::button("hold-cancel", "Cancel", false, true, k, |s: &mut Main, _| s.sheet = None)).child(widgets::button(
             "hold-go",
-            "Hold",
+            if busy { "Holding…" } else { "Hold" },
             true,
-            true,
+            !busy,
             k,
             move |s: &mut Main, _| s.hold(&a),
         )));
-    sheet_card(&format!("Hold {id}"), body, k)
+    parts::sheet_card(&format!("Hold {id}"), 460.0, None, k).child(body)
 }
 
 #[cfg(test)]
