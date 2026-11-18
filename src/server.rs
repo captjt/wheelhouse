@@ -296,6 +296,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         "build": build,
         "messages": messages,
         "owner": core.owner,
+        "flavor": flavor(),
         "hooks": crate::hooks::claude_installed(),
         "linear": core.linear_ready,
         "rex": { "connected": core.mirror.connected, "error": core.mirror.error },
@@ -306,12 +307,23 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
     })))
 }
 
+/// Which hub this is: null for the daily one; for a second one (`WH_FLAVOR`,
+/// Wheelhouse Dev's `dev`), its name and the build it runs, which its apps
+/// show on a DEV badge.
+pub fn flavor() -> Value {
+    match std::env::var("WH_FLAVOR").ok().map(|f| f.trim().to_string()).filter(|f| !f.is_empty()) {
+        Some(name) => json!({ "name": name, "commit": env!("WH_COMMIT"), "branch": env!("WH_BRANCH") }),
+        None => Value::Null,
+    }
+}
+
 async fn status(State(shared): State<Shared>) -> ApiResult {
     let core = shared.lock();
     let dockets = core.store.states().map_err(internal)?;
     Ok(Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "commit": env!("WH_COMMIT"),
+        "flavor": flavor(),
         "pid": std::process::id(),
         "uptime_secs": core.started.elapsed().as_secs(),
         "rex": { "connected": core.mirror.connected, "error": core.mirror.error },

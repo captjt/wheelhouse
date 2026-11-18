@@ -142,6 +142,9 @@ struct Sidebar: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) { SidebarFoot() }
         .toolbar {
+            if Flavor.isDev {
+                ToolbarItem(placement: .navigation) { DevBadge() }
+            }
             ToolbarItem {
                 Button { nav.palette = true } label: { Label("Search", systemImage: "magnifyingglass") }
                     .help("Search dockets and commands (⌘K)")
@@ -168,6 +171,13 @@ struct SidebarFoot: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Which Wheelhouse, and the build: Dev's is a nightly's foot.
+            if Flavor.isDev {
+                HStack(spacing: 6) {
+                    DevBadge()
+                    Text(Flavor.build ?? "Wheelhouse Dev").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+            }
             if let s = store.state {
                 if !s.hooks { hint("Hooks off", "wh hooks install", "Claude Code's hooks are off, so dockets are named after their panes and turns carry no message.", symbol: "link") }
                 if !s.linear { hint("Linear off", "wh setup-linear", "Connect Linear to start dockets from issues and link issues to dockets.", symbol: "circle.hexagongrid") }
@@ -230,7 +240,9 @@ struct HubDownView: View {
         ContentUnavailableView {
             Label("The hub isn't running", systemImage: "bolt.horizontal.circle")
         } description: {
-            Text("Wheelhouse.app shows what the hub (wh serve) keeps. Start it here, or with `wh up` in a terminal. It runs at login from then on.")
+            Text(Flavor.isDev
+                ? "Wheelhouse Dev shows what its own hub keeps: a copy of your dockets. Start it here, or with `wh-dev up` in a terminal. It runs at login from then on."
+                : "Wheelhouse.app shows what the hub (wh serve) keeps. Start it here, or with `wh up` in a terminal. It runs at login from then on.")
         } actions: {
             Button(store.startingHub ? "Starting…" : "Start the hub") { store.startHub() }
                 .buttonStyle(.borderedProminent)

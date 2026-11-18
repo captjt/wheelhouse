@@ -53,8 +53,11 @@ runs the hub at login, and installs the agents' hooks and skill.
 everyday Wheelhouse, as a second one that never meets it: `wh-dev`, its hub
 on :7600 with its own state (`~/.local/state/wheelhouse-dev`), config,
 socket and LaunchAgent (`dev.wheelhouse.hub.dev`), and Wheelhouse Dev.app
-(`dev.wheelhouse.app.dev`, `wheelhouse-dev://`, ⇧⌥⌘K, a blue icon and DEV in
-the menu bar). It shows a copy of your dockets with nothing live: Rex, gh,
+(`dev.wheelhouse.app.dev`, `wheelhouse-dev://`, ⇧⌥⌘K). It looks like a
+nightly: a blue brand where the daily one is orange, a DEV icon, and DEV
+badges with the branch and commit it was built from, in the menu bar, the
+window, the quick panel and the web app it serves (the hub's `flavor`, from
+`WH_FLAVOR`). It shows a copy of your dockets with nothing live: Rex, gh,
 Linear, Tailscale and notifications are off, Review and Build are paused on
 stand-in configs, and the agents' hooks stay with your everyday hub. Run it
 again after a change to update it; `just dev-sync` copies your dockets in

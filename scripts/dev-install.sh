@@ -118,6 +118,7 @@ cat >"$wrapper" <<EOF
 # socket, port and LaunchAgent, beside the daily hub and never on it. Nothing
 # live: Rex, gh, Linear, Tailscale and notifications are off.
 export WH_LABEL=$label
+export WH_FLAVOR=dev
 export WH_STATE="$state"
 export WH_SOCKET="$state/wh.sock"
 export WH_HTTP=127.0.0.1:$port

@@ -108,8 +108,9 @@ pub fn up() -> Result<()> {
     // SHELL too: agents get your interactive shell's PATH, from the shell you use.
     // And what makes a second hub one: its label, config and what it leaves alone.
     for var in [
-        "WH_STATE", "WH_SOCKET", "WH_HTTP", "WH_TAILNET", "WH_REX", "WH_OWNER", "WH_LABEL", "WH_CONFIG", "WH_SETTINGS", "WH_NOTIFY", "WH_LINEAR_OFF", "WH_REVIEW_CONFIG",
-        "WH_BUILD_CONFIG", "WH_REVIEW_DATA", "WH_BUILD_DATA", "WH_REVIEW_CACHE", "WH_REVIEW_SESSION", "WH_BUILD_SESSION", "WH_GH", "WH_TAILSCALE", "USER", "HOME", "SHELL",
+        "WH_STATE", "WH_SOCKET", "WH_HTTP", "WH_TAILNET", "WH_REX", "WH_OWNER", "WH_LABEL", "WH_FLAVOR", "WH_CONFIG", "WH_SETTINGS", "WH_NOTIFY", "WH_LINEAR_OFF",
+        "WH_REVIEW_CONFIG", "WH_BUILD_CONFIG", "WH_REVIEW_DATA", "WH_BUILD_DATA", "WH_REVIEW_CACHE", "WH_REVIEW_SESSION", "WH_BUILD_SESSION", "WH_GH", "WH_TAILSCALE", "USER",
+        "HOME", "SHELL",
     ] {
         if let Ok(v) = std::env::var(var) {
             env.push_str(&format!("    <key>{var}</key><string>{}</string>\n", xml(&v)));

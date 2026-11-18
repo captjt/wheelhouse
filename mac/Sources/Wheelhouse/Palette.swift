@@ -144,6 +144,7 @@ struct PaletteOverlay: View {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     if floating {
                         Logo().frame(width: 16, height: 16)
+                        DevBadge()
                     } else if let id = nav.current {
                         Text(id).font(.system(size: 11.5, design: .monospaced)).padding(.horizontal, 6).padding(.vertical, 2).background(K.recessed, in: Capsule())
                     }

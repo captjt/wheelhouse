@@ -65,7 +65,9 @@ private struct Opener: ViewModifier {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
-        Notifier.shared.setUp()
+        // Snapshots post nothing, so they never ask for notifications (a first
+        // launch's prompt, on someone's screen).
+        if Snapshot.requested == nil { Notifier.shared.setUp() }
         MarkdownKeys.install()
         if Snapshot.requested == nil { QuickPanel.apply() }
         Store.shared.start()
