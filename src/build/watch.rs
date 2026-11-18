@@ -96,6 +96,11 @@ async fn advance(shared: &Shared, cfg: &super::config::Config, poll: bool) {
         let lock = super::lock(shared, &t.docket);
         let _g = lock.lock().await;
         let Ok(Some(mut t)) = super::get(&shared.lock(), &t.docket) else { continue };
+        // On hold: no steps, no polls, until you resume it.
+        let held = shared.lock().store.state(&t.docket).ok().flatten().is_some_and(|s| s.hold.is_some());
+        if held {
+            continue;
+        }
         let before = serde_json::to_value(&t).ok();
         let res: anyhow::Result<Option<Attention>> = match t.state.as_str() {
             "queued" => {

@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-const BUILT_IN: [(&str, &str); 14] = [
+pub(crate) const BUILT_IN: [(&str, &str); 14] = [
     ("ground-rules.md", include_str!("../../briefs/review/ground-rules.md")),
     ("round-1.md", include_str!("../../briefs/review/round-1.md")),
     ("round-n.md", include_str!("../../briefs/review/round-n.md")),
@@ -19,9 +19,6 @@ const BUILT_IN: [(&str, &str); 14] = [
     ("parts/review-default.md", include_str!("../../briefs/review/parts/review-default.md")),
     ("review-draft.md", include_str!("../../briefs/review/review-draft.md")),
 ];
-
-pub const REVIEW_STYLE: &str = include_str!("../../guides/review-style.md");
-pub const MERGE_RISK: &str = include_str!("../../guides/merge-risk.md");
 
 pub fn brief(name: &str) -> String {
     let home = crate::paths::home();

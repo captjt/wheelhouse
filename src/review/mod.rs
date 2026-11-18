@@ -93,8 +93,8 @@ fn written(name: &str, text: &str) -> PathBuf {
 /// A bundled guide, written where agents can read it.
 pub fn bundled_guide(slot: &str) -> Option<PathBuf> {
     match slot {
-        "style" => Some(written("guides/review-style.md", briefs::REVIEW_STYLE)),
-        "merge_risk" => Some(written("guides/merge-risk.md", briefs::MERGE_RISK)),
+        "style" => Some(written("guides/review-style.md", &crate::settings::guide_text("review-style.md"))),
+        "merge_risk" => Some(written("guides/merge-risk.md", &crate::settings::guide_text("merge-risk.md"))),
         _ => None,
     }
 }
@@ -115,7 +115,7 @@ pub struct Attention {
 
 #[derive(Default)]
 pub struct Hub {
-    config: Option<(Arc<Config>, Option<std::time::SystemTime>)>,
+    pub(crate) config: Option<(Arc<Config>, Option<std::time::SystemTime>)>,
     pub config_error: Option<String>,
     pub attention: BTreeMap<String, Attention>,
     pub check_now: Arc<tokio::sync::Notify>,
@@ -149,7 +149,7 @@ pub fn post_mode(core: &Core, cfg: &Config) -> String {
 /// The config, read again when its file changes.
 pub fn config(shared: &Shared) -> Result<Arc<Config>> {
     let path = config::path();
-    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok().max(crate::settings::mtime());
     if let Some((c, m)) = &shared.lock().review.config
         && *m == mtime
         && c.path == path

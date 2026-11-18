@@ -43,6 +43,8 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/note", post(note))
         .route("/api/dockets/{id}/set", post(set))
         .route("/api/dockets/{id}/open", post(open_in_rex))
+        .route("/api/dockets/{id}/hold", post(hold))
+        .route("/api/dockets/{id}/check", post(run_checks))
         .route("/api/dockets/{id}/screen", get(screen))
         .route("/api/dockets/{id}/send", post(send))
         .route("/api/dockets/{id}/queue/{q}/cancel", post(unqueue))
@@ -83,6 +85,9 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/review/check", post(review_check))
         .route("/api/import/rex-reviewer", post(import_rex_reviewer))
         .route("/api/review/settings", post(review_settings))
+        .route("/api/settings", get(settings_view).post(settings_change))
+        .route("/api/settings/doc", get(settings_doc).post(settings_doc_save))
+        .route("/api/settings/doc/reset", post(settings_doc_reset))
         .route("/api/review/pickup", post(review_pickup))
         .route("/api/review/preview", post(review_native_preview))
         .route("/api/review/post", post(review_native_post))
@@ -295,6 +300,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         "dockets": dockets,
         "asks": asks,
         "agents": agents_now,
+        "attention": crate::evidence::attention(&core, &core.store.states().map_err(internal)?),
     })))
 }
 
@@ -340,7 +346,9 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
     let report = core.verify(&id).map_err(internal)?;
     let queued: Vec<Value> = core.store.queued_prompts(Some(&id)).map_err(internal)?.into_iter().map(|(q, _, _, body, at)| json!({ "id": q, "body": body, "at": at })).collect();
     let decisions: Vec<Value> = crate::decisions::of(&read).iter().map(crate::decisions::Decision::json).collect();
-    Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions })))
+    let numbered: Vec<(i64, record::Entry)> = entries.iter().filter_map(|v| v["seq"].as_i64()).zip(read.iter().cloned()).collect();
+    let verify_view = crate::evidence::view(&core, &st, &numbered);
+    Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions, "evidence": verify_view })))
 }
 
 #[derive(Deserialize)]
@@ -391,6 +399,12 @@ struct Set {
     title: Option<String>,
     #[serde(default)]
     status: Option<String>,
+    /// Close it with nothing witnessed or checkable behind it: on your
+    /// word, with why.
+    #[serde(default)]
+    anyway: bool,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 async fn set(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<Set>) -> ApiResult {
@@ -409,11 +423,66 @@ async fn set(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Js
         return Err(fail(StatusCode::BAD_REQUEST, "nothing to set"));
     }
     let mut core = shared.lock();
-    if core.store.state(&id).map_err(internal)?.is_none() {
-        return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
+    let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+    // The rule for done: a docket with acceptance items isn't closed on what
+    // was said. It needs something witnessed or checkable, or your word.
+    if req.status.as_deref() == Some("done") && st.status != "done" && crate::evidence::needs(&st) {
+        let entries: Vec<(i64, record::Entry)> = core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+        if crate::evidence::of(&st, &entries).is_empty() {
+            if !req.anyway {
+                return Err(fail(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "{id} has acceptance items, and nothing witnessed or checkable says they're met: no passing checks, no merged PR. Run its checks (wh check {id}), or close it on your word (--anyway, with a reason)"
+                    ),
+                ));
+            }
+            data["on"] = json!("word");
+            data["reason"] = json!(req.reason.as_deref().map(str::trim).filter(|r| !r.is_empty()).unwrap_or("closed on your word"));
+        }
     }
-    let s = core.append(&id, "set", &Who::Owner, None, data).map_err(internal)?;
+    let s = core.append(&id, "set", &Who::Owner, req.reason.clone().filter(|_| data["on"] == "word"), data).map_err(internal)?;
     Ok(Json(json!({ "seq": s.seq })))
+}
+
+#[derive(Deserialize)]
+struct Hold {
+    #[serde(default)]
+    reason: Option<String>,
+    /// Resume it.
+    #[serde(default)]
+    off: bool,
+}
+
+/// Hold a docket (its protocol takes no steps), or resume it.
+async fn hold(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<Hold>) -> ApiResult {
+    let mut core = shared.lock();
+    let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+    let data = if req.off {
+        if st.hold.is_none() {
+            return Err(fail(StatusCode::CONFLICT, format!("{id} isn't on hold")));
+        }
+        json!({ "hold": null })
+    } else {
+        json!({ "hold": req.reason.as_deref().map(str::trim).filter(|r| !r.is_empty()).unwrap_or("held") })
+    };
+    let s = core.append(&id, "set", &Who::Owner, None, data).map_err(internal)?;
+    core.build.check_now.notify_one();
+    Ok(Json(json!({ "seq": s.seq })))
+}
+
+/// Run a docket's witnessed checks now; the entries say how they went.
+async fn run_checks(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let t = crate::checks::target(&shared, &id).map_err(bad)?;
+    if t.specs.is_empty() {
+        return Err(fail(StatusCode::CONFLICT, format!("{} has no checks: add them to its table in build.lua (checks = {{ test = \"…\" }})", t.repo)));
+    }
+    if crate::checks::running(&id) {
+        return Err(fail(StatusCode::CONFLICT, format!("{id}'s checks are already running")));
+    }
+    let names: Vec<String> = t.specs.iter().map(|s| s.name.clone()).collect();
+    let run = crate::checks::spawn(&shared, &id, t, "asked");
+    Ok(Json(json!({ "run": run, "checks": names })))
 }
 
 async fn open_in_rex(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
@@ -999,6 +1068,60 @@ async fn review_settings(State(shared): State<Shared>, Json(req): Json<ReviewSet
     core.live_changed();
     drop(core);
     Ok(Json(crate::review::watch::status(&shared)))
+}
+
+// ---- Settings ----
+
+fn settings_now(shared: &Shared) -> Value {
+    let b = crate::build::config(shared).map_err(|e| format!("{e:#}"));
+    let r = crate::review::config(shared).map_err(|e| format!("{e:#}"));
+    let core = shared.lock();
+    crate::settings::view(&core, b, r)
+}
+
+async fn settings_view(State(shared): State<Shared>) -> ApiResult {
+    Ok(Json(settings_now(&shared)))
+}
+
+/// Change settings: `{ "build": {…}, "review": {…} }`, laid over what's
+/// set, as build.lua and review.lua are shaped. `null` removes a value.
+async fn settings_change(State(shared): State<Shared>, Json(patch): Json<Value>) -> ApiResult {
+    crate::settings::change(&patch).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
+    {
+        let mut core = shared.lock();
+        core.build.config = None;
+        core.review.config = None;
+        core.build.check_now.notify_one();
+        core.review.check_now.notify_one();
+        core.live_changed();
+    }
+    Ok(Json(settings_now(&shared)))
+}
+
+#[derive(Deserialize)]
+struct DocQ {
+    id: String,
+}
+
+async fn settings_doc(axum::extract::Query(q): axum::extract::Query<DocQ>) -> ApiResult {
+    let d = crate::settings::doc(&q.id).map_err(|e| fail(StatusCode::NOT_FOUND, format!("{e:#}")))?;
+    Ok(Json(d.json(true)))
+}
+
+#[derive(Deserialize)]
+struct DocSave {
+    id: String,
+    text: String,
+}
+
+async fn settings_doc_save(Json(req): Json<DocSave>) -> ApiResult {
+    let d = crate::settings::save_doc(&req.id, &req.text).map_err(bad)?;
+    Ok(Json(d.json(true)))
+}
+
+async fn settings_doc_reset(Json(q): Json<DocQ>) -> ApiResult {
+    crate::settings::reset_doc(&q.id).map_err(bad)?;
+    Ok(Json(crate::settings::doc(&q.id).map(|d| d.json(true)).unwrap_or_else(|_| json!({ "id": q.id, "removed": true }))))
 }
 
 #[derive(Deserialize)]

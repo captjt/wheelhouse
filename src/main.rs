@@ -14,8 +14,10 @@ mod approve;
 mod artifacts;
 mod brief;
 mod build;
+mod checks;
 mod client;
 mod decisions;
+mod evidence;
 mod follow;
 mod hooks;
 mod hub;
@@ -32,6 +34,7 @@ mod review;
 mod rex;
 mod server;
 mod service;
+mod settings;
 mod start;
 mod store;
 mod tailnet;
@@ -187,13 +190,38 @@ enum Cmd {
         docket: Option<String>,
     },
     /// Rename a docket, or set its status (todo, in_progress, done, dropped).
+    /// A docket with acceptance items closes on evidence (a passing check,
+    /// a merged PR), or on your word: --anyway --reason "…".
     Set {
         docket: String,
         #[arg(long)]
         title: Option<String>,
         #[arg(long)]
         status: Option<String>,
+        /// Close it without evidence, on your word (the record says so).
+        #[arg(long)]
+        anyway: bool,
+        #[arg(long)]
+        reason: Option<String>,
     },
+    /// Run a docket's witnessed checks now (its repo's `checks` in
+    /// build.lua or Settings), in its worktree; --wait for the results.
+    Check {
+        docket: String,
+        #[arg(long)]
+        wait: bool,
+    },
+    /// Hold a docket: its protocol takes no steps until you resume it
+    /// (--off). The reason goes on the record.
+    Hold {
+        docket: String,
+        reason: Option<String>,
+        #[arg(long)]
+        off: bool,
+    },
+    /// What needs you beyond your asks: failing checks, stalled Builds,
+    /// held dockets, and dockets closed on your word.
+    Attention,
     /// Check a docket's record (or every docket's), or an exported file.
     Verify {
         docket: Option<String>,
@@ -315,12 +343,28 @@ fn main() {
             })
         }
         Some(Cmd::Attach { what, title, docket }) => attach(&what, title, docket),
-        Some(Cmd::Set { docket, title, status }) => {
+        Some(Cmd::Set { docket, title, status, anyway, reason }) => {
             let d = normalize(&docket);
-            client::json("POST", &format!("/api/dockets/{d}/set"), Some(&json!({ "title": title, "status": status }))).map(|v| {
+            client::json("POST", &format!("/api/dockets/{d}/set"), Some(&json!({ "title": title, "status": status, "anyway": anyway, "reason": reason }))).map(|v| {
                 println!("{d} #{}", v["seq"]);
             })
         }
+        Some(Cmd::Check { docket, wait }) => check(&normalize(&docket), wait),
+        Some(Cmd::Hold { docket, reason, off }) => {
+            let d = normalize(&docket);
+            client::json("POST", &format!("/api/dockets/{d}/hold"), Some(&json!({ "reason": reason, "off": off }))).map(|v| {
+                println!("{d} {} #{}", if off { "resumed" } else { "held" }, v["seq"]);
+            })
+        }
+        Some(Cmd::Attention) => client::json("GET", "/api/state", None).map(|v| {
+            let items = v["attention"].as_array().cloned().unwrap_or_default();
+            if items.is_empty() {
+                println!("Nothing needs your attention beyond your asks.");
+            }
+            for a in items {
+                println!("{:<6} {:<9} {}", a["docket"].as_str().unwrap_or("-"), a["kind"].as_str().unwrap_or(""), a["text"].as_str().unwrap_or(""));
+            }
+        }),
         Some(Cmd::Verify { docket, file }) => verify(docket.as_deref().map(normalize), file),
         Some(Cmd::Export { docket }) => client::text(&format!("/api/dockets/{}/export", normalize(&docket))).map(|t| print!("{t}")),
     };
@@ -328,6 +372,47 @@ fn main() {
         eprintln!("wh: {e:#}");
         std::process::exit(1);
     }
+}
+
+/// `wh check D-12`: start its checks; with --wait, print how they went.
+fn check(d: &str, wait: bool) -> Result<()> {
+    let v = client::json("POST", &format!("/api/dockets/{d}/check"), Some(&json!({})))?;
+    let run = v["run"].as_str().unwrap_or("").to_string();
+    let names: Vec<String> = v["checks"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(str::to_string)).collect();
+    println!("{d}: running {}", names.join(", "));
+    if !wait {
+        return Ok(());
+    }
+    let mut failed = false;
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let doc = client::json("GET", &format!("/api/dockets/{d}"), None)?;
+        let ev = &doc["evidence"];
+        let mine: Vec<&Value> = ev["checks"].as_array().into_iter().flatten().filter(|c| c["run"] == run.as_str()).collect();
+        if ev["running"] == true || mine.len() < names.len() {
+            if ev["running"] != true && mine.len() < names.len() {
+                anyhow::bail!("the checks stopped before they all ran; see the docket");
+            }
+            continue;
+        }
+        for c in mine {
+            let ok = c["ok"] == true;
+            failed |= !ok && c["required"] != false;
+            println!(
+                "  {} {:<10} {}  ({} ms){}",
+                if ok { "✓" } else { "✗" },
+                c["name"].as_str().unwrap_or(""),
+                c["command"].as_str().unwrap_or(""),
+                c["ms"],
+                if c["required"] == false { " · optional" } else { "" }
+            );
+        }
+        break;
+    }
+    if failed {
+        anyhow::bail!("a required check failed");
+    }
+    Ok(())
 }
 
 /// `12` and `d-12` both mean `D-12`.

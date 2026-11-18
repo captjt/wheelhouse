@@ -130,7 +130,7 @@ pub fn load() -> Result<Config> {
     if !path.exists() {
         bail!("no review config at {} (docs/review.md; wh import rex-reviewer brings rex-reviewer's over)", crate::paths::tilde(&path.to_string_lossy()));
     }
-    let raw = lua::dump(&path)?;
+    let raw = crate::settings::overlaid(lua::dump(&path)?, "review");
     from_value(path, raw)
 }
 

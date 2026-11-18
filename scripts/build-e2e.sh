@@ -8,13 +8,16 @@
 #   scripts/build-e2e.sh           # run it; exits non-zero on the first failure
 #   KEEP=1 scripts/build-e2e.sh    # keep the scratch directory to look at
 #
-# It goes: plan → approve → build → check → a pre-review that sends it
-# back, then passes it → open the PR; then a round on
+# It goes: plan → approve → build → check → a witnessed check that fails
+# and sends it back → a pre-review that sends it back, then passes it →
+# open the PR (and `wh check` by hand); then a round on
 # review feedback and a failing check (a reply that speaks in the first
 # person is refused first), pushed with its replies; then a round on a base
 # that moved, merged in and pushed; then the merge, which cleans up. Then
 # Linear intake (a stand-in Linear): a labeled issue starts a Build, an
 # issue in your cycle is offered one, and a skip label is left alone.
+# Last, Verify and Settings: what D-1's done rests on, the rule for done,
+# hold, the attention list, and settings and guides changed through the API.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -65,7 +68,12 @@ echo you >"$t/gh/login"
 echo "{\"sessions\": [], \"home\": \"$t/home\"}" >"$t/world.json"
 cat >"$t/build.lua" <<EOF
 return {
-  repos = { ["acme/api"] = { checkout = "$t/checkout" } },
+  repos = { ["acme/api"] = {
+    checkout = "$t/checkout",
+    -- The hub runs these itself, at each checked commit: test must pass,
+    -- lint only informs.
+    checks = { test = "! grep -q TODO deliver.ts", lint = { run = "echo 'style: one nit' >&2; exit 1", required = false } },
+  } },
   sources = { linear = { teams = { ENG = "acme/api" }, label = "agent", cycle = true, skip_label = "no-agent" } },
   prereview = { reviewers = { "codex" } },
 }
@@ -151,7 +159,7 @@ until_ "the builder builds" '.phase == "building"'
 ok "approved; building"
 
 step "the build, and the check"
-printf 'export function deliver() { /* retries 5xx up to 3 times */ }\n' >"$wt/deliver.ts"
+printf 'export function deliver() { /* retries 5xx up to 3 times */ } // TODO: tests\n' >"$wt/deliver.ts"
 commit "fix(webhooks): retry failed deliveries" >/dev/null
 echo '{"title": "fix(webhooks): retry failed deliveries", "body": "A 5xx or a timeout is retried up to 3 times, with backoff."}' >"$wt/.tmp/pr.json"
 echo "Built the retry loop." >"$wt/.tmp/report.md"
@@ -159,6 +167,19 @@ say BUILT status.txt
 until_ "the checker checks" '.phase == "checking"'
 checked "The retry loop matches the plan."
 ok "checked"
+
+step "witnessed checks: the hub runs them, and a failing one goes back to the builder"
+until_ "the failing check sends it back" '.phase == "building" and .fix_used == 1'
+grep -q "WORKING building" "$wt/.tmp/status.txt" || fail "the builder wasn't told"
+rec() { api "$base/api/dockets/D-1"; }
+rec | jq -e '[.entries[] | select(.kind == "check" and .data.name == "test")][0] | .data.ok == false and .mark == "witnessed" and (.data.output | startswith("sha256:"))' >/dev/null ||
+  fail "no witnessed, failed test check with its output kept"
+printf 'export function deliver() { /* retries 5xx up to 3 times */ }\n' >"$wt/deliver.ts"
+commit "fix(webhooks): finish the retries" >/dev/null
+say BUILT status.txt
+until_ "the fix is checked" '.phase == "checking"'
+checked "The TODO is gone."
+ok "test failed at the first commit (kept, witnessed), went back, and was fixed"
 
 step "pre-review: a blind reviewer sends it back, then passes it"
 until_ "pre-review starts" '.phase == "prereview" and .prereview.n == 1'
@@ -180,7 +201,11 @@ echo REVIEWED >"$wt/.tmp/prereview/2/codex.status"
 until_ "the PR reaches its gate" '.phase == "open_gate"'
 id=$(ask_id "Open PR")
 api "$base/api/messages/$id" | jq -e '.body | contains("Pre-review 2: 0 blocking, 0 non-blocking")' >/dev/null || fail "the open gate doesn't say how pre-review went"
-ok "sent back once, fixed, checked, passed; the open gate says so"
+api "$base/api/messages/$id" | jq -e '.body | contains("Witnessed checks: passed at")' >/dev/null || fail "the open gate doesn't say the checks passed"
+rec | jq -e '.evidence.checks | map(select(.name == "test"))[0].ok == true' >/dev/null || fail "test isn't passing at the head"
+rec | jq -e '.evidence.verdicts | length >= 1 and all(.[]; .independent == true and (.by | startswith("claude-code@")))' >/dev/null ||
+  fail "the checker's verdicts aren't its own, from a session other than the builder's"
+ok "sent back once, fixed, checked, passed; the open gate says so, and the checks passed at its head"
 
 step "opening the PR"
 answer "Open PR"
@@ -189,6 +214,12 @@ head1=$(git -C "$wt" rev-parse HEAD)
 [ "$(git --git-dir="$origin" rev-parse "$(task | jq -r .branch)")" = "$head1" ] || fail "origin doesn't have the checked head"
 jq -e 'select(.kind == "pr") | .draft == true and (.body | contains("on behalf of @you"))' "$t/gh/writes.jsonl" >/dev/null || fail "no draft PR with its footer"
 ok "pushed $(git -C "$wt" rev-parse --short HEAD) and opened #45 as a draft"
+
+step "wh check, by hand"
+out=$("$wh" check D-1 --wait) || fail "wh check failed: $out"
+echo "$out" | grep -q "✓ test" || fail "wh check didn't show test passing: $out"
+echo "$out" | grep -q "✗ lint.*optional" || fail "wh check didn't show lint failing as optional: $out"
+ok "test passed, lint (optional) failed, and wh check exits 0"
 
 # --- Round 1: review feedback and a failing check -----------------------------
 
@@ -337,5 +368,42 @@ sleep 5
 [ -z "$(by_key ENG-9)" ] || fail "ENG-9 has the skip label, but it was built"
 [ "$(api "$base/api/state" | jq '[.messages[] | select(.subject | startswith("ENG-"))] | length')" = 0 ] || fail "an issue was offered twice"
 ok "ENG-9 (skip label) left alone; nothing offered twice"
+
+# --- Verify and Settings --------------------------------------------------------
+
+step "what D-1's done rests on"
+api "$base/api/dockets/D-1" | jq -e '.evidence.evidence | map(.what) | (any(startswith("`test` passed at")) and any(. == "Its PR #45 merged"))' >/dev/null ||
+  fail "D-1's evidence doesn't name its passing check and its merge: $(api "$base/api/dockets/D-1" | jq -c .evidence.evidence)"
+ok "witnessed: test passed at its head, and its PR merged"
+
+step "the rule for done: acceptance needs evidence, or your word"
+code() { curl -s -o /dev/null -w '%{http_code}' -H 'x-wheelhouse: 1' -H 'content-type: application/json' "$@"; }
+d=$(api -X POST "$base/api/dockets" -d '{"title": "Document the retry policy"}' | jq -r .docket)
+api -X POST "$base/api/dockets/$d/intent" -d '{"body": "Write it down.\n\n## Acceptance\n- [ ] The policy is in the README"}' >/dev/null
+[ "$(code -X POST "$base/api/dockets/$d/set" -d '{"status": "done"}')" = 409 ] || fail "$d closed on nothing"
+api -X POST "$base/api/dockets/$d/set" -d '{"status": "done", "anyway": true, "reason": "It is in the wiki"}' >/dev/null
+api "$base/api/dockets/$d" | jq -e '.docket.closed_on == "It is in the wiki" or .closed_on == "It is in the wiki"' >/dev/null || fail "$d doesn't say it closed on your word"
+api "$base/api/state" | jq -e --arg d "$d" '.attention | any(.docket == $d and .kind == "word")' >/dev/null || fail "closed on your word isn't on the attention list"
+ok "$d was refused, then closed on your word, which the record and the attention list show"
+
+step "hold and resume"
+h=$(api -X POST "$base/api/dockets" -d '{"title": "Wait for design"}' | jq -r .docket)
+"$wh" hold "$h" "waiting on design" >/dev/null
+api "$base/api/state" | jq -e --arg d "$h" '.attention | any(.docket == $d and .kind == "held" and (.text | contains("waiting on design")))' >/dev/null || fail "$h isn't held"
+"$wh" hold "$h" --off >/dev/null
+api "$base/api/state" | jq -e --arg d "$h" '.attention | any(.docket == $d) | not' >/dev/null || fail "$h is still held"
+ok "held with a reason, then resumed"
+
+step "Settings: a gate, a refusal, and a guide"
+api -X POST "$base/api/settings" -d '{"build": {"gates": {"push": "auto"}, "repos": {"acme/api": {"notes": "Run the tests first."}}}}' |
+  jq -e '(.build.config.gates[] | select(.key == "push") | .value == "auto") and .build.config.repos["acme/api"].notes == "Run the tests first."' >/dev/null ||
+  fail "the gate or the notes didn't change"
+jq -e '.build.gates.push == "auto"' "$HOME/.config/wheelhouse/settings.json" >/dev/null || fail "settings.json doesn't have it"
+[ "$(code -X POST "$base/api/settings" -d '{"build": {"agents": {"claude": {"program": "/bin/sh"}}}}')" = 400 ] || fail "Settings changed an agent's program"
+[ "$(code -X POST "$base/api/settings" -d '{"build": {"gates": {"open": "sometimes"}}}')" = 400 ] || fail "Settings took a gate that isn't ask or auto"
+api -X POST "$base/api/settings/doc" -d '{"id": "guide/pr-style.md", "text": "# PR style\n\nOne line, then why."}' | jq -e '.overridden == true' >/dev/null || fail "the guide wasn't saved"
+api -X POST "$base/api/settings/doc/reset" -d '{"id": "guide/pr-style.md"}' | jq -e '.overridden == false' >/dev/null || fail "the guide wasn't reset"
+ls "$HOME/.config/wheelhouse/.history/guides/" | grep -q "pr-style.md" || fail "the replaced guide wasn't kept"
+ok "push is auto, notes set, an agent's program and a bad gate refused, a guide saved, reset and kept"
 
 printf '\nBuild end to end: every step passed.\n'

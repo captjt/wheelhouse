@@ -30,6 +30,9 @@ enum Snapshot {
         var setup: (Nav) -> Void = { _ in }
     }
 
+    /// The docket the envelope shot opens (`WH_SNAP_DOCKET`, for a long record).
+    static let snapDocket = ProcessInfo.processInfo.environment["WH_SNAP_DOCKET"] ?? "D-7"
+
     static let shots: [Shot] = [
         Shot(name: "docket", place: .active, select: "D-6"),
         Shot(name: "inbox", place: .inbox),
@@ -39,6 +42,14 @@ enum Snapshot {
         Shot(name: "recap", place: .recap),
         Shot(name: "palette", place: .inbox) { nav in nav.palette = true },
         Shot(name: "record", place: .active, select: "D-6", target: .sheet) { nav in nav.record = "D-6" },
+        // A checkable link's signed envelope, open: it once hung the app.
+        Shot(name: "envelope", place: .all, select: snapDocket, target: .sheet) { nav in
+            nav.record = snapDocket
+            Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                NotificationCenter.default.post(name: .snapshotEnvelope, object: "checkable")
+            }
+        },
         Shot(name: "agent", place: .inbox, target: .sheet) { nav in nav.creating = .agent },
         Shot(name: "window", place: .inbox, target: .docketWindow),
         Shot(name: "menubar", place: .inbox, target: .menuBar),
@@ -137,4 +148,6 @@ enum Snapshot {
 
 extension Notification.Name {
     static let snapshotTab = Notification.Name("wheelhouse.snapshotTab")
+    static let snapshotEnvelope = Notification.Name("wheelhouse.snapshotEnvelope")
+    static let snapshotEnvelopeRow = Notification.Name("wheelhouse.snapshotEnvelopeRow")
 }
