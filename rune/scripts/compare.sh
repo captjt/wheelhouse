@@ -6,6 +6,7 @@
 #
 #   rune/scripts/compare.sh [OUT]          # default .tmp/compare; WH_HUB picks the hub
 #   ONLY="inbox docket" rune/scripts/compare.sh
+#   SKIP_SWIFT=1 rune/scripts/compare.sh   # keep the SwiftUI shots already in OUT/swift
 #
 # The SwiftUI shots need Xcode 26 and screen recording for the terminal (as
 # scripts/screenshots.sh's do); its windows stay behind yours and never take
@@ -18,7 +19,7 @@ case "$hub" in *:7500 | *:7500/*) echo "compare.sh: $hub is the daily hub" >&2; 
 out=${1:-.tmp/compare}
 mkdir -p "$out/swift" "$out/rune" "$out/pairs"
 
-# swift shot | rune window | rune scene | rune size | what it is
+# swift shot | rune window | rune scene | size | what it is
 pairs=(
   "inbox|main|inbox|1440x900|Inbox: what needs you, and the first of it"
   "docket|main|docket|1440x900|A docket: intent, decisions, Verify, kept files, activity, inspector"
@@ -28,20 +29,27 @@ pairs=(
   "recap|main|recap|1440x900|Recap"
   "palette|main|palette|1440x900|⌘K over the window"
   "record|main|record|1440x900|A docket's record"
+  "envelope|main|record-open|1440x900|A record entry, open to its signed envelope"
   "agent|main|agent|1440x900|New docket: an agent"
-  "hold|main|hold|1440x900|Hold a docket"
   "start-agent|main|start-agent|1440x900|Start an agent on a docket"
+  "hold|main|hold|1440x900|Hold a docket"
+  "closing|main|close|1440x900|Done refused: close on your word"
   "shortcuts|main|shortcuts|1440x900|Keyboard shortcuts"
   "verify|main|verify|1440x900|Verify: checks, witnessed"
   "verify-held|main|verify-held|1440x900|Verify on a docket on hold"
   "output|main|output|1440x900|A check's output"
-  "window|docket|window|1000x840|A docket in a window of its own"
-  "menubar|menubar|menubar|380x520|The menu bar item's panel"
-  "quick|panel|quick|648x520|⌃⌥⌘K from any app (⌥⌘K in SwiftUI)"
-  "settings-orders|settings|orders|900x640|Settings: standing orders"
-  "settings-agents|settings|agents|900x640|Settings: agents"
-  "settings-repos|settings|repos|900x640|Settings: repos"
-  "settings-guides|settings|guides|900x640|Settings: guides"
+  "window|docket|review|1000x840|A docket in a window of its own"
+  "menubar|menubar|inbox|380x324|The menu bar item's panel"
+  "quick|panel||648x520|The quick panel from any app (⌥⌘K; ⌃⌥⌘K in Rune)"
+  "settings-general|settings|general|720x560|Settings: General"
+  "settings-orders|settings|orders|720x560|Settings: Standing Orders"
+  "settings-rule|settings|rule|720x560|Settings: a rule's editor"
+  "settings-agents|settings|agents|720x560|Settings: Agents"
+  "settings-repos|settings|repos|720x560|Settings: Repos"
+  "settings-check|settings|check|720x560|Settings: a repo's check"
+  "settings-posting|settings|posting|720x560|Settings: who posts a checked review"
+  "settings-guides|settings|guides|720x560|Settings: Guides"
+  "settings-brief|settings|brief|720x560|Settings: the agents' brief"
 )
 only=${ONLY:-}
 keep() { [ -z "$only" ] || [[ " $only " == *" $1 "* ]]; }
@@ -52,9 +60,11 @@ for p in "${pairs[@]}"; do
   keep "$s" && names+=("$s")
 done
 
-echo "SwiftUI: $hub"
-(cd mac && swift build -c release --product Wheelhouse >/dev/null)
-WH_APP_HUB="$hub" mac/.build/release/Wheelhouse --snapshot "$root/$out/swift" --only "$(IFS=,; echo "${names[*]}")" -AppleShowScrollBars Always | sed "s|$root/||"
+if [ -z "${SKIP_SWIFT:-}" ]; then
+  echo "SwiftUI: $hub"
+  (cd mac && swift build -c release --product Wheelhouse >/dev/null)
+  WH_APP_HUB="$hub" mac/.build/release/Wheelhouse --snapshot "$root/$out/swift" --only "$(IFS=,; echo "${names[*]}")" -AppleShowScrollBars Always | sed "s|$root/||"
+fi
 
 echo "Rune: $hub"
 (cd rune && cargo build --release -q)
@@ -66,8 +76,9 @@ for p in "${pairs[@]}"; do
   for theme in light dark; do
     r="$out/rune/$s-$theme.png"
     rm -f "$r"
-    WH_HUB="$hub" $bin --window "$window" --scene "$scene" --theme "$theme" --size "$size" --scale 1 \
-      --scroll-bars always --at 0.6 --snap "$r" >/dev/null 2>&1 || true
+    args=(--window "$window" --theme "$theme" --size "$size" --scale 1 --scroll-bars always --at 0.8 --snap "$r")
+    [ -n "$scene" ] && args+=(--scene "$scene")
+    WH_HUB="$hub" $bin "${args[@]}" >/dev/null 2>&1 || true
     sw="$out/swift/mac-$s-$theme.png"
     pair="$out/pairs/$s-$theme.png"
     if [ -f "$sw" ] && [ -f "$r" ]; then
