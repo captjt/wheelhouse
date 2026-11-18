@@ -49,13 +49,24 @@ runs the hub at login, and installs the agents' hooks and skill.
 
 ## Trying a change
 
+**Wheelhouse Dev.** `just dev-install` installs your checkout beside your
+everyday Wheelhouse, as a second one that never meets it: `wh-dev`, its hub
+on :7600 with its own state (`~/.local/state/wheelhouse-dev`), config,
+socket and LaunchAgent (`dev.wheelhouse.hub.dev`), and Wheelhouse Dev.app
+(`dev.wheelhouse.app.dev`, `wheelhouse-dev://`, ⇧⌥⌘K, a blue icon and DEV in
+the menu bar). It shows a copy of your dockets with nothing live: Rex, gh,
+Linear, Tailscale and notifications are off, Review and Build are paused on
+stand-in configs, and the agents' hooks stay with your everyday hub. Run it
+again after a change to update it; `just dev-sync` copies your dockets in
+again, and `just dev-remove` takes it away. See `scripts/dev-install.sh`.
+
 **A hub of your own.** Your everyday hub keeps running. A second one, in
 the foreground, needs its own state, socket and port. It still follows
 your real Rex, so leave `WH_REX` pointing at a stand-in if your change
 could type into panes:
 
 ```sh
-WH_STATE=/tmp/wh-dev WH_HTTP=127.0.0.1:7600 WH_TAILNET=off WH_NOTIFY=off \
+WH_STATE=/tmp/wh-try WH_HTTP=127.0.0.1:7610 WH_TAILNET=off WH_NOTIFY=off \
   WH_REX=$PWD/scripts/fake-rex WH_WORLD=/path/to/world.json \
   cargo run -- serve
 ```

@@ -13,7 +13,7 @@ struct WheelhouseApp: App {
     @AppStorage("theme") private var theme = "system"
 
     var body: some Scene {
-        Window("Wheelhouse", id: "main") {
+        Window(Flavor.name, id: "main") {
             RootView()
                 .environment(store)
                 .environment(nav)

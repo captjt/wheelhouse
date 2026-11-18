@@ -10,6 +10,8 @@ struct MenuBarLabel: View {
         let n = store.urgent
         HStack(spacing: 3) {
             Image(nsImage: Self.wheel(alert: n > 0))
+            // Beside the daily one, Dev says which it is.
+            if Flavor.isDev { Text("DEV").font(.system(size: 9, weight: .heavy)) }
             if n > 0 { Text("\(n)").monospacedDigit() }
         }
     }
@@ -195,7 +197,7 @@ private struct GeneralSettings: View {
             }
             .pickerStyle(.segmented)
             Toggle("Show Wheelhouse in the menu bar", isOn: $menuBar)
-            Toggle("Open Wheelhouse from any app with ⌥⌘K", isOn: $quickPanel)
+            Toggle("Open \(Flavor.name) from any app with \(Flavor.chord)", isOn: $quickPanel)
                 .onChange(of: quickPanel) { QuickPanel.apply() }
             Toggle("Open at login", isOn: Binding(get: { login }, set: { on in
                 do {
