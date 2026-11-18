@@ -20,38 +20,12 @@ fn cmd(id: String, group: &'static str, label: String, mark: Mark, hint: Option<
     Command { id, group, label, mark, hint: hint.map(str::to_string), keywords: keywords.into(), action: Action::Main(key) }
 }
 
-/// Every command, the window's own first.
+/// The docket's own section, headed by its id (Palette.swift's `group: d.id`).
+pub const THIS: &str = "This docket";
+
+/// Every command, in Palette.swift's order: what needs you, the docket
+/// you're on, Create, Go to, Record, Settings, Theme, then the dockets.
 pub fn all(s: &Main, st: &HubState) -> Vec<Command> {
-    let mut out = vec![];
-    if let Some(d) = s.current().and_then(|id| st.docket(&id).cloned()) {
-        let id = d.id();
-        if d.live().is_some() {
-            out.push(cmd("rex".into(), "This docket", "Show pane in Rex".into(), Mark::Glyph("terminal"), Some("O"), "screen terminal", format!("rex:{id}")));
-        }
-        if let Some(l) = d.live().filter(|l| l.answerable()) {
-            out.push(cmd(
-                "approve".into(),
-                "This docket",
-                format!("Approve: {}", l.msg().unwrap_or_else(|| "the prompt".into())),
-                Mark::Approve,
-                None,
-                "permission yes allow",
-                format!("approve:{id}"),
-            ));
-            out.push(cmd("deny".into(), "This docket", "Deny the prompt".into(), Mark::Deny, None, "permission no reject", format!("deny:{id}")));
-        }
-        if d.hold().is_some() {
-            out.push(cmd("resume".into(), "This docket", "Resume: take it off hold".into(), Mark::Glyph("play"), Some("⇧⌘H"), "hold unpause continue", format!("resume:{id}")));
-        } else {
-            out.push(cmd("hold".into(), "This docket", "Hold…".into(), Mark::Glyph("pause"), Some("⇧⌘H"), "pause stop wait build review", format!("hold:{id}")));
-        }
-        out.push(cmd("checks".into(), "This docket", "Run checks".into(), Mark::Glyph("checks"), Some("⇧⌘U"), "verify test lint witnessed", format!("checks:{id}")));
-        for st_ in Status::ALL.into_iter().filter(|x| *x != d.status()) {
-            out.push(cmd(format!("st-{}", st_.raw()), "This docket", format!("Move to {}", st_.label()), Mark::Status(st_), None, "status", format!("status:{id}:{}", st_.raw())));
-        }
-        out.push(cmd("rec".into(), "This docket", "Read the record".into(), Mark::Glyph("shield"), None, "verify signed chain", format!("record:{id}")));
-        out.push(cmd("link".into(), "This docket", "Link a Linear issue…".into(), Mark::Linear, None, "linear issue", format!("link:{id}")));
-    }
     let world = World::parse(&st.j);
     let shared: Vec<Command> = commands::commands(&world)
         .into_iter()
@@ -66,12 +40,50 @@ pub fn all(s: &Main, st: &HubState) -> Vec<Command> {
             c
         })
         .collect();
-    let (dockets, rest): (Vec<_>, Vec<_>) = shared.into_iter().partition(|c| c.group == commands::DOCKETS);
-    out.extend(rest);
-    for (i, p) in Place::ORDER.iter().enumerate() {
-        out.push(cmd(format!("go-{i}"), "Go to", p.title(), Mark::Glyph("go"), Some(["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6", "⌘7", "⌘8"][i]), "go place", format!("go:{i}")));
+    let take = |g: &str| shared.iter().filter(|c| c.group == g).cloned().collect::<Vec<_>>();
+    let mut out = take(commands::NEEDS_YOU);
+    if let Some(d) = s.current().and_then(|id| st.docket(&id).cloned()) {
+        let id = d.id();
+        let mine = |key: &str, label: String, mark: Mark, hint: Option<&str>, keywords: &str| cmd(key.into(), THIS, label, mark, hint, keywords, format!("{key}:{id}"));
+        if d.live().is_some() {
+            out.push(mine("rex", "Show pane in Rex".into(), Mark::Glyph("terminal"), Some("O"), "screen terminal"));
+            out.push(mine("peek", "Peek at pane".into(), Mark::Glyph("eye"), None, "screen terminal message send"));
+        }
+        if let Some(l) = d.live().filter(|l| l.answerable()) {
+            out.push(mine("approve", format!("Approve: {}", l.msg().unwrap_or_else(|| "the prompt".into())), Mark::Approve, None, "permission yes allow"));
+            out.push(mine("deny", "Deny the prompt".into(), Mark::Deny, None, "permission no reject"));
+        }
+        if d.hold().is_some() {
+            out.push(mine("resume", "Resume: take it off hold".into(), Mark::Glyph("play"), Some("⇧⌘H"), "hold unpause continue"));
+        } else {
+            out.push(mine("hold", "Hold…".into(), Mark::Glyph("pause"), Some("⇧⌘H"), "pause stop wait build review"));
+        }
+        out.push(mine("checks", "Run checks".into(), Mark::Glyph("checklist"), Some("⇧⌘U"), "verify test lint witnessed"));
+        if d.is_open() && d.protocol() != "review" && d.live().is_none() {
+            out.push(mine("start", "Start an agent…".into(), Mark::Glyph("terminal"), Some("⇧⌘A"), "agent claude codex start pane work"));
+        }
+        for st_ in Status::ALL.into_iter().filter(|x| *x != d.status()) {
+            out.push(cmd(format!("st-{}", st_.raw()), THIS, format!("Move to {}", st_.label()), Mark::Status(st_), None, "status", format!("status:{id}:{}", st_.raw())));
+        }
+        out.push(mine("window", "Open in new window".into(), Mark::Glyph("window"), None, "window"));
+        out.push(mine("record", "Read the record".into(), Mark::Glyph("shield"), None, "verify signed chain"));
     }
-    out.extend(dockets);
+    out.extend(take(commands::CREATE));
+    const GO: [&str; 8] = ["go0", "go1", "go2", "go3", "go4", "go5", "go6", "go7"];
+    for (i, p) in Place::ORDER.iter().enumerate() {
+        out.push(cmd(format!("go-{i}"), "Go to", p.title(), Mark::Glyph(GO[i]), Some(["⌘1", "⌘2", "⌘3", "⌘4", "⌘5", "⌘6", "⌘7", "⌘8"][i]), "go place", format!("go:{i}")));
+    }
+    out.push(cmd("verify".into(), "Record", "Verify every docket's record".into(), Mark::Glyph("shield"), None, "check chain signatures", "verify".into()));
+    for (key, label, glyph, hint, keywords) in [
+        ("orders", "Standing orders and gates", "orders", Some("⌘,"), "settings preferences gates ask auto pause post"),
+        ("agents", "Agents: builder, checker, reviewers", "agents", None, "settings claude codex fix rounds pre-review"),
+        ("repos", "Repos: notes, checks, review guide", "repos", None, "settings checks base branch plan notes rules"),
+        ("guides", "Guides and briefs", "guides", None, "settings guide brief prompt markdown pr style plan format"),
+    ] {
+        out.push(cmd(format!("settings-{key}"), "Settings", label.into(), Mark::Glyph(glyph), hint, keywords, format!("settings:{key}")));
+    }
+    out.extend(take(commands::THEME));
+    out.extend(take(commands::DOCKETS));
     out
 }
 
@@ -138,6 +150,20 @@ impl Main {
                     ("checks", Some(d)) => self.run_checks(&d.id()),
                     ("record", Some(d)) => self.sheet = Some(Sheet::Record(d.id())),
                     ("link", Some(d)) => self.open_form(Sheet::LinkIssue(d.id())),
+                    ("peek", Some(d)) => super::chat::open_pane(self, &d.id()),
+                    ("start", Some(d)) => self.open_form(Sheet::StartAgent(d.id())),
+                    ("window", Some(d)) => self.open_window(&d.id()),
+                    ("verify", _) => super::settings::verify_all(),
+                    ("settings", _) => {
+                        use super::settings::Tab;
+                        let tab = match parts.get(1).copied() {
+                            Some("agents") => Tab::Agents,
+                            Some("repos") => Tab::Repos,
+                            Some("guides") => Tab::Guides,
+                            _ => Tab::Orders,
+                        };
+                        super::settings::open_tab(self.theme, tab);
+                    }
                     ("status", Some(d)) => self.set_status(&d.id(), Status::parse(parts.get(2).unwrap_or(&""))),
                     _ => {}
                 }
@@ -148,13 +174,21 @@ impl Main {
 }
 
 fn glyph(name: &str) -> &'static Icon {
+    if let Some(i) = name.strip_prefix("go").and_then(|n| n.parse::<usize>().ok()) {
+        return super::sidebar::place_icon(&Place::ORDER[i]);
+    }
     match name {
-        "terminal" => &icons::AGENT,
+        "terminal" => &icons::TERMINAL,
+        "eye" => &icons::EYE,
         "play" => &icons::PLAY,
-        "pause" => &icons::PAUSE,
-        "checks" => &icons::APPROVE,
+        "pause" => &icons::PAUSE_CIRCLE,
+        "checklist" => &icons::LIST,
         "shield" => &icons::SHIELD,
-        "go" => &icons::CHEVRON_RIGHT,
+        "window" => &icons::INSPECTOR,
+        "orders" => &icons::LIST,
+        "agents" => &icons::AGENT,
+        "repos" => &icons::STACK,
+        "guides" => &icons::DOC,
         _ => &icons::SEARCH,
     }
 }
@@ -225,7 +259,12 @@ pub fn view(s: &Main, st: &HubState, k: &K) -> El {
         });
     let mut id_chip = el();
     if let Some(id) = s.current() {
-        id_chip = row().px(6.0).py(2.0).radius(999.0).fill(k.recessed).child(text(id).font(mono(11.5).lh(14.0)).color(k.text2));
+        id_chip = row()
+            .px(6.0)
+            .py(2.0)
+            .radius(999.0)
+            .fill(if k.dark { Color::WHITE.alpha(0.1) } else { Color::BLACK.alpha(0.07) })
+            .child(text(id).font(mono(11.5).lh(14.0)).color(k.text2));
     }
     let header = row().key("palette-header").padding(14.0).gap(10.0).center_y().child(icon(&icons::SEARCH, 14.0).color(k.muted)).child(id_chip).child(field);
     let mut rows = col().key("palette-rows").w_full().px(6.0).pb(8.0).h(380.0).role("listbox").label("Commands and dockets").scroll(ScrollSpec { stick_bottom: false });
@@ -234,7 +273,8 @@ pub fn view(s: &Main, st: &HubState, k: &K) -> El {
     }
     for (i, c) in list.iter().enumerate() {
         if i == 0 || list[i - 1].group != c.group {
-            rows = rows.child(text(c.group).font(font(11.0, 600.0).lh(14.0)).color(k.muted).px(8.0).pt(10.0).pb(4.0).role("heading").level(2));
+            let head = if c.group == THIS { s.current().unwrap_or_default() } else { c.group.to_string() };
+            rows = rows.child(text(head).font(font(11.0, 600.0).lh(14.0)).color(k.muted).px(8.0).pt(10.0).pb(4.0).role("heading").level(2));
         }
         let on = i == sel;
         let c2 = c.clone();
@@ -279,7 +319,7 @@ pub fn view(s: &Main, st: &HubState, k: &K) -> El {
         .h_full()
         .fill(Color::BLACK.alpha(0.18))
         .items_center()
-        .pt(90.0)
+        .pt(140.0)
         .modal(true, |s: &mut Main| s.palette = None)
         .child(card)
 }

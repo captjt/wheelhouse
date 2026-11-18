@@ -10,7 +10,7 @@ use crate::icons;
 use crate::model::{self, HubState};
 use crate::theme::{self, K, font};
 
-fn place_icon(p: &Place) -> &'static Icon {
+pub(super) fn place_icon(p: &Place) -> &'static Icon {
     match p {
         Place::Inbox => &icons::TRAY,
         Place::Reviews => &icons::PULL,
@@ -18,7 +18,7 @@ fn place_icon(p: &Place) -> &'static Icon {
         Place::Active => &icons::DASHED,
         Place::All => &icons::STACK,
         Place::Done => &icons::APPROVE,
-        Place::Agents => &icons::AGENT,
+        Place::Agents => &icons::TERMINAL,
         Place::Recap => &icons::CHART,
         Place::Session(_) => &icons::LIST,
     }

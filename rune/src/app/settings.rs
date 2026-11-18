@@ -248,6 +248,29 @@ pub fn open(theme: Option<bool>) {
     });
 }
 
+/// Show Settings on a tab (⌘K's Settings commands).
+pub fn open_tab(theme: Option<bool>, tab: Tab) {
+    WINDOW.with(|w| {
+        if let Some(h) = w.borrow().as_ref() {
+            h.update(move |s: &mut Settings, tx| {
+                s.theme = theme;
+                s.opened(tx);
+                s.go(tab, tx);
+            });
+            h.open();
+        }
+    });
+}
+
+/// Every docket's record checked, from the main window (⌘K's Verify).
+pub fn verify_all() {
+    WINDOW.with(|w| {
+        if let Some(h) = w.borrow().as_ref() {
+            h.update(|s: &mut Settings, _| s.verify_all());
+        }
+    });
+}
+
 /// The main window's theme changed: Settings follows it.
 pub fn follow_theme(theme: Option<bool>) {
     WINDOW.with(|w| {

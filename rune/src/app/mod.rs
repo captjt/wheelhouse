@@ -638,6 +638,11 @@ pub fn on_key(s: &mut Main, ev: &KeyEvent, _: &mut Tx) -> bool {
                         s.run_checks(&id);
                     }
                 }
+                ('a', true) => {
+                    if let Some(id) = cur {
+                        s.open_form(Sheet::StartAgent(id));
+                    }
+                }
                 _ => return false,
             }
             return true;
@@ -814,15 +819,24 @@ fn toolbar(s: &Main, state: Option<&HubState>, k: &K, kit: &rune_kit::Kit) -> To
     if let Some(rv) = state.map(|st| st.review()).filter(|rv| s.place == Place::Reviews && model::flag(&rv["enabled"])) {
         let c = &rv["config"];
         let ruled = model::str_or(&c["post"], "") == "rule" || c["repo_posts"].as_object().is_some_and(|o| !o.is_empty());
-        let posting = model::text(&rv["post_override"]).unwrap_or_else(|| if ruled { "rule".into() } else if model::str_or(&c["post"], "") == "auto" { "auto".into() } else { "ask".into() });
+        let posting = model::text(&rv["post_override"]).unwrap_or_else(|| {
+            if ruled {
+                "rule".into()
+            } else if model::str_or(&c["post"], "") == "auto" {
+                "auto".into()
+            } else {
+                "ask".into()
+            }
+        });
         let mut segs = vec![("Ask", posting == "ask"), ("Auto", posting == "auto")];
         if ruled {
             segs.push(("Rules", posting == "rule"));
         }
-        trailing = trailing.child(
-            widgets::segmented("posting", &segs, |s: &mut Main, i| s.review_posting(["ask", "auto", "rule"][i]), k)
-                .help(if ruled { "Who posts a checked review: you (Ask), the checker (Auto), or your rules, repo by repo (Rules, in Settings)" } else { "Who posts a checked review: you (Ask), or the checker (Auto)" }),
-        );
+        trailing = trailing.child(widgets::segmented("posting", &segs, |s: &mut Main, i| s.review_posting(["ask", "auto", "rule"][i]), k).help(if ruled {
+            "Who posts a checked review: you (Ask), the checker (Auto), or your rules, repo by repo (Rules, in Settings)"
+        } else {
+            "Who posts a checked review: you (Ask), or the checker (Auto)"
+        }));
         let paused = model::flag(&rv["paused"]);
         trailing = trailing
             .child(widgets::icon_button(

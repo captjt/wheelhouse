@@ -58,11 +58,15 @@ impl Main {
     }
 
     fn load_folders(&mut self, docket: Option<String>) {
+        // On a docket, its folder to start with (StartAgentSheet); a new
+        // docket's agent starts with none (NewDocketSheet).
+        let suggest = docket.is_some();
         let path = format!("/api/folders{}", docket.map(|d| format!("?docket={d}")).unwrap_or_default());
-        let land = |s: &mut Main, r: Result<Value, String>| {
+        let land = move |s: &mut Main, r: Result<Value, String>| {
             if let Ok(v) = r {
                 s.form.folders = model::strings(&v["folders"]);
-                if s.form.folder.text.is_empty()
+                if suggest
+                    && s.form.folder.text.is_empty()
                     && let Some(f) = model::text(&v["suggested"]).or_else(|| s.form.folders.first().cloned())
                 {
                     s.form.folder = TextEdit::new(short(&f).as_str());
@@ -268,26 +272,34 @@ fn agent_picker(s: &Main, k: &K) -> El {
     widgets::segmented("agent-app", &[("Claude Code", !s.form.codex), ("Codex", s.form.codex)], |s: &mut Main, i| s.form.codex = i == 1, k)
 }
 
+/// The folder, and a menu of the ones agents ran in (the folder button).
 fn folder_row(s: &Main, k: &K) -> El {
-    let mut chips = row().gap(6.0);
-    for f in s.form.folders.iter().take(4) {
-        let f2 = short(f);
-        chips = chips.child(
-            row()
-                .key(format!("folder-{}", f.rsplit('/').next().unwrap_or(f)))
-                .h(20.0)
-                .px(8.0)
-                .radius(10.0)
-                .center()
-                .border(1.0, k.line2)
-                .hover(k.hover)
-                .role("button")
-                .label(format!("Use {f2}"))
-                .on_press(move |s: &mut Main| s.form.folder = TextEdit::new(f2.as_str()))
-                .child(text(f.rsplit('/').next().unwrap_or(f).to_string()).font(font(11.5, 400.0).lh(14.0)).color(k.muted)),
-        );
-    }
-    col().w_full().gap(6.0).child(input(&s.form.folder, "folder", "~/git/project", true, 0.0, k, |s| &mut s.form.folder)).child(chips)
+    let folders: Vec<String> = s.form.folders.iter().map(|f| short(f)).collect();
+    let menu = row()
+        .key("folder-menu")
+        .size(28.0, 24.0)
+        .radius(6.0)
+        .center()
+        .hover(k.hover)
+        .role("button")
+        .label("Folders agents ran in")
+        .help("Folders agents ran in")
+        .on_press_tx(move |_: &mut Main, tx| {
+            let mut m = rune::PopupMenu::new();
+            for f in &folders {
+                m = m.item(rune::PopupItem::new(f.as_str(), f.as_str()));
+            }
+            if folders.is_empty() {
+                m = m.item(rune::PopupItem::new("none", "No folders yet").enabled(false));
+            }
+            tx.popup_menu(m, "folder-menu", |s: &mut Main, picked, _| {
+                if let Some(f) = picked.filter(|f| *f != "none") {
+                    s.form.folder = TextEdit::new(f);
+                }
+            });
+        })
+        .child(rune::icon(&crate::icons::FOLDER, 15.0).color(k.muted));
+    row().w_full().gap(6.0).center_y().child(input(&s.form.folder, "folder", "~/git/project", true, 0.0, k, |s| &mut s.form.folder).grow(1.0).min_w(0.0)).child(menu)
 }
 
 fn grid_row(label: &str, field: El, k: &K) -> El {

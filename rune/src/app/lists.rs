@@ -515,7 +515,6 @@ pub fn review_live(p: &ReviewPr) -> LiveState {
     }
 }
 
-
 /// VerdictChip: GitHub's word, green when approved, red when changes are
 /// requested, grey otherwise (a reviewer's own word, lowercased).
 fn verdict_chip(v: &str, k: &K) -> El {
@@ -686,12 +685,7 @@ fn card(d: &Docket, k: &K) -> El {
     }
     if let Some(why) = d.hold() {
         line = line.child(
-            row()
-                .gap(3.0)
-                .center_y()
-                .help(why)
-                .child(rune::icon(&icons::PAUSE, 11.0).color(k.blocked))
-                .child(text("On hold").font(font(11.5, 400.0).lh(14.0)).color(k.blocked)),
+            row().gap(3.0).center_y().help(why).child(rune::icon(&icons::PAUSE, 11.0).color(k.blocked)).child(text("On hold").font(font(11.5, 400.0).lh(14.0)).color(k.blocked)),
         );
     }
     line = line.child(spacer());

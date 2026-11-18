@@ -53,9 +53,8 @@ pub fn detail(s: &Main, st: &HubState, id: &str, k: &K, kit: &Kit) -> El {
     }
     // It failed: what it said (Callout(tone: .error)).
     if let Some(l) = d.live().filter(|l| l.state() == LiveState::Error) {
-        let mut body = col().gap(4.0).grow(1.0).min_w(0.0).child(
-            text(format!("{} failed", model::app_name(d.agent_app().as_deref()))).font(font(13.0, 600.0).lh(16.0)).color(k.text),
-        );
+        let mut body =
+            col().gap(4.0).grow(1.0).min_w(0.0).child(text(format!("{} failed", model::app_name(d.agent_app().as_deref()))).font(font(13.0, 600.0).lh(16.0)).color(k.text));
         if let Some(m) = l.msg() {
             body = body.child(text(m).font(font(12.5, 400.0).lh(17.0)).color(k.text2).wrap().selectable(true));
         }
@@ -378,7 +377,14 @@ fn composer(s: &Main, d: &Docket, to_agent: bool, k: &K) -> El {
             .center_y()
             .child(text(if to_agent { "Sent through Rex, and kept on the record." } else { "Signed as you" }).font(font(11.5, 400.0).lh(15.0)).color(k.faint))
             .child(spacer())
-            .child(widgets::button("composer-send", if to_agent { "Send  ⌘↩" } else { "Note  ⌘↩" }, true, ready, k, move |s: &mut Main, _| if to_agent { s.send(&b) } else { s.note(&b) })),
+            .child(widgets::button(
+                "composer-send",
+                if to_agent { "Send  ⌘↩" } else { "Note  ⌘↩" },
+                true,
+                ready,
+                k,
+                move |s: &mut Main, _| if to_agent { s.send(&b) } else { s.note(&b) },
+            )),
     )
 }
 
@@ -480,7 +486,15 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
     c = c.child(widgets::field(
         "Linear",
         match (d.linear_key(), model::text(&d.j["linear"]["url"])) {
-            (Some(key), url) => link("inspector-linear", &key, Box::new(move |_, tx| if let Some(u) = &url { let _ = tx.open_url(u); })),
+            (Some(key), url) => link(
+                "inspector-linear",
+                &key,
+                Box::new(move |_, tx| {
+                    if let Some(u) = &url {
+                        let _ = tx.open_url(u);
+                    }
+                }),
+            ),
             (None, _) => link("link-issue", "Link issue…", Box::new(move |s, _| s.open_form(Sheet::LinkIssue(a.clone())))),
         },
         k,
@@ -500,7 +514,8 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
             Some(l) => format!("{}{}", l.state().word(), l.since().map(|s| format!(" · {}", model::ago(Some(&s)))).unwrap_or_default()),
             None => model::text(&d.j["released"]).map(|r| format!("Ended · {r}")).unwrap_or_else(|| "Not running".into()),
         };
-        let mut now_row = row().gap(6.0).center_y().child(theme::live_icon(Some(d.live().map(|l| l.state()).unwrap_or(LiveState::Idle)), 12.0, k)).child(widgets::value_text(now, k));
+        let mut now_row =
+            row().gap(6.0).center_y().child(theme::live_icon(Some(d.live().map(|l| l.state()).unwrap_or(LiveState::Idle)), 12.0, k)).child(widgets::value_text(now, k));
         if can_start {
             let a = id.to_string();
             now_row = now_row.child(link("start-again", "Start one…", Box::new(move |s, _| s.open_form(Sheet::StartAgent(a.clone())))));
@@ -572,11 +587,11 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
     c = c.child(widgets::field(
         "Hold",
         match d.hold() {
-            Some(why) => row()
-                .gap(8.0)
-                .center_y()
-                .child(text("On hold").font(font(12.5, 400.0).lh(16.0)).color(k.blocked).help(why))
-                .child(link("resume", "Resume", Box::new(move |s, _| s.resume(&a)))),
+            Some(why) => row().gap(8.0).center_y().child(text("On hold").font(font(12.5, 400.0).lh(16.0)).color(k.blocked).help(why)).child(link(
+                "resume",
+                "Resume",
+                Box::new(move |s, _| s.resume(&a)),
+            )),
             None => link("hold", "Hold…", Box::new(move |s, _| s.sheet = Some(Sheet::Hold(a.clone())))).help("Build and Review take no steps on it until you resume it"),
         },
         k,
@@ -604,11 +619,11 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
                 .help("Open the record: every signed entry, and what the check means")
                 .on_press(move |s: &mut Main| s.sheet = Some(Sheet::Record(a.clone())))
                 .child(icon(&icons::SHIELD, 13.0).color(if ok { k.working } else { k.error }))
-                .child(
-                    text(if ok { format!("Intact · {} signed", p.verify_entries()) } else { "Doesn't check".into() })
-                        .font(font(12.5, 400.0).lh(16.0))
-                        .color(if ok { k.working } else { k.error }),
-                ),
+                .child(text(if ok { format!("Intact · {} signed", p.verify_entries()) } else { "Doesn't check".into() }).font(font(12.5, 400.0).lh(16.0)).color(if ok {
+                    k.working
+                } else {
+                    k.error
+                })),
             k,
         ));
     }
@@ -630,10 +645,9 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
     let (a, b) = (id.to_string(), id.to_string());
     c = c.child(widgets::field(
         "Record",
-        row()
-            .gap(10.0)
-            .child(link("open-record", "Open", Box::new(move |s, _| s.sheet = Some(Sheet::Record(a.clone())))))
-            .child(link("export-record", "Export…", Box::new(move |s, tx| record::export(s, &b, tx))).help(format!("Save {id}.jsonl: it checks without the hub (wh verify --file)"))),
+        row().gap(10.0).child(link("open-record", "Open", Box::new(move |s, _| s.sheet = Some(Sheet::Record(a.clone()))))).child(
+            link("export-record", "Export…", Box::new(move |s, tx| record::export(s, &b, tx))).help(format!("Save {id}.jsonl: it checks without the hub (wh verify --file)")),
+        ),
         k,
     ));
     let _ = Place::Inbox;
@@ -682,22 +696,16 @@ fn hold_sheet(s: &Main, id: &str, k: &K) -> El {
         .padding(20.0)
         .gap(14.0)
         .child(
-            row()
-                .gap(12.0)
-                .child(icon(&icons::PAUSE_CIRCLE, 26.0).color(k.blocked))
-                .child(
-                    col()
-                        .gap(4.0)
-                        .min_w(0.0)
-                        .child(text(format!("Hold {id}")).font(font(14.0, 600.0).lh(18.0)).color(k.text).role("heading").level(2))
-                        .child(text(title).font(font(12.5, 400.0).lh(16.0)).color(k.muted).truncate()),
-                ),
+            row().gap(12.0).child(icon(&icons::PAUSE_CIRCLE, 26.0).color(k.blocked)).child(
+                col()
+                    .gap(4.0)
+                    .min_w(0.0)
+                    .child(text(format!("Hold {id}")).font(font(14.0, 600.0).lh(18.0)).color(k.text).role("heading").level(2))
+                    .child(text(title).font(font(12.5, 400.0).lh(16.0)).color(k.muted).truncate()),
+            ),
         )
         .child(
-            text("Build and Review take no steps on it, polls included, until you resume it. Agents in its panes carry on.")
-                .font(font(12.5, 400.0).lh(17.0))
-                .color(k.text2)
-                .wrap(),
+            text("Build and Review take no steps on it, polls included, until you resume it. Agents in its panes carry on.").font(font(12.5, 400.0).lh(17.0)).color(k.text2).wrap(),
         )
         .child(row().w_full().px(8.0).py(6.0).radius(6.0).fill(k.elev).border(1.0, k.line2).child(field))
         .child(row().w_full().gap(8.0).child(spacer()).child(widgets::button("hold-cancel", "Cancel", false, true, k, |s: &mut Main, _| s.sheet = None)).child(widgets::button(

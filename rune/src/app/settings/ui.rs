@@ -447,9 +447,10 @@ pub fn scrim(card: El, k: &K) -> El {
         .absolute(0.0, 0.0)
         .w_full()
         .h_full()
-        .fill(Color::BLACK.alpha(if k.dark { 0.45 } else { 0.18 }))
+        .fill(Color::BLACK.alpha(if k.dark { 0.25 } else { 0.18 }))
         .items_center()
-        .pt(56.0)
+        .justify_center()
+        .py(24.0)
         .modal(true, |s: &mut Settings| s.sheet = None)
         .child(card)
 }

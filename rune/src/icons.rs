@@ -233,8 +233,30 @@ icon!(
     r#"<g fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><circle cx="5.3" cy="8" r="0.9" fill="currentColor"/><circle cx="8" cy="8" r="0.9" fill="currentColor"/><circle cx="10.7" cy="8" r="0.9" fill="currentColor"/></g>"#
 );
 // info.circle: a Note's.
-icon!(INFO, "info", 16.0, r#"<g fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 7.2V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="5" r="0.85" fill="currentColor"/></g>"#);
+icon!(
+    INFO,
+    "info",
+    16.0,
+    r#"<g fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 7.2V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="5" r="0.85" fill="currentColor"/></g>"#
+);
 // lightbulb: a Tip's.
-icon!(BULB, "bulb", 16.0, r#"<g fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.6 10.2C4.6 9.4 4 8.3 4 7C4 4.8 5.8 3 8 3C10.2 3 12 4.8 12 7C12 8.3 11.4 9.4 10.4 10.2V11.5H5.6Z"/><path d="M6.2 13.5H9.8"/></g>"#);
+icon!(
+    BULB,
+    "bulb",
+    16.0,
+    r#"<g fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5.6 10.2C4.6 9.4 4 8.3 4 7C4 4.8 5.8 3 8 3C10.2 3 12 4.8 12 7C12 8.3 11.4 9.4 10.4 10.2V11.5H5.6Z"/><path d="M6.2 13.5H9.8"/></g>"#
+);
 // pause.circle: on hold.
-icon!(PAUSE_CIRCLE, "pause-circle", 16.0, r#"<g fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="8" cy="8" r="6.2"/><path d="M6.5 5.8V10.2M9.5 5.8V10.2"/></g>"#);
+icon!(
+    PAUSE_CIRCLE,
+    "pause-circle",
+    16.0,
+    r#"<g fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><circle cx="8" cy="8" r="6.2"/><path d="M6.5 5.8V10.2M9.5 5.8V10.2"/></g>"#
+);
+// folder: where an agent runs.
+icon!(
+    FOLDER,
+    "folder",
+    16.0,
+    r#"<path d="M2.5 4.8C2.5 4.1 3 3.5 3.7 3.5H6.3L7.6 4.9H12.3C13 4.9 13.5 5.4 13.5 6.1V11.3C13.5 12 13 12.5 12.3 12.5H3.7C3 12.5 2.5 12 2.5 11.3Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" fill="none"/>"#
+);

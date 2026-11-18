@@ -282,24 +282,14 @@ pub fn md_with(src: &str, size: Option<f32>, k: &K, kit: &rune_kit::Kit, on_task
                     _ => (k.accent, &crate::icons::INFO, "Note"),
                 };
                 let fs = size.unwrap_or(kit.ty.body.size);
-                row()
-                    .w_full()
-                    .gap(10.0)
-                    .child(el().w(3.0).radius(1.0).fill(color).self_stretch())
-                    .child(
-                        col()
-                            .grow(1.0)
-                            .min_w(0.0)
-                            .gap(6.0)
-                            .child(
-                                row()
-                                    .gap(6.0)
-                                    .center_y()
-                                    .child(rune::icon(glyph, fs).color(color))
-                                    .child(text(title).font(font(fs, 600.0).lh((fs * 1.3).round())).color(color)),
-                            )
-                            .child(rune_kit::Markdown::new(body).selectable(true).render(&style)),
-                    )
+                row().w_full().gap(10.0).child(el().w(3.0).radius(1.0).fill(color).self_stretch()).child(
+                    col()
+                        .grow(1.0)
+                        .min_w(0.0)
+                        .gap(6.0)
+                        .child(row().gap(6.0).center_y().child(rune::icon(glyph, fs).color(color)).child(text(title).font(font(fs, 600.0).lh((fs * 1.3).round())).color(color)))
+                        .child(rune_kit::Markdown::new(body).selectable(true).render(&style)),
+                )
             }
         });
     }
