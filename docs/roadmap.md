@@ -90,6 +90,9 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [x] Linear intake (`sources.linear`): an issue assigned to you with the
       label starts a Build on Linear's branch; one in your active cycle is
       offered (**Build it / Not this one**); a skip label leaves it alone
+- [x] Pre-review (`prereview`): reviewers review the branch blind before
+      the PR opens, posting nothing; blocking findings go back to the
+      builder, and what's left is at the open gate
 - [x] `scripts/build-e2e.sh`: a Build end to end on a scratch hub, with
       stand-in agents, gh, origin and Linear
 
@@ -122,8 +125,6 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### Build after the PR opens
 
-- [ ] Pre-review: a Review of the branch before the PR opens, with your
-      own reviewers, posting nothing
 - [ ] Build run live on more real repos
 
 ### Review

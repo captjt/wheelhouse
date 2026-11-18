@@ -241,6 +241,7 @@ pub(super) fn brief(name: &str) -> String {
         "plan.md" => include_str!("../../briefs/build/plan.md"),
         "build.md" => include_str!("../../briefs/build/build.md"),
         "address.md" => include_str!("../../briefs/build/address.md"),
+        "prereview.md" => include_str!("../../briefs/build/prereview.md"),
         _ => include_str!("../../briefs/build/check.md"),
     }
     .to_string()
@@ -298,10 +299,23 @@ fn app_of(agent: &str) -> &'static str {
 /// Open a role's pane behind the wall and hand it `prompt`.
 pub(super) async fn open_role(shared: &Shared, cfg: &Config, t: &mut Task, role: &str, prompt: &str, place: Place<'_>) -> Result<()> {
     let w = wt(t);
-    let r = if role == "builder" { &cfg.builder } else { &cfg.checker };
+    // `reviewer:<i>:<name>` is pre-review's reviewer i, known by its name.
+    let reviewer = role.strip_prefix("reviewer:").and_then(|x| x.split_once(':')).and_then(|(i, n)| Some((i.parse::<usize>().ok()?, n.to_string())));
+    let r = match &reviewer {
+        Some((i, _)) => cfg.prereview.get(*i).ok_or_else(|| anyhow!("no pre-reviewer {i}"))?,
+        None if role == "builder" => &cfg.builder,
+        None => &cfg.checker,
+    };
     let view = json!({ "key": t.key, "title": t.title, "repo": t.repo, "source": t.source });
-    let effort = cfg.effort(if role == "builder" { "build" } else { "check" }, &view)?;
-    let resume = if role == "builder" { t.builder.session.clone() } else { t.checker.session.clone() };
+    let effort = match (&reviewer, r.effort.as_str()) {
+        (Some(_), Some(e)) if crate::review::config::LEVELS.contains(&e) => Some(e.to_string()),
+        _ => cfg.effort(if role == "builder" { "build" } else { "check" }, &view)?,
+    };
+    let resume = match &reviewer {
+        Some((_, name)) => t.prereview.as_ref().and_then(|p| p["reviewers"][name.as_str()]["session"].as_str().map(str::to_string)),
+        None if role == "builder" => t.builder.session.clone(),
+        None => t.checker.session.clone(),
+    };
     let checkout = cfg.repos.get(&t.repo).map(|x| x.checkout.clone()).unwrap_or_default();
     let title = format!("wheelhouse build {} {role}", t.docket);
     let l = wall::argv(
@@ -341,10 +355,13 @@ pub(super) async fn open_role(shared: &Shared, cfg: &Config, t: &mut Task, role:
     }
     let session = if r.agent == "codex" { agentcli::codex_thread(&w, since).or(l.session) } else { l.session };
     let a = super::Agent { agent: r.agent.clone(), session, pane: Some(label), block: Some(created.block_id.clone()), effort };
-    if role == "builder" {
-        t.builder = a;
-    } else {
-        t.checker = a;
+    match &reviewer {
+        Some((_, name)) => {
+            let p = t.prereview.get_or_insert_with(|| json!({ "n": 0, "reviewers": {} }));
+            p["reviewers"][name.as_str()] = serde_json::to_value(&a)?;
+        }
+        None if role == "builder" => t.builder = a,
+        None => t.checker = a,
     }
     t.session_id = Some(created.session_id.clone());
     panes::deliver(shared, &created.session_id, &created.block_id, prompt).await?;
@@ -509,6 +526,7 @@ pub async fn step(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<Option<
             let idle = idle_for(bpane.as_ref().and_then(|p| p.1.as_deref()));
             return super::address::step(shared, cfg, t, &bstat, free, idle).await;
         }
+        "prereview" => return super::prereview::step(shared, cfg, t).await,
         "pushing" => {
             if let Err(e) = super::address::push(shared, cfg, t).await.and_then(|a| a.map_or(Ok(()), |a| Err(anyhow!(a.text)))) {
                 let e = format!("{e:#}");
@@ -937,6 +955,17 @@ async fn after_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
         );
         return tell_builder(shared, t, &text, "WORKING building").await;
     }
+    // Reviewers, blind, before it opens.
+    if super::prereview::due(cfg, t) {
+        return super::prereview::start(shared, cfg, t).await;
+    }
+    gates(shared, cfg, t).await
+}
+
+/// After the check (and pre-review): the preview gate when there's
+/// something to see, then the open gate.
+pub(super) async fn gates(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
+    let w = wt(t);
     // Something to see?
     let preview = std::fs::read_to_string(w.join(".tmp/preview.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok());
     if let Some(p) = preview.filter(|_| cfg.gate("preview") == "ask" && t.previewed_head != t.checked_head) {
@@ -1032,6 +1061,9 @@ fn ask_open(shared: &Shared, t: &mut Task, failed: Option<&str>) -> Result<()> {
     }
     if !left.is_empty() {
         body.push_str(&format!("\nFindings:\n{}\n", left.join("\n")));
+    }
+    if let Some(p) = super::prereview::summary(t) {
+        body.push_str(&p);
     }
     body.push_str(&format!(
         "\nOpen PR pushes {} and opens it {}on {} with the plan attached. Needs changes sends your words to the builder.",

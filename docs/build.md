@@ -57,6 +57,7 @@ In the app, **Build it** on a docket does the same as `wh build start`.
 | Plan gate | The plan: Intent, Acceptance, Decisions, Approach, Out of scope, Notes | **Approve / Revise / Discard** |
 | Build | The builder implements, tests, commits, drafts the PR | |
 | Check | The checker checks the branch against the plan; up to two fix rounds | |
+| Pre-review | With `prereview` set: reviewers review the branch blind, as they would its PR, posting nothing; blocking findings go back to the builder | |
 | Preview | When there's something to see, `wh share` puts it on your tailnet | **Looks right / Needs work** |
 | Open gate | The PR as it will open: title, body, commits, the check | **Open PR / Needs changes / Discard** |
 | Open | Wheelhouse pushes the checked head and opens a draft PR with the plan | |
@@ -132,6 +133,7 @@ the hub at another file.
 | `builder`, `checker` | `"claude"`, `"codex"`, or `{ agent, extra_args, effort }` | `"claude"`, `"claude"` |
 | `gates` | `plan`, `preview`, `open`, `address`, `push`: `"ask"` or `"auto"`; `start = { label, cycle }` for Linear intake | `"ask"`; `start`: label `"auto"`, cycle `"ask"` |
 | `update` | how a round brings the branch up to date with its base: `"merge"`, or `"rebase"` (pushed with a lease) | `"merge"` |
+| `prereview` | `{ reviewers = { "codex" }, loops = 1 }`: reviewers who review the branch blind before the PR opens; `loops` is how many times they may send it back | off |
 | `fix_loops` | fix rounds after the checker finds something (each address round has its own) | 2 |
 | `max_decisions` | decisions a plan may leave open at once | 3 |
 | `max_tasks` | Builds working at once (one waiting on a gate doesn't count) | 2 |
@@ -213,7 +215,24 @@ away. Threads are never resolved: the reviewers do that.
 rebased branch with a lease: only over the head the round started from,
 never over anyone's newer commits.
 
-Pre-review (a Review of the branch before the PR opens) is next. [roadmap.md](roadmap.md) has the order.
+## Pre-review
+
+With `prereview = { reviewers = { "codex" } }`, each reviewer reviews the
+branch blind once the checker passes it, before the open gate: the intent,
+the plan, the PR's draft, and the whole diff, held to what counts as
+blocking in a review (`briefs/build/prereview.md`). Each writes its own
+findings, with evidence, and reads no one else's. Nothing is posted.
+
+Blocking findings send the branch back to the builder, then through the
+checker, and the reviewers look again, in their own sessions, up to `loops`
+times (1). What's left, blocking or not, is listed at the open gate, so
+you decide with it in front of you. Each look's findings are kept on the
+docket.
+
+Pre-reviewers run behind the same wall as the builder and the checker. Each
+costs a review's worth of tokens per look, so it's off until you name them.
+
+ [roadmap.md](roadmap.md) has the order.
 
 ## Trying it
 

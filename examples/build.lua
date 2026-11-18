@@ -60,6 +60,10 @@ return {
   -- a force-push) or "rebase" (pushed with a lease).
   update = "merge",
 
+  -- Reviewers who review the branch blind before the PR opens, posting
+  -- nothing; blocking findings go back to the builder, up to `loops` times.
+  -- prereview = { reviewers = { "codex" }, loops = 1 },
+
   -- Fix rounds after the checker finds something.
   fix_loops = 2,
   -- Decisions a plan may leave open at once. More means it isn't ready.
