@@ -16,6 +16,7 @@ mod brief;
 mod build;
 mod checks;
 mod client;
+mod complete;
 mod decisions;
 mod doctor;
 mod evidence;
@@ -42,7 +43,7 @@ mod tailnet;
 mod time;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -63,7 +64,10 @@ enum Cmd {
         all: bool,
     },
     /// One docket's record.
-    Show { docket: String },
+    Show {
+        #[arg(add = complete::dockets())]
+        docket: String,
+    },
     /// Open a docket by hand, or from a Linear issue (--linear ENG-142).
     New {
         title: Option<String>,
@@ -71,14 +75,25 @@ enum Cmd {
         linear: Option<String>,
     },
     /// Link a Linear issue to a docket.
-    Link { docket: String, issue: String },
+    Link {
+        #[arg(add = complete::dockets())]
+        docket: String,
+        issue: String,
+    },
     /// A docket's intent: print it, or set it (TEXT, or - for stdin).
-    Intent { docket: String, text: Option<String> },
+    Intent {
+        #[arg(add = complete::dockets())]
+        docket: String,
+        text: Option<String>,
+    },
     /// What an agent reads to work on a docket (its own, from its pane).
-    Brief { docket: Option<String> },
+    Brief {
+        #[arg(add = complete::dockets())]
+        docket: Option<String>,
+    },
     /// Message an agent's pane, or you (`--to me`), with options as buttons.
     Send {
-        #[arg(long)]
+        #[arg(long, add = complete::addresses())]
         to: String,
         #[arg(long)]
         subject: Option<String>,
@@ -89,8 +104,9 @@ enum Cmd {
     },
     /// Answer message N: words, an option (--choice), or both.
     Reply {
+        #[arg(add = complete::messages())]
         n: i64,
-        #[arg(long)]
+        #[arg(long, add = complete::choices())]
         choice: Option<String>,
         text: Option<String>,
     },
@@ -101,6 +117,7 @@ enum Cmd {
     },
     /// Read message N.
     Read {
+        #[arg(add = complete::messages())]
         n: i64,
         #[arg(long)]
         json: bool,
@@ -125,7 +142,7 @@ enum Cmd {
         codex: bool,
         #[arg(long)]
         docket: Option<String>,
-        #[arg(short = 'C', long, default_value = ".")]
+        #[arg(short = 'C', long, default_value = ".", value_hint = clap::ValueHint::DirPath)]
         dir: String,
         #[arg(long)]
         title: Option<String>,
@@ -148,7 +165,9 @@ enum Cmd {
     /// post-mode ask|auto|config, pickup, preview, post, dismiss.
     /// A PR is OWNER/NAME N (or OWNER/NAME#N).
     Review {
+        #[arg(add = complete::words(complete::REVIEW))]
         action: Option<String>,
+        #[arg(add = complete::review_args())]
         args: Vec<String>,
         /// With `on`: even though rex-reviewer still runs.
         #[arg(long)]
@@ -159,6 +178,7 @@ enum Cmd {
     /// Move over from another tool, once: `wh import rex-reviewer` brings its
     /// config, guides and ledger into Wheelhouse.
     Import {
+        #[arg(add = complete::words(complete::IMPORT))]
         from: String,
         #[arg(long)]
         force: bool,
@@ -166,7 +186,9 @@ enum Cmd {
     /// Build: `start D-12|owner/name#45|ENG-142 [--repo owner/name]`,
     /// `discard D-12`, `pause`, `resume`, or the list.
     Build {
+        #[arg(add = complete::words(complete::BUILD))]
         action: Option<String>,
+        #[arg(add = complete::build_args())]
         args: Vec<String>,
         #[arg(long)]
         repo: Option<String>,
@@ -174,33 +196,45 @@ enum Cmd {
         json: bool,
     },
     /// What happened: today, this week (the default), or 30 days; as Markdown.
-    Recap { period: Option<String> },
+    Recap {
+        #[arg(add = complete::words(complete::RECAP))]
+        period: Option<String>,
+    },
     /// The agents' skill for Wheelhouse: show, install, or remove.
-    Skill { action: Option<String> },
+    Skill {
+        #[arg(add = complete::words(complete::SKILL))]
+        action: Option<String>,
+    },
     /// Store a Linear API key in the Keychain.
     SetupLinear,
     /// Add a note to a docket. From an agent's pane, the note is the agent's.
-    Note { docket: String, text: String },
+    Note {
+        #[arg(add = complete::dockets())]
+        docket: String,
+        text: String,
+    },
     /// Keep a file (a report, a page, an image) or a link (a Claude artifact)
     /// with a docket: the record pins a file by its hash. From an agent's
     /// pane, its own docket.
     Attach {
         /// A file, or an https:// link.
+        #[arg(value_hint = clap::ValueHint::FilePath)]
         what: String,
         /// What it is, for people. Defaults to the file's name.
         #[arg(long)]
         title: Option<String>,
-        #[arg(long)]
+        #[arg(long, add = complete::dockets())]
         docket: Option<String>,
     },
     /// Rename a docket, or set its status (todo, in_progress, done, dropped).
     /// A docket with acceptance items closes on evidence (a passing check,
     /// a merged PR), or on your word: --anyway --reason "…".
     Set {
+        #[arg(add = complete::dockets())]
         docket: String,
         #[arg(long)]
         title: Option<String>,
-        #[arg(long)]
+        #[arg(long, add = complete::words(complete::STATUS))]
         status: Option<String>,
         /// Close it without evidence, on your word (the record says so).
         #[arg(long)]
@@ -211,6 +245,7 @@ enum Cmd {
     /// Run a docket's witnessed checks now (its repo's `checks` in
     /// build.lua or Settings), in its worktree; --wait for the results.
     Check {
+        #[arg(add = complete::dockets())]
         docket: String,
         #[arg(long)]
         wait: bool,
@@ -218,6 +253,7 @@ enum Cmd {
     /// Hold a docket: its protocol takes no steps until you resume it
     /// (--off). The reason goes on the record.
     Hold {
+        #[arg(add = complete::dockets())]
         docket: String,
         reason: Option<String>,
         #[arg(long)]
@@ -228,14 +264,21 @@ enum Cmd {
     Attention,
     /// Check a docket's record (or every docket's), or an exported file.
     Verify {
+        #[arg(add = complete::dockets())]
         docket: Option<String>,
-        #[arg(long)]
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
         file: Option<PathBuf>,
     },
     /// A docket's record as JSON lines, checkable without the hub.
-    Export { docket: String },
+    Export {
+        #[arg(add = complete::dockets())]
+        docket: String,
+    },
     /// The agents' hooks: status, install, or remove.
-    Hooks { action: Option<String> },
+    Hooks {
+        #[arg(add = complete::words(complete::HOOKS))]
+        action: Option<String>,
+    },
     /// Run the hub in the background, at login (a LaunchAgent).
     Up,
     /// Stop the background hub.
@@ -251,12 +294,18 @@ enum Cmd {
     Doctor,
     /// Open a docket (or the Inbox) in Wheelhouse.app, or in the web app
     /// without it
-    Open { docket: Option<String> },
+    Open {
+        #[arg(add = complete::dockets())]
+        docket: Option<String>,
+    },
     /// The app's address on your tailnet; --publish serves it there.
     Web {
         #[arg(long)]
         publish: bool,
     },
+    /// Tab completion for zsh or bash: `eval "$(wh completions zsh)"` in
+    /// ~/.zshrc turns it on (bash: ~/.bashrc). Alone, it says how.
+    Completions { shell: Option<complete::Shell> },
     /// Run by an agent's hooks.
     #[command(hide = true)]
     Hook {
@@ -267,6 +316,7 @@ enum Cmd {
 }
 
 fn main() {
+    complete::answer(Cli::command);
     let cli = Cli::parse();
     let result = match cli.cmd {
         Some(Cmd::Serve) => serve(),
@@ -277,6 +327,7 @@ fn main() {
         Some(Cmd::Logs { lines }) => service::logs(lines),
         Some(Cmd::Status) => status(),
         Some(Cmd::Doctor) => doctor::run(),
+        Some(Cmd::Completions { shell }) => complete::cli(shell),
         Some(Cmd::Web { publish }) => tailnet::cli(publish),
         Some(Cmd::Open { docket }) => open(docket.as_deref().map(normalize)),
         Some(Cmd::Ls { all }) => ls(all),
