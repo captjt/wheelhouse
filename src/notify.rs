@@ -3,8 +3,12 @@
 //!
 //! Each waits two seconds and is dropped if it resolved meanwhile. While
 //! rex-inbox runs, it already notifies for prompts and failures, so
-//! Wheelhouse notifies only for its own messages. With terminal-notifier on
-//! PATH, a click opens the docket; otherwise osascript posts it.
+//! Wheelhouse notifies only for its own messages.
+//!
+//! While Wheelhouse.app listens (`/api/events?client=mac`), it gets each as a
+//! `notify` event and posts it, with actions (Approve, a reply, Post); the
+//! hub posts nothing itself. Otherwise, with terminal-notifier on PATH, a
+//! click opens the docket; without it, osascript posts it.
 
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -46,8 +50,15 @@ pub async fn run(shared: Shared) {
         tokio::spawn(async move {
             tokio::time::sleep(GRACE).await;
             if let Some(n) = still_due(&shared, &ev) {
-                let url = format!("http://{}{}", crate::server::http_addr().map(|a| a.to_string()).unwrap_or_else(|| "127.0.0.1:7500".into()), n.path);
-                post(&n.title, &n.subtitle, &n.body, &url, &n.group).await;
+                let app = {
+                    let core = shared.lock();
+                    let _ = core.events.send(n.event());
+                    core.mac_apps.load(std::sync::atomic::Ordering::SeqCst) > 0
+                };
+                if !app {
+                    let url = format!("http://{}{}", crate::server::http_addr().map(|a| a.to_string()).unwrap_or_else(|| "127.0.0.1:7500".into()), n.path);
+                    post(&n.title, &n.subtitle, &n.body, &url, &n.group).await;
+                }
             }
         });
     }
@@ -60,6 +71,33 @@ pub struct Note {
     pub body: String,
     pub path: String,
     pub group: String,
+    /// What it's about, for the actions Wheelhouse.app offers on it: the
+    /// event's type, its docket, and a message's id or a review's PR.
+    pub kind: &'static str,
+    pub docket: Option<String>,
+    pub message: Option<i64>,
+    pub key: Option<String>,
+    /// What an answer from the banner must match: a prompt as it was shown
+    /// (record, time, words), or the checked review's digest.
+    pub seen: Value,
+}
+
+impl Note {
+    /// The `notify` event Wheelhouse.app posts.
+    pub fn event(&self) -> Value {
+        serde_json::json!({
+            "type": "notify",
+            "kind": self.kind,
+            "title": self.title,
+            "subtitle": self.subtitle,
+            "body": self.body,
+            "group": self.group,
+            "docket": self.docket,
+            "message": self.message,
+            "key": self.key,
+            "seen": self.seen,
+        })
+    }
 }
 
 /// The notification, if what it's about still needs you.
@@ -84,6 +122,11 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 body: h.msg.clone().unwrap_or_default(),
                 path: format!("{base}/#/d/{docket}"),
                 group: format!("wh-{docket}"),
+                kind: "needs",
+                docket: Some(docket),
+                message: None,
+                key: None,
+                seen: serde_json::json!({ "record": h.id, "updated_at": h.updated_at, "msg": h.msg.clone().or_else(|| h.title.clone()) }),
             })
         }
         // An agent answered what you sent it from the app.
@@ -97,6 +140,11 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 body: ev["text"].as_str().unwrap_or_default().to_string(),
                 path: format!("{base}/#/d/{docket}"),
                 group: format!("wh-{docket}"),
+                kind: "turn",
+                docket: Some(docket),
+                message: None,
+                key: None,
+                seen: Value::Null,
             })
         }
         "message" => {
@@ -108,7 +156,18 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
             let title = if m.options.is_empty() { format!("{from} wrote to you") } else { format!("{from} asks you") };
             let sub = [m.docket.clone(), m.subject.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
             let url = m.docket.as_ref().map(|d| format!("{base}/#/d/{d}")).unwrap_or(format!("{base}/#/inbox"));
-            Some(Note { title, subtitle: sub, body: m.body.lines().next().unwrap_or_default().to_string(), path: url, group: format!("wh-msg-{}", m.id) })
+            Some(Note {
+                title,
+                subtitle: sub,
+                body: m.body.lines().next().unwrap_or_default().to_string(),
+                path: url,
+                group: format!("wh-msg-{}", m.id),
+                kind: "message",
+                docket: m.docket.clone(),
+                message: Some(m.id),
+                key: None,
+                seen: Value::Null,
+            })
         }
         "build" => {
             let docket = ev["docket"].as_str()?.to_string();
@@ -132,6 +191,11 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 body: a.text.clone(),
                 path: format!("{base}/#/d/{docket}"),
                 group: format!("wh-build-{docket}"),
+                kind: "build",
+                docket: Some(docket),
+                message: None,
+                key: None,
+                seen: Value::Null,
             })
         }
         "review" => {
@@ -157,6 +221,15 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 body: a.text.clone(),
                 path: format!("{base}/#/d/{docket}"),
                 group: format!("wh-review-{key}"),
+                kind: "review",
+                docket: Some(docket),
+                message: None,
+                key: Some(key.to_string()),
+                seen: crate::review::all(&core)
+                    .ok()
+                    .and_then(|prs| prs.into_iter().find(|p| p.key() == key))
+                    .map(|p| serde_json::json!({ "digest": crate::review::watch::draft_summary(&p)["digest"] }))
+                    .unwrap_or(Value::Null),
             })
         }
         _ => None,
@@ -188,5 +261,33 @@ async fn post(title: &str, subtitle: &str, body: &str, url: &str, group: &str) {
     };
     if let Err(e) = r {
         say!("notify: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_app_gets_what_its_actions_need() {
+        let n = Note {
+            title: "Claude Code asks you".into(),
+            subtitle: "D-1 · Ship it?".into(),
+            body: "Tests pass.".into(),
+            path: "/#/d/D-1".into(),
+            group: "wh-msg-1".into(),
+            kind: "message",
+            docket: Some("D-1".into()),
+            message: Some(1),
+            key: None,
+            seen: Value::Null,
+        };
+        let ev = n.event();
+        assert_eq!(ev["type"], "notify");
+        assert_eq!(ev["kind"], "message");
+        assert_eq!(ev["group"], "wh-msg-1");
+        assert_eq!(ev["docket"], "D-1");
+        assert_eq!(ev["message"], 1);
+        assert!(ev["key"].is_null());
     }
 }

@@ -1,0 +1,413 @@
+import Foundation
+
+// The hub's answers, as the app reads them (see src/server.rs and
+// web/src/api.ts). Each type wraps its JSON and reads fields on demand, so a
+// field the hub adds or drops never breaks the app.
+
+/// A docket's status.
+enum Status: String, CaseIterable, Identifiable {
+    case todo, in_progress, done, dropped
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .todo: "To do"
+        case .in_progress: "In progress"
+        case .done: "Done"
+        case .dropped: "Dropped"
+        }
+    }
+
+    var isOpen: Bool { self == .todo || self == .in_progress }
+}
+
+/// What an agent is doing, from its program status in Rex.
+enum LiveState: String {
+    case working, blocked, error, done, idle, starting
+
+    var word: String {
+        switch self {
+        case .working: "Working"
+        case .blocked: "Needs you"
+        case .error: "Failed"
+        case .done: "Finished"
+        case .idle: "Idle"
+        case .starting: "Starting"
+        }
+    }
+}
+
+func appName(_ app: String?) -> String {
+    switch app {
+    case "claude-code", "claude": "Claude Code"
+    case "codex": "Codex"
+    case let a? where !a.isEmpty: a
+    default: "Agent"
+    }
+}
+
+struct Live: Hashable {
+    let j: JSON
+    var block: String { j["block"].str ?? "" }
+    var record: String? { j["record"].str }
+    var answerable: Bool { j["answerable"].bool }
+    var app: String { j["app"].str ?? "" }
+    var state: LiveState { LiveState(rawValue: j["state"].str ?? "") ?? .idle }
+    var kind: String? { j["kind"].text }
+    var msg: String? { j["msg"].text }
+    var since: String? { j["since"].str }
+    var rexSession: String { j["rex_session"].str ?? "" }
+    var pane: String { j["pane"].str ?? "" }
+    var cwd: String? { j["cwd"].text }
+    var docket: String? { j["docket"].text }
+}
+
+struct AgentRef: Hashable {
+    let j: JSON
+    var app: String { j["app"].str ?? "" }
+    var block: String { j["block"].str ?? "" }
+    var rexSession: String { j["rex_session"].str ?? "" }
+    var pane: String { j["pane"].str ?? "" }
+    var cwd: String? { j["cwd"].text }
+}
+
+struct LinearRef: Hashable, Identifiable {
+    let j: JSON
+    var id: String { key }
+    var key: String { j["key"].str ?? j["identifier"].str ?? "" }
+    var url: URL? { j["url"].str.flatMap(URL.init(string:)) }
+    var title: String? { j["title"].text }
+    var state: String? { j["state"].text }
+    var stateType: String? { j["state_type"].text }
+    var priority: String? { j["priority"].text }
+    var assignee: String? { j["assignee"].text }
+    var description: String? { j["description"].text }
+    var team: String? { j["team"].text }
+}
+
+struct Intent: Hashable {
+    let j: JSON
+    var body: String { j["body"].str ?? "" }
+    var source: String { j["source"].str ?? "" }
+    var at: String { j["at"].str ?? "" }
+}
+
+struct ReviewRef: Hashable {
+    let j: JSON
+    var key: String { j["key"].str ?? "" }
+    var url: URL? { j["url"].str.flatMap(URL.init(string:)) }
+    var title: String? { j["title"].text }
+    var round: Int? { j["round"].int }
+    var verdict: String? { j["verdict"].text }
+    var phase: String? { j["phase"].text }
+    var mergeRisk: String? { j["merge_risk"].text }
+}
+
+struct Docket: Hashable, Identifiable {
+    let j: JSON
+    var id: String { j["id"].str ?? "" }
+    var title: String { j["title"].str ?? id }
+    var titleSource: String { j["title_source"].str ?? "" }
+    var status: Status { Status(rawValue: j["status"].str ?? "") ?? .todo }
+    var proto: String { j["protocol"].str ?? "none" }
+    var agent: AgentRef? { j["agent"].object == nil ? nil : AgentRef(j: j["agent"]) }
+    var session: String? { j["session"].text }
+    var prompts: Int { j["prompts"].int ?? 0 }
+    var turns: Int { j["turns"].int ?? 0 }
+    var lastTurn: String? { j["last_turn"].text }
+    var released: String? { j["released"].text }
+    var createdAt: String { j["created_at"].str ?? "" }
+    var updatedAt: String { j["updated_at"].str ?? "" }
+    var entries: Int { j["entries"].int ?? 0 }
+    var head: String { j["head"].str ?? "" }
+    var shortHead: String { j["short_head"].str ?? "" }
+    var live: Live? { j["live"].object == nil ? nil : Live(j: j["live"]) }
+    var intent: Intent? { j["intent"].object == nil ? nil : Intent(j: j["intent"]) }
+    var intentVersions: Int { j["intent_versions"].int ?? 0 }
+    var linear: LinearRef? { j["linear"].object == nil ? nil : LinearRef(j: j["linear"]) }
+    var linearAlso: [LinearRef] { j["linear_also"].array.map(LinearRef.init) }
+    var review: ReviewRef? { j["review"].object == nil ? nil : ReviewRef(j: j["review"]) }
+    var isOpen: Bool { status.isOpen }
+    var talks: Bool { proto == "agent" && agent != nil }
+    var hasIntent: Bool { !(intent?.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }
+}
+
+struct Msg: Hashable, Identifiable {
+    let j: JSON
+    var id: Int { j["id"].int ?? 0 }
+    var docket: String? { j["docket"].text }
+    var from: String { j["from"].str ?? "" }
+    var fromApp: String? { j["from_app"].text }
+    var subject: String? { j["subject"].text }
+    var body: String { j["body"].str ?? "" }
+    var options: [String] { j["options"].strings }
+    var createdAt: String { j["created_at"].str ?? "" }
+    var preview: JSON { j["preview"] }
+    var who: String { from == "wheelhouse" ? "Wheelhouse" : fromApp ?? appName(from) }
+    var title: String {
+        subject ?? body.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? "Message #\(id)"
+    }
+}
+
+struct Attention: Hashable {
+    let j: JSON
+    var kind: String { j["kind"].str ?? "" }
+    var text: String { j["text"].str ?? "" }
+    var round: Int { j["round"].int ?? 0 }
+}
+
+struct Draft: Hashable {
+    let j: JSON
+    var event: String { j["event"].str ?? "" }
+    var verdict: String? { j["verdict"].text }
+    var blocking: Int { j["blocking"].int ?? 0 }
+    var nonBlocking: Int { j["non_blocking"].int ?? 0 }
+    var mergeRisk: String? { j["merge_risk"].text }
+    var digest: String? { j["digest"].text }
+}
+
+struct ReviewRound: Hashable, Identifiable {
+    let j: JSON
+    var id: String { "\(round)-\(at ?? "")" }
+    var round: Int { j["round"].int ?? 0 }
+    var verdict: String? { j["verdict"].text }
+    var by: String? { j["by"].text }
+    var at: String? { j["at"].text }
+    var url: URL? { j["url"].str.flatMap(URL.init(string:)) }
+    var blocking: Int? { j["blocking"].int }
+    var nonBlocking: Int? { j["non_blocking"].int }
+    var mergeRisk: String? { j["merge_risk"].text }
+    var tokens: Int? { j["tokens"]["total"].int }
+    var found: String {
+        (j["reviewers"].object ?? [:]).sorted { $0.key < $1.key }.map { name, r in
+            let kept = r["kept"].int ?? r["drafted"].int ?? 0
+            return "\(name): \(kept)" + ((r["only"].int ?? 0) > 0 ? " (\(r["only"].int!) alone)" : "")
+        }.joined(separator: " · ")
+    }
+}
+
+struct ReviewPr: Hashable, Identifiable {
+    let j: JSON
+    var id: String { fullKey }
+    var key: String { j["key"].str ?? "" }
+    var fullKey: String { j["full_key"].str ?? key }
+    var repo: String { j["repo"].str ?? "" }
+    var pr: Int { j["pr"].int ?? 0 }
+    var url: URL? { j["url"].str.flatMap(URL.init(string:)) }
+    var title: String? { j["title"].text }
+    var author: String? { j["author"].text }
+    var state: String { j["state"].str ?? "" }
+    var phase: String? { j["phase"].text }
+    var round: Int { j["round"].int ?? 0 }
+    var verdict: String? { j["verdict"].text }
+    var mergeRisk: String? { j["merge_risk"].text }
+    var implementation: String? { j["implementation"].text }
+    var docket: String? { j["docket"].text }
+    var reviewersDone: Int { j["reviewers_done"].int ?? 0 }
+    var reviewersTotal: Int { j["reviewers_total"].int ?? reviewers.count }
+    var reviewers: [(name: String, agent: String, effort: String?)] {
+        j["reviewers"].array.map { ($0["name"].str ?? "", $0["agent"].str ?? "", $0["effort"].text) }
+    }
+
+    var checkerEffort: String? { j["checker_effort"].text }
+    var startError: String? { j["start_error"].text }
+    var attention: Attention? { j["attention"].object == nil ? nil : Attention(j: j["attention"]) }
+    var postedAt: String? { j["posted_at"].text }
+    var updatedAt: String? { j["updated_at"].text }
+    var history: [ReviewRound] { j["history"].array.map(ReviewRound.init) }
+    var draft: Draft? { j["draft"].object == nil ? nil : Draft(j: j["draft"]) }
+    var ready: Bool { state == "reviewing" && phase == "awaiting" }
+
+    static func == (a: ReviewPr, b: ReviewPr) -> Bool { a.j == b.j }
+    func hash(into h: inout Hasher) { h.combine(j) }
+}
+
+struct ReviewStatus: Hashable {
+    let j: JSON
+    var enabled: Bool { j["enabled"].bool }
+    var paused: Bool { j["paused"].bool }
+    var auto: Bool { j["post"].str == "auto" }
+    var config: JSON { j["config"] }
+    var configError: String? { j["config_error"].text }
+    var lastScanAt: String? { j["last_scan_at"].text }
+    var scanError: String? { j["scan_error"].text }
+    var doing: String? { j["doing"].text }
+    var rexReviewerRunning: Bool { j["rex_reviewer_running"].bool }
+    var prs: [ReviewPr] { j["prs"].array.map(ReviewPr.init) }
+}
+
+struct BuildTask: Hashable, Identifiable {
+    let j: JSON
+    var id: String { docket }
+    var docket: String { j["docket"].str ?? "" }
+    var key: String { j["key"].str ?? "" }
+    var title: String { j["title"].str ?? "" }
+    var repo: String { j["repo"].str ?? "" }
+    var state: String { j["state"].str ?? "" }
+    var phase: String? { j["phase"].text }
+    var branch: String? { j["branch"].text }
+    var base: String? { j["base"].text }
+    var planVersion: Int { j["plan_version"].int ?? 0 }
+    var checkN: Int { j["check_n"].int ?? 0 }
+    var fixUsed: Int { j["fix_used"].int ?? 0 }
+    var lastCheck: JSON { j["last_check"] }
+    var prNumber: Int? { j["pr_number"].int }
+    var prURL: URL? { j["pr_url"].str.flatMap(URL.init(string:)) }
+    var builder: JSON { j["builder"] }
+    var checker: JSON { j["checker"] }
+    var decisions: [JSON] { j["decisions"].array }
+    var asks: [String] { j["asks"].strings }
+    var why: String? { j["why"].text }
+    var startError: String? { j["start_error"].text }
+    var updatedAt: String? { j["updated_at"].text }
+    var attention: Attention? { j["attention"].object == nil ? nil : Attention(j: j["attention"]) }
+    var needsYou: Bool { attention != nil || (!asks.isEmpty && state == "active") }
+    var finished: Bool { ["merged", "closed", "discarded"].contains(state) }
+}
+
+struct BuildStatus: Hashable {
+    let j: JSON
+    var paused: Bool { j["paused"].bool }
+    var doing: String? { j["doing"].text }
+    var config: JSON { j["config"] }
+    var repos: [String] { j["config"]["repos"].strings }
+    var configError: String? { j["config_error"].text }
+    var tasks: [BuildTask] { j["tasks"].array.map(BuildTask.init) }
+}
+
+/// What `/api/state` says: every docket, what needs you, and the protocols.
+struct HubState: Hashable {
+    let j: JSON
+    let dockets: [Docket]
+    let byId: [String: Docket]
+    let messages: [Msg]
+    let review: ReviewStatus?
+    let build: BuildStatus?
+
+    init(_ j: JSON) {
+        self.j = j
+        dockets = j["dockets"].array.map(Docket.init)
+        byId = Dictionary(dockets.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        messages = j["messages"].array.map(Msg.init)
+        review = j["review"].object == nil ? nil : ReviewStatus(j: j["review"])
+        build = j["build"].object == nil ? nil : BuildStatus(j: j["build"])
+    }
+
+    static func == (a: HubState, b: HubState) -> Bool { a.j == b.j }
+    func hash(into h: inout Hasher) { h.combine(j) }
+
+    var owner: String { j["owner"].str ?? "you" }
+    var hooks: Bool { j["hooks"].bool }
+    var linear: Bool { j["linear"].bool }
+    var rexConnected: Bool { j["rex"]["connected"].bool }
+    var rexError: String? { j["rex"]["error"].text }
+    var agents: [Live] { j["agents"].array.map(Live.init) }
+    var prs: [ReviewPr] { review?.prs ?? [] }
+    var tasks: [BuildTask] { build?.tasks ?? [] }
+    func task(for docket: String) -> BuildTask? { tasks.first { $0.docket == docket } }
+    func pr(for docket: String) -> ReviewPr? { prs.first { $0.docket == docket } }
+}
+
+/// One entry of a docket's record, as its page shows it.
+struct Entry: Hashable, Identifiable {
+    let j: JSON
+    var id: Int { seq }
+    var seq: Int { j["seq"].int ?? 0 }
+    var entryId: String { j["id"].str ?? "" }
+    var chain: String { j["chain"].str ?? "" }
+    var kind: String { j["kind"].str ?? "" }
+    var at: String { j["at"].str ?? "" }
+    var actorType: String { j["actor"]["type"].str ?? "" }
+    var actorId: String { j["actor"]["id"].str ?? "" }
+    /// The app an agent actor speaks for (`claude-code@block` → `claude-code`).
+    var actorApp: String { String(actorId.split(separator: "@").first ?? "") }
+    var body: String? { j["body"].str }
+    var data: JSON { j["data"] }
+    var mark: String { j["mark"].str ?? "said" }
+    var key: String? { j["key"].text }
+    // The record view's extras.
+    var blobs: [String] { j["blobs"].strings }
+    var keyid: String? { j["keyid"].text }
+    var problems: [String] { j["problems"].strings }
+}
+
+struct Verify: Hashable {
+    let j: JSON
+    var ok: Bool { j["ok"].bool }
+    var entries: Int { j["entries"].int ?? 0 }
+    var head: String? { j["head"].text }
+    var problems: [String] { j["problems"].strings }
+}
+
+struct DocketPage: Hashable {
+    let j: JSON
+    let docket: Docket
+    let entries: [Entry]
+    init(_ j: JSON) {
+        self.j = j
+        docket = Docket(j: j["docket"])
+        entries = j["entries"].array.map(Entry.init)
+    }
+
+    static func == (a: DocketPage, b: DocketPage) -> Bool { a.j == b.j }
+    func hash(into h: inout Hasher) { h.combine(j) }
+
+    var verify: Verify { Verify(j: j["verify"]) }
+    var queued: [(id: Int, body: String, at: String)] { j["queued"].array.map { ($0["id"].int ?? 0, $0["body"].str ?? "", $0["at"].str ?? "") } }
+}
+
+// ---- dates ----
+
+private let isoFrac: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return f
+}()
+
+private let isoPlain = ISO8601DateFormatter()
+
+func date(_ iso: String?) -> Date? {
+    guard let iso, !iso.isEmpty else { return nil }
+    return isoFrac.date(from: iso) ?? isoPlain.date(from: iso)
+}
+
+/// How long ago, in the list's few characters: now, 5m, 3h, 2d, Mar 4.
+func ago(_ iso: String?, now: Date = Date()) -> String {
+    guard let d = date(iso) else { return "" }
+    let s = max(0, now.timeIntervalSince(d))
+    if s < 60 { return "now" }
+    if s < 3600 { return "\(Int(s / 60))m" }
+    if s < 86400 { return "\(Int(s / 3600))h" }
+    if s < 86400 * 7 { return "\(Int(s / 86400))d" }
+    return d.formatted(.dateTime.month(.abbreviated).day())
+}
+
+/// The same, in words: just now, 5m ago, Mar 4.
+func agoLong(_ iso: String?) -> String {
+    let a = ago(iso)
+    if a.isEmpty { return "" }
+    if a == "now" { return "just now" }
+    return a.last.map { "mhd".contains($0) } == true && a.first?.isNumber == true ? "\(a) ago" : a
+}
+
+/// A timestamp: Mar 4, 14:05.
+func stamp(_ iso: String?) -> String {
+    guard let d = date(iso) else { return iso ?? "" }
+    return d.formatted(.dateTime.month(.abbreviated).day().hour(.twoDigits(amPM: .omitted)).minute())
+}
+
+func shortPath(_ p: String?) -> String {
+    guard let p else { return "" }
+    let home = NSHomeDirectory()
+    return p.hasPrefix(home) ? "~" + p.dropFirst(home.count) : p
+}
+
+func plural(_ n: Int, _ word: String, _ many: String? = nil) -> String {
+    "\(n) \(n == 1 ? word : many ?? word + "s")"
+}
+
+/// The first line worth showing of an agent's turn: no Markdown marks.
+func firstLine(_ s: String?) -> String? {
+    s?.split(separator: "\n").lazy.map {
+        $0.replacingOccurrences(of: "**", with: "").trimmingCharacters(in: CharacterSet(charactersIn: "#>*- \t"))
+    }.first { !$0.isEmpty }
+}

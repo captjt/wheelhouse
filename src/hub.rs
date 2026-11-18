@@ -37,6 +37,9 @@ pub struct Core {
     /// Something live changed since the last `live` event went out: events
     /// go out at most a few times a second (`run_live`), not once per change.
     pub live_dirty: Arc<std::sync::atomic::AtomicBool>,
+    /// Wheelhouse.app windows following the events: while one is, the app
+    /// posts the Mac's notifications (with their actions), not the hub.
+    pub mac_apps: Arc<std::sync::atomic::AtomicUsize>,
     /// Each docket's last quick check, by its head: a record that hasn't
     /// moved isn't checked again.
     verified: std::collections::HashMap<String, (String, verify::Report)>,
@@ -84,6 +87,7 @@ impl Core {
             review: Default::default(),
             build: Default::default(),
             live_dirty: Default::default(),
+            mac_apps: Default::default(),
             verified: Default::default(),
         };
         for name in ["owner", "hub"] {

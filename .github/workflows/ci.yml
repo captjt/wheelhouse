@@ -1,5 +1,6 @@
 # What a pull request needs to pass: `just check`, on macOS (Wheelhouse is a
-# Mac app: it drives Rex, the Keychain and launchd).
+# Mac app: it drives Rex, the Keychain and launchd). macOS 26 has Xcode 26,
+# which Wheelhouse.app needs (Swift 6.2).
 name: check
 
 on:
@@ -16,13 +17,17 @@ concurrency:
 
 jobs:
   check:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: mac/.build
+          key: swiftpm-${{ hashFiles('mac/Package.resolved') }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: web/.nvmrc

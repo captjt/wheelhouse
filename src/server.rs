@@ -1288,10 +1288,38 @@ async fn hook(State(shared): State<Shared>, Json(req): Json<Hook>) -> ApiResult 
     Ok(Json(v))
 }
 
-async fn events(State(shared): State<Shared>) -> impl IntoResponse {
-    let rx = shared.lock().events.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|r| r.ok()).map(|ev| Event::default().json_data(ev));
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(20)))
+#[derive(Deserialize)]
+struct EventsQ {
+    client: Option<String>,
+}
+
+/// Counts a connected Wheelhouse.app for as long as its stream lives.
+struct MacApp(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for MacApp {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// What changed, as it happens. `?client=mac` is Wheelhouse.app: while it
+/// listens, the Mac's notifications are its to post.
+async fn events(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<EventsQ>) -> impl IntoResponse {
+    let (rx, app) = {
+        let core = shared.lock();
+        let app = (q.client.as_deref() == Some("mac")).then(|| {
+            core.mac_apps.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            MacApp(core.mac_apps.clone())
+        });
+        (core.events.subscribe(), app)
+    };
+    let stream = BroadcastStream::new(rx).filter_map(|r| r.ok()).map(move |ev| {
+        let _held = &app;
+        Event::default().json_data(ev)
+    });
+    // nosniff: without it, URLSession (Wheelhouse.app) holds the first bytes
+    // back to guess their type, and the stream looks dead for a while.
+    ([(header::X_CONTENT_TYPE_OPTIONS, "nosniff"), (header::CACHE_CONTROL, "no-cache")], Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(5))))
 }
 
 // ---- the web app ----

@@ -1,0 +1,237 @@
+import SwiftUI
+
+/// Who wrote an intent version, in words.
+func intentAuthor(_ e: Entry, _ d: Docket) -> String {
+    switch e.data["source"].str {
+    case "linear": return e.data["taken_by"].exists ? "Linear (\(e.data["key"].str ?? "")), taken by you" : "Linear (\(e.data["key"].str ?? d.linear?.key ?? "issue"))"
+    case "review": return "Wheelhouse, from the PR"
+    default: return e.actorType == "person" ? "You" : e.actorType == "agent" ? appName(e.actorApp) : "Wheelhouse"
+    }
+}
+
+/// The docket's living spec: what it's for, how you'll know it's done, and
+/// what's out of scope. Each edit, and each box you tick, is a new version
+/// on the record, by whoever made it.
+struct IntentSection: View {
+    let d: Docket
+    let entries: [Entry]
+    @Environment(Store.self) private var store
+    @State private var editing = false
+    @State private var text = ""
+    @State private var preview = false
+    @State private var busy = false
+    @State private var history = false
+
+    var body: some View {
+        let versions = entries.filter { $0.kind == "intent" }
+        let intent = d.intent
+        let linearAhead = d.proto != "review" && intent != nil && intent?.source != "linear" && (d.linear?.description).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) != (intent?.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines) } == true
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Intent").font(.system(size: 13, weight: .semibold)).foregroundStyle(K.text)
+                if let i = intent, let cur = versions.last {
+                    Text("v\(d.intentVersions) · \(intentAuthor(cur, d)) · \(agoLong(i.at))").font(.system(size: 12)).foregroundStyle(K.muted).help(stamp(i.at))
+                }
+                Spacer()
+                if versions.count > 1, !editing {
+                    Button("History", systemImage: "clock.arrow.circlepath") { history = true }.buttonStyle(.borderless).controlSize(.small)
+                }
+                if !editing, intent != nil {
+                    Button("Edit", systemImage: "pencil") { edit() }.buttonStyle(.borderless).controlSize(.small)
+                }
+            }
+            if linearAhead, !editing {
+                HStack(spacing: 8) {
+                    Image(systemName: "circle.hexagongrid")
+                    Text("\(d.linear?.key ?? "The issue")'s description in Linear has changed since this was edited here.")
+                    Spacer()
+                    Button("Use Linear's version") { store.takeLinear(d) }.controlSize(.small)
+                }
+                .font(.system(size: 12.5))
+                .padding(10)
+                .background(K.accentSoft, in: RoundedRectangle(cornerRadius: 8))
+            }
+            if editing {
+                VStack(alignment: .leading, spacing: 0) {
+                    Picker("", selection: $preview) {
+                        Text("Write").tag(false)
+                        Text("Preview").tag(true)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize().padding(10)
+                    Divider()
+                    Group {
+                        if preview {
+                            MarkdownView(text: text.isEmpty ? "_Nothing yet._" : text).frame(minHeight: 120, alignment: .topLeading)
+                        } else {
+                            Editor(text: $text, placeholder: "What must be true when this is done?\n\n## Acceptance\n- [ ] …\n\n## Out of scope\n- …", minHeight: 160, maxHeight: 520, font: .monospacedSystemFont(ofSize: 12.5, weight: .regular), focus: true, onSubmit: save, onCancel: { editing = false })
+                        }
+                    }
+                    .padding(12)
+                    Divider()
+                    HStack {
+                        Text("Each save is a new version on the record, signed as you.").font(.system(size: 11.5)).foregroundStyle(K.faint)
+                        Spacer()
+                        Button("Cancel") { editing = false }
+                        Button("Save  ⌘↩") { save() }
+                            .buttonStyle(.borderedProminent).tint(K.accent)
+                            .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines) == (intent?.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                    .controlSize(.small)
+                    .padding(10)
+                }
+                .background(K.elev, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(K.accent.opacity(0.5)))
+            } else if let i = intent, !i.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                MarkdownView(text: i.body, size: 13.5) { line, checked in tick(line, checked) }
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { edit() }
+            } else {
+                Button { edit() } label: {
+                    (Text("Write the intent: ").bold() + Text("what this docket is for, how you'll know it's done, and what's out of scope. Agents read it with `wh brief`."))
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(K.muted)
+                        .multilineTextAlignment(.leading)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 10).strokeBorder(K.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sheet(isPresented: $history) { IntentHistory(d: d, versions: versions) }
+    }
+
+    private func edit() {
+        text = d.intent?.body ?? ""
+        preview = false
+        editing = true
+    }
+
+    private func save() {
+        guard !busy else { return }
+        busy = true
+        Task {
+            if await store.setIntent(d.id, text, versions: d.intentVersions) { editing = false }
+            busy = false
+        }
+    }
+
+    private func tick(_ line: Int, _ checked: Bool) {
+        guard let body = d.intent?.body, let next = MD.toggleTask(body, line: line, checked: checked) else {
+            store.toast("That box isn't plain in the text: edit the intent to change it", error: true)
+            return
+        }
+        Task {
+            if await store.act("/api/dockets/\(d.id)/intent", ["body": next]) != nil {
+                store.toast("\(d.id): \(checked ? "ticked off" : "unticked"), saved as version \(d.intentVersions + 1)")
+            }
+        }
+    }
+}
+
+/// Every version of the intent: as it read, and what each changed.
+struct IntentHistory: View {
+    let d: Docket
+    let versions: [Entry]
+    @State private var i: Int
+    @State private var changes = false
+    @Environment(\.dismiss) private var dismiss
+
+    init(d: Docket, versions: [Entry]) {
+        self.d = d
+        self.versions = versions
+        _i = State(initialValue: max(0, versions.count - 1))
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            List(selection: Binding<Int?>(get: { i }, set: { if let v = $0 { i = v } })) {
+                Section("Versions") {
+                    ForEach(Array(versions.enumerated()).reversed(), id: \.offset) { n, v in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("v\(n + 1) · \(intentAuthor(v, d))").font(.system(size: 12.5, weight: .medium))
+                            Text(agoLong(v.at)).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                        }
+                        .tag(n)
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .frame(width: 220)
+            Divider()
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("v\(i + 1) · \(intentAuthor(versions[i], d)) · \(stamp(versions[i].at))").font(.headline)
+                    Spacer()
+                    if i > 0 {
+                        Picker("", selection: $changes) {
+                            Text("Rendered").tag(false)
+                            Text("Changes").tag(true)
+                        }
+                        .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    } else {
+                        Text("first version").foregroundStyle(.secondary)
+                    }
+                    Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                }
+                .padding(14)
+                Divider()
+                ScrollView {
+                    if changes && i > 0 {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(lineDiff(versions[i - 1].body ?? "", versions[i].body ?? "").enumerated()), id: \.offset) { _, l in
+                                HStack(spacing: 8) {
+                                    Text(l.op == .add ? "+" : l.op == .del ? "−" : " ").foregroundStyle(l.op == .add ? K.working : l.op == .del ? K.error : K.faint)
+                                    Text(l.text.isEmpty ? " " : l.text).foregroundStyle(l.op == .same ? K.muted : K.text)
+                                    Spacer(minLength: 0)
+                                }
+                                .font(.system(size: 12, design: .monospaced))
+                                .padding(.horizontal, 10).padding(.vertical, 1.5)
+                                .background(l.op == .add ? K.successTint : l.op == .del ? K.dangerTint : .clear)
+                            }
+                        }
+                        .textSelection(.enabled)
+                        .padding(14)
+                    } else {
+                        MarkdownView(text: versions[i].body ?? "").padding(20)
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 820, idealWidth: 900, minHeight: 520, idealHeight: 640)
+    }
+}
+
+struct DiffLine {
+    enum Op { case same, add, del }
+    let op: Op
+    let text: String
+}
+
+/// A line diff (longest common subsequence): enough for a spec's versions.
+func lineDiff(_ a: String, _ b: String) -> [DiffLine] {
+    let x = a.isEmpty ? [] : a.components(separatedBy: "\n")
+    let y = b.isEmpty ? [] : b.components(separatedBy: "\n")
+    let n = x.count, m = y.count
+    var lcs = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
+    for i in stride(from: n - 1, through: 0, by: -1) {
+        for j in stride(from: m - 1, through: 0, by: -1) {
+            lcs[i][j] = x[i] == y[j] ? lcs[i + 1][j + 1] + 1 : max(lcs[i + 1][j], lcs[i][j + 1])
+        }
+    }
+    var out: [DiffLine] = []
+    var i = 0, j = 0
+    while i < n, j < m {
+        if x[i] == y[j] {
+            out.append(DiffLine(op: .same, text: x[i])); i += 1; j += 1
+        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
+            out.append(DiffLine(op: .del, text: x[i])); i += 1
+        } else {
+            out.append(DiffLine(op: .add, text: y[j])); j += 1
+        }
+    }
+    while i < n { out.append(DiffLine(op: .del, text: x[i])); i += 1 }
+    while j < m { out.append(DiffLine(op: .add, text: y[j])); j += 1 }
+    return out
+}

@@ -1,0 +1,401 @@
+import SwiftUI
+
+/// One command in the palette.
+struct Command: Identifiable {
+    let id: String
+    let group: String
+    let label: String
+    var symbol: String?
+    var status: Status?
+    var hint: String?
+    var keywords = ""
+    let run: () -> Void
+}
+
+/// How well `q` matches `text`: higher is better, nil is no match.
+private func score(_ q: String, _ text: String) -> Int? {
+    if q.isEmpty { return 0 }
+    let t = text.lowercased()
+    if let r = t.range(of: q) { return 100 - t.distance(from: t.startIndex, to: r.lowerBound) }
+    var j = q.startIndex
+    var s = 0
+    for c in t where c == q[j] {
+        j = q.index(after: j)
+        s += 1
+        if j == q.endIndex { return s }
+    }
+    return nil
+}
+
+/// ⌘K: search dockets and run any command, from the keyboard.
+struct PaletteOverlay: View {
+    @Environment(Store.self) private var store
+    @Environment(Nav.self) private var nav
+    @Environment(\.openWindow) private var openWindow
+    @State private var q = ""
+    @State private var sel = 0
+    @FocusState private var focused: Bool
+
+    private var commands: [Command] {
+        var out: [Command] = []
+        if let id = nav.current, let d = store.docket(id) {
+            if d.live != nil {
+                out.append(Command(id: "rex", group: d.id, label: "Show pane in Rex", symbol: "terminal", hint: "O") { store.openInRex(d.id) })
+                out.append(Command(id: "peek", group: d.id, label: "Peek at pane", symbol: "eye", keywords: "screen terminal message send") { nav.pane = d.id })
+            }
+            if d.live?.answerable == true {
+                out.append(Command(id: "approve", group: d.id, label: "Approve: \(d.live?.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "permission yes allow") { Task { await store.answer(d, approve: true) } })
+                out.append(Command(id: "deny", group: d.id, label: "Deny the prompt", symbol: "xmark.circle", keywords: "permission no reject") { Task { await store.answer(d, approve: false) } })
+            }
+            for s in Status.allCases where s != d.status {
+                out.append(Command(id: "st-\(s.rawValue)", group: d.id, label: "Move to \(s.label)", status: s, keywords: "status") { store.setStatus(d.id, s, undo: d.status) })
+            }
+            out.append(Command(id: "win", group: d.id, label: "Open in new window", symbol: "macwindow") { openWindow(id: "docket", value: d.id) })
+            out.append(Command(id: "rec", group: d.id, label: "Read the record", symbol: "checkmark.shield", keywords: "verify signed chain") { nav.record = d.id })
+        }
+        out += [
+            Command(id: "new", group: "Create", label: "New docket", symbol: "square.and.pencil", hint: "⌘N") { nav.creating = .blank },
+            Command(id: "new-agent", group: "Create", label: "Start an agent on a new docket", symbol: "terminal", hint: "⇧⌘N", keywords: "claude codex start run") { nav.creating = .agent },
+            Command(id: "new-linear", group: "Create", label: "New docket from a Linear issue", symbol: "circle.hexagongrid", keywords: "linear issue import") { nav.creating = .linear },
+        ]
+        for (i, (p, key)) in Place.order.enumerated() {
+            out.append(Command(id: "go-\(key)", group: "Go to", label: p.title, symbol: p.symbol, hint: "⌘\(i + 1)") { nav.go(p) })
+        }
+        out += [
+            Command(id: "verify", group: "Record", label: "Verify every docket's record", symbol: "checkmark.shield", keywords: "check chain signatures") { store.verifyAll() },
+            Command(id: "th-system", group: "Theme", label: "Theme: System", symbol: "circle.lefthalf.filled", keywords: "appearance mode auto") { UserDefaults.standard.set("system", forKey: "theme") },
+            Command(id: "th-light", group: "Theme", label: "Theme: Light", symbol: "sun.max", keywords: "appearance mode") { UserDefaults.standard.set("light", forKey: "theme") },
+            Command(id: "th-dark", group: "Theme", label: "Theme: Dark", symbol: "moon", keywords: "appearance mode") { UserDefaults.standard.set("dark", forKey: "theme") },
+        ]
+        for d in store.dockets {
+            out.append(Command(id: "d-\(d.id)", group: "Dockets", label: d.title, status: d.status, hint: d.id, keywords: "\(d.id) \(d.agent?.cwd ?? "") \(d.agent?.rexSession ?? "")") { nav.show(d.id, store: store) })
+        }
+        return out
+    }
+
+    private var shown: [Command] {
+        let all = commands
+        let query = q.trimmingCharacters(in: .whitespaces).lowercased()
+        if query.isEmpty { return all.filter { $0.group != "Dockets" } + all.filter { $0.group == "Dockets" }.prefix(6) }
+        return all.compactMap { c -> (Command, Int)? in
+            let s = max(score(query, c.label) ?? -1, (score(query, c.keywords) ?? -100) - 20)
+            return s >= 0 ? (c, s) : nil
+        }
+        .sorted { $0.1 > $1.1 }
+        .prefix(30)
+        .map(\.0)
+    }
+
+    var body: some View {
+        let list = shown
+        ZStack(alignment: .top) {
+            Color.black.opacity(0.18).ignoresSafeArea().onTapGesture { close() }
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    if let id = nav.current { Text(id).font(.system(size: 11.5, design: .monospaced)).padding(.horizontal, 6).padding(.vertical, 2).background(K.recessed, in: Capsule()) }
+                    TextField("Type a command or search dockets…", text: $q)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 16))
+                        .focused($focused)
+                        .onSubmit { run(list[safe: sel]) }
+                        .onKeyPress(.downArrow) { sel = min(list.count - 1, sel + 1); return .handled }
+                        .onKeyPress(.upArrow) { sel = max(0, sel - 1); return .handled }
+                        .onKeyPress(.escape) { close(); return .handled }
+                }
+                .padding(14)
+                Divider()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            if list.isEmpty { Text("No results").foregroundStyle(.secondary).padding(16) }
+                            ForEach(Array(list.enumerated()), id: \.element.id) { i, c in
+                                if i == 0 || list[i - 1].group != c.group {
+                                    Text(c.group).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
+                                }
+                                HStack(spacing: 10) {
+                                    Group {
+                                        if let s = c.status { StatusIcon(status: s) } else if let sym = c.symbol { Image(systemName: sym) } else { Color.clear }
+                                    }
+                                    .frame(width: 18)
+                                    Text(c.label).lineLimit(1)
+                                    Spacer()
+                                    if let h = c.hint { Text(h).font(.system(size: 11.5, design: c.group == "Dockets" ? .monospaced : .default)).foregroundStyle(.secondary) }
+                                }
+                                .font(.system(size: 13))
+                                .padding(.horizontal, 14).padding(.vertical, 7)
+                                .background(i == sel ? K.accent.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 7))
+                                .padding(.horizontal, 6)
+                                .contentShape(Rectangle())
+                                .onTapGesture { run(c) }
+                                .onHover { if $0 { sel = i } }
+                                .id(i)
+                            }
+                        }
+                        .padding(.bottom, 8)
+                    }
+                    .frame(maxHeight: 380)
+                    .onChange(of: sel) { proxy.scrollTo(sel) }
+                }
+            }
+            .frame(width: 600)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(K.line2))
+            .shadow(color: .black.opacity(0.25), radius: 30, y: 12)
+            .padding(.top, 90)
+        }
+        .onAppear { focused = true }
+        .onChange(of: q) { sel = 0 }
+    }
+
+    private func close() {
+        nav.palette = false
+        q = ""
+    }
+
+    private func run(_ c: Command?) {
+        guard let c else { return }
+        close()
+        c.run()
+    }
+}
+
+extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
+// ---- new dockets ----
+
+struct NewDocketSheet: View {
+    @State var mode: NewMode
+    @Environment(Store.self) private var store
+    @Environment(Nav.self) private var nav
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    @State private var note = ""
+    @State private var cwd = ""
+    @State private var app = "claude-code"
+    @State private var busy = false
+
+    private var folders: [String] {
+        Array(Set(store.dockets.compactMap { $0.agent?.cwd }.filter { !$0.contains("/.local/share/") })).sorted()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("New docket").font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Picker("", selection: $mode) {
+                    Text("Blank").tag(NewMode.blank)
+                    Text("From Linear").tag(NewMode.linear)
+                    Text("Agent").tag(NewMode.agent)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
+            .padding(16)
+            Divider()
+            Group {
+                switch mode {
+                case .blank: blank
+                case .agent: agent
+                case .linear:
+                    LinearPicker(busy: busy) { issue in
+                        busy = true
+                        Task {
+                            if let id = await store.fromLinear(issue.key) { done(id) } else { busy = false }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 620)
+    }
+
+    private var blank: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField("Docket title", text: $title).textFieldStyle(.plain).font(.system(size: 18, weight: .semibold))
+            Editor(text: $note, placeholder: "Add a note… (Markdown, optional)", minHeight: 90, maxHeight: 260, onSubmit: create)
+            HStack {
+                Text("Signed as you, on the record.").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(busy ? "Creating…" : "Create docket") { create() }
+                    .buttonStyle(.borderedProminent).tint(K.accent)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || busy)
+            }
+        }
+        .padding(16)
+    }
+
+    private var agent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Editor(text: $note, placeholder: "What should the agent do? (its first prompt; the docket is named from it)", minHeight: 110, maxHeight: 280, focus: true, onSubmit: start)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                GridRow {
+                    Text("Folder").foregroundStyle(.secondary)
+                    HStack {
+                        TextField("~/git/project", text: $cwd).textFieldStyle(.roundedBorder)
+                        Menu {
+                            ForEach(folders, id: \.self) { f in Button(shortPath(f)) { cwd = shortPath(f) } }
+                            if !folders.isEmpty { Divider() }
+                            Button("Choose…") { choose() }
+                        } label: { Image(systemName: "folder") }
+                            .menuStyle(.borderlessButton).fixedSize()
+                    }
+                }
+                GridRow {
+                    Text("Agent").foregroundStyle(.secondary)
+                    Picker("", selection: $app) {
+                        Text("Claude Code").tag("claude-code")
+                        Text("Codex").tag("codex")
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                }
+                GridRow {
+                    Text("Title").foregroundStyle(.secondary)
+                    TextField("Optional: named from the prompt otherwise", text: $title).textFieldStyle(.roundedBorder)
+                }
+            }
+            HStack {
+                Text("A new tab in Rex's wheelhouse session, named after the docket.").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(busy ? "Starting…" : "Start agent") { start() }
+                    .buttonStyle(.borderedProminent).tint(K.accent)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(cwd.trimmingCharacters(in: .whitespaces).isEmpty || busy)
+            }
+        }
+        .padding(16)
+    }
+
+    private func choose() {
+        let p = NSOpenPanel()
+        p.canChooseDirectories = true
+        p.canChooseFiles = false
+        p.prompt = "Choose"
+        if p.runModal() == .OK, let u = p.url { cwd = shortPath(u.path) }
+    }
+
+    private func create() {
+        let t = title.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, !busy else { return }
+        busy = true
+        Task {
+            if let id = await store.create(title: t, note: note) { done(id) } else { busy = false }
+        }
+    }
+
+    private func start() {
+        let dir = cwd.trimmingCharacters(in: .whitespaces)
+        guard !dir.isEmpty, !busy else { return }
+        busy = true
+        Task {
+            if let id = await store.startAgent(app: app, cwd: dir, prompt: note, title: title.isEmpty ? nil : title) { done(id) } else { busy = false }
+        }
+    }
+
+    private func done(_ id: String) {
+        dismiss()
+        store.reload()
+        Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            nav.show(id, store: store)
+        }
+    }
+}
+
+/// Search Linear: your open assigned issues, or by words, or a key.
+struct LinearPicker: View {
+    var busy = false
+    let pick: (LinearRef) -> Void
+    @Environment(Store.self) private var store
+    @State private var q = ""
+    @State private var issues: [LinearRef] = []
+    @State private var error: String?
+    @State private var loading = false
+    @State private var sel = 0
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("Search Linear, or paste a key (ENG-142)…", text: $q)
+                .textFieldStyle(.plain).font(.system(size: 15)).padding(14)
+                .focused($focused)
+                .onSubmit { if let i = issues[safe: sel] { pick(i) } }
+                .onKeyPress(.downArrow) { sel = min(issues.count - 1, sel + 1); return .handled }
+                .onKeyPress(.upArrow) { sel = max(0, sel - 1); return .handled }
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if let error { Text(error).foregroundStyle(K.error).padding(14) }
+                    if !loading, issues.isEmpty, error == nil { Text(q.isEmpty ? "No open issues assigned to you." : "No issues match.").foregroundStyle(.secondary).padding(14) }
+                    ForEach(Array(issues.enumerated()), id: \.offset) { i, issue in
+                        HStack(spacing: 10) {
+                            StatusIcon(status: issue.stateType == "started" ? .in_progress : issue.stateType == "completed" ? .done : issue.stateType == "canceled" ? .dropped : .todo)
+                            Text(issue.key).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary).frame(width: 74, alignment: .leading)
+                            Text(issue.title ?? "").lineLimit(1)
+                            Spacer()
+                            if let s = issue.state { Text(s).font(.system(size: 11.5)).foregroundStyle(.secondary) }
+                        }
+                        .font(.system(size: 13))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(i == sel ? K.accent.opacity(0.14) : .clear)
+                        .contentShape(Rectangle())
+                        .onTapGesture { pick(issue) }
+                        .onHover { if $0 { sel = i } }
+                    }
+                }
+            }
+            .frame(height: 320)
+            .disabled(busy)
+            .overlay { if busy || loading { ProgressView().controlSize(.small) } }
+        }
+        .onAppear { focused = true }
+        .task(id: q) {
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            loading = true
+            do {
+                let r = try await store.hub.get("/api/linear/search?q=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")")
+                issues = r["issues"].array.map(LinearRef.init)
+                error = nil
+                sel = 0
+            } catch {
+                self.error = Store.words(error)
+                issues = []
+            }
+            loading = false
+        }
+    }
+}
+
+/// Link a Linear issue to a docket.
+struct LinkIssueSheet: View {
+    let docket: String
+    @Environment(Store.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var busy = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Link a Linear issue to \(docket)").font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(16)
+            Divider()
+            LinearPicker(busy: busy) { issue in
+                busy = true
+                Task {
+                    await store.link(docket, issue: issue.key, hadIntent: store.docket(docket)?.intent != nil)
+                    dismiss()
+                }
+            }
+        }
+        .frame(width: 620)
+    }
+}

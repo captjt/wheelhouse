@@ -11,7 +11,7 @@ fixes can go straight to a pull request.
 ## Setting up
 
 You need what the README's [Requirements](README.md#requirements) list:
-Rust 1.88 or later, Node 22.18 or later, `just`, LuaJIT, and Rex. Each
+Rust 1.88 or later, Node 22.18 or later, Xcode 26, `just`, LuaJIT, and Rex. Each
 recipe in the `justfile` is a line or two, so you can run its commands by
 hand instead.
 
@@ -40,7 +40,8 @@ runs the hub at login, and installs the agents' hooks and skill.
 | `src/review/` | The Review protocol: rules, rounds, posting, links to Linear. [docs/review.md](docs/review.md) |
 | `src/build/` | The Build protocol: steps, plans, decisions, the wall. [docs/build.md](docs/build.md) |
 | `briefs/`, `guides/`, `skills/` | What agents read: round briefs, review and plan guides, the `wheelhouse` skill |
-| `web/` | The app: React and TypeScript, built with Vite into the binary. `web/src/mobile.tsx` is the phone's gestures; `web/src/markdown.ts` renders and sanitizes Markdown |
+| `web/` | The web app: React and TypeScript, built with Vite into the binary. `web/src/mobile.tsx` is the phone's gestures; `web/src/markdown.ts` renders and sanitizes Markdown |
+| `mac/` | Wheelhouse.app: SwiftUI, against the same API. `Store.swift` follows the hub; `Models.swift` reads its JSON; `Markdown.swift` renders as the web app does; `Notifier.swift` posts notifications with their actions. `./build.sh` makes the bundle |
 | `scripts/` | The made-up world for screenshots and demos (below) |
 | `examples/` | `review.lua` and `build.lua` to start from |
 
@@ -68,7 +69,14 @@ the social preview card. Nothing of yours shows up in them.
 `scripts/screenshots.sh --serve` keeps that world's hub running at
 http://127.0.0.1:7438 to work on the app against.
 
-**The app with hot reload.** `just dev` serves the app on :5180 against a
+**Wheelhouse.app.** `cd mac && swift run` runs it against your hub;
+`WH_APP_HUB=http://127.0.0.1:7438 swift run` against the made-up world
+(`scripts/screenshots.sh --serve`). `swift test` runs its tests. Run
+outside a bundle, it posts no notifications; `just app` builds the real
+bundle into `~/Applications`. `Wheelhouse --snapshot DIR` renders its
+windows into DIR (see `Snapshot.swift`).
+
+**The web app with hot reload.** `just dev` serves the app on :5180 against a
 running hub. `WH_WEB_DIR=web/dist` makes a hub serve the built app from disk,
 so a rebuilt app shows on reload.
 
@@ -83,6 +91,10 @@ people.
 
 - **Rust:** `just fmt` (rustfmt, `rustfmt.toml`). `just check` refuses
   code that doesn't match, and clippy's warnings.
+- **Swift:** the system's controls first (lists, sheets, the inspector,
+  menus), Kumo's colors from `Theme.swift`, and the web app's words. Read
+  the hub's JSON through `Models.swift`, never with a decoder that fails
+  on a field it doesn't expect.
 - **Words:** docs, comments, UI text and messages to agents are plain
   American English, in short sentences, without "I", "we" or em dashes.
   Name things for what they do. A doc comment says what something is for,
