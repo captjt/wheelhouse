@@ -29,7 +29,15 @@ pub fn all(s: &Main, st: &HubState) -> Vec<Command> {
             out.push(cmd("rex".into(), "This docket", "Show pane in Rex".into(), Mark::Glyph("terminal"), Some("O"), "screen terminal", format!("rex:{id}")));
         }
         if let Some(l) = d.live().filter(|l| l.answerable()) {
-            out.push(cmd("approve".into(), "This docket", format!("Approve: {}", l.msg().unwrap_or_else(|| "the prompt".into())), Mark::Approve, None, "permission yes allow", format!("approve:{id}")));
+            out.push(cmd(
+                "approve".into(),
+                "This docket",
+                format!("Approve: {}", l.msg().unwrap_or_else(|| "the prompt".into())),
+                Mark::Approve,
+                None,
+                "permission yes allow",
+                format!("approve:{id}"),
+            ));
             out.push(cmd("deny".into(), "This docket", "Deny the prompt".into(), Mark::Deny, None, "permission no reject", format!("deny:{id}")));
         }
         if d.hold().is_some() {

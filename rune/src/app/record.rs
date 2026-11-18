@@ -152,9 +152,11 @@ pub fn sheet(s: &Main, id: &str, k: &K, kit: &Kit) -> El {
     }
     if let (Some(rec), Some(v)) = (rec, v) {
         // The check, in words.
-        let mut words = col().gap(4.0).grow(1.0).min_w(0.0).child(
-            text(if ok { "Verified: the record is intact." } else { "The record doesn't check." }).font(font(13.5, 600.0).lh(17.0)).color(k.text),
-        );
+        let mut words = col()
+            .gap(4.0)
+            .grow(1.0)
+            .min_w(0.0)
+            .child(text(if ok { "Verified: the record is intact." } else { "The record doesn't check." }).font(font(13.5, 600.0).lh(17.0)).color(k.text));
         if ok {
             words = words.child(
                 text(format!(
@@ -196,7 +198,9 @@ pub fn sheet(s: &Main, id: &str, k: &K, kit: &Kit) -> El {
         );
         if r.explain {
             let sh = if short.is_empty() { "…".to_string() } else { short.clone() };
-            let bullet = |head: &str, rest: String| Rich::new().push(head, |s| s.weight(600.0).color(k.text2)).push(&format!(" {rest}"), |s| s.color(k.text2)).el().font(font(12.5, 400.0).lh(17.0)).wrap();
+            let bullet = |head: &str, rest: String| {
+                Rich::new().push(head, |s| s.weight(600.0).color(k.text2)).push(&format!(" {rest}"), |s| s.color(k.text2)).el().font(font(12.5, 400.0).lh(17.0)).wrap()
+            };
             means = means.child(
                 col()
                     .w_full()
@@ -338,11 +342,9 @@ fn details(s: &Main, id: &str, e: &Entry, k: &K, kit: &Kit) -> El {
         _ => "Wheelhouse".to_string(),
     };
     let fact = |label: &str, v: String, is_mono: bool| {
-        row()
-            .w_full()
-            .gap(14.0)
-            .child(text(label.to_string()).font(font(12.0, 400.0).lh(16.0)).color(k.muted).w(104.0))
-            .child(text(v).font(if is_mono { mono(11.5).lh(16.0) } else { font(12.0, 400.0).lh(16.0) }).color(k.text).selectable(true).wrap_anywhere().shrink().grow(1.0).min_w(0.0))
+        row().w_full().gap(14.0).child(text(label.to_string()).font(font(12.0, 400.0).lh(16.0)).color(k.muted).w(104.0)).child(
+            text(v).font(if is_mono { mono(11.5).lh(16.0) } else { font(12.0, 400.0).lh(16.0) }).color(k.text).selectable(true).wrap_anywhere().shrink().grow(1.0).min_w(0.0),
+        )
     };
     let mut facts = col()
         .w_full()

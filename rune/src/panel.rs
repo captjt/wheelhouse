@@ -515,7 +515,6 @@ fn poll(s: &mut Panel, _: f64, tx: &mut Tx) -> bool {
     changed
 }
 
-
 /// The panel's window: a launcher panel, hidden until ⌃⌥⌘K.
 pub fn spec(hub: Hub, show_at_launch: bool) -> WindowSpec<Panel> {
     let spec = AppSpec { setup: Some(setup), poll: Some(poll), ..AppSpec::new("Wheelhouse", view::SIZE, || unreachable!(), view::view) };

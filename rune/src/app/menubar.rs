@@ -12,7 +12,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rune::{App, AppHandle, AppSpec, Color, Cx, DisplayTarget, El, Icon, Key, KeyEvent, OverlayPlacement, PopupItem, PopupMenu, ScrollSpec, SystemMaterial, Tx, WindowOptions, WindowSpec, col, el, icon, row, spacer, text};
+use rune::{
+    App, AppHandle, AppSpec, Color, Cx, DisplayTarget, El, Icon, Key, KeyEvent, OverlayPlacement, PopupItem, PopupMenu, ScrollSpec, SystemMaterial, Tx, WindowOptions, WindowSpec,
+    col, el, icon, row, spacer, text,
+};
 use rune_kit::ScrollBar;
 
 use super::{Main, NewMode, Sheet, Window, sidebar, windows};
@@ -247,18 +250,13 @@ fn view(s: &Main, cx: &mut Cx<Main>) -> El {
         .system_material(SystemMaterial::Popover)
         .fill(if dark { theme::hex("#262729") } else { theme::hex("#ececee") })
         .border(1.0, if dark { Color::WHITE.alpha(0.13) } else { Color::BLACK.alpha(0.12) })
-        .child(
-            col()
-                .w_full()
-                .radius(10.0)
-                .continuous_corners()
-                .fill(tint)
-                .child(header)
-                .child(divider(&k, 1.0))
-                .child(body)
-                .child(divider(&k, 1.0))
-                .child(foot(s, state.as_deref(), name, down, &k)),
-        )
+        .child(col().w_full().radius(10.0).continuous_corners().fill(tint).child(header).child(divider(&k, 1.0)).child(body).child(divider(&k, 1.0)).child(foot(
+            s,
+            state.as_deref(),
+            name,
+            down,
+            &k,
+        )))
 }
 
 fn divider(k: &K, opacity: f32) -> El {
@@ -272,25 +270,21 @@ fn item_row(s: &Main, st: Option<&HubState>, it: &InboxItem, k: &K) -> El {
         InboxKind::Done => LiveState::Done,
         _ => LiveState::Blocked,
     };
-    let top = row()
-        .w_full()
-        .gap(9.0)
-        .child(el().pt(2.0).child(theme::live_icon(Some(mark), 13.0, k)))
-        .child(
-            col()
-                .gap(2.0)
-                .grow(1.0)
-                .min_w(0.0)
-                .child(
-                    row()
-                        .w_full()
-                        .gap(4.0)
-                        .child(text(it.title.clone()).font(font(12.5, 600.0).lh(15.0)).color(k.text).truncate().shrink())
-                        .child(spacer())
-                        .child(text(model::ago(it.at.as_deref())).font(font(11.0, 400.0).lh(15.0)).color(k.faint)),
-                )
-                .child(text(format!("{}  {}", it.docket_id, it.line)).font(font(11.5, 400.0).lh(14.0)).color(k.muted).truncate()),
-        );
+    let top = row().w_full().gap(9.0).child(el().pt(2.0).child(theme::live_icon(Some(mark), 13.0, k))).child(
+        col()
+            .gap(2.0)
+            .grow(1.0)
+            .min_w(0.0)
+            .child(
+                row()
+                    .w_full()
+                    .gap(4.0)
+                    .child(text(it.title.clone()).font(font(12.5, 600.0).lh(15.0)).color(k.text).truncate().shrink())
+                    .child(spacer())
+                    .child(text(model::ago(it.at.as_deref())).font(font(11.0, 400.0).lh(15.0)).color(k.faint)),
+            )
+            .child(text(format!("{}  {}", it.docket_id, it.line)).font(font(11.5, 400.0).lh(14.0)).color(k.muted).truncate()),
+    );
     let mut c = col().w_full().gap(6.0).child(top);
     if let Some(a) = actions(s, it, k) {
         c = c.child(a.pl(22.0));
@@ -320,9 +314,23 @@ fn actions(s: &Main, it: &InboxItem, k: &K) -> Option<El> {
         let (a, b) = (p.clone(), p.clone());
         let mut r = row().gap(6.0);
         if p.ready() {
-            r = r.child(small_button(&format!("mb-post-{full}"), if busy("post") { "Posting…" } else { "Post" }, true, !busy("post") && !busy("dismiss"), k, move |s: &mut Main, _| s.post_review(&a)));
+            r = r.child(small_button(
+                &format!("mb-post-{full}"),
+                if busy("post") { "Posting…" } else { "Post" },
+                true,
+                !busy("post") && !busy("dismiss"),
+                k,
+                move |s: &mut Main, _| s.post_review(&a),
+            ));
         }
-        return Some(r.child(small_button(&format!("mb-dismiss-{full}"), if busy("dismiss") { "Dismissing…" } else { "Dismiss" }, false, !busy("post") && !busy("dismiss"), k, move |s: &mut Main, _| s.dismiss_review(&b))));
+        return Some(r.child(small_button(
+            &format!("mb-dismiss-{full}"),
+            if busy("dismiss") { "Dismissing…" } else { "Dismiss" },
+            false,
+            !busy("post") && !busy("dismiss"),
+            k,
+            move |s: &mut Main, _| s.dismiss_review(&b),
+        )));
     }
     if let Some(m) = it.msg.as_ref().filter(|m| !m.options().is_empty()) {
         let busy = s.busy.contains(&format!("reply:{}", m.id()));
@@ -340,8 +348,12 @@ fn actions(s: &Main, it: &InboxItem, k: &K) -> Option<El> {
     Some(
         row()
             .gap(6.0)
-            .child(small_button(&format!("mb-approve-{id}"), if approving { "Approving…" } else { "Approve" }, true, !approving && !denying, k, move |s: &mut Main, _| s.answer(&a, true)))
-            .child(small_button(&format!("mb-deny-{id}"), if denying { "Denying…" } else { "Deny" }, false, !approving && !denying, k, move |s: &mut Main, _| s.answer(&n, false))),
+            .child(small_button(&format!("mb-approve-{id}"), if approving { "Approving…" } else { "Approve" }, true, !approving && !denying, k, move |s: &mut Main, _| {
+                s.answer(&a, true)
+            }))
+            .child(small_button(&format!("mb-deny-{id}"), if denying { "Denying…" } else { "Deny" }, false, !approving && !denying, k, move |s: &mut Main, _| {
+                s.answer(&n, false)
+            })),
     )
 }
 
@@ -361,7 +373,13 @@ fn small_button(key: &str, label: &str, primary: bool, enabled: bool, k: &K, on:
         .continuous_corners()
         .center()
         .fill(fill)
-        .hover(if primary { Color::WHITE.alpha(0.12) } else if k.dark { Color::WHITE.alpha(0.06) } else { Color::BLACK.alpha(0.05) })
+        .hover(if primary {
+            Color::WHITE.alpha(0.12)
+        } else if k.dark {
+            Color::WHITE.alpha(0.06)
+        } else {
+            Color::BLACK.alpha(0.05)
+        })
         .role("button")
         .label(label.to_string())
         .focusable(true)
@@ -658,7 +676,13 @@ mod item {
             });
             let pill = text.as_ref().map(|(_, t)| NSSize::new(t.width.ceil() + 9.0, 13.0));
             let w = 16.0 + pill.map(|p| 3.0 + p.width).unwrap_or(0.0);
-            let color = if alert { Some(ALERT) } else if dev { Some(DEV_BLUE) } else { None };
+            let color = if alert {
+                Some(ALERT)
+            } else if dev {
+                Some(DEV_BLUE)
+            } else {
+                None
+            };
             let draw = RcBlock::new(move |r: NSRect| -> Bool {
                 wheel(NSRect::new(NSPoint::new(0.0, (r.size.height - 16.0) / 2.0), NSSize::new(16.0, 16.0)), color);
                 if let (Some(p), Some((s, t)), Some(a)) = (pill, &text, &attrs) {

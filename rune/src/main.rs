@@ -28,7 +28,10 @@ use store::Store;
 
 /// A headless run: Rune's tooling flags, read before Rune starts.
 fn headless() -> bool {
-    std::env::args().any(|a| matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--video" | "--out" | "--trace" | "--list-scenes" | "--list-windows" | "--strip") && !std::env::args().any(|a| a == "--native"))
+    std::env::args().any(|a| {
+        matches!(a.as_str(), "--snap" | "--tree" | "--script" | "--video" | "--out" | "--trace" | "--list-scenes" | "--list-windows" | "--strip")
+            && !std::env::args().any(|a| a == "--native")
+    })
 }
 
 fn main() {

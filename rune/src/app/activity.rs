@@ -61,18 +61,41 @@ fn shape(e: &Entry, d: &Docket, owner: &str) -> Shape {
     let person = e.actor_type() == "person";
     match e.kind().as_str() {
         "open" => match s(&data["protocol"]).as_deref() {
-            Some("review") => Shape::Sys(Avatar::Pr, vec![B("Wheelhouse".into()), T(format!(" opened this Review docket{}", s(&data["review"]["key"]).map(|k| format!(" for {k}")).unwrap_or_default()))], None),
-            Some("agent") => Shape::Sys(Avatar::Hub, vec![B("Wheelhouse".into()), T(format!(" picked up {agent}{}", d.agent_cwd().map(|c| format!(" in {}", short_path(&c))).unwrap_or_default()))], None),
+            Some("review") => Shape::Sys(
+                Avatar::Pr,
+                vec![B("Wheelhouse".into()), T(format!(" opened this Review docket{}", s(&data["review"]["key"]).map(|k| format!(" for {k}")).unwrap_or_default()))],
+                None,
+            ),
+            Some("agent") => Shape::Sys(
+                Avatar::Hub,
+                vec![B("Wheelhouse".into()), T(format!(" picked up {agent}{}", d.agent_cwd().map(|c| format!(" in {}", short_path(&c))).unwrap_or_default()))],
+                None,
+            ),
             _ if person => Shape::Sys(you, vec![B("You".into()), T(" opened this docket".into())], None),
             _ => Shape::Sys(Avatar::Hub, vec![B("Wheelhouse".into()), T(" opened this docket".into())], None),
         },
         "claim" => {
             let src = s(&data["source"]);
             match src.as_deref() {
-                Some("rex-reviewer") => Shape::Sys(Avatar::Hub, vec![B("rex-reviewer".into()), T(format!(" started its {}{}", model::str_or(&data["role"], ""), model::int(&data["round"]).map(|r| format!(" for round {r}")).unwrap_or_default()))], None),
+                Some("rex-reviewer") => Shape::Sys(
+                    Avatar::Hub,
+                    vec![
+                        B("rex-reviewer".into()),
+                        T(format!(" started its {}{}", model::str_or(&data["role"], ""), model::int(&data["round"]).map(|r| format!(" for round {r}")).unwrap_or_default())),
+                    ],
+                    None,
+                ),
                 Some("wheelhouse") if s(&data["role"]).is_some() => Shape::Sys(
                     Avatar::Hub,
-                    vec![B("Wheelhouse".into()), T(format!(" {} the {}{}", if data["round"].is_number() { "started" } else { "found" }, model::str_or(&data["role"], ""), model::int(&data["round"]).map(|r| format!(" for round {r}")).unwrap_or_default()))],
+                    vec![
+                        B("Wheelhouse".into()),
+                        T(format!(
+                            " {} the {}{}",
+                            if data["round"].is_number() { "started" } else { "found" },
+                            model::str_or(&data["role"], ""),
+                            model::int(&data["round"]).map(|r| format!(" for round {r}")).unwrap_or_default()
+                        )),
+                    ],
                     None,
                 ),
                 Some("wheelhouse") => Shape::Sys(Avatar::Hub, vec![B("Wheelhouse".into()), T(format!(" started {agent} in Rex's wheelhouse session"))], None),
@@ -90,7 +113,12 @@ fn shape(e: &Entry, d: &Docket, owner: &str) -> Shape {
         "question" => Shape::Comment(
             wa,
             writer,
-            format!("asked {}{} (#{})", if model::str_or(&data["to"], "") == "me" { "you".into() } else { model::str_or(&data["to"], "").to_string() }, s(&data["subject"]).map(|x| format!(" · {x}")).unwrap_or_default(), model::int(&data["message"]).unwrap_or(0)),
+            format!(
+                "asked {}{} (#{})",
+                if model::str_or(&data["to"], "") == "me" { "you".into() } else { model::str_or(&data["to"], "").to_string() },
+                s(&data["subject"]).map(|x| format!(" · {x}")).unwrap_or_default(),
+                model::int(&data["message"]).unwrap_or(0)
+            ),
             format!("{}\n\nOptions: {}", e.body().unwrap_or_default(), model::strings(&data["options"]).join(" · ")),
             Some("ask"),
         ),
@@ -103,7 +131,11 @@ fn shape(e: &Entry, d: &Docket, owner: &str) -> Shape {
             let body = e.body().unwrap_or_default();
             if data["message"].is_number() {
                 let verb = model::int(&data["replies_to"]).map(|r| format!("replied to #{r}")).unwrap_or_else(|| {
-                    if model::str_or(&data["to"], "") == "me" { format!("wrote to you{}", s(&data["subject"]).map(|x| format!(" · {x}")).unwrap_or_default()) } else { format!("wrote to {}", model::str_or(&data["to"], "")) }
+                    if model::str_or(&data["to"], "") == "me" {
+                        format!("wrote to you{}", s(&data["subject"]).map(|x| format!(" · {x}")).unwrap_or_default())
+                    } else {
+                        format!("wrote to {}", model::str_or(&data["to"], ""))
+                    }
                 });
                 return Shape::Comment(wa, writer, verb, body, person.then_some("you"));
             }
@@ -122,7 +154,9 @@ fn shape(e: &Entry, d: &Docket, owner: &str) -> Shape {
             }
         },
         "intent" => match s(&data["source"]).as_deref() {
-            Some("linear") => Shape::Sys(Avatar::Issue, vec![B("Linear".into()), T(format!(" set the intent from {}'s description", model::str_or(&data["key"], "the issue")))], Some("intent")),
+            Some("linear") => {
+                Shape::Sys(Avatar::Issue, vec![B("Linear".into()), T(format!(" set the intent from {}'s description", model::str_or(&data["key"], "the issue")))], Some("intent"))
+            }
             Some("review") => Shape::Sys(Avatar::Hub, vec![B("Wheelhouse".into()), T(" wrote the intent from the PR".into())], Some("intent")),
             _ => Shape::Sys(wa, vec![B(writer), T(if person { " updated the intent".into() } else { " proposed the intent".into() })], Some("intent")),
         },
@@ -131,7 +165,12 @@ fn shape(e: &Entry, d: &Docket, owner: &str) -> Shape {
             match model::str_or(&data["kind"], "") {
                 "linear" => Shape::Sys(
                     if person { you } else { Avatar::Issue },
-                    vec![B(if person { "You".into() } else { "Wheelhouse".into() }), T(" linked ".into()), B(key), T(s(&data["title"]).map(|t| format!(" · {t}")).unwrap_or_default())],
+                    vec![
+                        B(if person { "You".into() } else { "Wheelhouse".into() }),
+                        T(" linked ".into()),
+                        B(key),
+                        T(s(&data["title"]).map(|t| format!(" · {t}")).unwrap_or_default()),
+                    ],
                     None,
                 ),
                 "github-pr" => Shape::Sys(Avatar::Pr, vec![T("Following ".into()), B(key), T(" on GitHub".into())], None),
@@ -143,17 +182,36 @@ fn shape(e: &Entry, d: &Docket, owner: &str) -> Shape {
             "review" if model::str_or(&data["source"], "") == "wheelhouse" => Shape::Skip,
             "review-event" => {
                 let ev = model::str_or(&data["event"], "");
-                Shape::Sys(Avatar::Pr, vec![T(e.body().unwrap_or_default())], if ev == "posted" || ev == "merged" { Some("approved") } else if ev == "dismissed" || ev == "post-refused" { Some("denied") } else { None })
+                Shape::Sys(
+                    Avatar::Pr,
+                    vec![T(e.body().unwrap_or_default())],
+                    if ev == "posted" || ev == "merged" {
+                        Some("approved")
+                    } else if ev == "dismissed" || ev == "post-refused" {
+                        Some("denied")
+                    } else {
+                        None
+                    },
+                )
             }
             "review-attention" => {
                 let blocked = matches!(model::str_or(&data["kind"], ""), "ready" | "blocked");
-                Shape::Sys(Avatar::Live(if blocked { LiveState::Blocked } else { LiveState::Error }), vec![T(e.body().unwrap_or_default())], Some(if blocked { "blocked" } else { "error" }))
+                Shape::Sys(
+                    Avatar::Live(if blocked { LiveState::Blocked } else { LiveState::Error }),
+                    vec![T(e.body().unwrap_or_default())],
+                    Some(if blocked { "blocked" } else { "error" }),
+                )
             }
-            "linear-comment" => Shape::Comment(Avatar::Issue, model::str_or(&data["author"], "Someone").to_string(), "commented in Linear".into(), e.body().unwrap_or_default(), Some("linear")),
+            "linear-comment" => {
+                Shape::Comment(Avatar::Issue, model::str_or(&data["author"], "Someone").to_string(), "commented in Linear".into(), e.body().unwrap_or_default(), Some("linear"))
+            }
             "error" => Shape::Sys(Avatar::Live(LiveState::Error), vec![B(agent), T(format!(" failed{}", e.body().map(|b| format!(": {b}")).unwrap_or_default()))], Some("error")),
             _ => Shape::Sys(
                 Avatar::Live(LiveState::Blocked),
-                vec![B(agent), T(format!(" waited on you{}{}", s(&data["kind"]).map(|x| format!(" ({x})")).unwrap_or_default(), e.body().map(|b| format!(": {b}")).unwrap_or_default()))],
+                vec![
+                    B(agent),
+                    T(format!(" waited on you{}{}", s(&data["kind"]).map(|x| format!(" ({x})")).unwrap_or_default(), e.body().map(|b| format!(": {b}")).unwrap_or_default())),
+                ],
                 Some("blocked"),
             ),
         },
@@ -178,12 +236,30 @@ fn shape(e: &Entry, d: &Docket, owner: &str) -> Shape {
         "check" => {
             let ok = model::flag(&data["ok"]);
             let optional = data["required"].as_bool() == Some(false);
-            let how = if ok { "passed".to_string() } else if data["exit"].is_null() { "timed out".into() } else { format!("failed, exit {}", model::int(&data["exit"]).unwrap_or(1)) };
+            let how = if ok {
+                "passed".to_string()
+            } else if data["exit"].is_null() {
+                "timed out".into()
+            } else {
+                format!("failed, exit {}", model::int(&data["exit"]).unwrap_or(1))
+            };
             let head: String = model::str_or(&data["head"], "").chars().take(7).collect();
             Shape::Sys(
                 Avatar::Hub,
-                vec![B("Wheelhouse".into()), T(" ran ".into()), M(model::str_or(&data["name"], "a check").to_string()), T(format!("{} · {how} at ", if optional { " (optional)" } else { "" })), M(head)],
-                if ok { Some("approved") } else if optional { None } else { Some("error") },
+                vec![
+                    B("Wheelhouse".into()),
+                    T(" ran ".into()),
+                    M(model::str_or(&data["name"], "a check").to_string()),
+                    T(format!("{} · {how} at ", if optional { " (optional)" } else { "" })),
+                    M(head),
+                ],
+                if ok {
+                    Some("approved")
+                } else if optional {
+                    None
+                } else {
+                    Some("error")
+                },
             )
         }
         "verdict" => {
@@ -192,7 +268,12 @@ fn shape(e: &Entry, d: &Docket, owner: &str) -> Shape {
             Shape::Comment(
                 wa,
                 writer,
-                format!("{}: {}{}", model::str_or(&data["role"], "checker"), if passed { "passed" } else { "found problems" }, if n > 0 { format!(" · {}", model::plural(n as usize, "finding")) } else { String::new() }),
+                format!(
+                    "{}: {}{}",
+                    model::str_or(&data["role"], "checker"),
+                    if passed { "passed" } else { "found problems" },
+                    if n > 0 { format!(" · {}", model::plural(n as usize, "finding")) } else { String::new() }
+                ),
                 e.body().unwrap_or_default(),
                 None,
             )
@@ -200,7 +281,11 @@ fn shape(e: &Entry, d: &Docket, owner: &str) -> Shape {
         "approval" => {
             if model::str_or(&data["kind"], "") == "review" {
                 let posted = model::str_or(&data["decision"], "") == "post";
-                return Shape::Sys(you, vec![B("You".into()), T(if posted { " posted the review".into() } else { " dismissed the review".into() })], Some(if posted { "approved" } else { "denied" }));
+                return Shape::Sys(
+                    you,
+                    vec![B("You".into()), T(if posted { " posted the review".into() } else { " dismissed the review".into() })],
+                    Some(if posted { "approved" } else { "denied" }),
+                );
             }
             let ok = model::str_or(&data["decision"], "") == "approve";
             let mut bits = vec![B("You".into()), T(format!(" {} {agent}'s {}", if ok { "approved" } else { "denied" }, model::str_or(&data["kind"], "prompt")))];
@@ -278,7 +363,11 @@ pub fn activity(s: &Main, st: &HubState, d: &Docket, p: &DocketPage, k: &K, kit:
             .child(theme::section_title("Activity", k))
             .child(spacer())
             .child(icon(&icons::SHIELD, 12.0).color(if ok { k.working } else { k.error }))
-            .child(text(format!("{} · {} signed", if ok { "Verified" } else { "Doesn't check" }, p.verify_entries())).font(font(12.0, 500.0).lh(15.0)).color(if ok { k.working } else { k.error })),
+            .child(text(format!("{} · {} signed", if ok { "Verified" } else { "Doesn't check" }, p.verify_entries())).font(font(12.0, 500.0).lh(15.0)).color(if ok {
+                k.working
+            } else {
+                k.error
+            })),
     );
     for e in &p.entries {
         let when = model::ago_long(Some(&e.at()));

@@ -62,16 +62,7 @@ fn group(title: &str, keys: &[(String, String)], k: &K) -> El {
                 .w_full()
                 .gap(10.0)
                 .items_start()
-                .child(
-                    text(key.clone())
-                        .font(font(12.0, 500.0).lh(15.0))
-                        .color(k.text)
-                        .px(6.0)
-                        .py(2.0)
-                        .radius(5.0)
-                        .fill(k.recessed)
-                        .border(1.0, k.line),
-                )
+                .child(text(key.clone()).font(font(12.0, 500.0).lh(15.0)).color(k.text).px(6.0).py(2.0).radius(5.0).fill(k.recessed).border(1.0, k.line))
                 .child(text(what.clone()).font(font(12.5, 400.0).lh(16.0)).color(k.text2).wrap().shrink().grow(1.0).min_w(0.0).pt(1.5)),
         );
     }

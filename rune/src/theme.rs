@@ -31,7 +31,6 @@ pub struct K {
     pub main: Color,
     pub elev: Color,
     pub recessed: Color,
-    pub group: Color,
     pub hover: Color,
     pub sel: Color,
     pub line: Color,
@@ -66,7 +65,6 @@ impl K {
             main: p("#ffffff", "#111111"),
             elev: p("#ffffff", "#171717"),
             recessed: p("#f5f5f5", "#0b0b0b"),
-            group: p("#f9f9f9", "#0d0d0d"),
             hover: p("#f3f3f3", "#1a1a1a"),
             sel: p("#ededed", "#1e1e1e"),
             line: p("#e9e9e9", "#232323"),
@@ -147,17 +145,15 @@ pub fn status_icon(s: Status, size: f32, k: &K) -> El {
 /// What an agent is doing: a pulse while it works, a mark when it needs you.
 pub fn live_icon(s: Option<LiveState>, size: f32, k: &K) -> El {
     let c = k.live(s);
-    let mark = |i: &'static Icon| {
-        el().size(size * 12.0 / 14.0, size * 12.0 / 14.0).radius(size * 3.5 / 14.0).fill(c).center().child(icon(i, size * 12.0 / 14.0).color(Color::WHITE))
-    };
+    let mark =
+        |i: &'static Icon| el().size(size * 12.0 / 14.0, size * 12.0 / 14.0).radius(size * 3.5 / 14.0).fill(c).center().child(icon(i, size * 12.0 / 14.0).color(Color::WHITE));
     let inner = match s {
         None => el().size(size, size),
         Some(LiveState::Blocked) => mark(&icons::BANG),
         Some(LiveState::Error) => mark(&icons::CROSS),
-        Some(LiveState::Working) => el()
-            .size(size, size)
-            .center()
-            .child(el().size(size * 0.5, size * 0.5).radius(size * 0.25).fill(c).looping(rune::LoopSpec::opacity(1.4, 0.0, 0.45, 1.0))),
+        Some(LiveState::Working) => {
+            el().size(size, size).center().child(el().size(size * 0.5, size * 0.5).radius(size * 0.25).fill(c).looping(rune::LoopSpec::opacity(1.4, 0.0, 0.45, 1.0)))
+        }
         _ => el().size(size * 0.44, size * 0.44).radius(size * 0.22).fill(c),
     };
     let e = row().size(size, size).center().child(inner);
@@ -193,14 +189,7 @@ pub fn person_avatar(name: &str, size: f32, k: &K) -> El {
 
 /// Wheelhouse itself: the wheel on the brand's gradient.
 pub fn hub_avatar(size: f32, k: &K) -> El {
-    row()
-        .size(size, size)
-        .radius(size * 0.28)
-        .continuous_corners()
-        .gradient(k.brand2, k.brand)
-        .center()
-        .child(icon(&icons::LOGO_WHITE, size * 0.62))
-        .label("Wheelhouse")
+    row().size(size, size).radius(size * 0.28).continuous_corners().gradient(k.brand2, k.brand).center().child(icon(&icons::LOGO_WHITE, size * 0.62)).label("Wheelhouse")
 }
 
 /// A colour from hue, saturation and brightness, as SwiftUI's `Color(hue:…)`.
@@ -250,26 +239,16 @@ pub fn id_text(id: &str, k: &K) -> El {
 
 /// A rounded tag: a verdict, a risk, a phase.
 pub fn chip(t: &str, c: Color, filled: bool) -> El {
-    row()
-        .px(6.0)
-        .py(1.5)
-        .radius(999.0)
-        .fill(if filled { c } else { c.alpha(0.12) })
-        .child(text(t.to_string()).font(font(11.0, 500.0).lh(14.0)).color(if filled { Color::WHITE } else { c }))
+    row().px(6.0).py(1.5).radius(999.0).fill(if filled { c } else { c.alpha(0.12) }).child(text(t.to_string()).font(font(11.0, 500.0).lh(14.0)).color(if filled {
+        Color::WHITE
+    } else {
+        c
+    }))
 }
 
 /// A chip with a mark: the docket's status, or what its agent does.
 pub fn mark_chip(mark: El, t: &str, c: Color, k: &K) -> El {
-    row()
-        .gap(5.0)
-        .pl(5.0)
-        .pr(7.0)
-        .py(2.0)
-        .radius(999.0)
-        .border(1.0, k.line2)
-        .center_y()
-        .child(mark)
-        .child(text(t.to_string()).font(font(11.5, 500.0).lh(14.0)).color(c))
+    row().gap(5.0).pl(5.0).pr(7.0).py(2.0).radius(999.0).border(1.0, k.line2).center_y().child(mark).child(text(t.to_string()).font(font(11.5, 500.0).lh(14.0)).color(c))
 }
 
 /// A status line: tinted by what it's about.

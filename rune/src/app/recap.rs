@@ -108,25 +108,21 @@ fn pick(s: &mut Main, i: usize) {
 pub fn toolbar(s: &Main, k: &K) -> El {
     let segs: Vec<(&str, bool)> = PERIODS.iter().map(|(p, l)| (*l, s.recap.period == *p)).collect();
     let ready = s.recap.data.as_ref().is_some_and(|d| model::text(&d["markdown"]).is_some());
-    row()
-        .gap(6.0)
-        .center_y()
-        .child(widgets::segmented("recap-period", &segs, pick, k))
-        .child(
-            row()
-                .key("recap-copy")
-                .size(28.0, 26.0)
-                .radius(6.0)
-                .center()
-                .hover(k.hover)
-                .role("button")
-                .label("Copy as Markdown")
-                .help("Copy the recap as a Markdown note, for a standup")
-                .focusable(ready)
-                .opacity(if ready { 1.0 } else { 0.4 })
-                .on_press_tx(move |s: &mut Main, tx: &mut Tx| copy(s, tx))
-                .child(icon(&glyphs::CLIPBOARD, 16.0).color(k.muted)),
-        )
+    row().gap(6.0).center_y().child(widgets::segmented("recap-period", &segs, pick, k)).child(
+        row()
+            .key("recap-copy")
+            .size(28.0, 26.0)
+            .radius(6.0)
+            .center()
+            .hover(k.hover)
+            .role("button")
+            .label("Copy as Markdown")
+            .help("Copy the recap as a Markdown note, for a standup")
+            .focusable(ready)
+            .opacity(if ready { 1.0 } else { 0.4 })
+            .on_press_tx(move |s: &mut Main, tx: &mut Tx| copy(s, tx))
+            .child(icon(&glyphs::CLIPBOARD, 16.0).color(k.muted)),
+    )
 }
 
 fn copy(s: &mut Main, tx: &mut Tx) {
@@ -176,7 +172,7 @@ fn compact(n: i64) -> String {
         let s = n.to_string();
         let mut out = String::new();
         for (i, c) in s.chars().enumerate() {
-            if i > 0 && (s.len() - i) % 3 == 0 {
+            if i > 0 && (s.len() - i).is_multiple_of(3) {
                 out.push(',');
             }
             out.push(c);
@@ -361,7 +357,19 @@ fn pr_group(mut c: El, title: &str, prs: &[Value], kind: &str, k: &K) -> El {
     for (i, p) in prs.iter().enumerate() {
         let verdicts = model::strings(&p["verdicts"]);
         let last = verdicts.last().map(String::as_str);
-        let trail = verdicts.iter().map(|v| if v == "APPROVED" { "✓" } else if v == "CHANGES_REQUESTED" { "✕" } else { "·" }).collect::<Vec<_>>().join(" → ");
+        let trail = verdicts
+            .iter()
+            .map(|v| {
+                if v == "APPROVED" {
+                    "✓"
+                } else if v == "CHANGES_REQUESTED" {
+                    "✕"
+                } else {
+                    "·"
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" → ");
         let state = if kind == "open" {
             match last {
                 Some("APPROVED") => "approved, not merged yet".to_string(),
@@ -472,8 +480,20 @@ fn tile(label: &str, value: i64, sub: Option<String>, delta: Option<(i64, i64, &
         .child(text(value.to_string()).font(big).color(k.text));
     if let Some((now, before, words)) = delta {
         let d = now - before;
-        let sign = if d > 0 { "+" } else if d < 0 { "−" } else { "±" };
-        c = c.child(text(format!("{sign}{} vs {words}", d.abs())).font(font(11.5, 400.0).lh(14.0)).color(if d > 0 { k.working } else if d < 0 { k.error } else { k.faint }));
+        let sign = if d > 0 {
+            "+"
+        } else if d < 0 {
+            "−"
+        } else {
+            "±"
+        };
+        c = c.child(text(format!("{sign}{} vs {words}", d.abs())).font(font(11.5, 400.0).lh(14.0)).color(if d > 0 {
+            k.working
+        } else if d < 0 {
+            k.error
+        } else {
+            k.faint
+        }));
     }
     if let Some(sub) = sub {
         c = c.child(text(sub).font(font(11.5, 400.0).lh(14.0)).color(k.muted));

@@ -79,13 +79,23 @@ pub fn sidebar(s: &Main, st: Option<&HubState>, k: &K, kit: &Kit) -> El {
 fn foot(s: &Main, st: Option<&HubState>, k: &K) -> El {
     let mut c = col().key("sidebar-foot").w_full().gap(6.0).px(6.0).pt(6.0).pb(4.0);
     if let Some(build) = st.and_then(|st| st.flavor_build()) {
-        c = c.child(
-            row()
-                .gap(6.0)
-                .center_y()
-                .child(dev_badge(k))
-                .child(text(build).font(theme::mono(11.0).lh(14.0)).color(k.muted).truncate().shrink()),
-        );
+        c = c.child(row().gap(6.0).center_y().child(dev_badge(k)).child(text(build).font(theme::mono(11.0).lh(14.0)).color(k.muted).truncate().shrink()));
+    }
+    // What's off, with the command that turns it on (Dev has them off on purpose).
+    if let Some(st) = st.filter(|st| st.flavor().is_none()) {
+        if !st.hooks() {
+            c = c.child(hint(
+                "hint-hooks",
+                &icons::LINK,
+                "Hooks off",
+                "wh hooks install",
+                "Claude Code's hooks are off, so dockets are named after their panes and turns carry no message.",
+                k,
+            ));
+        }
+        if !st.linear() {
+            c = c.child(hint("hint-linear", &icons::LINEAR, "Linear off", "wh setup-linear", "Connect Linear to start dockets from issues and link issues to dockets.", k));
+        }
     }
     let (dot, line) = match st {
         Some(st) if st.flavor().is_some() => (k.brand, "Nothing live".to_string()),
@@ -112,6 +122,27 @@ fn foot(s: &Main, st: Option<&HubState>, k: &K) -> El {
                 k,
             )),
     )
+}
+
+/// Something off, as a line that copies the command to turn it on.
+fn hint(key: &str, i: &'static rune::Icon, title: &str, command: &'static str, why: &str, k: &K) -> El {
+    row()
+        .key(key.to_string())
+        .w_full()
+        .gap(6.0)
+        .center_y()
+        .role("button")
+        .label(format!("{title}: turn on"))
+        .help(format!("{why} Click to copy the command: {command}"))
+        .focusable(true)
+        .on_press_tx(move |s: &mut Main, tx| {
+            tx.copy(command);
+            s.toast(format!("Copied “{command}”. Run it in a terminal."), false);
+        })
+        .child(row().w(14.0).center().child(rune::icon(i, 12.0).color(k.muted)))
+        .child(text(title.to_string()).font(font(11.5, 400.0).lh(14.0)).color(k.muted))
+        .child(spacer())
+        .child(text("Turn on").font(font(11.5, 400.0).lh(14.0)).color(k.accent))
 }
 
 /// DEV, as a nightly build marks itself.

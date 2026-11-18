@@ -62,10 +62,10 @@ impl Main {
         let land = |s: &mut Main, r: Result<Value, String>| {
             if let Ok(v) = r {
                 s.form.folders = model::strings(&v["folders"]);
-                if s.form.folder.text.is_empty() {
-                    if let Some(f) = model::text(&v["suggested"]).or_else(|| s.form.folders.first().cloned()) {
-                        s.form.folder = TextEdit::new(short(&f).as_str());
-                    }
+                if s.form.folder.text.is_empty()
+                    && let Some(f) = model::text(&v["suggested"]).or_else(|| s.form.folders.first().cloned())
+                {
+                    s.form.folder = TextEdit::new(short(&f).as_str());
                 }
             }
         };
@@ -208,10 +208,16 @@ impl Main {
     pub fn pick_issue(&mut self, i: usize) {
         let Some(key) = self.form.issues.get(i).map(|x| x.key.clone()) else { return };
         match self.sheet.clone() {
-            Some(Sheet::LinkIssue(id)) => self.submit_form(format!("/api/dockets/{id}/linear"), json!({ "key": key }), move |_| (Some(id.clone()), format!("{id} linked to {key}"))),
+            Some(Sheet::LinkIssue(id)) => {
+                self.submit_form(format!("/api/dockets/{id}/linear"), json!({ "key": key }), move |_| (Some(id.clone()), format!("{id} linked to {key}")))
+            }
             _ => self.submit_form("/api/dockets/from-linear".into(), json!({ "key": key }), move |v| {
                 let id = model::text(&v["docket"]);
-                let t = if model::flag(&v["existing"]) { format!("{key} is already {}", id.clone().unwrap_or_default()) } else { format!("{} created from {key}", id.clone().unwrap_or_default()) };
+                let t = if model::flag(&v["existing"]) {
+                    format!("{key} is already {}", id.clone().unwrap_or_default())
+                } else {
+                    format!("{} created from {key}", id.clone().unwrap_or_default())
+                };
                 (id, t)
             }),
         }
@@ -224,7 +230,13 @@ fn short(p: &str) -> String {
 }
 
 fn input(edit: &TextEdit, key: &str, placeholder: &str, single: bool, min_h: f32, k: &K, access: fn(&mut Main) -> &mut TextEdit) -> El {
-    let mut t = text_input(edit, font(13.0, 400.0).lh(18.0)).key(key.to_string()).w_full().color(k.text).placeholder(placeholder.to_string(), k.muted).label(placeholder.to_string()).on_edit(access);
+    let mut t = text_input(edit, font(13.0, 400.0).lh(18.0))
+        .key(key.to_string())
+        .w_full()
+        .color(k.text)
+        .placeholder(placeholder.to_string(), k.muted)
+        .label(placeholder.to_string())
+        .on_edit(access);
     if single {
         t = t.single_line();
     } else {
@@ -290,18 +302,12 @@ fn error_line(s: &Main, k: &K) -> El {
 }
 
 pub fn new_docket(s: &Main, mode: NewMode, k: &K) -> El {
-    let title = row()
-        .w_full()
-        .gap(10.0)
-        .center_y()
-        .child(text("New docket").font(font(14.0, 600.0).lh(18.0)).color(k.text))
-        .child(spacer())
-        .child(widgets::segmented(
-            "new-mode",
-            &[("Blank", mode == NewMode::Blank), ("From Linear", mode == NewMode::Linear), ("Agent", mode == NewMode::Agent)],
-            |s: &mut Main, i| s.open_form(Sheet::NewDocket([NewMode::Blank, NewMode::Linear, NewMode::Agent][i])),
-            k,
-        ));
+    let title = row().w_full().gap(10.0).center_y().child(text("New docket").font(font(14.0, 600.0).lh(18.0)).color(k.text)).child(spacer()).child(widgets::segmented(
+        "new-mode",
+        &[("Blank", mode == NewMode::Blank), ("From Linear", mode == NewMode::Linear), ("Agent", mode == NewMode::Agent)],
+        |s: &mut Main, i| s.open_form(Sheet::NewDocket([NewMode::Blank, NewMode::Linear, NewMode::Agent][i])),
+        k,
+    ));
     let cancel = widgets::button("cancel", "Cancel", false, true, k, |s: &mut Main, _| s.sheet = None);
     let body = match mode {
         NewMode::Blank => {
@@ -322,7 +328,12 @@ pub fn new_docket(s: &Main, mode: NewMode, k: &K) -> El {
                 .child(t)
                 .child(input(&s.form.note, "new-note", "Add a note… (Markdown, optional)", false, 90.0, k, |s| &mut s.form.note))
                 .child(error_line(s, k))
-                .child(footer("Signed as you, on the record.", cancel, widgets::button("create", if s.form.busy { "Creating…" } else { "Create docket" }, true, ready, k, |s: &mut Main, _| s.create_blank()), k))
+                .child(footer(
+                    "Signed as you, on the record.",
+                    cancel,
+                    widgets::button("create", if s.form.busy { "Creating…" } else { "Create docket" }, true, ready, k, |s: &mut Main, _| s.create_blank()),
+                    k,
+                ))
         }
         NewMode::Agent => {
             let ready = !s.form.folder.text.trim().is_empty() && !s.form.busy;
@@ -335,7 +346,12 @@ pub fn new_docket(s: &Main, mode: NewMode, k: &K) -> El {
                 .child(grid_row("Agent", row().child(agent_picker(s, k)), k))
                 .child(grid_row("Title", input(&s.form.title, "agent-title", "Optional: named from the prompt otherwise", true, 0.0, k, |s| &mut s.form.title), k))
                 .child(error_line(s, k))
-                .child(footer("A new tab in Rex's wheelhouse session, named after the docket.", cancel, widgets::button("start", if s.form.busy { "Starting…" } else { "Start agent" }, true, ready, k, |s: &mut Main, _| s.start_agent(None)), k))
+                .child(footer(
+                    "A new tab in Rex's wheelhouse session, named after the docket.",
+                    cancel,
+                    widgets::button("start", if s.form.busy { "Starting…" } else { "Start agent" }, true, ready, k, |s: &mut Main, _| s.start_agent(None)),
+                    k,
+                ))
         }
         NewMode::Linear => linear_picker(s, k),
     };
@@ -407,7 +423,9 @@ fn linear_picker(s: &Main, k: &K) -> El {
     if let Some(e) = &s.form.error {
         rows = rows.child(text(e.clone()).font(font(13.0, 400.0).lh(17.0)).color(k.error).padding(10.0).wrap());
     } else if !s.form.loading && s.form.issues.is_empty() {
-        rows = rows.child(text(if s.form.query.text.is_empty() { "No open issues assigned to you." } else { "No issues match." }).font(font(13.0, 400.0).lh(17.0)).color(k.muted).padding(10.0));
+        rows = rows.child(
+            text(if s.form.query.text.is_empty() { "No open issues assigned to you." } else { "No issues match." }).font(font(13.0, 400.0).lh(17.0)).color(k.muted).padding(10.0),
+        );
     }
     for (i, issue) in s.form.issues.iter().enumerate() {
         let on = i == s.form.sel;
@@ -434,9 +452,5 @@ fn linear_picker(s: &Main, k: &K) -> El {
         }
         rows = rows.child(r);
     }
-    col()
-        .w_full()
-        .child(row().w_full().px(16.0).py(12.0).gap(10.0).center_y().child(icon(&icons::LINEAR, 15.0).color(k.muted)).child(field))
-        .child(theme::hairline(k))
-        .child(rows)
+    col().w_full().child(row().w_full().px(16.0).py(12.0).gap(10.0).center_y().child(icon(&icons::LINEAR, 15.0).color(k.muted)).child(field)).child(theme::hairline(k)).child(rows)
 }

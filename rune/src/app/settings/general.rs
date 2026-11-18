@@ -57,20 +57,18 @@ pub fn notifications(_: &Settings, k: &K, kit: &Kit) -> El {
             ),
         ]),
         ui::cell(vec![ui::labeled(label("macOS", k), text(word).font(font(13.0, 400.0).lh(17.0)).color(color))]),
-        ui::cell(vec![
-            row()
-                .gap(8.0)
-                .child(ui::button("notify-test", "Send a Test", Look::Plain, can, k, |_: &mut Settings, _| notify::test()))
-                .child(ui::button("notify-settings", "Open System Settings…", Look::Plain, true, k, |s: &mut Settings, _| {
-                    open(s, "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=dev.wheelhouse.rune");
-                })),
-        ]),
+        ui::cell(vec![row().gap(8.0).child(ui::button("notify-test", "Send a Test", Look::Plain, can, k, |_: &mut Settings, _| notify::test())).child(ui::button(
+            "notify-settings",
+            "Open System Settings…",
+            Look::Plain,
+            true,
+            k,
+            |s: &mut Settings, _| {
+                open(s, "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=dev.wheelhouse.rune");
+            },
+        ))]),
     ];
-    let foot = if can {
-        None
-    } else {
-        Some("Off for this run: WH_RUNE_NOTIFY=off, or the app isn't running from its bundle (macOS notifies only for one).")
-    };
+    let foot = if can { None } else { Some("Off for this run: WH_RUNE_NOTIFY=off, or the app isn't running from its bundle (macOS notifies only for one).") };
     ui::form("notifications-form", 520.0, vec![ui::section("notifications", None, rows, foot, k)], kit)
 }
 

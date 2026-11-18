@@ -159,7 +159,11 @@ pub fn section(s: &Main, d: &Docket, p: &DocketPage, k: &K) -> Option<El> {
             .px(12.0)
             .py(9.0)
             .gap(9.0)
-            .child(row().w(16.0).pt(1.0).justify_center().child(icon(if witnessed { &glyphs::SEAL } else { &icons::APPROVE }, 13.0).color(if witnessed { k.working } else { k.accent })))
+            .child(row().w(16.0).pt(1.0).justify_center().child(icon(if witnessed { &glyphs::SEAL } else { &icons::APPROVE }, 13.0).color(if witnessed {
+                k.working
+            } else {
+                k.accent
+            })))
             .child(Rich::new().push("Done rests on ", |s| s.color(k.muted)).md(str_or(&l["what"], ""), k.text).el().font(font(12.5, 400.0).lh(17.0)).wrap().grow(1.0).min_w(0.0))
             .child(parts::mark(how, k));
         if let Some(at) = l["at"].as_str() {
@@ -168,25 +172,21 @@ pub fn section(s: &Main, d: &Docket, p: &DocketPage, k: &K) -> Option<El> {
         rows.push(r);
     }
     if needs && lines.is_empty() {
-        let mut r = row()
-            .w_full()
-            .px(12.0)
-            .py(9.0)
-            .gap(9.0)
-            .child(row().w(16.0).pt(2.0).justify_center().child(icon(&glyphs::TEXT_BUBBLE, 13.0).color(k.faint)))
-            .child(
-                col()
-                    .gap(3.0)
-                    .grow(1.0)
-                    .min_w(0.0)
-                    .child(text(if d.status() == Status::Done { "Done rests on what was said." } else { "Nothing yet but what was said." }).font(font(12.5, 400.0).lh(17.0)).color(k.text))
-                    .child(
-                        text("Its intent has acceptance items, so done needs a passing check, a merged PR, or a completed issue. Or your word, with a reason.")
-                            .font(font(12.0, 400.0).lh(16.0))
-                            .color(k.muted)
-                            .wrap(),
-                    ),
-            );
+        let mut r = row().w_full().px(12.0).py(9.0).gap(9.0).child(row().w(16.0).pt(2.0).justify_center().child(icon(&glyphs::TEXT_BUBBLE, 13.0).color(k.faint))).child(
+            col()
+                .gap(3.0)
+                .grow(1.0)
+                .min_w(0.0)
+                .child(
+                    text(if d.status() == Status::Done { "Done rests on what was said." } else { "Nothing yet but what was said." }).font(font(12.5, 400.0).lh(17.0)).color(k.text),
+                )
+                .child(
+                    text("Its intent has acceptance items, so done needs a passing check, a merged PR, or a completed issue. Or your word, with a reason.")
+                        .font(font(12.0, 400.0).lh(16.0))
+                        .color(k.muted)
+                        .wrap(),
+                ),
+        );
         if d.is_open() {
             let (a, from) = (id.clone(), d.status());
             r = r.child(parts::link("close-on-word", "Close on Your Word…", 12.0, k, move |s, _| close_on_word(s, &a, from)));
@@ -200,22 +200,16 @@ pub fn section(s: &Main, d: &Docket, p: &DocketPage, k: &K) -> Option<El> {
     let unrun: Vec<&str> = configured.iter().filter_map(|c| c["name"].as_str()).filter(|n| !ran.contains(n)).collect();
     if !unrun.is_empty() {
         rows.push(
-            row()
-                .w_full()
-                .px(12.0)
-                .py(9.0)
-                .gap(9.0)
-                .child(row().w(16.0).pt(2.0).justify_center().child(icon(&icons::DASHED, 13.0).color(k.faint)))
-                .child(
-                    Rich::new()
-                        .push(&unrun.join(", "), |s| s.mono().weight(500.0).color(k.text2))
-                        .push(if checks.is_empty() { "  not run on this docket yet" } else { "  not run yet" }, |s| s.color(k.muted))
-                        .el()
-                        .font(font(12.5, 400.0).lh(17.0))
-                        .wrap()
-                        .grow(1.0)
-                        .min_w(0.0),
-                ),
+            row().w_full().px(12.0).py(9.0).gap(9.0).child(row().w(16.0).pt(2.0).justify_center().child(icon(&icons::DASHED, 13.0).color(k.faint))).child(
+                Rich::new()
+                    .push(&unrun.join(", "), |s| s.mono().weight(500.0).color(k.text2))
+                    .push(if checks.is_empty() { "  not run on this docket yet" } else { "  not run yet" }, |s| s.color(k.muted))
+                    .el()
+                    .font(font(12.5, 400.0).lh(17.0))
+                    .wrap()
+                    .grow(1.0)
+                    .min_w(0.0),
+            ),
         );
     }
     for v in arr(&ev["verdicts"]) {
@@ -230,7 +224,17 @@ pub fn section(s: &Main, d: &Docket, p: &DocketPage, k: &K) -> Option<El> {
                 .gap(9.0)
                 .help("Nothing witnessed or checkable said its acceptance items were met. The record keeps your reason.")
                 .child(row().w(16.0).pt(2.0).justify_center().child(icon(&glyphs::QUOTE_BUBBLE, 13.0).color(k.blocked)))
-                .child(Rich::new().push("Closed on your word: ", |s| s.weight(500.0).color(k.text)).push(&why, |s| s.color(k.text2)).el().font(font(12.5, 400.0).lh(17.0)).wrap().selectable(true).grow(1.0).min_w(0.0))
+                .child(
+                    Rich::new()
+                        .push("Closed on your word: ", |s| s.weight(500.0).color(k.text))
+                        .push(&why, |s| s.color(k.text2))
+                        .el()
+                        .font(font(12.5, 400.0).lh(17.0))
+                        .wrap()
+                        .selectable(true)
+                        .grow(1.0)
+                        .min_w(0.0),
+                )
                 .child(parts::mark("said", k)),
         );
     }
@@ -259,12 +263,14 @@ fn check_row(docket: &str, c: &Check, k: &K) -> El {
     } else {
         k.muted
     };
-    let mark = if c.ok() { &glyphs::CHECK_FILL } else if c.timed_out() { &glyphs::CLOCK_BANG } else { &glyphs::CROSS_FILL };
-    let mut name = row()
-        .w_full()
-        .gap(7.0)
-        .center_y()
-        .child(text(c.name().to_string()).font(parts::mono_w(12.5, 600.0).lh(16.0)).color(k.text));
+    let mark = if c.ok() {
+        &glyphs::CHECK_FILL
+    } else if c.timed_out() {
+        &glyphs::CLOCK_BANG
+    } else {
+        &glyphs::CROSS_FILL
+    };
+    let mut name = row().w_full().gap(7.0).center_y().child(text(c.name().to_string()).font(parts::mono_w(12.5, 600.0).lh(16.0)).color(k.text));
     if !c.required() {
         name = name.child(crate::theme::chip("optional", k.muted, false).help("An optional check only informs: it doesn't hold a PR or a push"));
     }
@@ -331,9 +337,23 @@ fn verdict_row(v: &Value, k: &K) -> El {
         .w_full()
         .gap(7.0)
         .center_y()
-        .child(text(format!("{}{}", role.unwrap_or_else(|| "Checker".into()), int(&v["n"]).map(|n| format!(" · check {n}")).unwrap_or_default())).font(font(12.5, 600.0).lh(16.0)).color(k.text))
+        .child(
+            text(format!("{}{}", role.unwrap_or_else(|| "Checker".into()), int(&v["n"]).map(|n| format!(" · check {n}")).unwrap_or_default()))
+                .font(font(12.5, 600.0).lh(16.0))
+                .color(k.text),
+        )
         .child(text(who).font(font(12.5, 400.0).lh(16.0)).color(k.muted))
-        .child(crate::theme::chip(if passed { "passed" } else if verdict.is_empty() { "no verdict" } else { "found problems" }, if passed { k.working } else { k.error }, false));
+        .child(crate::theme::chip(
+            if passed {
+                "passed"
+            } else if verdict.is_empty() {
+                "no verdict"
+            } else {
+                "found problems"
+            },
+            if passed { k.working } else { k.error },
+            false,
+        ));
     if findings > 0 {
         top = top.child(text(model::plural(findings as usize, "finding")).font(font(12.0, 400.0).lh(16.0)).color(k.muted));
     }
@@ -344,15 +364,11 @@ fn verdict_row(v: &Value, k: &K) -> El {
     let mut body = col().gap(4.0).grow(1.0).min_w(0.0).child(top);
     if let Some(i) = v["independent"].as_bool() {
         body = body.child(
-            row()
-                .gap(5.0)
-                .center_y()
-                .child(icon(if i { &glyphs::PEOPLE } else { &glyphs::PERSON_ASK }, 12.0).color(if i { k.muted } else { k.blocked }))
-                .child(
-                    text(if i { "Independent: its own session, apart from the builder's" } else { "Same session as the builder: not an independent check" })
-                        .font(font(11.5, 400.0).lh(15.0))
-                        .color(if i { k.muted } else { k.blocked }),
-                ),
+            row().gap(5.0).center_y().child(icon(if i { &glyphs::PEOPLE } else { &glyphs::PERSON_ASK }, 12.0).color(if i { k.muted } else { k.blocked })).child(
+                text(if i { "Independent: its own session, apart from the builder's" } else { "Same session as the builder: not an independent check" })
+                    .font(font(11.5, 400.0).lh(15.0))
+                    .color(if i { k.muted } else { k.blocked }),
+            ),
         );
     }
     if let Some(sum) = model::text(&v["summary"]) {
@@ -365,7 +381,11 @@ fn verdict_row(v: &Value, k: &K) -> El {
         .py(9.0)
         .gap(9.0)
         .help(format!("#{} · said by {by}{}", int(&v["seq"]).unwrap_or(0), if head.is_empty() { String::new() } else { format!(" · at {head}") }))
-        .child(row().w(16.0).pt(2.0).justify_center().child(icon(if passed { &glyphs::THUMBSUP } else { &glyphs::BUBBLE_BANG }, 13.0).color(if passed { k.working } else { k.error })))
+        .child(row().w(16.0).pt(2.0).justify_center().child(icon(if passed { &glyphs::THUMBSUP } else { &glyphs::BUBBLE_BANG }, 13.0).color(if passed {
+            k.working
+        } else {
+            k.error
+        })))
         .child(body)
 }
 
@@ -438,11 +458,11 @@ pub fn output_sheet(s: &Main, docket: &str, check: &str, k: &K, kit: &Kit) -> El
     let text_now = v.output.clone();
     let copy = text_now.clone().unwrap_or_default();
     let head = parts::sheet_head(
-        row()
-            .gap(8.0)
-            .center_y()
-            .child(text(check.to_string()).font(parts::mono_w(14.0, 600.0).lh(18.0)).color(k.text))
-            .child(text(format!("{}{} · {docket}", c.outcome(), if c.short_head().is_empty() { String::new() } else { format!(" at {}", c.short_head()) })).font(font(12.5, 400.0).lh(16.0)).color(k.muted)),
+        row().gap(8.0).center_y().child(text(check.to_string()).font(parts::mono_w(14.0, 600.0).lh(18.0)).color(k.text)).child(
+            text(format!("{}{} · {docket}", c.outcome(), if c.short_head().is_empty() { String::new() } else { format!(" at {}", c.short_head()) }))
+                .font(font(12.5, 400.0).lh(16.0))
+                .color(k.muted),
+        ),
         row()
             .gap(8.0)
             .child(widgets::button("output-copy", "Copy", false, text_now.is_some(), k, move |s: &mut Main, tx: &mut Tx| {
@@ -457,7 +477,16 @@ pub fn output_sheet(s: &Main, docket: &str, check: &str, k: &K, kit: &Kit) -> El
             .w_full()
             .grow(1.0)
             .min_h(0.0)
-            .child(text(if t.is_empty() { "(no output)".to_string() } else { t.clone() }).font(mono(11.5).lh(15.0)).color(k.text).selectable(true).wrap_anywhere().w_full().px(12.0).py(10.0))
+            .child(
+                text(if t.is_empty() { "(no output)".to_string() } else { t.clone() })
+                    .font(mono(11.5).lh(15.0))
+                    .color(k.text)
+                    .selectable(true)
+                    .wrap_anywhere()
+                    .w_full()
+                    .px(12.0)
+                    .py(10.0),
+            )
             .scroll(ScrollSpec { stick_bottom: false })
             .scroll_bar(kit),
         (None, Some(e)) => col()
@@ -540,11 +569,12 @@ pub fn close_sheet(s: &Main, id: &str, from: Status, k: &K) -> El {
                 })
                 .collect();
             c = c.child(
-                row()
-                    .gap(6.0)
-                    .center_y()
-                    .child(icon(&glyphs::CHECKLIST, 13.0).color(k.muted))
-                    .child(text(format!("{}'s checks: {}", model::text(&ev["repo"]).unwrap_or_else(|| "Its repo".into()), names.join(", "))).font(font(12.0, 400.0).lh(16.0)).color(k.muted).wrap()),
+                row().gap(6.0).center_y().child(icon(&glyphs::CHECKLIST, 13.0).color(k.muted)).child(
+                    text(format!("{}'s checks: {}", model::text(&ev["repo"]).unwrap_or_else(|| "Its repo".into()), names.join(", ")))
+                        .font(font(12.0, 400.0).lh(16.0))
+                        .color(k.muted)
+                        .wrap(),
+                ),
             );
         }
     }
@@ -574,7 +604,10 @@ pub fn close_sheet(s: &Main, id: &str, from: Status, k: &K) -> El {
         row()
             .w_full()
             .gap(8.0)
-            .child(widgets::button("close-run", "Run Checks", false, can_run && !v.closing, k, move |s: &mut Main, _| run(s, &r, true)).help("Run its checks now; a passing run is evidence"))
+            .child(
+                widgets::button("close-run", "Run Checks", false, can_run && !v.closing, k, move |s: &mut Main, _| run(s, &r, true))
+                    .help("Run its checks now; a passing run is evidence"),
+            )
             .child(spacer())
             .child(widgets::button("close-cancel", "Cancel", false, true, k, |s: &mut Main, _| s.sheet = None))
             .child(widgets::button("close-go", if v.closing { "Closing…" } else { "Close on Your Word" }, true, ready, k, move |s: &mut Main, _| close(s, &b, from))),
@@ -622,20 +655,15 @@ pub fn hold_banner(d: &Docket, k: &K) -> Option<El> {
             .border(1.0, k.blocked.alpha(0.25))
             .child(el().pt(1.0).child(icon(&glyphs::PAUSE_FILL, 16.0).color(k.blocked)))
             .child(
-                col()
-                    .gap(4.0)
-                    .grow(1.0)
-                    .min_w(0.0)
-                    .child(text("On hold").font(font(13.0, 600.0).lh(16.0)).color(k.text))
-                    .child(
-                        Rich::new()
-                            .push(&why, |s| s.color(k.text))
-                            .push("  Build and Review take no steps on it until you resume it.", |s| s.color(k.muted))
-                            .el()
-                            .font(font(12.5, 400.0).lh(17.0))
-                            .wrap()
-                            .selectable(true),
-                    ),
+                col().gap(4.0).grow(1.0).min_w(0.0).child(text("On hold").font(font(13.0, 600.0).lh(16.0)).color(k.text)).child(
+                    Rich::new()
+                        .push(&why, |s| s.color(k.text))
+                        .push("  Build and Review take no steps on it until you resume it.", |s| s.color(k.muted))
+                        .el()
+                        .font(font(12.5, 400.0).lh(17.0))
+                        .wrap()
+                        .selectable(true),
+                ),
             )
             .child(widgets::button("hold-resume", "Resume", false, true, k, move |s: &mut Main, _| s.resume(&id)).help("Take it off hold: Build and Review carry on")),
     )

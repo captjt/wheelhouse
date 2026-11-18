@@ -23,7 +23,14 @@ pub fn group_dockets(list: &[Docket], by: GroupBy) -> Vec<DocketGroup> {
     match by {
         GroupBy::Status => [Status::InProgress, Status::Todo, Status::Done, Status::Dropped]
             .into_iter()
-            .map(|s| DocketGroup { id: s.raw().into(), label: s.label().into(), live: None, status: Some(s), session: None, items: list.iter().filter(|d| d.status() == s).cloned().collect() })
+            .map(|s| DocketGroup {
+                id: s.raw().into(),
+                label: s.label().into(),
+                live: None,
+                status: Some(s),
+                session: None,
+                items: list.iter().filter(|d| d.status() == s).cloned().collect(),
+            })
             .filter(|g| !g.items.is_empty())
             .collect(),
         GroupBy::Session => {
@@ -242,38 +249,43 @@ fn inbox_row(s: &Main, it: &InboxItem, k: &K) -> El {
     } else if it.msg.as_ref().is_some_and(|m| m.from() == "wheelhouse") {
         theme::hub_avatar(24.0, k)
     } else {
-        let app = it.docket.as_ref().and_then(|d| d.agent_app()).or_else(|| it.msg.as_ref().map(|m| if m.from_app().as_deref() == Some("Codex") { "codex".to_string() } else { "claude-code".to_string() }));
+        let app = it
+            .docket
+            .as_ref()
+            .and_then(|d| d.agent_app())
+            .or_else(|| it.msg.as_ref().map(|m| if m.from_app().as_deref() == Some("Codex") { "codex".to_string() } else { "claude-code".to_string() }));
         theme::app_avatar(app.as_deref(), 24.0, k)
     };
-    let badge = theme::live_icon(Some(match it.kind {
-        InboxKind::Error => LiveState::Error,
-        InboxKind::Done => LiveState::Done,
-        _ => LiveState::Blocked,
-    }), 12.0, k);
+    let badge = theme::live_icon(
+        Some(match it.kind {
+            InboxKind::Error => LiveState::Error,
+            InboxKind::Done => LiveState::Done,
+            _ => LiveState::Blocked,
+        }),
+        12.0,
+        k,
+    );
     let mark = el().size(28.0, 28.0).child(avatar).child(el().absolute(15.0, 15.0).size(14.0, 14.0).radius(7.0).fill(k.main).center().child(badge));
     let prefix = match it.kind {
         InboxKind::Blocked => it.docket.as_ref().and_then(|d| d.live()).and_then(|l| l.kind()).map(|k| format!("{k}: ")).unwrap_or_else(|| "Needs you: ".into()),
         InboxKind::Error => "Failed: ".into(),
         _ => String::new(),
     };
-    let mut body = col()
-        .gap(3.0)
-        .child(title_line(&it.title, it.at.as_deref(), 600.0, k))
-        .child(
-            row()
-                .w_full()
-                .gap(6.0)
-                .child(theme::id_text(&it.docket_id, k))
-                .child(text(format!("{prefix}{}", it.line)).font(font(12.0, 400.0).lh(15.0)).color(k.muted).wrap().max_lines(2).shrink()),
-        );
+    let mut body = col().gap(3.0).child(title_line(&it.title, it.at.as_deref(), 600.0, k)).child(
+        row()
+            .w_full()
+            .gap(6.0)
+            .child(theme::id_text(&it.docket_id, k))
+            .child(text(format!("{prefix}{}", it.line)).font(font(12.0, 400.0).lh(15.0)).color(k.muted).wrap().max_lines(2).shrink()),
+    );
     if let Some(p) = it.pr.as_ref().filter(|p| p.attention().is_some_and(|a| a.kind == "ready")) {
         body = body.child(review_actions(s, p, k));
     } else if let Some(m) = it.msg.as_ref().filter(|m| !m.options().is_empty()) {
         body = body.child(option_buttons(s, m, k));
-    } else if it.kind == InboxKind::Blocked {
-        if let Some(d) = it.docket.as_ref().filter(|d| d.live().is_some_and(|l| l.answerable())) {
-            body = body.child(answer_buttons(s, d, k));
-        }
+    } else if it.kind == InboxKind::Blocked
+        && let Some(d) = it.docket.as_ref().filter(|d| d.live().is_some_and(|l| l.answerable()))
+    {
+        body = body.child(answer_buttons(s, d, k));
     }
     row().w_full().gap(10.0).child(el().pt(1.0).child(mark)).child(body.grow(1.0).min_w(0.0))
 }
@@ -289,36 +301,29 @@ fn concern_row(c: &Concern, k: &K) -> El {
         "word" => (&icons::QUOTE, k.accent),
         _ => (&icons::EYE, k.faint),
     };
-    row()
-        .w_full()
-        .gap(10.0)
-        .help(c.label())
-        .child(row().size(24.0, 24.0).radius(6.0).fill(k.recessed).center().child(icon(i, 13.0).color(tint)))
-        .child(
-            col()
-                .gap(3.0)
-                .grow(1.0)
-                .min_w(0.0)
-                .child(title_line(&c.title, c.at.as_deref(), 600.0, k))
-                .child(
-                    row()
-                        .w_full()
-                        .gap(6.0)
-                        .child(theme::id_text(c.docket.as_deref().unwrap_or(""), k))
-                        .child(text(c.text.replace("**", "").replace('`', "")).font(font(12.0, 400.0).lh(15.0)).color(k.muted).wrap().max_lines(2).shrink()),
-                ),
-        )
+    row().w_full().gap(10.0).help(c.label()).child(row().size(24.0, 24.0).radius(6.0).fill(k.recessed).center().child(icon(i, 13.0).color(tint))).child(
+        col().gap(3.0).grow(1.0).min_w(0.0).child(title_line(&c.title, c.at.as_deref(), 600.0, k)).child(
+            row()
+                .w_full()
+                .gap(6.0)
+                .child(theme::id_text(c.docket.as_deref().unwrap_or(""), k))
+                .child(text(c.text.replace("**", "").replace('`', "")).font(font(12.0, 400.0).lh(15.0)).color(k.muted).wrap().max_lines(2).shrink()),
+        ),
+    )
 }
 
 pub fn answer_buttons(s: &Main, d: &Docket, k: &K) -> El {
     let id = d.id();
     let (a, n) = (d.clone(), d.clone());
     let busy = s.busy.contains(&format!("approve:{id}")) || s.busy.contains(&format!("deny:{id}"));
-    row()
-        .gap(6.0)
-        .pt(3.0)
-        .child(widgets::button(&format!("approve-{id}"), "Approve", false, !busy, k, move |s: &mut Main, _| s.answer(&a, true)))
-        .child(widgets::button(&format!("deny-{id}"), "Deny", false, !busy, k, move |s: &mut Main, _| s.answer(&n, false)))
+    row().gap(6.0).pt(3.0).child(widgets::button(&format!("approve-{id}"), "Approve", false, !busy, k, move |s: &mut Main, _| s.answer(&a, true))).child(widgets::button(
+        &format!("deny-{id}"),
+        "Deny",
+        false,
+        !busy,
+        k,
+        move |s: &mut Main, _| s.answer(&n, false),
+    ))
 }
 
 pub fn option_buttons(s: &Main, m: &model::Msg, k: &K) -> El {
@@ -430,7 +435,12 @@ fn bar(items: Vec<El>, k: &K) -> El {
 fn reviews(s: &Main, st: &HubState, k: &K) -> El {
     let rv = st.review();
     if rv.is_object() && !model::flag(&rv["enabled"]) {
-        return widgets::empty(&icons::PULL, "Reviews run in Wheelhouse", "Each PR that asks you for a review becomes a Review docket: blind reviewers in Rex, a checker that merges their drafts and rates the merge risk, and a post you approve.", k);
+        return widgets::empty(
+            &icons::PULL,
+            "Reviews run in Wheelhouse",
+            "Each PR that asks you for a review becomes a Review docket: blind reviewers in Rex, a checker that merges their drafts and rates the merge risk, and a post you approve.",
+            k,
+        );
     }
     let groups = review_groups(st);
     if groups.is_empty() {
@@ -440,13 +450,15 @@ fn reviews(s: &Main, st: &HubState, k: &K) -> El {
     let c = &rv["config"];
     let mut bits = vec![theme::chip(if paused { "Paused" } else { "On" }, if paused { k.blocked } else { k.working }, false)];
     let scan = model::text(&rv["last_scan_at"]);
-    bits.push(text(match scan.as_deref() {
-        None => "Not checked GitHub yet".to_string(),
-        Some(t) if model::ago(Some(t)) == "now" => "Checked GitHub just now".to_string(),
-        Some(t) => format!("Checked GitHub {} ago", model::ago(Some(t))),
-    })
-    .font(font(12.0, 400.0).lh(15.0))
-    .color(k.muted));
+    bits.push(
+        text(match scan.as_deref() {
+            None => "Not checked GitHub yet".to_string(),
+            Some(t) if model::ago(Some(t)) == "now" => "Checked GitHub just now".to_string(),
+            Some(t) => format!("Checked GitHub {} ago", model::ago(Some(t))),
+        })
+        .font(font(12.0, 400.0).lh(15.0))
+        .color(k.muted),
+    );
     if c.is_object() {
         let reviewers: Vec<String> = model::arr(&c["reviewers"]).iter().filter_map(|r| model::text(&r["name"])).collect();
         bits.push(text(format!("{} → checker {}", reviewers.join(", "), model::str_or(&c["checker"], ""))).font(font(12.0, 400.0).lh(15.0)).color(k.muted).truncate().shrink());
@@ -492,7 +504,13 @@ pub fn phase_text(p: &ReviewPr, paused: bool) -> String {
 
 fn verdict_chip(v: &str, k: &K) -> El {
     let l = v.to_lowercase();
-    let c = if l.contains("approve") { k.working } else if l.contains("request") || l.contains("changes") { k.error } else { k.muted };
+    let c = if l.contains("approve") {
+        k.working
+    } else if l.contains("request") || l.contains("changes") {
+        k.error
+    } else {
+        k.muted
+    };
     let label = l.replace('_', " ");
     let mut cs = label.chars();
     theme::chip(&cs.next().map(|f| f.to_uppercase().collect::<String>() + cs.as_str()).unwrap_or_default(), c, false)
@@ -653,7 +671,15 @@ pub fn board(s: &Main, st: &HubState, k: &K) -> El {
                 .h_full()
                 .min_h(0.0)
                 .gap(8.0)
-                .child(row().gap(7.0).px(4.0).center_y().child(group_mark(&g, k)).child(text(g.label.clone()).font(font(12.0, 600.0).lh(15.0)).color(k.text)).child(text(g.items.len().to_string()).font(font(11.5, 400.0).lh(15.0)).color(k.faint)))
+                .child(
+                    row()
+                        .gap(7.0)
+                        .px(4.0)
+                        .center_y()
+                        .child(group_mark(&g, k))
+                        .child(text(g.label.clone()).font(font(12.0, 600.0).lh(15.0)).color(k.text))
+                        .child(text(g.items.len().to_string()).font(font(11.5, 400.0).lh(15.0)).color(k.faint)),
+                )
                 .child(cards.grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false })),
         );
     }
@@ -691,23 +717,27 @@ pub fn agents(_s: &Main, st: &HubState, k: &K) -> El {
                 .hover(k.hover)
                 .center_y()
                 .child(
-                    row()
-                        .w(220.0)
-                        .gap(8.0)
-                        .center_y()
-                        .child(theme::app_avatar(Some(&a.app()), 20.0, k))
-                        .child(
-                            col()
-                                .gap(1.0)
-                                .shrink()
-                                .min_w(0.0)
-                                .child(text(format!("{} / {}", a.rex_session(), a.pane())).font(font(12.5, 500.0).lh(16.0)).color(k.text).truncate())
-                                .child(text(a.cwd().unwrap_or_default()).font(font(11.0, 400.0).lh(14.0)).color(k.muted).truncate()),
-                        ),
+                    row().w(220.0).gap(8.0).center_y().child(theme::app_avatar(Some(&a.app()), 20.0, k)).child(
+                        col()
+                            .gap(1.0)
+                            .shrink()
+                            .min_w(0.0)
+                            .child(text(format!("{} / {}", a.rex_session(), a.pane())).font(font(12.5, 500.0).lh(16.0)).color(k.text).truncate())
+                            .child(text(a.cwd().unwrap_or_default()).font(font(11.0, 400.0).lh(14.0)).color(k.muted).truncate()),
+                    ),
                 )
-                .child(row().w(150.0).gap(6.0).center_y().child(theme::live_icon(Some(a.state()), 13.0, k)).child(text(a.state().word()).font(font(12.0, 400.0).lh(15.0)).color(k.text2)))
+                .child(
+                    row()
+                        .w(150.0)
+                        .gap(6.0)
+                        .center_y()
+                        .child(theme::live_icon(Some(a.state()), 13.0, k))
+                        .child(text(a.state().word()).font(font(12.0, 400.0).lh(15.0)).color(k.text2)),
+                )
                 .child(match doc {
-                    Some((id, title)) => row().grow(1.0).min_w(0.0).gap(6.0).child(theme::id_text(&id, k)).child(text(title).font(font(12.5, 400.0).lh(16.0)).color(k.text).truncate().shrink()),
+                    Some((id, title)) => {
+                        row().grow(1.0).min_w(0.0).gap(6.0).child(theme::id_text(&id, k)).child(text(title).font(font(12.5, 400.0).lh(16.0)).color(k.text).truncate().shrink())
+                    }
                     None => text("No docket").font(font(12.0, 400.0).lh(15.0)).color(k.faint),
                 }),
         );

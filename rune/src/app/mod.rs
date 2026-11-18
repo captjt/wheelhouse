@@ -5,20 +5,20 @@
 mod activity;
 mod chat;
 mod docket;
-mod forms;
 mod fixtures;
+mod forms;
 mod glyphs;
 mod lists;
+pub mod menubar;
 mod menus;
+pub mod notify;
 mod palette;
 mod panels;
 mod parts;
 mod recap;
 mod record;
-mod shortcuts;
-pub mod menubar;
-pub mod notify;
 pub mod settings;
+mod shortcuts;
 mod sidebar;
 mod verify;
 pub mod widgets;
@@ -283,15 +283,15 @@ impl Main {
     /// you, else All dockets (Nav.show).
     pub fn show(&mut self, id: &str) {
         let Some(state) = self.state() else { return };
-        if self.place == Place::Inbox {
-            if let Some(it) = model::inbox(&state).into_iter().find(|i| i.docket_id == id) {
-                return self.select(it.id);
-            }
+        if self.place == Place::Inbox
+            && let Some(it) = model::inbox(&state).into_iter().find(|i| i.docket_id == id)
+        {
+            return self.select(it.id);
         }
-        if let Some(d) = state.docket(id) {
-            if self.place.shows(d) {
-                return self.select(id.to_string());
-            }
+        if let Some(d) = state.docket(id)
+            && self.place.shows(d)
+        {
+            return self.select(id.to_string());
         }
         if let Some(it) = model::inbox(&state).into_iter().find(|i| i.docket_id == id) {
             self.place = Place::Inbox;
@@ -710,10 +710,7 @@ pub fn view(s: &Main, cx: &mut Cx<Main>) -> El {
 
 fn toolbar(s: &Main, state: Option<&HubState>, k: &K, kit: &rune_kit::Kit) -> Toolbar {
     let subtitle = state.map(|st| subtitle(s, st)).unwrap_or_default();
-    let title = col()
-        .gap(1.0)
-        .child(text(s.place.title()).font(font(13.0, 600.0).lh(16.0)).color(k.text))
-        .child(text(subtitle).font(font(11.0, 400.0).lh(13.0)).color(k.muted));
+    let title = col().gap(1.0).child(text(s.place.title()).font(font(13.0, 600.0).lh(16.0)).color(k.text)).child(text(subtitle).font(font(11.0, 400.0).lh(13.0)).color(k.muted));
     let mut trailing = row().gap(6.0).center_y();
     if s.place == Place::Recap {
         trailing = trailing.child(recap::toolbar(s, k));
@@ -751,12 +748,7 @@ fn toolbar(s: &Main, state: Option<&HubState>, k: &K, kit: &rune_kit::Kit) -> To
                 .child(rune::icon(&crate::icons::LIST, 14.0).color(k.muted))
                 .child(rune::icon(&crate::icons::CHEVRON, 10.0).color(k.muted)),
         );
-        trailing = trailing.child(widgets::segmented(
-            "layout",
-            &[("List", !s.board), ("Board", s.board)],
-            |s: &mut Main, i| s.board = i == 1,
-            k,
-        ));
+        trailing = trailing.child(widgets::segmented("layout", &[("List", !s.board), ("Board", s.board)], |s: &mut Main, i| s.board = i == 1, k));
     }
     let Some(d) = s.shown_docket().and_then(|id| state.and_then(|st| st.docket(&id).cloned())) else {
         let _ = kit;
@@ -848,7 +840,12 @@ fn content(s: &Main, st: &HubState, k: &K, kit: &rune_kit::Kit) -> El {
 
 fn hub_down(s: &Main, k: &K) -> El {
     let err = s.store.error().unwrap_or_else(|| "Connecting…".into());
-    widgets::empty(&crate::icons::REFRESH, "The hub isn't running", &format!("{err} ({}). Start it with `wh-dev up` for Wheelhouse Dev, or the made-up world's script.", s.store.hub.base()), k)
+    widgets::empty(
+        &crate::icons::REFRESH,
+        "The hub isn't running",
+        &format!("{err} ({}). Start it with `wh-dev up` for Wheelhouse Dev, or the made-up world's script.", s.store.hub.base()),
+        k,
+    )
 }
 
 // ---- scenes, for headless shots: a place, a selection, the docket's page ----

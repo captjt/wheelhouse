@@ -204,9 +204,6 @@ impl Docket {
     pub fn updated_at(&self) -> String {
         str_or(&self.j["updated_at"], "").to_string()
     }
-    pub fn entries(&self) -> i64 {
-        int(&self.j["entries"]).unwrap_or(0)
-    }
     pub fn short_head(&self) -> String {
         str_or(&self.j["short_head"], "").to_string()
     }
@@ -221,9 +218,6 @@ impl Docket {
     }
     pub fn linear_key(&self) -> Option<String> {
         text(&self.j["linear"]["key"]).or_else(|| text(&self.j["linear"]["identifier"]))
-    }
-    pub fn linear_title(&self) -> Option<String> {
-        text(&self.j["linear"]["title"])
     }
     pub fn linear_state(&self) -> Option<String> {
         text(&self.j["linear"]["state"])
@@ -279,9 +273,7 @@ impl Msg {
         if self.from() == "wheelhouse" { "Wheelhouse".into() } else { self.from_app().unwrap_or_else(|| app_name(Some(&self.from()))) }
     }
     pub fn title(&self) -> String {
-        self.subject()
-            .or_else(|| self.body().lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string))
-            .unwrap_or_else(|| format!("Message #{}", self.id()))
+        self.subject().or_else(|| self.body().lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string)).unwrap_or_else(|| format!("Message #{}", self.id()))
     }
 }
 
@@ -722,9 +714,6 @@ impl DocketPage {
     }
     pub fn queued(&self) -> Vec<(i64, String)> {
         arr(&self.j["queued"]).iter().map(|q| (int(&q["id"]).unwrap_or(0), str_or(&q["body"], "").to_string())).collect()
-    }
-    pub fn artifacts(&self) -> &[Value] {
-        arr(&self.j["artifacts"])
     }
 }
 

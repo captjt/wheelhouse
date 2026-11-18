@@ -65,7 +65,13 @@ pub fn draft_line(p: &ReviewPr) -> Option<String> {
         e => e.to_string(),
     };
     let risk = model::text(&d["merge_risk"]).map(|r| format!("merge risk {r}"));
-    Some([Some(ask).filter(|a| !a.is_empty()), Some(format!("{} blocking, {} non-blocking", int(&d["blocking"]).unwrap_or(0), int(&d["non_blocking"]).unwrap_or(0))), risk].into_iter().flatten().collect::<Vec<_>>().join(" · "))
+    Some(
+        [Some(ask).filter(|a| !a.is_empty()), Some(format!("{} blocking, {} non-blocking", int(&d["blocking"]).unwrap_or(0), int(&d["non_blocking"]).unwrap_or(0))), risk]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · "),
+    )
 }
 
 fn tokens(n: i64) -> String {
@@ -104,7 +110,11 @@ pub fn review(s: &Main, st: &HubState, d: &Docket, k: &K, kit: &Kit) -> Option<E
     let name = format!("{}#{}", str_or(&p.j["repo"], ""), int(&p.j["pr"]).unwrap_or(0));
     let link = {
         let u = url.clone();
-        let mut t = row().key("review-pr").min_w(0.0).shrink().child(text(name.clone()).font(font(13.0, 600.0).lh(16.0)).color(if url.is_some() { k.accent } else { k.text }).truncate_middle());
+        let mut t = row()
+            .key("review-pr")
+            .min_w(0.0)
+            .shrink()
+            .child(text(name.clone()).font(font(13.0, 600.0).lh(16.0)).color(if url.is_some() { k.accent } else { k.text }).truncate_middle());
         if url.is_some() {
             t = t.role("link").label(name.clone()).cursor(rune::Cursor::Pointer).on_press_tx(move |_: &mut Main, tx: &mut Tx| {
                 if let Some(u) = &u {
@@ -193,11 +203,17 @@ pub fn review(s: &Main, st: &HubState, d: &Docket, k: &K, kit: &Kit) -> Option<E
         }
         if history.len() > 2 {
             let f = full.clone();
-            h = h.child(el().pt(4.0).child(parts::link("review-rounds", &if all { "Fewer rounds".to_string() } else { format!("All {} rounds", history.len()) }, 12.0, k, move |s, _| {
-                if !s.panels.all_rounds.remove(&f) {
-                    s.panels.all_rounds.insert(f.clone());
-                }
-            })));
+            h = h.child(el().pt(4.0).child(parts::link(
+                "review-rounds",
+                &if all { "Fewer rounds".to_string() } else { format!("All {} rounds", history.len()) },
+                12.0,
+                k,
+                move |s, _| {
+                    if !s.panels.all_rounds.remove(&f) {
+                        s.panels.all_rounds.insert(f.clone());
+                    }
+                },
+            )));
         }
         c = c.child(h);
     }
@@ -269,14 +285,20 @@ pub fn actions(s: &Main, p: &ReviewPr, k: &K) -> El {
     let mut r = row().gap(6.0).center_y();
     if p.ready() {
         let a = p.clone();
-        r = r.child(widgets::button(&format!("post-{full}"), if busy("post") { "Posting…" } else { "Post" }, true, !any, k, move |s: &mut Main, _| post(s, &a, None)).help("Post the checked review to GitHub as you"));
+        r = r.child(
+            widgets::button(&format!("post-{full}"), if busy("post") { "Posting…" } else { "Post" }, true, !any, k, move |s: &mut Main, _| post(s, &a, None))
+                .help("Post the checked review to GitHub as you"),
+        );
     }
     if matches!(p.phase().as_deref(), Some("awaiting" | "checking")) {
         let a = p.clone();
         r = r.child(widgets::button(&format!("preview-{full}"), if busy("preview") { "Loading…" } else { "Preview" }, false, !any, k, move |s: &mut Main, _| preview(s, &a)));
     }
     let a = p.clone();
-    r.child(widgets::button(&format!("dismiss-{full}"), if busy("dismiss") { "Dismissing…" } else { "Dismiss" }, false, !any, k, move |s: &mut Main, _| dismiss(s, &a)).help("End this round without posting anything"))
+    r.child(
+        widgets::button(&format!("dismiss-{full}"), if busy("dismiss") { "Dismissing…" } else { "Dismiss" }, false, !any, k, move |s: &mut Main, _| dismiss(s, &a))
+            .help("End this round without posting anything"),
+    )
 }
 
 pub fn post(s: &mut Main, p: &ReviewPr, digest: Option<String>) {
@@ -353,7 +375,14 @@ pub fn preview_sheet(s: &Main, full: &str, k: &K, kit: &Kit) -> El {
         .color(k.text),
         trailing,
     );
-    let body = col().key("preview-scroll").w_full().grow(1.0).min_h(0.0).child(col().w_full().padding(20.0).child(parts::md(&md, 13.0, k, kit))).scroll(ScrollSpec { stick_bottom: false }).scroll_bar(kit);
+    let body = col()
+        .key("preview-scroll")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .child(col().w_full().padding(20.0).child(parts::md(&md, 13.0, k, kit)))
+        .scroll(ScrollSpec { stick_bottom: false })
+        .scroll_bar(kit);
     let mut buttons = row().gap(8.0).child(widgets::button("preview-close", "Close", false, true, k, |s: &mut Main, _| s.sheet = None));
     if let Some(p) = p.clone() {
         let d = p.clone();
@@ -367,7 +396,12 @@ pub fn preview_sheet(s: &Main, full: &str, k: &K, kit: &Kit) -> El {
         .padding(16.0)
         .gap(10.0)
         .center_y()
-        .child(text(if ready { "Posts from your GitHub account, with the footer above." } else { "The checker hasn't finished; this is its draft so far." }).font(font(12.0, 400.0).lh(16.0)).color(k.muted).shrink())
+        .child(
+            text(if ready { "Posts from your GitHub account, with the footer above." } else { "The checker hasn't finished; this is its draft so far." })
+                .font(font(12.0, 400.0).lh(16.0))
+                .color(k.muted)
+                .shrink(),
+        )
         .child(spacer())
         .child(buttons);
     parts::sheet_card("Review preview", 760.0, Some(680.0), k).child(head).child(parts::divider(k)).child(body).child(parts::divider(k)).child(foot)
@@ -430,7 +464,8 @@ pub fn build(st: &HubState, d: &Docket, k: &K) -> Option<El> {
         .child(text("Build").font(font(13.0, 600.0).lh(16.0)).color(k.text))
         .child(text(format!("into {}", t.repo())).font(font(12.5, 400.0).lh(16.0)).color(k.muted));
     if let Some(b) = t.branch() {
-        top = top.child(text(format!("· {b}")).font(mono(12.0).lh(16.0)).color(k.muted).truncate().shrink().help(format!("from {}", base.clone().unwrap_or_else(|| "main".into()))));
+        top =
+            top.child(text(format!("· {b}")).font(mono(12.0).lh(16.0)).color(k.muted).truncate().shrink().help(format!("from {}", base.clone().unwrap_or_else(|| "main".into()))));
     }
     top = top.child(spacer());
     if let Some(u) = t.pr_url() {
@@ -440,7 +475,10 @@ pub fn build(st: &HubState, d: &Docket, k: &K) -> Option<El> {
     }
     if state == "active" || state == "queued" {
         let a = id.clone();
-        top = top.child(widgets::button("build-discard", "Discard", false, true, k, move |s: &mut Main, _| discard(s, &a)).help("Stop the Build: its panes close and its worktree goes; the branch stays"));
+        top = top.child(
+            widgets::button("build-discard", "Discard", false, true, k, move |s: &mut Main, _| discard(s, &a))
+                .help("Stop the Build: its panes close and its worktree goes; the branch stays"),
+        );
     }
     let mut c = parts::panel(t.attention().is_some(), k).key("build-panel").child(top);
 
@@ -494,7 +532,9 @@ pub fn build(st: &HubState, d: &Docket, k: &K) -> Option<El> {
             .collect();
         c = c.child(parts::steps(&labels, at, k));
     } else {
-        c = c.child(text(format!("{}{}", build_phase(t), model::text(&t.j["why"]).map(|w| format!(": {w}")).unwrap_or_default())).font(font(12.0, 400.0).lh(16.0)).color(k.muted).wrap());
+        c = c.child(
+            text(format!("{}{}", build_phase(t), model::text(&t.j["why"]).map(|w| format!(": {w}")).unwrap_or_default())).font(font(12.0, 400.0).lh(16.0)).color(k.muted).wrap(),
+        );
     }
 
     if let Some(a) = t.attention() {
@@ -515,7 +555,8 @@ pub fn build(st: &HubState, d: &Docket, k: &K) -> Option<El> {
     }
 
     let who = |j: &Value, role: &str| format!("{role} · {}{}", str_or(&j["agent"], "claude"), model::text(&j["effort"]).map(|e| format!(" · {e}")).unwrap_or_default());
-    let mut chips = row().gap(6.0).flex_wrap().child(theme::chip(&who(&t.j["builder"], "builder"), k.text2, false)).child(theme::chip(&who(&t.j["checker"], "checker"), k.text2, false));
+    let mut chips =
+        row().gap(6.0).flex_wrap().child(theme::chip(&who(&t.j["builder"], "builder"), k.text2, false)).child(theme::chip(&who(&t.j["checker"], "checker"), k.text2, false));
     let plan = int(&t.j["plan_version"]).unwrap_or(0);
     if plan > 0 {
         chips = chips.child(theme::chip(&format!("plan v{plan}"), k.text2, false));
@@ -552,7 +593,11 @@ pub fn build(st: &HubState, d: &Docket, k: &K) -> Option<El> {
                     .gap(8.0)
                     .child(text(str_or(&x["id"], "").to_string()).font(mono(11.5).lh(16.0)).color(k.muted))
                     .child(text(str_or(&x["question"], "").to_string()).font(font(12.5, 400.0).lh(16.0)).color(k.text).wrap().shrink().grow(1.0).min_w(0.0))
-                    .child(text(if answered { str_or(&x["label"], "answered").to_string() } else { "open".into() }).font(font(12.5, 400.0).lh(16.0)).color(if answered { k.working } else { k.blocked })),
+                    .child(text(if answered { str_or(&x["label"], "answered").to_string() } else { "open".into() }).font(font(12.5, 400.0).lh(16.0)).color(if answered {
+                        k.working
+                    } else {
+                        k.blocked
+                    })),
             );
         }
         c = c.child(list);

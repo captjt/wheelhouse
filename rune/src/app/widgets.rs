@@ -9,7 +9,13 @@ use crate::theme::{K, font};
 
 /// A button: `primary` is the accent's, else a bordered neutral one.
 pub fn button(key: &str, label: &str, primary: bool, enabled: bool, k: &K, on: impl Fn(&mut Main, &mut Tx) + 'static) -> El {
-    let (fill, ink) = if primary { (k.accent, Color::WHITE) } else if k.dark { (Color::WHITE.alpha(0.1), k.text) } else { (Color::WHITE, k.text) };
+    let (fill, ink) = if primary {
+        (k.accent, Color::WHITE)
+    } else if k.dark {
+        (Color::WHITE.alpha(0.1), k.text)
+    } else {
+        (Color::WHITE, k.text)
+    };
     let mut b = row()
         .key(key.to_string())
         .h(22.0)
@@ -70,7 +76,14 @@ pub fn segmented(key: &str, segs: &[(&str, bool)], pick: fn(&mut Main, usize), k
 
 /// A small segmented control of icons: the theme's System, Light, Dark.
 pub fn icon_segments(key: &str, segs: &[(&'static Icon, &str, bool)], pick: fn(&mut Main, usize), k: &K) -> El {
-    let mut r = row().key(key.to_string()).padding(2.0).gap(1.0).radius(6.0).fill(if k.dark { Color::WHITE.alpha(0.07) } else { Color::BLACK.alpha(0.05) }).role("radiogroup").label("Theme");
+    let mut r = row()
+        .key(key.to_string())
+        .padding(2.0)
+        .gap(1.0)
+        .radius(6.0)
+        .fill(if k.dark { Color::WHITE.alpha(0.07) } else { Color::BLACK.alpha(0.05) })
+        .role("radiogroup")
+        .label("Theme");
     for (i, (ic, label, on)) in segs.iter().enumerate() {
         r = r.child(
             row()
@@ -156,12 +169,7 @@ pub fn toasts(list: &[Toast], k: &K) -> El {
 
 /// A label beside its value, in the inspector.
 pub fn field(label: &str, value: El, k: &K) -> El {
-    row()
-        .w_full()
-        .gap(10.0)
-        .py(5.0)
-        .child(text(label.to_string()).font(font(12.0, 400.0).lh(16.0)).color(k.muted).w(74.0))
-        .child(value.grow(1.0).min_w(0.0))
+    row().w_full().gap(10.0).py(5.0).child(text(label.to_string()).font(font(12.0, 400.0).lh(16.0)).color(k.muted).w(74.0)).child(value.grow(1.0).min_w(0.0))
 }
 
 pub fn value_text(t: impl Into<String>, k: &K) -> El {

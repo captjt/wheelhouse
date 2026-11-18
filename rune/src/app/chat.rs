@@ -115,7 +115,9 @@ fn items(d: &Docket, p: &DocketPage) -> Vec<Item> {
             "observed" => {
                 let colon = e.body().map(|b| format!(": {b}")).unwrap_or_default();
                 match x["what"].as_str() {
-                    Some("blocked") => out.push(Item::Sys(format!("Waited on you{}{colon}", model::text(&x["kind"]).map(|k| format!(" ({k})")).unwrap_or_default()), Some(LiveState::Blocked))),
+                    Some("blocked") => {
+                        out.push(Item::Sys(format!("Waited on you{}{colon}", model::text(&x["kind"]).map(|k| format!(" ({k})")).unwrap_or_default()), Some(LiveState::Blocked)))
+                    }
                     Some("error") => out.push(Item::Sys(format!("Failed{colon}"), Some(LiveState::Error))),
                     _ => {}
                 }
@@ -150,9 +152,7 @@ pub fn view(s: &Main, st: &HubState, d: &Docket, k: &K, kit: &Kit) -> El {
     };
     let items = items(d, page);
     let queued = page.queued();
-    let said = |t: &str| {
-        items.iter().any(|i| matches!(i, Item::You { text, .. } if text.trim() == t)) || queued.iter().any(|(_, b)| b.trim() == t)
-    };
+    let said = |t: &str| items.iter().any(|i| matches!(i, Item::You { text, .. } if text.trim() == t)) || queued.iter().any(|(_, b)| b.trim() == t);
     let pending: Vec<&String> = s.talk.sent.iter().filter(|(on, t)| *on == id && !said(t)).map(|(_, t)| t).collect();
     let state = d.live().map(|l| l.state());
     let can_send = d.live().is_some() && state != Some(LiveState::Error);
@@ -161,7 +161,9 @@ pub fn view(s: &Main, st: &HubState, d: &Docket, k: &K, kit: &Kit) -> El {
 
     let mut c = col().key("chat-items").w_full().max_w(820.0).px(28.0).py(20.0).gap(14.0);
     if items.is_empty() {
-        c = c.child(row().w_full().pt(40.0).justify_center().child(text(format!("Nothing said yet. Send {app} something to start.")).font(font(13.0, 400.0).lh(17.0)).color(k.muted)));
+        c = c.child(
+            row().w_full().pt(40.0).justify_center().child(text(format!("Nothing said yet. Send {app} something to start.")).font(font(13.0, 400.0).lh(17.0)).color(k.muted)),
+        );
     }
     for it in &items {
         c = c.child(bubble(s, d, it, k, kit));
@@ -171,20 +173,15 @@ pub fn view(s: &Main, st: &HubState, d: &Docket, k: &K, kit: &Kit) -> El {
     }
     for (q, body) in &queued {
         let (a, q) = (id.clone(), *q);
-        c = c.child(
-            col()
-                .w_full()
-                .items_end()
-                .gap(4.0)
-                .child(you_bubble(body, false, k, kit).opacity(0.6))
-                .child(
-                    row()
-                        .gap(4.0)
-                        .center_y()
-                        .child(text("Queued · goes in when the turn ends ·").font(font(11.5, 400.0).lh(15.0)).color(k.muted))
-                        .child(parts::link(format!("unqueue-{q}"), "Take back", 11.5, k, move |s, _| unqueue(s, &a, q))),
-                ),
-        );
+        c = c.child(col().w_full().items_end().gap(4.0).child(you_bubble(body, false, k, kit).opacity(0.6)).child(
+            row().gap(4.0).center_y().child(text("Queued · goes in when the turn ends ·").font(font(11.5, 400.0).lh(15.0)).color(k.muted)).child(parts::link(
+                format!("unqueue-{q}"),
+                "Take back",
+                11.5,
+                k,
+                move |s, _| unqueue(s, &a, q),
+            )),
+        ));
     }
     for t in pending {
         c = c.child(row().w_full().justify_end().child(you_bubble(t, false, k, kit).opacity(0.6)));
@@ -215,11 +212,8 @@ fn bubble(s: &Main, d: &Docket, it: &Item, k: &K, kit: &Kit) -> El {
             c.child(you_bubble(t, *note, k, kit).help(model::stamp(Some(at))))
         }
         Item::Agent { seq, at, text: t, app, ask, subject } => {
-            let mut head = row()
-                .gap(7.0)
-                .center_y()
-                .child(theme::app_avatar(Some(app), 18.0, k))
-                .child(text(model::app_name(Some(app))).font(font(12.5, 600.0).lh(16.0)).color(k.text));
+            let mut head =
+                row().gap(7.0).center_y().child(theme::app_avatar(Some(app), 18.0, k)).child(text(model::app_name(Some(app))).font(font(12.5, 600.0).lh(16.0)).color(k.text));
             if ask.is_some() {
                 head = head.child(text(format!("asked you{}", subject.as_ref().map(|s| format!(" · {s}")).unwrap_or_default())).font(font(12.5, 400.0).lh(16.0)).color(k.muted));
             }
@@ -230,9 +224,10 @@ fn bubble(s: &Main, d: &Docket, it: &Item, k: &K, kit: &Kit) -> El {
             };
             col().w_full().gap(8.0).child(head).child(clamp(s, *seq, parts::md(&src, 13.0, k, kit), k))
         }
-        Item::Chose(t) => row().w_full().justify_end().child(
-            row().px(12.0).py(7.0).radius(999.0).fill(k.accent_soft).child(text(format!("Chose “{t}”")).font(font(12.5, 400.0).lh(16.0)).color(k.text)),
-        ),
+        Item::Chose(t) => row()
+            .w_full()
+            .justify_end()
+            .child(row().px(12.0).py(7.0).radius(999.0).fill(k.accent_soft).child(text(format!("Chose “{t}”")).font(font(12.5, 400.0).lh(16.0)).color(k.text))),
         Item::Sys(t, tone) => row().w_full().justify_center().child(
             text(t.clone())
                 .font(font(12.0, 400.0).lh(16.0))
@@ -282,15 +277,8 @@ fn bubble(s: &Main, d: &Docket, it: &Item, k: &K, kit: &Kit) -> El {
 /// What you said: on the right, in the accent's tint; a note on the
 /// record (not sent) dashed and plain.
 fn you_bubble(t: &str, note: bool, k: &K, kit: &Kit) -> El {
-    let mut b = col()
-        .max_w(560.0)
-        .min_w(0.0)
-        .px(13.0)
-        .py(9.0)
-        .radius(14.0)
-        .continuous_corners()
-        .fill(if note { k.recessed } else { k.accent_soft })
-        .child(parts::md(t, 13.0, k, kit));
+    let mut b =
+        col().max_w(560.0).min_w(0.0).px(13.0).py(9.0).radius(14.0).continuous_corners().fill(if note { k.recessed } else { k.accent_soft }).child(parts::md(t, 13.0, k, kit));
     if note {
         b = b.border(1.0, k.line).border_dash(4.0, 3.0);
     }
@@ -339,19 +327,23 @@ fn now_line(s: &Main, d: &Docket, k: &K) -> El {
     };
     match l.state() {
         LiveState::Blocked => {
-            let mut body = col().gap(4.0).grow(1.0).min_w(0.0).child(
-                text(format!("{app} is asking{}", l.kind().map(|k| format!(" ({k})")).unwrap_or_default())).font(font(13.0, 600.0).lh(16.0)).color(k.text),
-            );
+            let mut body = col()
+                .gap(4.0)
+                .grow(1.0)
+                .min_w(0.0)
+                .child(text(format!("{app} is asking{}", l.kind().map(|k| format!(" ({k})")).unwrap_or_default())).font(font(13.0, 600.0).lh(16.0)).color(k.text));
             if let Some(m) = l.msg() {
                 body = body.child(text(m).font(mono(12.5).lh(16.0)).color(k.text2).wrap());
             }
             let a = id.clone();
-            let r = row()
-                .w_full()
-                .gap(8.0)
-                .child(body)
-                .child(lists::answer_buttons(s, d, k))
-                .child(el().pt(3.0).child(widgets::button("now-terminal", "Terminal", false, true, k, move |s: &mut Main, _| open_pane(s, &a))));
+            let r = row().w_full().gap(8.0).child(body).child(lists::answer_buttons(s, d, k)).child(el().pt(3.0).child(widgets::button(
+                "now-terminal",
+                "Terminal",
+                false,
+                true,
+                k,
+                move |s: &mut Main, _| open_pane(s, &a),
+            )));
             theme::callout(LiveState::Blocked, r, k)
         }
         LiveState::Error => {
@@ -361,7 +353,13 @@ fn now_line(s: &Main, d: &Docket, k: &K) -> El {
                 .gap(8.0)
                 .center_y()
                 .child(theme::live_icon(Some(LiveState::Error), 15.0, k))
-                .child(text(format!("{app} stopped with an error{}", l.msg().map(|m| format!(": {m}")).unwrap_or_else(|| ".".into()))).font(font(12.5, 400.0).lh(16.0)).color(k.error).wrap().shrink())
+                .child(
+                    text(format!("{app} stopped with an error{}", l.msg().map(|m| format!(": {m}")).unwrap_or_else(|| ".".into())))
+                        .font(font(12.5, 400.0).lh(16.0))
+                        .color(k.error)
+                        .wrap()
+                        .shrink(),
+                )
                 .child(parts::link("now-look", "Look at the terminal", 12.5, k, move |s, _| open_pane(s, &a)))
         }
         LiveState::Working | LiveState::Starting => {
@@ -412,7 +410,16 @@ fn dots(k: &K) -> El {
 fn elapsed(since: Option<&str>) -> String {
     let Some(d) = model::date(since) else { return String::new() };
     let s = (chrono::Utc::now() - d).num_seconds().max(0);
-    format!(" · {}", if s < 60 { format!("{s}s") } else if s < 3600 { format!("{}m", s / 60) } else { format!("{}h {}m", s / 3600, (s % 3600) / 60) })
+    format!(
+        " · {}",
+        if s < 60 {
+            format!("{s}s")
+        } else if s < 3600 {
+            format!("{}m", s / 60)
+        } else {
+            format!("{}h {}m", s / 3600, (s % 3600) / 60)
+        }
+    )
 }
 
 /// The box to the agent: Return sends, Shift-Return makes a new line.
@@ -555,7 +562,9 @@ pub fn poll(s: &mut Main, t: f64, tx: &mut Tx) -> bool {
     if s.talk.peek.is_some() {
         let current = s.current();
         let working = current.as_deref() == s.talk.peek.as_deref()
-            && s.state().and_then(|st| s.talk.peek.as_deref().and_then(|p| st.docket(p).and_then(|d| d.live()))).is_some_and(|l| matches!(l.state(), LiveState::Working | LiveState::Starting));
+            && s.state()
+                .and_then(|st| s.talk.peek.as_deref().and_then(|p| st.docket(p).and_then(|d| d.live())))
+                .is_some_and(|l| matches!(l.state(), LiveState::Working | LiveState::Starting));
         if !working || !s.chat {
             s.talk.peek = None;
         } else {
@@ -635,23 +644,25 @@ pub fn pane_sheet(s: &Main, id: &str, k: &K, kit: &Kit) -> El {
     if let Some(st) = state {
         meta = meta.child(theme::live_icon(Some(st), 11.0, k)).child(text(st.word()).font(font(11.5, 400.0).lh(14.0)).color(k.text2));
     }
-    if let Some(d) = &d {
-        if d.has_agent() {
-            let pane = d.agent_pane().unwrap_or_else(|| "pane".into());
-            meta = meta.child(text(format!("{} / {pane}", d.rex_session().unwrap_or_default())).font(font(11.5, 400.0).lh(14.0)).color(k.muted));
-        }
+    if let Some(d) = &d
+        && d.has_agent()
+    {
+        let pane = d.agent_pane().unwrap_or_else(|| "pane".into());
+        meta = meta.child(text(format!("{} / {pane}", d.rex_session().unwrap_or_default())).font(font(11.5, 400.0).lh(14.0)).color(k.muted));
     }
     let (a, b) = (id.to_string(), id.to_string());
     let head = parts::sheet_head(
-        row()
-            .gap(10.0)
-            .center_y()
-            .child(theme::app_avatar(d.as_ref().and_then(|d| d.agent_app()).as_deref(), 22.0, k))
-            .child(col().gap(2.0).child(text(d.as_ref().map(|d| d.title()).unwrap_or_else(|| id.to_string())).font(font(13.0, 600.0).lh(16.0)).color(k.text).truncate()).child(meta)),
-        row()
-            .gap(8.0)
-            .child(widgets::button("pane-rex", "Open in Rex", false, true, k, move |s: &mut Main, _| s.open_in_rex(&a)))
-            .child(widgets::button("pane-done", "Done", false, true, k, |s: &mut Main, _| s.sheet = None)),
+        row().gap(10.0).center_y().child(theme::app_avatar(d.as_ref().and_then(|d| d.agent_app()).as_deref(), 22.0, k)).child(
+            col().gap(2.0).child(text(d.as_ref().map(|d| d.title()).unwrap_or_else(|| id.to_string())).font(font(13.0, 600.0).lh(16.0)).color(k.text).truncate()).child(meta),
+        ),
+        row().gap(8.0).child(widgets::button("pane-rex", "Open in Rex", false, true, k, move |s: &mut Main, _| s.open_in_rex(&a))).child(widgets::button(
+            "pane-done",
+            "Done",
+            false,
+            true,
+            k,
+            |s: &mut Main, _| s.sheet = None,
+        )),
     );
     let screen = if s.talk.screen.is_empty() { s.talk.screen_error.clone().unwrap_or_else(|| "Loading the pane…".into()) } else { s.talk.screen.clone() };
     let term = col()
@@ -695,13 +706,14 @@ pub fn pane_sheet(s: &Main, id: &str, k: &K, kit: &Kit) -> El {
                     false
                 });
             let ready = why.is_none() && !s.talk.busy && !s.talk.pane_text.text.trim().is_empty();
-            row()
-                .w_full()
-                .padding(14.0)
-                .gap(8.0)
-                .items_end()
-                .child(row().grow(1.0).min_w(0.0).child(field))
-                .child(widgets::button("pane-send", if queues { "Queue  ⌘↩" } else { "Send  ⌘↩" }, true, ready, k, move |s: &mut Main, _| pane_send(s, &b)))
+            row().w_full().padding(14.0).gap(8.0).items_end().child(row().grow(1.0).min_w(0.0).child(field)).child(widgets::button(
+                "pane-send",
+                if queues { "Queue  ⌘↩" } else { "Send  ⌘↩" },
+                true,
+                ready,
+                k,
+                move |s: &mut Main, _| pane_send(s, &b),
+            ))
         }
     };
     parts::sheet_card("Pane", 900.0, Some(640.0), k).child(head).child(parts::divider(k)).child(term).child(parts::divider(k)).child(foot)

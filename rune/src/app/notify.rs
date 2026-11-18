@@ -305,19 +305,21 @@ fn respond(c: &rune_notify::Click, store: &Store) {
                     windows::show_main();
                     return;
                 };
-                say(store.post(&format!("/api/messages/{id}/reply"), json!({ "body": t })).map(|v| (format!("Replied · it goes to {} between turns", model::text(&v["to"]).unwrap_or(m.who())), false)));
+                say(store
+                    .post(&format!("/api/messages/{id}/reply"), json!({ "body": t }))
+                    .map(|v| (format!("Replied · it goes to {} between turns", model::text(&v["to"]).unwrap_or(m.who())), false)));
             } else if let Some(d) = docket {
-                say(store.post(&format!("/api/dockets/{d}/send"), json!({ "text": t, "queue": true })).map(|v| {
-                    (if v["queued"].is_number() { "Queued: it goes in when the turn ends".to_string() } else { "Sent to the pane".to_string() }, false)
-                }));
+                say(store
+                    .post(&format!("/api/dockets/{d}/send"), json!({ "text": t, "queue": true }))
+                    .map(|v| (if v["queued"].is_number() { "Queued: it goes in when the turn ends".to_string() } else { "Sent to the pane".to_string() }, false)));
             }
         }
         Some(a) if a.starts_with("opt-") => {
             let (Some(id), Ok(i)) = (message, a[4..].parse::<usize>()) else { return };
             let Some(choice) = msg(id).and_then(|m| m.options().get(i).cloned()) else { return };
-            say(store.post(&format!("/api/messages/{id}/reply"), json!({ "body": "", "choice": choice })).map(|v| {
-                (format!("Chose {choice} · it goes to {} between turns", model::text(&v["to"]).unwrap_or_else(|| "the agent".into())), false)
-            }));
+            say(store
+                .post(&format!("/api/messages/{id}/reply"), json!({ "body": "", "choice": choice }))
+                .map(|v| (format!("Chose {choice} · it goes to {} between turns", model::text(&v["to"]).unwrap_or_else(|| "the agent".into())), false)));
         }
         Some("post") => {
             // The draft whose summary the banner showed; the hub refuses a changed one.

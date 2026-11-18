@@ -134,13 +134,8 @@ fn title(st: &HubState, id: &str) -> String {
 /// `docket`, then `docket-2`…: windowless until a docket opens in one.
 fn docket_window(store: &Arc<Store>, i: usize) -> WindowSpec<Main> {
     let key = if i == 0 { "docket".to_string() } else { format!("docket-{}", i + 1) };
-    let spec = AppSpec {
-        scenes: SCENES,
-        poll: Some(super::poll),
-        on_key: Some(on_key),
-        min_size: Some((620.0, 480.0)),
-        ..AppSpec::new("Docket", DOCKET_SIZE, || unreachable!(), view)
-    };
+    let spec =
+        AppSpec { scenes: SCENES, poll: Some(super::poll), on_key: Some(on_key), min_size: Some((620.0, 480.0)), ..AppSpec::new("Docket", DOCKET_SIZE, || unreachable!(), view) };
     // The traffic lights centred on the title band, where SwiftUI's sit.
     let chrome = Chrome { full_size_content: true, traffic_lights: Some((20.0, 19.0)), drag_regions: true };
     // Closed, it's free: it stops following its docket's page.
@@ -197,9 +192,7 @@ fn view(s: &Main, cx: &mut Cx<Main>) -> El {
     };
     let mut body = row().key("docket-window").w_full().grow(1.0).min_h(0.0).child(col().key("detail-column").grow(1.0).min_w(0.0).h_full().child(main));
     if let Some(i) = inspector.filter(|_| s.inspector.is_open()) {
-        body = body
-            .child(el().w(1.0).h_full().fill(k.line).a11y_hidden())
-            .child(col().key("inspector").w(s.inspector.width()).h_full().min_h(0.0).px(10.0).child(i));
+        body = body.child(el().w(1.0).h_full().fill(k.line).a11y_hidden()).child(col().key("inspector").w(s.inspector.width()).h_full().min_h(0.0).px(10.0).child(i));
     }
     let band = titlebar(s, state.as_deref(), id.as_deref(), cx.chrome_insets(), &k, &kit);
     let mut root = col().key("root").w_full().h_full().fill(k.main).child(band).child(body);

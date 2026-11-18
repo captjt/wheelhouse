@@ -168,9 +168,22 @@ impl Issue {
 /// What a command does.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
-    Answer { docket: String, approve: bool, record: String, since: Option<String>, msg: Option<String> },
-    Choose { id: i64, choice: String },
-    Post { full_key: String, key: String, digest: String },
+    Answer {
+        docket: String,
+        approve: bool,
+        record: String,
+        since: Option<String>,
+        msg: Option<String>,
+    },
+    Choose {
+        id: i64,
+        choice: String,
+    },
+    Post {
+        full_key: String,
+        key: String,
+        digest: String,
+    },
     NewDocket,
     StartAgent,
     FromLinear,

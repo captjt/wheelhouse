@@ -137,17 +137,14 @@ fn header(s: &Main, d: &Docket, k: &K) -> El {
     if embedded {
         c = c.child(top);
     }
-    c.child(text(d.title()).font(font(22.0, 600.0).lh(27.0)).color(k.text).wrap().role("heading").level(1))
-        .child(chips)
+    c.child(text(d.title()).font(font(22.0, 600.0).lh(27.0)).color(k.text).wrap().role("heading").level(1)).child(chips)
 }
 
 fn prompt_callout(s: &Main, d: &Docket, l: &model::Live, k: &K) -> El {
     let who = model::app_name(d.agent_app().as_deref());
     let line = format!("{who} is waiting on you{}", l.kind().map(|k| format!(" · {k}")).unwrap_or_default());
-    let mut body = col()
-        .gap(4.0)
-        .child(text(line).font(font(13.0, 600.0).lh(16.0)).color(k.text))
-        .child(text(l.msg().unwrap_or_default()).font(mono(12.5).lh(16.0)).color(k.text2).wrap());
+    let mut body =
+        col().gap(4.0).child(text(line).font(font(13.0, 600.0).lh(16.0)).color(k.text)).child(text(l.msg().unwrap_or_default()).font(mono(12.5).lh(16.0)).color(k.text2).wrap());
     if !l.answerable() {
         body = body.child(text("Answer it in its pane: Wheelhouse can't read this prompt's choices.").font(font(11.5, 400.0).lh(15.0)).color(k.muted));
     }
@@ -206,9 +203,14 @@ fn intent(s: &Main, d: &Docket, page: Option<&DocketPage>, k: &K, kit: &Kit) -> 
             .placeholder("What this docket is for, how you'll know it's done, and what's out of scope.", k.muted)
             .label("Intent")
             .on_edit(|s: &mut Main| s.intent_edit.get_or_insert_with(|| rune::TextEdit::new("")));
-        head = head
-            .child(widgets::button("intent-cancel", "Cancel", false, true, k, |s: &mut Main, _| s.intent_edit = None))
-            .child(widgets::button("intent-save", "Save", true, true, k, move |s: &mut Main, _| s.save_intent(&a)));
+        head = head.child(widgets::button("intent-cancel", "Cancel", false, true, k, |s: &mut Main, _| s.intent_edit = None)).child(widgets::button(
+            "intent-save",
+            "Save",
+            true,
+            true,
+            k,
+            move |s: &mut Main, _| s.save_intent(&a),
+        ));
         let _ = b;
         return col().w_full().gap(8.0).child(head).child(row().w_full().padding(10.0).radius(8.0).fill(k.recessed).border(1.0, k.line2).child(field));
     }
@@ -236,12 +238,12 @@ fn intent(s: &Main, d: &Docket, page: Option<&DocketPage>, k: &K, kit: &Kit) -> 
     );
     let content = match body {
         Some(b) => intent_markdown(&id, &b, kit),
-        None => row()
-            .w_full()
-            .padding(14.0)
-            .radius(8.0)
-            .border(1.0, k.line2)
-            .child(text("Write the intent: what this docket is for, how you'll know it's done, and what's out of scope. Agents read it with `wh brief`.").font(font(13.0, 400.0).lh(18.0)).color(k.muted).wrap()),
+        None => row().w_full().padding(14.0).radius(8.0).border(1.0, k.line2).child(
+            text("Write the intent: what this docket is for, how you'll know it's done, and what's out of scope. Agents read it with `wh brief`.")
+                .font(font(13.0, 400.0).lh(18.0))
+                .color(k.muted)
+                .wrap(),
+        ),
     };
     col().w_full().gap(8.0).child(head).child(content)
 }
@@ -278,7 +280,13 @@ fn artifacts(files: &[&model::Entry], k: &K) -> El {
         let d = e.data();
         let link = model::text(&d["url"]);
         let sub = match &link {
-            Some(_) => if model::str_or(&d["provider"], "") == "claude" { "Claude artifact".to_string() } else { "Link".to_string() },
+            Some(_) => {
+                if model::str_or(&d["provider"], "") == "claude" {
+                    "Claude artifact".to_string()
+                } else {
+                    "Link".to_string()
+                }
+            }
             None => format!("{} · {} B", model::str_or(&d["name"], ""), model::int(&d["size"]).unwrap_or(0)),
         };
         let title = e.body().unwrap_or_else(|| model::str_or(&d["name"], "").to_string());
@@ -310,7 +318,13 @@ fn artifacts(files: &[&model::Entry], k: &K) -> El {
     col()
         .w_full()
         .gap(8.0)
-        .child(row().gap(8.0).center_y().child(theme::section_title("Artifacts", k)).child(text(format!("{} kept · each pinned in the record by its hash", files.len())).font(font(12.0, 400.0).lh(16.0)).color(k.muted)))
+        .child(
+            row()
+                .gap(8.0)
+                .center_y()
+                .child(theme::section_title("Artifacts", k))
+                .child(text(format!("{} kept · each pinned in the record by its hash", files.len())).font(font(12.0, 400.0).lh(16.0)).color(k.muted)),
+        )
         .child(grid)
 }
 
@@ -323,28 +337,26 @@ fn composer(s: &Main, d: &Docket, to_agent: bool, k: &K) -> El {
         .w_full()
         .min_h(54.0)
         .color(k.text)
-        .placeholder(if to_agent { format!("Message {}… (Return sends; it waits for the turn to end)", model::app_name(d.agent_app().as_deref())) } else { "Leave a note… (Markdown)".to_string() }, k.muted)
+        .placeholder(
+            if to_agent {
+                format!("Message {}… (Return sends; it waits for the turn to end)", model::app_name(d.agent_app().as_deref()))
+            } else {
+                "Leave a note… (Markdown)".to_string()
+            },
+            k.muted,
+        )
         .label(if to_agent { "Message the agent" } else { "Leave a note" })
         .on_edit(|s: &mut Main| &mut s.note)
         .on_submit(move |s: &mut Main, _| if to_agent { s.send(&a) } else { s.note(&a) });
     let ready = !s.note.text.trim().is_empty();
-    col()
-        .w_full()
-        .gap(8.0)
-        .padding(12.0)
-        .radius(10.0)
-        .continuous_corners()
-        .border(1.0, k.line2)
-        .fill(k.elev)
-        .child(field)
-        .child(
-            row()
-                .w_full()
-                .center_y()
-                .child(text(if to_agent { "Sent through Rex, and kept on the record." } else { "Signed as you, on the record." }).font(font(11.5, 400.0).lh(15.0)).color(k.faint))
-                .child(spacer())
-                .child(widgets::button("composer-send", if to_agent { "Send" } else { "Note" }, true, ready, k, move |s: &mut Main, _| if to_agent { s.send(&b) } else { s.note(&b) })),
-        )
+    col().w_full().gap(8.0).padding(12.0).radius(10.0).continuous_corners().border(1.0, k.line2).fill(k.elev).child(field).child(
+        row()
+            .w_full()
+            .center_y()
+            .child(text(if to_agent { "Sent through Rex, and kept on the record." } else { "Signed as you, on the record." }).font(font(11.5, 400.0).lh(15.0)).color(k.faint))
+            .child(spacer())
+            .child(widgets::button("composer-send", if to_agent { "Send" } else { "Note" }, true, ready, k, move |s: &mut Main, _| if to_agent { s.send(&b) } else { s.note(&b) })),
+    )
 }
 
 // ---- the inspector ----
@@ -371,7 +383,7 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
             let a = a.clone();
             tx.popup_menu(menu, "status-picker", move |s: &mut Main, picked, _| {
                 if let Some(p) = picked.filter(|p| *p != cur.raw()) {
-                    s.set_status(&a, Status::parse(&p));
+                    s.set_status(&a, Status::parse(p));
                 }
             });
         })
@@ -393,11 +405,27 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
         k,
     ));
     if d.has_agent() {
-        c = c.child(widgets::field("Agent", row().gap(6.0).center_y().child(theme::app_avatar(d.agent_app().as_deref(), 14.0, k)).child(widgets::value_text(model::app_name(d.agent_app().as_deref()), k)), k));
+        c = c.child(widgets::field(
+            "Agent",
+            row().gap(6.0).center_y().child(theme::app_avatar(d.agent_app().as_deref(), 14.0, k)).child(widgets::value_text(model::app_name(d.agent_app().as_deref()), k)),
+            k,
+        ));
     }
     if let Some(l) = d.live() {
-        c = c.child(widgets::field("Now", row().gap(6.0).center_y().child(theme::live_icon(Some(l.state()), 12.0, k)).child(widgets::value_text(format!("{} · {}", l.state().word(), model::ago(l.since().as_deref())), k)), k));
-        c = c.child(widgets::field("Rex", row().gap(6.0).center_y().child(theme::session_icon(&l.rex_session(), 14.0, k)).child(widgets::value_text(format!("{} / {}", l.rex_session(), l.pane()), k)), k));
+        c = c.child(widgets::field(
+            "Now",
+            row()
+                .gap(6.0)
+                .center_y()
+                .child(theme::live_icon(Some(l.state()), 12.0, k))
+                .child(widgets::value_text(format!("{} · {}", l.state().word(), model::ago(l.since().as_deref())), k)),
+            k,
+        ));
+        c = c.child(widgets::field(
+            "Rex",
+            row().gap(6.0).center_y().child(theme::session_icon(&l.rex_session(), 14.0, k)).child(widgets::value_text(format!("{} / {}", l.rex_session(), l.pane()), k)),
+            k,
+        ));
     }
     if let Some(cwd) = d.agent_cwd() {
         c = c.child(widgets::field("Folder", widgets::value_text(cwd.replace(&std::env::var("HOME").unwrap_or_default(), "~"), k), k));
@@ -405,18 +433,39 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
     if let Some(sess) = d.session() {
         c = c.child(widgets::field("Session", text(sess.chars().take(8).collect::<String>()).font(mono(12.0).lh(16.0)).color(k.text), k));
     }
-    c = c.child(widgets::field("Protocol", widgets::value_text(match d.protocol().as_str() { "agent" => "Agent", "review" => "Review", "build" => "Build", _ => "None" }, k), k));
+    c = c.child(widgets::field(
+        "Protocol",
+        widgets::value_text(
+            match d.protocol().as_str() {
+                "agent" => "Agent",
+                "review" => "Review",
+                "build" => "Build",
+                _ => "None",
+            },
+            k,
+        ),
+        k,
+    ));
     let a = id.to_string();
     c = c.child(widgets::field(
         "Hold",
         match d.hold() {
             Some(why) => row().gap(6.0).child(widgets::value_text(why, k)).child(widgets::button("resume", "Resume", false, true, k, move |s: &mut Main, _| s.resume(&a))),
-            None => row().key("hold").role("button").label("Hold…").on_press(move |s: &mut Main| s.sheet = Some(Sheet::Hold(a.clone()))).child(text("Hold…").font(font(12.5, 400.0).lh(16.0)).color(k.link)),
+            None => row()
+                .key("hold")
+                .role("button")
+                .label("Hold…")
+                .on_press(move |s: &mut Main| s.sheet = Some(Sheet::Hold(a.clone())))
+                .child(text("Hold…").font(font(12.5, 400.0).lh(16.0)).color(k.link)),
         },
         k,
     ));
     if d.prompts() + d.turns() > 0 {
-        c = c.child(widgets::field("Work", widgets::value_text(format!("{} · {}", model::plural(d.prompts() as usize, "prompt"), model::plural(d.turns() as usize, "turn")), k), k));
+        c = c.child(widgets::field(
+            "Work",
+            widgets::value_text(format!("{} · {}", model::plural(d.prompts() as usize, "prompt"), model::plural(d.turns() as usize, "turn")), k),
+            k,
+        ));
     }
     c = c.child(widgets::field("Created", widgets::value_text(model::stamp(Some(&d.created_at())), k), k));
     c = c.child(widgets::field("Updated", widgets::value_text(model::ago_long(Some(&d.updated_at())), k), k));
@@ -426,11 +475,13 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
         let ok = p.verify_ok();
         c = c.child(widgets::field(
             "Check",
-            row()
-                .gap(5.0)
-                .center_y()
-                .child(icon(&icons::SHIELD, 13.0).color(if ok { k.working } else { k.error }))
-                .child(text(format!("{} · {} signed", if ok { "Intact" } else { "Broken" }, p.verify_entries())).font(font(12.5, 400.0).lh(16.0)).color(if ok { k.working } else { k.error })),
+            row().gap(5.0).center_y().child(icon(&icons::SHIELD, 13.0).color(if ok { k.working } else { k.error })).child(
+                text(format!("{} · {} signed", if ok { "Intact" } else { "Broken" }, p.verify_entries())).font(font(12.5, 400.0).lh(16.0)).color(if ok {
+                    k.working
+                } else {
+                    k.error
+                }),
+            ),
             k,
         ));
     }
@@ -438,7 +489,12 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
     let a = id.to_string();
     c = c.child(widgets::field(
         "Record",
-        row().key("open-record").role("button").label("Open the record").on_press(move |s: &mut Main| s.sheet = Some(Sheet::Record(a.clone()))).child(text("Open").font(font(12.5, 400.0).lh(16.0)).color(k.link)),
+        row()
+            .key("open-record")
+            .role("button")
+            .label("Open the record")
+            .on_press(move |s: &mut Main| s.sheet = Some(Sheet::Record(a.clone())))
+            .child(text("Open").font(font(12.5, 400.0).lh(16.0)).color(k.link)),
         k,
     ));
     let _ = Place::Inbox;
@@ -510,16 +566,21 @@ fn hold_sheet(s: &Main, id: &str, k: &K) -> El {
         .w_full()
         .padding(18.0)
         .gap(12.0)
-        .child(text("On hold, Build and Review take no steps on it, and it shows in the Inbox's Attention until you resume it.").font(font(12.5, 400.0).lh(17.0)).color(k.muted).wrap())
-        .child(row().w_full().px(10.0).py(7.0).radius(7.0).fill(k.recessed).border(1.0, k.line2).child(field))
         .child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .child(spacer())
-                .child(widgets::button("hold-cancel", "Cancel", false, true, k, |s: &mut Main, _| s.sheet = None))
-                .child(widgets::button("hold-go", "Hold", true, true, k, move |s: &mut Main, _| s.hold(&a))),
-        );
+            text("On hold, Build and Review take no steps on it, and it shows in the Inbox's Attention until you resume it.")
+                .font(font(12.5, 400.0).lh(17.0))
+                .color(k.muted)
+                .wrap(),
+        )
+        .child(row().w_full().px(10.0).py(7.0).radius(7.0).fill(k.recessed).border(1.0, k.line2).child(field))
+        .child(row().w_full().gap(8.0).child(spacer()).child(widgets::button("hold-cancel", "Cancel", false, true, k, |s: &mut Main, _| s.sheet = None)).child(widgets::button(
+            "hold-go",
+            "Hold",
+            true,
+            true,
+            k,
+            move |s: &mut Main, _| s.hold(&a),
+        )));
     sheet_card(&format!("Hold {id}"), body, k)
 }
 
