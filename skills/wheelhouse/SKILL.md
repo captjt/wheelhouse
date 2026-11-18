@@ -27,6 +27,23 @@ wh intent D-12 - < intent.md
 Leave a note on the record for anything someone should find later:
 `wh note D-12 "Chose a token bucket; see bench/limits.md"`.
 
+## Checks, and what "done" rests on
+
+When your brief has a **Verify** section, the repo has checks that
+Wheelhouse runs itself, at your commit, behind the same wall. Run the same
+commands before you say you're done. To have Wheelhouse run them now and
+see what it saw:
+
+```sh
+wh check D-12 --wait     # each check, pass or fail; exits non-zero on a required failure
+```
+
+What you say ("tests pass") is recorded as *said*. A check Wheelhouse ran
+is *witnessed*. A docket with acceptance items closes on evidence (its
+required checks passing at one commit, its PR merged), not on what anyone
+says, so don't set it done yourself; tell the user what's left. If your
+brief says the docket is on hold, stop and say so.
+
 ## Keeping what you made
 
 Something you made that the user should be able to open later (a report,
