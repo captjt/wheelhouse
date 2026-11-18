@@ -1,0 +1,4 @@
+# Rune's own toolchain at the pinned rev (its rust-toolchain.toml); the hub keeps its own.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]

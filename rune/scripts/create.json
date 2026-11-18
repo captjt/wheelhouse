@@ -1,0 +1,11 @@
+{"events": [
+  {"t": 0.30, "type": "type", "text": "new dock", "every": 0.05},
+  {"t": 0.80, "type": "key", "name": "Enter"},
+  {"t": 1.00, "type": "mark", "name": "form"},
+  {"t": 1.10, "type": "type", "text": "Try Rune's text field", "every": 0.03},
+  {"t": 2.00, "type": "key", "name": "Tab"},
+  {"t": 2.10, "type": "type", "text": "Made from the Rune panel.", "every": 0.02},
+  {"t": 2.80, "type": "mark", "name": "filled"},
+  {"t": 2.90, "type": "key", "name": "Enter", "cmd": true},
+  {"t": 3.30, "type": "mark", "name": "end"}
+]}

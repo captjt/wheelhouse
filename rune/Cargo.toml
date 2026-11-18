@@ -1,0 +1,59 @@
+# The ⌥⌘K quick panel in Rune: its own workspace, so Rune's pinned rev and its
+# patched crates never reach the hub's Cargo.lock (docs/rune.md).
+[workspace]
+resolver = "3"
+
+[package]
+name = "wheelhouse-rune"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "wheelhouse-rune"
+path = "src/main.rs"
+
+# One rev for Rune and every patch below. To move to a newer Rune, change all
+# seven together, after reading `[patch.crates-io]` in Rune's root Cargo.toml
+# at the new rev (README: "Depending on Rune"); `scripts/bump-rune.sh` does it.
+[dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a" }
+# Only for its scroll bar, which follows "Show scroll bars" (Rune's core draws none).
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a" }
+serde_json = "1"
+# Plain HTTP to the hub on this Mac: no TLS.
+ureq = { version = "3", default-features = false }
+
+# The Theme commands set the app's NSAppearance, so the native material follows
+# them (Rune has no appearance API). The versions Rune itself links.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSAppearance", "NSResponder"] }
+objc2-foundation = { version = "0.2.2" }
+
+# Rune's agent tooling in release builds: --snap, --tree, --script and --video,
+# and keycaps and click ripples over --video. On by default; a shipping build
+# would leave it out (`--no-default-features`: about 5 MB less).
+[features]
+default = ["tooling"]
+tooling = ["rune/tooling", "rune/keys-overlay"]
+
+# Cargo doesn't take a dependency's patches: Rune's own forks, at the same rev.
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "78efd4a7876b5478dd72033ce6fd2b2f13ab9f9a" }
+
+# Rune's own profiles: line tables only in dev (full debug info is huge), and
+# incremental release builds.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+codegen-units = 16
+incremental = true
