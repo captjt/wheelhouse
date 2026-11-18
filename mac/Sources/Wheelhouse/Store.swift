@@ -444,12 +444,21 @@ final class Store {
         await act("/api/dockets/\(id)/artifacts", ["url": link.absoluteString], done: "Linked it to \(id)")
     }
 
-    func startAgent(app: String, cwd: String, prompt: String, title: String?) async -> String? {
+    /// `docket`: work on that docket instead of opening a new one.
+    func startAgent(app: String, cwd: String, prompt: String, title: String?, docket: String? = nil) async -> String? {
         var body: [String: Any] = ["app": app, "cwd": cwd, "prompt": prompt]
         if let title, !title.isEmpty { body["title"] = title }
+        if let docket { body["docket"] = docket }
         guard let r = await act("/api/agents/start", body), let id = r["docket"].str else { return nil }
-        toast("\(id): \(appName(app)) started in Rex's wheelhouse session")
+        toast(docket == nil ? "\(id): \(appName(app)) started in Rex's wheelhouse session" : "\(appName(app)) is on \(id), in wheelhouse/\(id)")
         return id
+    }
+
+    /// Where an agent could start, and where this docket's should.
+    func folders(for docket: String?) async -> (all: [String], suggested: String?) {
+        let q = docket.map { "?docket=\($0)" } ?? ""
+        guard let r = try? await hub.get("/api/folders\(q)") else { return ([], nil) }
+        return (r["folders"].strings, r["suggested"].text)
     }
 
     func fromLinear(_ key: String) async -> String? {

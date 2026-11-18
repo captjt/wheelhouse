@@ -4,7 +4,7 @@ import { AppAvatar, IconBoard, IconChevronDown, IconEye, SessionChip, SessionIco
 import { ago, go, lastList, store, useHub } from "./live";
 import { useKeys, useMenu, usePhone, type MenuItem } from "./ui";
 import { LargeTitle, SwipeRow, type SwipeAction } from "./mobile";
-import { IconCheck, IconPause, IconPlay, IconX } from "./icons";
+import { IconAgents, IconCheck, IconPause, IconPlay, IconX } from "./icons";
 import { onThisMac, usePane } from "./Pane";
 
 export const STATUSES: { key: Docket["status"]; label: string }[] = [
@@ -44,8 +44,12 @@ export function rowMenu(d: Docket, hub: ReturnType<typeof useHub>, pane: ReturnT
       : { key: "hold", label: "Hold…", icon: <IconPause size={14} />, onPick: () => hub.setDialog({ kind: "hold", id: d.id }) },
     { key: "copy", label: "Copy ID", icon: <IconCopy size={14} />, onPick: () => navigator.clipboard?.writeText(d.id) },
   );
+  if (canStartAgent(d)) items.splice(1, 0, { key: "start-agent", label: "Start an agent…", icon: <IconAgents size={14} />, onPick: () => hub.setDialog({ kind: "agent", id: d.id }) });
   return items;
 }
+
+/** Whether a docket can take an agent now: open, not a Review's, and no agent working on it. */
+export const canStartAgent = (d: Docket) => (d.status === "todo" || d.status === "in_progress") && d.protocol !== "review" && !d.live;
 
 // ---- grouping ----
 

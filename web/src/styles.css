@@ -1973,6 +1973,12 @@ code {
   padding: 0 10px;
   font-size: 12px;
 }
+.nd-for {
+  max-width: 46%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 /* ---- review previews ---- */
 
