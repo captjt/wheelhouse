@@ -579,7 +579,7 @@ pub fn poll(s: &mut Main, t: f64, tx: &mut Tx) -> bool {
     // After the first frame, so the section has a place to scroll to.
     if t > 0.05 {
         if let Some(key) = s.scroll_to.take() {
-            tx.scroll_into_view(key);
+            tx.scroll_center(key);
             return true;
         }
     } else if s.scroll_to.is_some() {

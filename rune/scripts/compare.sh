@@ -81,7 +81,7 @@ for p in "${pairs[@]}"; do
     if [ "$size" = auto ] && [ -f "$sw" ]; then
       size="$(sips -g pixelWidth "$sw" | awk '/pixelWidth/{print $2}')x$(sips -g pixelHeight "$sw" | awk '/pixelHeight/{print $2}')"
     fi
-    args=(--window "$window" --theme "$theme" --size "$size" --scale 1 --scroll-bars always --at 0.8 --snap "$r")
+    args=(--window "$window" --theme "$theme" --size "$size" --scale 1 --scroll-bars always --at 1.5 --snap "$r")
     [ -n "$scene" ] && args+=(--scene "$scene")
     WH_HUB="$hub" $bin "${args[@]}" >/dev/null 2>&1 || true
     pair="$out/pairs/$s-$theme.png"

@@ -389,9 +389,10 @@ pub fn activity(s: &Main, st: &HubState, d: &Docket, p: &DocketPage, k: &K, kit:
                 .child(mark(&e.mark(), k)),
             Shape::Comment(a, writer, verb, body, style) => {
                 let (fill, edge) = match style {
-                    Some("you") => (k.accent_soft, k.accent.alpha(0.25)),
-                    Some("ask") => (k.warning_tint, k.blocked.alpha(0.25)),
-                    _ => (k.elev, k.line2),
+                    // Activity.swift: K.accentSoft at half, K.line around it.
+                    Some("you") => (if k.dark { crate::theme::hex("#1c398e").alpha(0.14) } else { crate::theme::hex("#dbeafe").alpha(0.33) }, k.line),
+                    Some("ask") => (k.warning_tint, k.blocked.alpha(0.35)),
+                    _ => (k.elev, k.line),
                 };
                 col()
                     .key(format!("entry-{}", e.seq()))
