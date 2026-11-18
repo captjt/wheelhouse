@@ -42,6 +42,31 @@ impl Decision {
     }
 }
 
+/// A decision as a standing rule for its repo's notes.
+pub fn rule(d: &Decision, docket: &str) -> String {
+    let day = crate::time::parse(d.at.as_deref().unwrap_or("")).map(|t| format!(", {} {}", t.month(), t.day())).unwrap_or_default();
+    let q = d.question.trim().trim_end_matches(['?', '.', ':']).trim();
+    let a = d.answer.as_deref().unwrap_or("").trim().trim_end_matches('.');
+    let note = d.note.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(|n| format!(": {}.", n.trim_end_matches('.'))).unwrap_or_else(|| ".".into());
+    format!("- {q}? {a}{note} (Decided on {docket}{day}.)")
+}
+
+/// Notes with the rule added under "Standing decisions", or `None` when
+/// it's there already.
+pub fn with_rule(notes: &str, rule: &str) -> Option<String> {
+    let notes = notes.trim_end();
+    if notes.contains(rule) {
+        return None;
+    }
+    Some(if notes.contains("## Standing decisions") {
+        format!("{notes}\n{rule}\n")
+    } else if notes.is_empty() {
+        format!("## Standing decisions\n\n{rule}\n")
+    } else {
+        format!("{notes}\n\n## Standing decisions\n\n{rule}\n")
+    })
+}
+
 fn first_line(s: &str) -> String {
     s.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(200).collect()
 }
@@ -148,6 +173,30 @@ pub fn brief(ds: &[Decision]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_standing_decision_reads_as_a_rule_in_the_notes() {
+        let d = Decision {
+            key: "#12".into(),
+            question: "How many retries?".into(),
+            options: vec!["3".into(), "5".into()],
+            asked_by: "claude-code".into(),
+            asked_at: "t".into(),
+            message: Some(12),
+            answer: Some("3".into()),
+            note: Some("To match the API docs.".into()),
+            by: Some("you".into()),
+            at: Some("2026-11-18T01:00:00Z".into()),
+        };
+        let r = rule(&d, "D-6");
+        assert_eq!(r, "- How many retries? 3: To match the API docs. (Decided on D-6, November 18.)");
+        assert_eq!(with_rule("", &r).unwrap(), format!("## Standing decisions\n\n{r}\n"));
+        let once = with_rule("Run just check.", &r).unwrap();
+        assert_eq!(once, format!("Run just check.\n\n## Standing decisions\n\n{r}\n"));
+        assert_eq!(with_rule(&once, &r), None, "not twice");
+        let r2 = "- Base? main. (Decided on D-7.)";
+        assert_eq!(with_rule(&once, r2).unwrap(), format!("{once}{r2}\n"));
+    }
     use crate::record::entry::Actor;
 
     fn e(kind: &str, typ: &str, id: &str, body: Option<&str>, data: Value, at: &str) -> Entry {

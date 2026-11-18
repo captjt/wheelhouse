@@ -258,9 +258,69 @@ fn sum(o: &Open) -> String {
 
 /// A poll of an open PR: merged or closed ends it; anything new to address
 /// is an ask (or, with `gates.address = "auto"`, a round).
+/// Everyone's reviews, comments and review-thread comments on the PR but
+/// yours and bots': `(id, data, body)`, oldest first.
+pub fn feedback(v: &Value) -> Vec<(String, Value, String)> {
+    let p = &v["data"]["repository"]["pullRequest"];
+    let me = v["data"]["viewer"]["login"].as_str().unwrap_or("");
+    let nodes = |x: &Value| x["nodes"].as_array().cloned().unwrap_or_default();
+    let person = |c: &Value| c["author"]["login"] != me && c["author"]["__typename"] != "Bot" && c["author"]["login"].is_string();
+    let mut out: Vec<(String, Value, String)> = Vec::new();
+    for r in nodes(&p["reviews"]).into_iter().filter(|r| person(r) && r["state"] != "PENDING") {
+        let d = json!({ "kind": "review", "state": r["state"], "author": r["author"]["login"], "url": r["url"], "at": r["submittedAt"] });
+        out.push((format!("review-{}", r["databaseId"]), d, r["body"].as_str().unwrap_or("").to_string()));
+    }
+    for c in nodes(&p["comments"]).into_iter().filter(|c| person(c)) {
+        let d = json!({ "kind": "comment", "author": c["author"]["login"], "url": c["url"], "at": c["createdAt"] });
+        out.push((format!("comment-{}", c["databaseId"]), d, c["body"].as_str().unwrap_or("").to_string()));
+    }
+    for t in nodes(&p["reviewThreads"]) {
+        let line = if t["line"].is_null() { t["originalLine"].clone() } else { t["line"].clone() };
+        for c in nodes(&t["comments"]).into_iter().filter(|c| person(c)) {
+            let d = json!({ "kind": "thread", "author": c["author"]["login"], "url": c["url"], "at": c["createdAt"], "path": t["path"], "line": line });
+            out.push((format!("thread-{}", c["databaseId"]), d, c["body"].as_str().unwrap_or("").to_string()));
+        }
+    }
+    out.sort_by(|a, b| a.1["at"].as_str().unwrap_or("").cmp(b.1["at"].as_str().unwrap_or("")));
+    out
+}
+
+/// Reviews come home: each person's review, comment and thread comment on
+/// the PR goes on the docket once, as it reads on GitHub (checkable there).
+fn record_feedback(shared: &Shared, t: &mut Task, n: i64, v: &Value) -> Result<()> {
+    let mut done: Vec<String> = t.extra.get("recorded").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or_default();
+    let fresh: Vec<(String, Value, String)> = feedback(v).into_iter().filter(|(id, ..)| !done.contains(id)).collect();
+    if fresh.is_empty() {
+        return Ok(());
+    }
+    let mut core = shared.lock();
+    for (id, mut d, body) in fresh {
+        let who = d["author"].as_str().unwrap_or("someone").to_string();
+        let words = match (d["kind"].as_str(), d["state"].as_str()) {
+            (Some("review"), Some("APPROVED")) => format!("{who} approved #{n}"),
+            (Some("review"), Some("CHANGES_REQUESTED")) => format!("{who} requested changes on #{n}"),
+            (Some("review"), _) => format!("{who} reviewed #{n}"),
+            (Some("thread"), _) => format!("{who} on {}{}", d["path"].as_str().unwrap_or("the diff"), d["line"].as_i64().map(|l| format!(":{l}")).unwrap_or_default()),
+            _ => format!("{who} commented on #{n}"),
+        };
+        d["what"] = json!("github-feedback");
+        d["source"] = json!("github");
+        d["pr"] = json!(n);
+        d["id"] = json!(id);
+        d["summary"] = json!(words);
+        let text = if body.trim().is_empty() { words } else { body };
+        core.append(&t.docket, "observed", &Who::Hub, Some(text), d)?;
+        done.push(id);
+    }
+    t.extra.insert("recorded".into(), json!(done));
+    Ok(())
+}
+
 pub async fn follow(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<Option<Attention>> {
     let Some(n) = t.pr_number else { return Ok(None) };
-    let o = scan(&fetch_pr(&t.repo, n).await?);
+    let raw = fetch_pr(&t.repo, n).await?;
+    record_feedback(shared, t, n, &raw)?;
+    let o = scan(&raw);
     match o.state.as_str() {
         "MERGED" | "CLOSED" => {
             steps::ended(shared, t, o.state == "MERGED").await?;
@@ -927,6 +987,18 @@ mod tests {
                 ] } } } } ] }
             } }
         } })
+    }
+
+    #[test]
+    fn every_persons_feedback_comes_home_once_in_order() {
+        let f = feedback(&pr());
+        let ids: Vec<&str> = f.iter().map(|(id, ..)| id.as_str()).collect();
+        // Everyone's, answered or resolved too; not yours, not a bot's.
+        assert_eq!(ids, vec!["thread-110", "thread-120", "review-7", "thread-100", "review-8", "comment-90"]);
+        let (_, d, body) = &f[2];
+        assert_eq!((d["kind"].as_str(), d["state"].as_str(), body.as_str()), (Some("review"), Some("CHANGES_REQUESTED"), "The retry cap needs a test."));
+        let (_, d, _) = &f[3];
+        assert_eq!((d["path"].as_str(), d["line"].as_i64()), (Some("src/retry.ts"), Some(42)));
     }
 
     #[test]

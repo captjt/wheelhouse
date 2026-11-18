@@ -122,6 +122,11 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       checked before they're written
 - [x] Guides and briefs: edit, compare with the built-in, reset, and
       write your own; every replaced version kept
+- [x] Standing decisions: a decision made standing joins its repo's notes,
+      so every later brief there, reviewers' too, carries it
+- [x] Reviews come home: each person's review and comment on a Build's PR
+      lands on its docket as a checkable entry
+- [x] `wh doctor`: what's set up, what isn't, and the fix for each
 
 ### Recap and the phone
 

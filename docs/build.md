@@ -218,6 +218,11 @@ away. Threads are never resolved: the reviewers do that.
 rebased branch with a lease: only over the head the round started from,
 never over anyone's newer commits.
 
+Each person's review, comment and review-thread comment on the PR also
+comes home to the docket, once, as a checkable entry (it's on GitHub for
+anyone to read again), so the docket reads as the whole story and the next
+round's agents see it in their brief.
+
 ## Pre-review
 
 With `prereview = { reviewers = { "codex" } }`, each reviewer reviews the

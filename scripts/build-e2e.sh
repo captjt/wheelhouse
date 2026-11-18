@@ -247,7 +247,9 @@ pr_json OPEN "$thread" "$review" '[]' "$failing" CLEAN "$main1"
 until_ "the feedback is an ask" '.asks | index("address")'
 id=$(ask_id "Address it")
 api "$base/api/messages/$id" | jq -e '.subject | contains("a review thread, a review, a failing check")' >/dev/null || fail "the ask doesn't say what's open"
-ok "asked: $(api "$base/api/messages/$id" | jq -r .subject)"
+api "$base/api/dockets/D-1" | jq -e '[.entries[] | select(.data.what == "github-feedback")] | length == 2 and all(.[]; .mark == "checkable") and any(.[]; .data.summary == "dana requested changes on #45")' >/dev/null ||
+  fail "dana's review and thread comment didn't come home as checkable entries"
+ok "asked: $(api "$base/api/messages/$id" | jq -r .subject); dana's review and comment are on the docket"
 
 step "address it: the builder reopens on the round"
 answer "Address it"
