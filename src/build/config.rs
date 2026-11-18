@@ -19,6 +19,17 @@ pub struct Repo {
     pub plan: Option<String>,
 }
 
+/// `sources.linear`: Linear issues assigned to you that start a Build (with
+/// the label) or are offered one (entering your active cycle).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LinearSource {
+    /// Each team's key, and the repo its issues build into.
+    pub teams: BTreeMap<String, String>,
+    pub label: Option<String>,
+    pub cycle: bool,
+    pub skip_label: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Role {
     pub agent: String,
@@ -32,6 +43,7 @@ pub struct Config {
     pub raw: Value,
     pub repos: BTreeMap<String, Repo>,
     pub github_label: Option<String>,
+    pub linear: Option<LinearSource>,
     pub builder: Role,
     pub checker: Role,
     /// `ask` or `auto`, by gate: `start`, `plan`, `preview`, `open`, and
@@ -106,21 +118,52 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
             Repo { checkout, notes: r["notes"].as_str().map(str::to_string).or(prev.map(|p| p.notes)).unwrap_or_default(), base: r["base"].as_str().map(str::to_string), plan },
         );
     }
-    let mut gates: BTreeMap<String, String> = [("start", "auto"), ("plan", "ask"), ("preview", "ask"), ("open", "ask"), ("address", "ask"), ("push", "ask")]
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
+    let mut gates: BTreeMap<String, String> =
+        [("start", "auto"), ("start_cycle", "ask"), ("plan", "ask"), ("preview", "ask"), ("open", "ask"), ("address", "ask"), ("push", "ask")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
     for (k, v) in raw["gates"].as_object().into_iter().flatten() {
-        let v = match v {
-            Value::String(s) => s.clone(),
-            Value::Object(o) => o.get("label").and_then(|x| x.as_str()).unwrap_or("auto").to_string(),
-            _ => continue,
+        let mut set = |k: String, v: String| -> Result<()> {
+            if v != "ask" && v != "auto" {
+                bail!("gates.{k} is ask or auto, not {v}");
+            }
+            gates.insert(k, v);
+            Ok(())
         };
-        if v != "ask" && v != "auto" {
-            bail!("gates.{k} is ask or auto, not {v}");
+        match v {
+            Value::String(s) => set(k.clone(), s.clone())?,
+            // gates.start = { label = …, cycle = … }: how a Linear issue starts.
+            Value::Object(o) => {
+                set(k.clone(), o.get("label").and_then(|x| x.as_str()).unwrap_or("auto").to_string())?;
+                if let Some(c) = o.get("cycle").and_then(|x| x.as_str()) {
+                    set(format!("{k}_cycle"), c.to_string())?;
+                }
+            }
+            _ => continue,
         }
-        gates.insert(k.clone(), v);
     }
+    let linear = match &raw["sources"]["linear"] {
+        Value::Object(l) => {
+            let teams: BTreeMap<String, String> =
+                l.get("teams").and_then(Value::as_object).map(|o| o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect()).unwrap_or_default();
+            if teams.is_empty() {
+                bail!("sources.linear.teams maps each Linear team to the repo its issues build into, like {{ ENG = \"acme/api\" }}");
+            }
+            for (team, repo) in &teams {
+                if !repos.contains_key(repo) {
+                    bail!("sources.linear.teams.{team} is {repo}, which isn't one of Build's repos");
+                }
+            }
+            let label = l.get("label").and_then(Value::as_str).map(str::to_string);
+            let cycle = l.get("cycle").and_then(Value::as_bool).unwrap_or(false);
+            if label.is_none() && !cycle {
+                bail!("sources.linear needs a label, cycle = true, or both");
+            }
+            Some(LinearSource { teams, label, cycle, skip_label: l.get("skip_label").and_then(Value::as_str).map(str::to_string) })
+        }
+        _ => None,
+    };
     let mut agents = review.map(|r| r.agents.clone()).unwrap_or_default();
     for name in ["codex", "claude"] {
         let a = &raw["agents"][name];
@@ -142,6 +185,7 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
         path,
         repos,
         github_label: raw["sources"]["github"]["label"].as_str().map(str::to_string),
+        linear,
         builder: role(&raw["builder"], "claude")?,
         checker: role(&raw["checker"], "claude")?,
         gates,

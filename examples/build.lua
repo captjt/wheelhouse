@@ -35,8 +35,9 @@ return {
     -- Open GitHub issues assigned to you, in the repos above, with this label.
     github = { label = "agent" },
 
-    -- Planned, not read yet: Linear issues by label, and issues that enter
-    -- your active cycle.
+    -- Linear issues assigned to you (needs `wh setup-linear`), in each team's
+    -- repo: with the label they start a Build; in your active cycle they're
+    -- offered one; with skip_label they're left alone.
     -- linear = { teams = { ENG = "acme/api" }, label = "agent", cycle = true, skip_label = "no-agent" },
   },
 
@@ -50,7 +51,14 @@ return {
     plan = "ask",    -- Approve, Revise or Discard the plan
     preview = "ask", -- Looks right or Needs work, when there's something to see
     open = "ask",    -- Open PR, Needs changes or Discard
+    address = "ask", -- once it's open: Address it or Not now, on review feedback, failing checks, a moved base
+    push = "ask",    -- Push and reply, Needs changes or Drop the round
+    -- start = { label = "auto", cycle = "ask" }, -- how a Linear issue starts
   },
+
+  -- How a round brings the branch up to date with its base: "merge" (never
+  -- a force-push) or "rebase" (pushed with a lease).
+  update = "merge",
 
   -- Fix rounds after the checker finds something.
   fix_loops = 2,

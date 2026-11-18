@@ -9,6 +9,7 @@ pub mod address;
 pub mod agents;
 pub mod config;
 pub mod decide;
+pub mod intake;
 pub mod plan;
 pub mod steps;
 pub mod watch;
@@ -253,6 +254,16 @@ pub fn summary(t: &Task) -> Value {
         "pending": t.extra.get("pending").map(|p| p["ids"].as_array().map_or(0, Vec::len)),
         "tokens": t.tokens.as_ref().and_then(|x| x["total"].as_i64()),
     })
+}
+
+/// Say what started a Build (`label`, `linear-cycle`…). One lock, held once:
+/// never inside an `if let` that locks again, which would hang the hub.
+pub fn set_trigger(shared: &crate::hub::Shared, docket: &str, trigger: &str) {
+    let mut core = shared.lock();
+    if let Ok(Some(mut t)) = get(&core, docket) {
+        t.trigger = trigger.to_string();
+        let _ = save(&mut core, &mut t);
+    }
 }
 
 /// Save a Build's state; note its phase on the docket when it changes.

@@ -178,6 +178,36 @@ pub async fn search(q: &str) -> Result<Vec<Issue>> {
     Ok(out)
 }
 
+/// Your open assigned issues in these teams, with their labels and cycle,
+/// for Build's intake (`sources.linear`): `{key, title, url, team, state,
+/// labels, cycle_active}` each.
+pub async fn intake(teams: &[String]) -> Result<Vec<Value>> {
+    let query = format!(
+        "query($teams: [String!]) {{
+           viewer {{ assignedIssues(first: 100, orderBy: updatedAt, filter: {{ state: {{ type: {{ nin: [\"completed\", \"canceled\"] }} }}, team: {{ key: {{ in: $teams }} }} }}) {{
+             nodes {{ {LITE} labels {{ nodes {{ name }} }} cycle {{ isActive }} }}
+           }} }}
+         }}"
+    );
+    let data = graphql(&query, json!({ "teams": teams })).await?;
+    Ok(data["viewer"]["assignedIssues"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| {
+            Some(json!({
+                "key": v["identifier"].as_str()?,
+                "title": v["title"],
+                "url": v["url"],
+                "team": v["team"]["key"],
+                "state": v["state"]["type"],
+                "labels": v["labels"]["nodes"].as_array().map(|l| l.iter().filter_map(|x| x["name"].as_str()).collect::<Vec<_>>()).unwrap_or_default(),
+                "cycle_active": v["cycle"]["isActive"].as_bool().unwrap_or(false),
+            }))
+        })
+        .collect())
+}
+
 pub fn is_key(s: &str) -> bool {
     let Some((team, n)) = s.split_once('-') else { return false };
     !team.is_empty() && team.chars().all(|c| c.is_ascii_alphanumeric()) && !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())

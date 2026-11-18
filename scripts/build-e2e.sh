@@ -11,7 +11,9 @@
 # It goes: plan → approve → build → check → open the PR; then a round on
 # review feedback and a failing check (a reply that speaks in the first
 # person is refused first), pushed with its replies; then a round on a base
-# that moved, merged in and pushed; then the merge, which cleans up.
+# that moved, merged in and pushed; then the merge, which cleans up. Then
+# Linear intake (a stand-in Linear): a labeled issue starts a Build, an
+# issue in your cycle is offered one, and a skip label is left alone.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -20,11 +22,13 @@ t=$(mktemp -d)
 port=${PORT:-7614}
 base="http://127.0.0.1:$port"
 hub=""
+linear=""
 cleanup() {
-  if [ -n "$hub" ]; then
-    kill "$hub" 2>/dev/null || true
-    wait "$hub" 2>/dev/null || true
-  fi
+  for p in "$hub" "${linear:-}"; do
+    [ -n "$p" ] || continue
+    kill "$p" 2>/dev/null || true
+    wait "$p" 2>/dev/null || true
+  done
   if [ -n "${KEEP:-}" ]; then echo "kept $t"; else rm -rf "$t"; fi
 }
 trap cleanup EXIT
@@ -61,14 +65,21 @@ echo "{\"sessions\": [], \"home\": \"$t/home\"}" >"$t/world.json"
 cat >"$t/build.lua" <<EOF
 return {
   repos = { ["acme/api"] = { checkout = "$t/checkout" } },
+  sources = { linear = { teams = { ENG = "acme/api" }, label = "agent", cycle = true, skip_label = "no-agent" } },
 }
 EOF
+# Linear: a stand-in server, with no issues until the last part.
+lport=$((port + 1))
+echo '[]' >"$t/linear.json"
+python3 "$here/fake-linear.py" "$lport" "$t/linear.json" &
+linear=$!
 
 export HOME="$t/home" USER=you WH_STATE="$t/state" WH_SOCKET="$t/wh.sock" WH_HTTP="127.0.0.1:$port" \
-  WH_TAILNET=off WH_NOTIFY=off WH_LINEAR_OFF=1 WH_REX="$here/fake-rex" WH_WORLD="$t/world.json" \
+  WH_TAILNET=off WH_NOTIFY=off WH_LINEAR_KEY=test WH_LINEAR_ENDPOINT="http://127.0.0.1:$lport/graphql" \
+  WH_REX="$here/fake-rex" WH_WORLD="$t/world.json" \
   WH_GH="$here/fake-gh" WH_FAKE_GH="$t/gh" WH_GIT_BASE="$t/origin" WH_BUILD_CONFIG="$t/build.lua" \
   WH_REVIEW_CONFIG="$t/none.lua" WH_BUILD_DATA="$t/build" WH_BUILD_POLL_SECONDS=2
-unset CLAUDE_CONFIG_DIR CODEX_HOME REX_SESSION REX_BLOCK
+unset CLAUDE_CONFIG_DIR CODEX_HOME REX_SESSION REX_BLOCK WH_LINEAR_OFF LINEAR_API_KEY
 "$wh" serve >"$t/hub.log" 2>&1 &
 hub=$!
 
@@ -267,5 +278,35 @@ pr_json MERGED '[]' '[]' '[]' "$passing" CLEAN "$main2"
 until_ "the Build ends" '.state == "merged"'
 [ ! -d "$wt" ] || fail "the worktree is still there"
 ok "merged; the worktree is gone"
+
+# --- Linear intake -------------------------------------------------------------
+
+step "Linear: a labeled issue starts a Build; a cycle's issue is offered one"
+by_key() { api "$base/api/build" | jq -c --arg k "$1" '.tasks[] | select(.key == $k)'; }
+cat >"$t/linear.json" <<'ISSUES'
+[
+  {"key": "ENG-7", "title": "Retry the outbox", "team": "ENG", "labels": ["agent"], "description": "The outbox retries failed sends.\n\n## Acceptance\n- [ ] A failed send is retried", "branch": "you/eng-7-retry-the-outbox"},
+  {"key": "ENG-8", "title": "Paginate the audit log", "team": "ENG", "labels": [], "cycle_active": true, "description": "Page the audit log by 50."},
+  {"key": "ENG-9", "title": "Leave this one", "team": "ENG", "labels": ["agent", "no-agent"], "cycle_active": true}
+]
+ISSUES
+for _ in $(seq 60); do [ -n "$(by_key ENG-7)" ] && break; sleep 0.5; done
+by_key ENG-7 | jq -e '.source == "linear" and .branch == "you/eng-7-retry-the-outbox"' >/dev/null || fail "ENG-7 didn't start a Build on its Linear branch"
+ok "ENG-7 (labeled) started a Build on Linear's branch"
+oid=""
+for _ in $(seq 60); do
+  oid=$(api "$base/api/state" | jq -r '[.messages[] | select(.subject | startswith("ENG-8"))][0].id // empty')
+  [ -n "$oid" ] && break
+  sleep 0.5
+done
+[ -n "$oid" ] || fail "ENG-8 (in the cycle) wasn't offered"
+api -X POST "$base/api/messages/$oid/reply" -d '{"body": "", "choice": "Build it"}' >/dev/null
+for _ in $(seq 60); do [ -n "$(by_key ENG-8)" ] && break; sleep 0.5; done
+by_key ENG-8 | jq -e '.source == "linear"' >/dev/null || fail "Build it didn't start ENG-8's Build"
+ok "ENG-8 (in the cycle) was offered, and Build it started it"
+sleep 5
+[ -z "$(by_key ENG-9)" ] || fail "ENG-9 has the skip label, but it was built"
+[ "$(api "$base/api/state" | jq '[.messages[] | select(.subject | startswith("ENG-"))] | length')" = 0 ] || fail "an issue was offered twice"
+ok "ENG-9 (skip label) left alone; nothing offered twice"
 
 printf '\nBuild end to end: every step passed.\n'

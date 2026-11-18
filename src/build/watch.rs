@@ -1,5 +1,6 @@
 //! Build's loop: start what's queued (up to `max_tasks` at once), step each
-//! active Build every few seconds, and follow open PRs on GitHub.
+//! active Build every few seconds, follow open PRs on GitHub, and take in
+//! GitHub and Linear issues (`sources`).
 
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -11,7 +12,8 @@ const STEP: Duration = Duration::from_secs(5);
 const START_BACKOFF: i64 = 300;
 
 pub async fn run(shared: Shared) {
-    if let Err(e) = super::load(&mut shared.lock()) {
+    let loaded = super::load(&mut shared.lock());
+    if let Err(e) = loaded {
         say!("build: {e:#}");
     }
     tokio::time::sleep(Duration::from_secs(4)).await;
@@ -21,10 +23,15 @@ pub async fn run(shared: Shared) {
             let poll = last_poll.is_none_or(|t| t.elapsed() >= Duration::from_secs(cfg.poll_seconds));
             if poll {
                 last_poll = Some(Instant::now());
-                if cfg.github_label.is_some() && !super::paused(&shared.lock()) {
-                    intake(&shared, &cfg).await;
+                if !super::paused(&shared.lock()) {
+                    if cfg.github_label.is_some() {
+                        intake(&shared, &cfg).await;
+                    }
+                    super::intake::linear(&shared, &cfg).await;
                 }
             }
+            // Your answers to Linear offers, every step.
+            super::intake::answers(&shared).await;
             let has = !super::all(&shared.lock()).unwrap_or_default().iter().all(Task::finished);
             if has {
                 advance(&shared, &cfg, poll).await;
@@ -58,11 +65,8 @@ async fn intake(shared: &Shared, cfg: &super::config::Config) {
         }
         match steps::start_from(shared, &key, Some(repo)).await {
             Ok(v) => {
-                if let Some(d) = v["docket"].as_str()
-                    && let Ok(Some(mut t)) = super::get(&shared.lock(), d)
-                {
-                    t.trigger = "label".into();
-                    let _ = super::save(&mut shared.lock(), &mut t);
+                if let Some(d) = v["docket"].as_str() {
+                    super::set_trigger(shared, d, "label");
                 }
             }
             Err(e) => say!("build: {key}: {e:#}"),

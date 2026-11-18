@@ -50,7 +50,7 @@ In the app, **Build it** on a docket does the same as `wh build start`.
 
 | Phase | What happens | You |
 | --- | --- | --- |
-| Start | `wh build start` with a docket, a GitHub issue, or a Linear issue; or a GitHub issue assigned to you with the label in `sources.github.label` | |
+| Start | `wh build start` with a docket, a GitHub issue, or a Linear issue; or an issue assigned to you with the label (`sources.github`, `sources.linear`); or one in your Linear cycle, offered | **Build it / Not this one**, for an offer |
 | Prep | A worktree on the docket's branch from `origin/<base>`, the intent and issue in `.tmp/context/` | |
 | Plan | The builder reads, then writes a plan, or says it isn't ready | **Proceed / Drop** when it isn't ready |
 | Decisions | Each open question is a message with its options as buttons | Pick one, or answer in your own words |
@@ -128,8 +128,9 @@ the hub at another file.
 | --- | --- | --- |
 | `repos["owner/name"]` | `checkout`, `notes`, `base`, `plan` (`"full"`, `"summary"`, `false`). A repo in `review.lua` is already listed; `checkout` is required only for one that isn't. | `review.lua`'s repos |
 | `sources.github` | `{ label = "agent" }`: open issues assigned to you, in Build's repos, with the label start a Build | off |
+| `sources.linear` | `{ teams, label, cycle, skip_label }`: Linear issues assigned to you start a Build or are offered one (below) | off |
 | `builder`, `checker` | `"claude"`, `"codex"`, or `{ agent, extra_args, effort }` | `"claude"`, `"claude"` |
-| `gates` | `plan`, `preview`, `open`, `address`, `push`: `"ask"` or `"auto"` | `"ask"` |
+| `gates` | `plan`, `preview`, `open`, `address`, `push`: `"ask"` or `"auto"`; `start = { label, cycle }` for Linear intake | `"ask"`; `start`: label `"auto"`, cycle `"ask"` |
 | `update` | how a round brings the branch up to date with its base: `"merge"`, or `"rebase"` (pushed with a lease) | `"merge"` |
 | `fix_loops` | fix rounds after the checker finds something (each address round has its own) | 2 |
 | `max_decisions` | decisions a plan may leave open at once | 3 |
@@ -142,14 +143,34 @@ the hub at another file.
 | `agents`, `path`, `caches` | as in `review.lua` | `review.lua`'s |
 | `wall` | `{ mcp = true }` turns MCP servers back on for builders and checkers | off |
 
-Planned, not read yet:
+### Linear intake
 
-- `sources.linear`: `{ teams = { ENG = "acme/api" }, label = "agent",
-  cycle = true, skip_label = "no-agent" }`. Linear issues with the label,
-  and issues that enter your active cycle, would start or offer a Build.
-  Today a Linear issue starts a Build only with `wh build start ENG-142`.
-- `gates.start = { label = …, cycle = … }`: whether those Linear starts ask
-  you first.
+`sources.linear` takes in Linear issues assigned to you, in the teams it
+maps to repos:
+
+```lua
+sources = {
+  linear = {
+    teams = { ENG = "acme/api" },  -- each team, and the repo it builds into
+    label = "agent",               -- an issue with it starts a Build
+    cycle = true,                  -- an issue in your active cycle is offered one
+    skip_label = "no-agent",       -- an issue with it is left alone
+  },
+},
+gates = { start = { label = "auto", cycle = "ask" } },
+```
+
+With the label, an issue starts a Build on Linear's branch name, with its
+description as the intent and "Closes ENG-142" on the PR
+(`gates.start.label = "ask"` offers it instead). In your active cycle, it's
+offered: a docket made from the issue, with **Build it / Not this one** on
+it (`gates.start.cycle = "auto"` starts it). Each issue is handled once,
+remembered across restarts; one you pass on isn't offered again. It needs
+a Linear key (`wh setup-linear`), and polls with GitHub's intake
+(`poll_seconds`).
+
+A docket linked to a Linear issue builds as that issue, whether intake
+started it or you did with **Build it**.
 
 ## After it opens
 
@@ -192,8 +213,7 @@ away. Threads are never resolved: the reviewers do that.
 rebased branch with a lease: only over the head the round started from,
 never over anyone's newer commits.
 
-Pre-review (a Review of the branch before the PR opens) and Linear intake
-are next. [roadmap.md](roadmap.md) has the order.
+Pre-review (a Review of the branch before the PR opens) is next. [roadmap.md](roadmap.md) has the order.
 
 ## Trying it
 
@@ -201,4 +221,5 @@ are next. [roadmap.md](roadmap.md) has the order.
 hub, with a made-up Rex and gh and a local origin: the plan, the check,
 opening the PR, a round on review feedback and a failing check (a reply in
 the first person is refused first), a round on a base that moved, and the
-merge. It plays the agents and you, and checks what would reach GitHub.
+merge; then Linear intake against a stand-in Linear. It plays the agents
+and you, and checks what would reach GitHub.

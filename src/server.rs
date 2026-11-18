@@ -1248,7 +1248,8 @@ async fn blob(State(shared): State<Shared>, Path(digest): Path<String>, axum::ex
     if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return (StatusCode::BAD_REQUEST, "not a sha256 digest").into_response();
     }
-    let bytes = match shared.lock().store.blob(&hex) {
+    let found = shared.lock().store.blob(&hex);
+    let bytes = match found {
         Ok(Some(b)) => b,
         Ok(None) => return (StatusCode::NOT_FOUND, "no such file").into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
