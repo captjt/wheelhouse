@@ -268,6 +268,8 @@ fi
 # The social preview card shows docket-dark.png, so render it after.
 chrome="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 # A profile of its own: never your Chrome's, which may be open.
-"$chrome" --headless=new --disable-gpu --hide-scrollbars --window-size=1280,640 --user-data-dir="$demo/chrome" \
+# A mock keychain too: no Keychain prompt for "Chrome Safe Storage".
+"$chrome" --headless=new --disable-gpu --hide-scrollbars --use-mock-keychain --password-store=basic --no-first-run \
+  --window-size=1280,640 --user-data-dir="$demo/chrome" \
   --screenshot="$images/social-preview.png" "file://$images/social-preview.html" >/dev/null 2>&1
 echo "wrote docs/images/social-preview.png"
