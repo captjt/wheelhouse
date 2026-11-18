@@ -336,6 +336,14 @@ pub fn guide_text(name: &str) -> String {
 
 /// Where a guide is used: the config keys that name its file.
 pub fn used_by(p: &Path) -> Vec<String> {
+    match lua_raw() {
+        Ok((r, b)) => used_in(p, &overlaid(r, "review"), &overlaid(b, "build")),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// `used_by`, in tables already read.
+pub fn used_in(p: &Path, review: &Value, build: &Value) -> Vec<String> {
     let full = p.display().to_string();
     let short = crate::paths::tilde(&full);
     let mut out = Vec::new();
@@ -359,10 +367,8 @@ pub fn used_by(p: &Path) -> Vec<String> {
             _ => {}
         }
     }
-    if let Ok((r, b)) = lua_raw() {
-        walk(&overlaid(r, "review"), &mut Vec::new(), &full, &short, "review", &mut out);
-        walk(&overlaid(b, "build"), &mut Vec::new(), &full, &short, "build", &mut out);
-    }
+    walk(review, &mut Vec::new(), &full, &short, "review", &mut out);
+    walk(build, &mut Vec::new(), &full, &short, "build", &mut out);
     out
 }
 
@@ -376,10 +382,20 @@ impl Doc {
     }
 
     pub fn json(&self, with_text: bool) -> Value {
+        self.json_in(with_text, None)
+    }
+
+    /// With the configs' tables already read, for a list of them.
+    pub fn json_in(&self, with_text: bool, raws: Option<(&Value, &Value)>) -> Value {
+        let used = match (self.kind, raws) {
+            ("guide", Some((r, b))) => used_in(&self.path, r, b),
+            ("guide", None) => used_by(&self.path),
+            _ => Vec::new(),
+        };
         let mut v = json!({
             "id": self.id, "kind": self.kind, "protocol": self.protocol, "title": self.title, "about": self.about,
             "builtin": self.builtin.is_some(), "overridden": self.overridden(), "path": crate::paths::tilde(&self.path.display().to_string()),
-            "used_by": if self.kind == "guide" { used_by(&self.path) } else { Vec::new() },
+            "used_by": used,
         });
         if with_text {
             v["text"] = json!(self.text());
@@ -593,6 +609,11 @@ pub fn view(
         Err(_) => Value::Null,
     };
     let tilde = |p: PathBuf| crate::paths::tilde(&p.display().to_string());
+    // The configs as loaded (Settings laid over the Lua), read once for
+    // every guide's "used by".
+    let rr = r.as_ref().map(|c| c.raw.clone()).unwrap_or_default();
+    let br = b.as_ref().map(|c| c.raw.clone()).unwrap_or_default();
+    let doc_list: Vec<Value> = docs().iter().map(|d| d.json_in(false, Some((&rr, &br)))).collect();
     json!({
         "file": tilde(path()),
         "set": set,
@@ -600,7 +621,7 @@ pub fn view(
         "build": { "lua": tilde(crate::build::config::path()), "lua_exists": crate::build::config::path().exists(), "error": b.as_ref().err(), "config": build },
         "review": { "lua": tilde(crate::review::config::path()), "lua_exists": crate::review::config::path().exists(), "error": r.as_ref().err(), "config": review },
         "orders": orders(core, b.as_deref().ok(), r.as_deref().ok()),
-        "docs": docs().iter().map(|d| d.json(false)).collect::<Vec<_>>(),
+        "docs": doc_list,
         "history": tilde(dir().join(".history")),
     })
 }
