@@ -164,11 +164,33 @@ pub fn run() -> Result<()> {
         Some(p) => r.ok("mac app", &crate::paths::tilde(&p.display().to_string())),
         None => r.note("mac app", "Wheelhouse.app isn't installed", "just app (needs Xcode 26)"),
     }
+    completion(&mut r);
     let attention = state["attention"].as_array().map_or(0, Vec::len);
     if attention > 0 {
         r.note("attention", &format!("{attention} docket{} need{} a look", if attention == 1 { "" } else { "s" }, if attention == 1 { "s" } else { "" }), "wh attention");
     }
     finish(r)
+}
+
+/// Whether Tab completes `wh` in the shell this runs in (its hook exports
+/// a mark), or will in the next one (its startup file has the line).
+fn completion(r: &mut Report) {
+    if let Ok(shell) = std::env::var(crate::complete::MARK) {
+        return r.ok("completion", &format!("Tab completes wh in {shell}"));
+    }
+    let login = std::env::var("SHELL").unwrap_or_default();
+    let home = crate::paths::home();
+    let (name, rc) = match login.rsplit('/').next() {
+        Some("zsh") => ("zsh", std::env::var_os("ZDOTDIR").map(std::path::PathBuf::from).unwrap_or_else(|| home.clone()).join(".zshrc")),
+        Some("bash") => ("bash", home.join(".bashrc")),
+        _ => return,
+    };
+    let shown = crate::paths::tilde(&rc.display().to_string());
+    if std::fs::read_to_string(&rc).is_ok_and(|s| s.contains("wh completions")) {
+        r.note("completion", &format!("{shown} has it, but this shell started before"), "open a new terminal");
+    } else {
+        r.note("completion", &format!("Tab doesn't complete wh in this {name}"), &format!("add eval \"$(wh completions {name})\" to {shown}"));
+    }
 }
 
 /// Without a hub: what can still be checked here.
@@ -179,6 +201,7 @@ fn offline(r: &mut Report) {
     if tool("gh").is_none() {
         r.warn("gh", "not found", "brew install gh, then gh auth login");
     }
+    completion(r);
 }
 
 fn tool(name: &str) -> Option<std::path::PathBuf> {

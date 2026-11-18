@@ -142,11 +142,17 @@ Then:
 2. Tell your agents about Wheelhouse: paste the block in
    [docs/agent-instructions.md](docs/agent-instructions.md) into
    `~/.claude/CLAUDE.md` (and `~/.codex/AGENTS.md`).
-3. Optional, the phone: `wh web --publish` serves the app on your tailnet
+3. Tab completion: add `eval "$(wh completions zsh)"` to `~/.zshrc`
+   (bash: `eval "$(wh completions bash)"` in `~/.bashrc`). Tab fills in
+   commands and flags, and from the hub: the dockets in flight with their
+   titles (closed ones too, once you type a number), your messages and
+   their options, agents' addresses for `wh send --to`, and the PRs Review
+   follows. `wh doctor` says whether your shell has it.
+4. Optional, the phone: `wh web --publish` serves the app on your tailnet
    at `https://<your-mac>.ts.net:7500`, to your Tailscale user only. Open it
    in Safari and add it to your Home Screen for the app and its
    notifications.
-4. Optional, Linear: `wh setup-linear` stores a read-only API key in the
+5. Optional, Linear: `wh setup-linear` stores a read-only API key in the
    Keychain.
 
 ## Review and Build
@@ -202,6 +208,7 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh web [--publish]` | The app's address on your tailnet |
 | `wh hooks [install\|remove]`, `wh skill [install\|remove]` | Claude Code's hooks; the agents' skill |
 | `wh setup-linear` | Store a Linear API key in the Keychain |
+| `wh completions zsh\|bash` | Tab completion, for `eval "$(wh completions zsh)"` in `~/.zshrc` |
 | `wh import rex-reviewer` | Move over from rex-reviewer, once |
 
 Agents use `wh` from their panes too: `brief`, `intent`, `note`, `attach`,
