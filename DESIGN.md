@@ -149,7 +149,7 @@ These things come only from having the protocols on one record:
 | --- | --- |
 | **Wheelhouse.app** | One menu bar icon, orange with a count while something needs you. The panel shows your asks. The window holds the full app. Notifications carry the answer (Approve and Deny, Post and Dismiss, a decision's options) and are withdrawn once answered. |
 | **The window** | The web UI in a native window: Home, Dockets, Agents, Recap, Settings, and ⌘K. |
-| **The phone** | The same UI from the Home Screen over your tailnet, with Web Push, laid out natively: a tab bar, large titles, a docket that slides onto its list (swipe right to go back), rows that swipe (Done, Drop, Status, File, Approve) and long-press for their menu, sheets from the bottom, and pull to refresh. Previews open here. |
+| **The phone** | The same UI from the Home Screen over your tailnet, with Web Push, laid out natively: a tab bar, large titles, a docket that slides onto its list (swipe right to go back), rows that swipe (Done, Drop, Status, File, Approve) and long-press for their menu, sheets from the bottom, and pull to refresh. An agent's docket opens to its conversation: what you asked, what it answered, what it's doing now, and a box to send the next thing (queued while it works; its reply comes as a push). Previews open here. |
 | **The terminal** | `wh` for you: `wh` (your asks), `wh D-41`, `wh approve 3`, `wh build ENG-142`. Rex key bindings: `wh_next` focuses the next pane that needs you. |
 | **Agents** | `wh` for agents: `ask`, `note`, `attach`, `send`, `reply`, `share`, `done`. Also a skill, and a brief at `SessionStart`. |
 

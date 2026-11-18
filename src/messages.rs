@@ -325,6 +325,7 @@ pub async fn deliver_loop(shared: Shared) {
             }
             core.live_changed();
         }
+        deliver_prompts(&shared, &mut last).await;
     }
 }
 
@@ -341,28 +342,76 @@ fn plan(core: &Core, last: &std::collections::HashMap<String, (Option<String>, I
             continue;
         }
         // A pane that closed keeps its messages; `wh inbox` there finds none.
-        let Some(p) = core.mirror.panes.get(&block) else { continue };
-        if !p.is_agent() {
-            continue;
-        }
-        let Some(root) = p.root() else { continue };
-        if root.state != "idle" && root.state != "done" {
-            continue;
-        }
-        let settled = root.updated_at.as_deref().and_then(crate::time::parse).is_some_and(|t| (time::OffsetDateTime::now_utc() - t) >= SETTLE);
-        if !settled {
-            continue;
-        }
-        if let Some((upd, at)) = last.get(&block)
-            && *upd == root.updated_at
-            && at.elapsed() < Duration::from_secs(60)
-        {
-            continue;
-        }
+        let Some((session, root)) = ready(core, &block, last) else { continue };
         let docket = agents::docket_of(core, &block);
-        due.push((m, p.session_id.clone(), block, root.updated_at.clone(), docket));
+        due.push((m, session, block, root, docket));
     }
     due
+}
+
+/// A pane that can take something typed now: an agent between turns, settled
+/// for a moment, that hasn't had something typed this turn. Its session, and
+/// its root record's time.
+fn ready(core: &Core, block: &str, last: &std::collections::HashMap<String, (Option<String>, Instant)>) -> Option<(String, Option<String>)> {
+    let p = core.mirror.panes.get(block)?;
+    if !p.is_agent() {
+        return None;
+    }
+    let root = p.root()?;
+    if root.state != "idle" && root.state != "done" {
+        return None;
+    }
+    let settled = root.updated_at.as_deref().and_then(crate::time::parse).is_some_and(|t| (time::OffsetDateTime::now_utc() - t) >= SETTLE);
+    if !settled {
+        return None;
+    }
+    if let Some((upd, at)) = last.get(block)
+        && *upd == root.updated_at
+        && at.elapsed() < Duration::from_secs(60)
+    {
+        return None;
+    }
+    Some((p.session_id.clone(), root.updated_at.clone()))
+}
+
+/// Type the prompts you queued for agents that were working, as each one's
+/// turn ends: oldest first, one per pane per turn, after any message.
+async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<String, (Option<String>, Instant)>) {
+    let due: Vec<(i64, String, String, String, String, Option<String>)> = {
+        let core = shared.lock();
+        let mut seen = std::collections::HashSet::new();
+        core.store
+            .queued_prompts(None)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(_, _, block, _, _)| seen.insert(block.clone()))
+            .filter_map(|(id, docket, block, body, _)| ready(&core, &block, last).map(|(session, root)| (id, docket, block, body, session, root)))
+            .collect()
+    };
+    for (id, docket, block, body, session, root) in due {
+        let rex = crate::rex::Rex;
+        let ok = async {
+            rex.paste(&session, &block, &body).await?;
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            rex.send_keys(&session, &block, &["enter"]).await
+        }
+        .await;
+        let mut core = shared.lock();
+        match ok {
+            Ok(()) => {
+                let _ = core.store.set_prompt_status(id, &docket, "sent");
+                last.insert(block.clone(), (root, Instant::now()));
+                let app = core.mirror.panes.get(&block).and_then(|p| p.app()).unwrap_or("agent").to_string();
+                let session_id = core.agents.by_block.get(&block).and_then(|t| t.session.clone());
+                if !(app == "claude-code" && crate::hooks::claude_installed()) {
+                    let _ = agents::note_prompt(&mut core, &docket, &body, session_id.as_deref(), Some("wheelhouse"));
+                }
+                core.agents.remote.insert(docket.clone());
+            }
+            Err(e) => say!("{docket}: typing a queued prompt: {e:#}"),
+        }
+        core.live_changed();
+    }
 }
 
 /// A message as the apps show it.

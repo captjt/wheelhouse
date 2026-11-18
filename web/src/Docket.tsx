@@ -8,6 +8,8 @@ import { IconBack, IconBuild, IconInfo } from "./icons";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { IntentSection } from "./Intent";
 import { ArtifactViewer, ArtifactsSection, RecordViewer } from "./Artifacts";
+import { ChatView } from "./Chat";
+import { IconTerminal } from "./icons";
 import { markdownKeys } from "./Editor";
 import { MessageCard } from "./Messages";
 import { ReviewPanel } from "./Reviews";
@@ -33,6 +35,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   const [details, setDetails] = useState(false);
   const [viewing, setViewing] = useState<EntryView | null>(null);
   const [record, setRecord] = useState(false);
+  // An agent's docket opens to its conversation on a phone; the record is a tap away.
+  const [tab, setTab] = useState<"chat" | "docket" | null>(null);
 
   const ids = lastList.ids;
   const pos = ids.indexOf(id);
@@ -60,6 +64,19 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   if (error && !data) return <div className="view-empty">{error}</div>;
   if (!data || !d) return <div className="view" />;
   const { entries, verify } = data;
+  const talks = !embedded && d.protocol === "agent" && !!d.agent;
+  const view = tab ?? (talks && phone ? "chat" : "docket");
+  const chatting = talks && view === "chat";
+  const seg = talks && (
+    <span className="seg seg-text docket-seg" role="tablist">
+      <button className={chatting ? "on" : ""} onClick={() => setTab("chat")} role="tab" aria-selected={chatting}>
+        Chat
+      </button>
+      <button className={!chatting ? "on" : ""} onClick={() => setTab("docket")} role="tab" aria-selected={!chatting}>
+        Docket
+      </button>
+    </span>
+  );
   const aside = (
         <aside className="props">
           <Prop label="Status">
@@ -213,9 +230,13 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             <IconBack size={20} />
             <span>{lastList.title}</span>
           </button>
-          <span className="m-nav-title">{d.id}</span>
+          {seg || <span className="m-nav-title">{d.id}</span>}
           <span className="m-nav-end">
-            {d.live && <PaneButton id={d.id} small />}
+            {d.live && (
+              <button className="icon-btn m-icon" onClick={() => pane.view(d.id)} aria-label="Terminal">
+                <IconTerminal size={20} />
+              </button>
+            )}
             <button className="icon-btn m-icon" onClick={() => setDetails(true)} aria-label="Details">
               <IconInfo size={20} />
             </button>
@@ -242,11 +263,15 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </span>
             </span>
           )}
+          {seg}
           <span className="spacer" />
           {d.live && <PaneButton id={d.id} />}
         </header>
       )}
 
+      {chatting ? (
+        <ChatView d={d} entries={entries} queued={data.queued ?? []} reload={reload} onArtifact={setViewing} />
+      ) : (
       <div className="docket-body">
         <div className="docket-main">
           <div className="docket-col">
@@ -361,6 +386,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
           aside
         )}
       </div>
+      )}
       {menu.node}
       {viewing && <ArtifactViewer e={viewing} onClose={() => setViewing(null)} />}
       {record && <RecordViewer d={d} onClose={() => setRecord(false)} />}

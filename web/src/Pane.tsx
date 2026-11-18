@@ -120,26 +120,18 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
 
   const state = screen?.live?.state ?? d?.live?.state;
   const app = appName(d?.agent?.app);
-  const why =
-    state === "working"
-      ? `${app} is working. You can send when the turn ends.`
-      : state === "blocked"
-        ? `${app} is waiting on a prompt${screen?.live?.kind ? ` (${screen.live.kind})` : ""}. Answer it in Rex.`
-        : state === "error"
-          ? `${app} stopped with an error.`
-          : !state
-            ? "The pane isn't open in Rex."
-            : null;
+  const why = state === "error" ? `${app} stopped with an error.` : !state ? "The pane isn't open in Rex." : null;
+  const queues = state === "working" || state === "starting" || state === "blocked";
   const send = () => {
     const t = text.trim();
     if (!t || busy || why) return;
     setBusy(true);
-    post(`/api/dockets/${id}/send`, { text: t }).then(
-      () => {
+    post<{ queued?: number }>(`/api/dockets/${id}/send`, { text: t, queue: true }).then(
+      (r) => {
         setText("");
         setBusy(false);
         stick.current = true;
-        toast(`Sent to ${app}`);
+        toast(r.queued ? `Queued: it goes in when ${app}'s turn ends` : `Sent to ${app}`);
         hub.reload();
       },
       (e: Error) => {
@@ -199,7 +191,7 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
       ) : (
       <div className="ps-compose">
         <textarea
-          placeholder={why || `Message ${app}…`}
+          placeholder={why || (queues ? `Queue a message for ${app}…` : `Message ${app}…`)}
           value={text}
           disabled={!!why}
           rows={text.split("\n").length > 1 ? 3 : 1}
@@ -209,7 +201,7 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
           }}
         />
         <button className="btn btn-primary" disabled={!text.trim() || busy || !!why} onClick={send}>
-          Send <Kbd>⌘↩</Kbd>
+          {queues ? "Queue" : "Send"} <Kbd>⌘↩</Kbd>
         </button>
       </div>
       )}

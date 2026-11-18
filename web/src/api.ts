@@ -277,7 +277,7 @@ export type Verify = {
   problems: string[];
 };
 
-export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify };
+export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify; queued?: { id: number; body: string; at: string }[] };
 
 async function handle<T>(res: Response): Promise<T> {
   const text = await res.text();

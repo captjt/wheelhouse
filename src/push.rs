@@ -59,7 +59,7 @@ pub async fn run(shared: Shared) {
             Err(_) => return,
         };
         let kind = ev["type"].as_str().unwrap_or_default();
-        if kind != "needs" && kind != "review" && kind != "build" && !(kind == "message" && ev["to"] == "me") {
+        if kind != "needs" && kind != "review" && kind != "build" && kind != "turn" && !(kind == "message" && ev["to"] == "me") {
             continue;
         }
         // rex-inbox pushes prompts and failures while it runs.
