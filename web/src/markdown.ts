@@ -1,9 +1,11 @@
 import DOMPurify from "dompurify";
-import { Marked, type TokenizerAndRendererExtension } from "marked";
+import { Marked, type Token, type TokenizerAndRendererExtension } from "marked";
+import markedFootnote from "marked-footnote";
 
 /**
- * Markdown as GitHub renders it (GFM: tables, task lists, strikethrough,
- * autolinks, fenced code), plus the HTML people put in PR and issue text
+ * Markdown as GitHub renders a PR or issue: GFM (tables, task lists,
+ * strikethrough, autolinks, footnotes), line breaks where you ended a
+ * line, alerts (`> [!NOTE]`), and the HTML people put in PR and issue text
  * (`<details>`, `<summary>`, `<br>`, `<kbd>`, `<sub>`), sanitized. Also:
  * `D-12` links to the docket, and Linear's collapsible sections
  * (`+++ Title` … `+++`) open and close.
@@ -22,17 +24,49 @@ const docketRef: TokenizerAndRendererExtension = {
     return undefined;
   },
   renderer(t) {
-    return `<a href="#/d/${t.id}" class="docket-ref">${t.id}</a>`;
+    return `<a href="#/d/${t.id}">${t.id}</a>`;
   },
 };
 
-const md = new Marked({ gfm: true, breaks: false, async: false });
+/**
+ * Prose an agent wrapped at a column reads as one paragraph, as it was
+ * meant; a line someone ended on purpose keeps its break, as on GitHub.
+ * Wrapped lines are 55 to 100 characters, of about one length, and break
+ * mid-sentence; a line ended on purpose usually ends a sentence.
+ */
+export function hardWrapped(raw: string): boolean {
+  const lines = raw
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return false;
+  const broken = lines.slice(0, -1);
+  const lens = broken.map((l) => l.length);
+  if (!lens.every((n) => n >= 55 && n <= 100) || Math.max(...lens) - Math.min(...lens) > 30) return false;
+  const mid = broken.filter((l) => !/[.!?:;]["')\]*]*$/.test(l)).length;
+  return lines.length >= 3 ? mid * 2 >= broken.length : mid === broken.length;
+}
+
+/** Soft line breaks (not `  ` or `\` at a line's end) become spaces. */
+function unbreak(tokens: Token[]) {
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.type === "br" && t.raw === "\n") tokens[i] = { type: "text", raw: "\n", text: " " } as Token;
+    else if ("tokens" in t && Array.isArray(t.tokens)) unbreak(t.tokens);
+  }
+}
+
+const md = new Marked({ gfm: true, breaks: true, async: false });
+md.use(markedFootnote({ description: "Footnotes" }));
 md.use({
   extensions: [docketRef],
-  // A link inside a link's text would nest anchors: keep it as text.
   walkTokens(token) {
+    // A link inside a link's text would nest anchors: keep it as text.
     if (token.type === "link" && token.tokens) {
-      token.tokens = token.tokens.map((t) => (t.type === "docket" ? { type: "text", raw: t.raw, text: t.raw } : t));
+      token.tokens = token.tokens.map((t) => (t.type === "docket" ? ({ type: "text", raw: t.raw, text: t.raw } as Token) : t));
+    }
+    if ((token.type === "paragraph" || (token.type === "text" && "tokens" in token && token.tokens)) && hardWrapped(token.raw)) {
+      unbreak((token as { tokens: Token[] }).tokens);
     }
   },
 });
@@ -88,7 +122,20 @@ function purify(html: string, forbid: string[] = []): string {
   return DOMPurify.sanitize(html, {
     ADD_ATTR: ["target"],
     FORBID_TAGS: ["style", "form", "button", "textarea", "select", "option", "iframe", "video", "audio", "source", ...forbid],
-    FORBID_ATTR: ["style", "class", "id"],
+    FORBID_ATTR: ["style", "class"],
+    // Ids (footnotes) get a `user-content-` prefix, as on GitHub, so text
+    // can't clobber the page's own names.
+    SANITIZE_NAMED_PROPS: true,
+  });
+}
+
+const ALERTS: Record<string, string> = { NOTE: "Note", TIP: "Tip", IMPORTANT: "Important", WARNING: "Warning", CAUTION: "Caution" };
+
+/** GitHub's alerts: a quote whose first line is `[!NOTE]`, `[!TIP]`, … */
+function alerts(html: string): string {
+  return html.replace(/<blockquote>\s*<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(<br>\s*|<\/p>\s*)?/g, (_m, kind: string, after?: string) => {
+    const head = `<blockquote data-alert="${kind.toLowerCase()}"><p data-alert-title="">${ALERTS[kind]}</p>`;
+    return after?.startsWith("</p>") ? head : `${head}<p>`;
   });
 }
 
@@ -108,12 +155,12 @@ export function renderMarkdown(text: string): string {
     } catch {
       html = `<pre>${escape(text)}</pre>`;
     }
-    html = purify(html)
+    html = alerts(purify(html))
       // Wide tables scroll on their own, not the page.
       .replace(/<table>/g, '<div class="prose-table"><table>')
-      .replace(/<\/table>/g, "</table></div>");
-    // FORBID_ATTR drops class, so the docket links get theirs back here.
-    html = html.replace(/<a href="#\/d\/(D-\d+)">/g, '<a href="#/d/$1" class="docket-ref">');
+      .replace(/<\/table>/g, "</table></div>")
+      // FORBID_ATTR drops class, so the docket links get theirs back here.
+      .replace(/<a href="#\/d\/(D-\d+)">/g, '<a href="#/d/$1" class="docket-ref">');
   }
   if (cache.size > 400) cache.delete(cache.keys().next().value as string);
   cache.set(text, html);
@@ -143,4 +190,37 @@ export function renderInline(text: string, links = true): string {
   if (inlineCache.size > 600) inlineCache.delete(inlineCache.keys().next().value as string);
   inlineCache.set(k, html);
   return html;
+}
+
+// ---- task lists ----
+
+const TASK = /^((?:\s*>)*\s*(?:[-*+]|\d+[.)])\s+)\[( |x|X)\](?=\s|$)/;
+
+/** Where each task box is in the text: its line, outside code blocks. */
+function taskLines(lines: string[]): number[] {
+  const out: number[] = [];
+  let fence: string | null = null;
+  lines.forEach((line, i) => {
+    const f = /^\s*(```+|~~~+)/.exec(line);
+    if (f) {
+      fence = fence ? (line.trim().startsWith(fence) ? null : fence) : f[1];
+      return;
+    }
+    if (!fence && TASK.test(line)) out.push(i);
+  });
+  return out;
+}
+
+/**
+ * The text with its `index`th task box ticked or cleared, or null when the
+ * boxes in the text don't match the `count` rendered (then it's safer to
+ * edit by hand).
+ */
+export function toggleTask(text: string, index: number, checked: boolean, count: number): string | null {
+  const lines = text.split("\n");
+  const at = taskLines(lines);
+  if (at.length !== count || index < 0 || index >= at.length) return null;
+  const n = at[index];
+  lines[n] = lines[n].replace(TASK, (_m, pre: string) => `${pre}[${checked ? "x" : " "}]`);
+  return lines.join("\n");
 }

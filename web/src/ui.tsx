@@ -161,10 +161,41 @@ export function Modal({ children, onClose, className }: { children: ReactNode; o
 
 // ---- text ----
 
-/** Markdown, fully: GFM, and the HTML PRs and issues carry, sanitized. */
-export function Prose({ text }: { text: string }) {
+/**
+ * Markdown, fully: GFM, footnotes, alerts, and the HTML PRs and issues
+ * carry, sanitized. With `onTask`, its task boxes can be ticked: it gets the
+ * box's index and new state, and resolves false to put the box back.
+ */
+export function Prose({ text, onTask }: { text: string; onTask?: (index: number, checked: boolean) => Promise<boolean> | boolean }) {
   const html = useMemo(() => renderMarkdown(text), [text]);
-  return <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />;
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const boxes = ref.current?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') ?? [];
+    boxes.forEach((b) => {
+      b.disabled = !onTask;
+      if (onTask) b.title = b.checked ? "Done: untick it" : "Tick it off";
+    });
+  }, [html, onTask]);
+  const click = (e: React.MouseEvent<HTMLDivElement>) => {
+    const t = e.target as HTMLElement;
+    const a = t.closest("a");
+    // A footnote's link stays on the page; the app's own routes are #/….
+    const href = a?.getAttribute("href") ?? "";
+    if (a && href.startsWith("#") && !href.startsWith("#/")) {
+      e.preventDefault();
+      ref.current?.querySelector(`[id="user-content-${CSS.escape(href.slice(1))}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
+    if (onTask && t instanceof HTMLInputElement && t.type === "checkbox") {
+      const all = [...(ref.current?.querySelectorAll('input[type="checkbox"]') ?? [])];
+      const box = t;
+      Promise.resolve(onTask(all.indexOf(box), box.checked)).then(
+        (ok) => !ok && (box.checked = !box.checked),
+        () => (box.checked = !box.checked),
+      );
+    }
+  };
+  return <div ref={ref} className="prose" onClick={click} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 /** One line of Markdown, inline: for summaries and rows. */
