@@ -414,7 +414,7 @@ pub fn activity(s: &Main, st: &HubState, d: &Docket, p: &DocketPage, k: &K, kit:
                             .child(spacer())
                             .child(mark(&e.mark(), k)),
                     )
-                    .child(markdown(&body, kit))
+                    .child(markdown(&body, k, kit))
             }
         };
         c = c.child(entry);

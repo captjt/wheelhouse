@@ -12,15 +12,15 @@ use rune_kit::{Kit, ScrollBar};
 use super::{Settings, glyphs};
 use crate::theme::{self, K, font, hex, mono};
 
-/// The window's own grey: the title bar, the tabs and a form's ground, as
-/// the main window's frame.
+/// The window's own ground: the title bar, the tabs and a form's, as the
+/// Mac's Settings window draws them (white, or near black).
 pub fn chrome(k: &K) -> Color {
-    if k.dark { hex("#1b1b1d") } else { hex("#f1f1f3") }
+    if k.dark { hex("#1e1e1e") } else { Color::WHITE }
 }
 
-/// A form's card, on that grey.
+/// A grouped form's card, a shade off that ground (`.formStyle(.grouped)`).
 pub fn card(k: &K) -> Color {
-    k.main
+    if k.dark { hex("#262626") } else { hex("#f7f7f7") }
 }
 
 /// An element key from an id or a slug: a `/` in a key reads as a path of keys.
@@ -380,7 +380,7 @@ pub fn switch(on: bool, label: &str, enabled: bool, k: &K, kit: &Kit, toggle: im
     } else if k.dark {
         Color::WHITE.alpha(0.16)
     } else {
-        Color::BLACK.alpha(0.09)
+        Color::BLACK.alpha(0.12)
     };
     let knob = el()
         .key("thumb")

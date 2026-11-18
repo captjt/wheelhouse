@@ -180,14 +180,130 @@ pub fn risk_chip(level: Option<&str>, k: &K) -> El {
 // ---- text ----
 
 /// Markdown as the Mac app's MarkdownView draws it at `size` (13 by
-/// default): GitHub's alerts read as a quote headed by their kind.
+/// default), with GitHub's alerts as its callouts.
 pub fn md(src: &str, size: f32, k: &K, kit: &rune_kit::Kit) -> El {
-    let mut s = src.to_string();
-    for (tag, word) in [("NOTE", "Note"), ("TIP", "Tip"), ("IMPORTANT", "Important"), ("WARNING", "Warning"), ("CAUTION", "Caution")] {
-        s = s.replace(&format!("[!{tag}]"), &format!("**{word}**  "));
+    md_with(src, Some(size), k, kit, None)
+}
+
+/// A task box pressed: its `[`'s byte offset in the source, and whether it's
+/// ticked now.
+pub type OnTask = std::rc::Rc<dyn Fn(&mut Main, usize, bool)>;
+
+/// A piece of Markdown: plain from byte `at`, or one of GitHub's alerts
+/// (`> [!NOTE]` and the quote under it), which rune-kit's Markdown lacks.
+#[derive(Debug, PartialEq)]
+pub enum Piece<'a> {
+    Md { at: usize, text: &'a str },
+    Alert { kind: &'static str, body: String },
+}
+
+pub fn pieces(src: &str) -> Vec<Piece<'_>> {
+    const KINDS: [&str; 5] = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"];
+    let mut lines = vec![];
+    let mut off = 0;
+    for l in src.split_inclusive('\n') {
+        lines.push((off, l));
+        off += l.len();
     }
-    let style = rune_kit::MarkdownStyle::from_kit(kit).body_font(font(size, 400.0).lh((size * 1.45).round())).text(k.text);
-    rune_kit::Markdown::new(s).selectable(true).render(&style)
+    let (mut out, mut start, mut fence, mut i) = (vec![], 0, false, 0);
+    while i < lines.len() {
+        let (o, l) = lines[i];
+        let q = l.trim_end_matches(['\n', '\r']).trim_start();
+        if q.starts_with("```") || q.starts_with("~~~") {
+            fence = !fence;
+        }
+        let alert = (!fence)
+            .then(|| q.strip_prefix('>').map(str::trim_start))
+            .flatten()
+            .and_then(|r| KINDS.iter().find(|k| r.starts_with(&format!("[!{k}]"))).map(|k| (*k, r[k.len() + 3..].trim().to_string())));
+        let Some((kind, first)) = alert else {
+            i += 1;
+            continue;
+        };
+        if o > start {
+            out.push(Piece::Md { at: start, text: &src[start..o] });
+        }
+        let mut body = first;
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        i += 1;
+        while let Some((_, l)) = lines.get(i) {
+            let Some(r) = l.trim_end_matches(['\n', '\r']).trim_start().strip_prefix('>') else { break };
+            body.push_str(r.strip_prefix(' ').unwrap_or(r));
+            body.push('\n');
+            i += 1;
+        }
+        start = lines.get(i).map_or(src.len(), |l| l.0);
+        out.push(Piece::Alert { kind, body });
+    }
+    if start < src.len() || out.is_empty() {
+        out.push(Piece::Md { at: start, text: &src[start..] });
+    }
+    out
+}
+
+/// The Markdown style: the kit's (or `size`), with task boxes as the Mac's
+/// checkboxes, the accent's when ticked.
+fn md_style(size: Option<f32>, k: &K, kit: &rune_kit::Kit) -> rune_kit::MarkdownStyle {
+    let mut s = rune_kit::MarkdownStyle::from_kit(kit).text(k.text);
+    if let Some(size) = size {
+        s = s.body_font(font(size, 400.0).lh((size * 1.45).round()));
+    }
+    let off = if k.dark { theme::hex("#5e5e5e") } else { theme::hex("#b8b8b8") };
+    s.task_checkbox(14.0, 3.5, 8.0, None, k.accent, Color::WHITE, k.elev, off)
+}
+
+/// Markdown in pieces: plain runs, and alerts as a coloured bar, an icon and
+/// a title over what they say. `on_task` makes task boxes live.
+pub fn md_with(src: &str, size: Option<f32>, k: &K, kit: &rune_kit::Kit, on_task: Option<OnTask>) -> El {
+    let style = md_style(size, k, kit);
+    let one = |text: &str, at: usize| {
+        let mut m = rune_kit::Markdown::new(text.to_string()).selectable(true);
+        if let Some(f) = on_task.clone() {
+            m = m.on_task(move |s: &mut Main, _: &str, off: usize, checked: bool| f(s, at + off, checked));
+        }
+        m.render(&style)
+    };
+    let ps = pieces(src);
+    if let [Piece::Md { at, text }] = ps.as_slice() {
+        return one(text, *at);
+    }
+    let mut c = col().w_full().gap(12.0);
+    for p in ps {
+        c = c.child(match p {
+            Piece::Md { at, text } => one(text, at),
+            Piece::Alert { kind, body } => {
+                let (color, glyph, title) = match kind {
+                    "WARNING" => (k.blocked, &crate::icons::BANG, "Warning"),
+                    "CAUTION" => (k.error, &crate::icons::BANG, "Caution"),
+                    "TIP" => (k.working, &crate::icons::BULB, "Tip"),
+                    "IMPORTANT" => (theme::hex("#a855f7"), &crate::icons::INFO, "Important"),
+                    _ => (k.accent, &crate::icons::INFO, "Note"),
+                };
+                let fs = size.unwrap_or(kit.ty.body.size);
+                row()
+                    .w_full()
+                    .gap(10.0)
+                    .child(el().w(3.0).radius(1.0).fill(color).self_stretch())
+                    .child(
+                        col()
+                            .grow(1.0)
+                            .min_w(0.0)
+                            .gap(6.0)
+                            .child(
+                                row()
+                                    .gap(6.0)
+                                    .center_y()
+                                    .child(rune::icon(glyph, fs).color(color))
+                                    .child(text(title).font(font(fs, 600.0).lh((fs * 1.3).round())).color(color)),
+                            )
+                            .child(rune_kit::Markdown::new(body).selectable(true).render(&style)),
+                    )
+            }
+        });
+    }
+    c
 }
 
 /// Runs of rich text, built up in order.

@@ -66,7 +66,8 @@ impl K {
             elev: p("#ffffff", "#171717"),
             recessed: p("#f5f5f5", "#0b0b0b"),
             hover: p("#f3f3f3", "#1a1a1a"),
-            sel: p("#ededed", "#1e1e1e"),
+            // The system's unemphasized selection, as SwiftUI's lists and sidebar draw it.
+            sel: p("#dcdcdc", "#464646"),
             line: p("#e9e9e9", "#232323"),
             line2: p("#d9d9d9", "#333333"),
             text: p("#18181b", "#f5f5f5"),
@@ -124,6 +125,9 @@ impl K {
         let mut k = Kit::from_palette(PaletteSeed { bg: self.main, fg: self.text, accent: self.accent });
         k.c.text_muted = self.muted;
         k.c.text_faint = self.faint;
+        // The sidebar's ground and its selection, as the Mac's sidebar draws them.
+        k.c.bg_deep = if self.dark { hex("#262626") } else { hex("#f7f7f7") };
+        k.c.pressed = self.sel;
         k
     }
 }

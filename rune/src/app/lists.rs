@@ -115,7 +115,7 @@ fn ids(s: &Main, st: &HubState) -> Vec<String> {
         Place::Builds => build_groups(st).into_iter().flat_map(|g| g.3).map(|t| t.docket()).collect(),
         p => {
             let shown: Vec<Docket> = st.dockets.iter().filter(|d| p.shows(d)).cloned().collect();
-            group_dockets(&shown, s.group_by).into_iter().flat_map(|g| g.items).map(|d| d.id()).collect()
+            group_dockets(&shown, s.group()).into_iter().flat_map(|g| g.items).map(|d| d.id()).collect()
         }
     }
 }
@@ -355,7 +355,7 @@ fn dockets(s: &Main, st: &HubState, k: &K) -> El {
     }
     let sel = selected_id(s, st);
     let mut rows = col().role("listbox").label(s.place.title()).gap(1.0);
-    for g in group_dockets(&shown, s.group_by) {
+    for g in group_dockets(&shown, s.group()) {
         let key = format!("{}:{}", s.place.title(), g.id);
         let folded = s.folded.contains(&key);
         let mark = group_mark(&g, k);
@@ -630,47 +630,22 @@ fn build_row(t: &BuildTask, k: &K) -> El {
 pub fn board(s: &Main, st: &HubState, k: &K) -> El {
     let shown: Vec<Docket> = st.dockets.iter().filter(|d| s.place.shows(d)).cloned().collect();
     let mut cols = row().key("board").gap(12.0).padding(14.0).h_full();
-    for g in group_dockets(&shown, s.group_by) {
-        let mut cards = col().gap(8.0).w_full();
+    for g in group_dockets(&shown, s.group()) {
+        let mut cards = col().gap(8.0).w_full().pb(12.0);
         for d in &g.items {
-            let id = d.id();
-            cards = cards.child(
-                col()
-                    .key(format!("card-{id}"))
-                    .w_full()
-                    .padding(10.0)
-                    .gap(6.0)
-                    .radius(10.0)
-                    .continuous_corners()
-                    .fill(k.elev)
-                    .border(1.0, k.line)
-                    .box_shadow(rune::Shadow { x: 0.0, y: 1.0, blur: 2.0, spread: 0.0, color: Color::BLACK.alpha(0.05), inset: false })
-                    .hover(k.hover)
-                    .role("button")
-                    .label(d.title())
-                    .on_press(move |s: &mut Main| {
-                        s.board = false;
-                        s.select(id.clone());
-                    })
-                    .child(text(d.title()).font(font(13.0, 500.0).lh(17.0)).color(k.text).wrap().max_lines(3))
-                    .child(
-                        row()
-                            .gap(6.0)
-                            .center_y()
-                            .child(theme::status_icon(d.status(), 12.0, k))
-                            .child(theme::id_text(&d.id(), k))
-                            .child(spacer())
-                            .child(text(model::ago(Some(&d.updated_at()))).font(font(11.0, 400.0).lh(14.0)).color(k.faint)),
-                    ),
-            );
+            cards = cards.child(card(d, k));
         }
         cols = cols.child(
             col()
                 .key(format!("lane-{}", g.id))
-                .w(270.0)
+                .w(290.0)
                 .h_full()
                 .min_h(0.0)
+                .padding(10.0)
                 .gap(8.0)
+                .radius(12.0)
+                .continuous_corners()
+                .fill(k.recessed)
                 .child(
                     row()
                         .gap(7.0)
@@ -684,6 +659,53 @@ pub fn board(s: &Main, st: &HubState, k: &K) -> El {
         );
     }
     el().key("board-scroll").w_full().h_full().scroll_x().child(cols)
+}
+
+/// A board's card (BoardView.Card): its id and agent, title, status and
+/// what it's doing, and its Rex session. A click opens it in a window.
+fn card(d: &Docket, k: &K) -> El {
+    let id = d.id();
+    let mut top = row().w_full().center_y().child(theme::id_text(&id, k)).child(spacer());
+    if d.agent_app().is_some() {
+        top = top.child(theme::app_avatar(d.agent_app().as_deref(), 16.0, k));
+    }
+    let mut line = row().w_full().gap(6.0).center_y().child(theme::status_icon(d.status(), 13.0, k));
+    if let Some(l) = d.live() {
+        line = line.child(theme::live_icon(Some(l.state()), 12.0, k)).child(text(l.state().word()).font(font(11.5, 400.0).lh(14.0)).color(k.muted));
+    }
+    if let Some(why) = d.hold() {
+        line = line.child(
+            row()
+                .gap(3.0)
+                .center_y()
+                .help(why)
+                .child(rune::icon(&icons::PAUSE, 11.0).color(k.blocked))
+                .child(text("On hold").font(font(11.5, 400.0).lh(14.0)).color(k.blocked)),
+        );
+    }
+    line = line.child(spacer());
+    if let Some(sess) = d.rex_session().filter(|s| !s.is_empty()) {
+        line = line.child(theme::session_icon(&sess, 14.0, k));
+    }
+    let (open, menu) = (id.clone(), d.clone());
+    col()
+        .key(format!("card-{id}"))
+        .w_full()
+        .padding(11.0)
+        .gap(8.0)
+        .radius(9.0)
+        .continuous_corners()
+        .fill(k.elev)
+        .border(1.0, k.line)
+        .box_shadow(rune::Shadow { x: 0.0, y: 1.0, blur: 2.0, spread: 0.0, color: Color::BLACK.alpha(0.03), inset: false })
+        .hover(k.hover)
+        .role("button")
+        .label(d.title())
+        .on_press(move |s: &mut Main| s.open_window(&open))
+        .on_secondary_press(move |_: &mut Main, press, tx| super::menus::open(&menu, press, tx))
+        .child(top)
+        .child(text(d.title()).font(font(13.0, 500.0).lh(17.0)).color(k.text).wrap().max_lines(3))
+        .child(line)
 }
 
 // ---- Agents ----

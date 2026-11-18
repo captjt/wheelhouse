@@ -145,8 +145,9 @@ pub struct Main {
     pub page_errors: HashMap<String, String>,
     pub busy: HashSet<String>,
     pub folded: HashSet<String>,
-    pub board: bool,
-    pub group_by: GroupBy,
+    /// Per place, as the Mac app keeps them: the board, and how lists group.
+    pub boards: HashSet<Place>,
+    pub group_by: HashMap<Place, GroupBy>,
     pub chat: bool,
     pub note: TextEdit,
     pub intent_edit: Option<TextEdit>,
@@ -182,8 +183,8 @@ impl Main {
             page_errors: HashMap::new(),
             busy: HashSet::new(),
             folded: ["reviews:done".to_string(), "builds:done".to_string()].into_iter().collect(),
-            board: false,
-            group_by: GroupBy::Attention,
+            boards: HashSet::new(),
+            group_by: HashMap::new(),
             chat: false,
             note: TextEdit::new(""),
             intent_edit: None,
@@ -256,7 +257,7 @@ impl Main {
             Place::Builds => sel.or_else(|| lists::build_groups(&state).into_iter().flat_map(|g| g.3).map(|t| t.docket()).next()),
             p if p.is_list() => sel.filter(|id| state.docket(id).is_some()).or_else(|| {
                 let shown: Vec<_> = state.dockets.iter().filter(|d| p.shows(d)).cloned().collect();
-                lists::group_dockets(&shown, self.group_by).into_iter().flat_map(|g| g.items).map(|d| d.id()).next()
+                lists::group_dockets(&shown, self.group()).into_iter().flat_map(|g| g.items).map(|d| d.id()).next()
             }),
             _ => None,
         }
@@ -304,11 +305,27 @@ impl Main {
     /// The docket the window shows beside its list, if any: none on Recap,
     /// Agents or a board.
     pub fn shown_docket(&self) -> Option<String> {
-        if self.embedded() || matches!(self.place, Place::Agents | Place::Recap) || (self.place.is_list() && self.board) {
+        if self.embedded() || matches!(self.place, Place::Agents | Place::Recap) || (self.place.is_list() && self.board()) {
             return None;
         }
         let id = self.current()?;
         self.state()?.docket(&id).map(|_| id)
+    }
+
+    /// How this place's list groups: All and Done by status, the rest by
+    /// what needs you, until you pick (Lists.swift's defaults).
+    pub fn group(&self) -> GroupBy {
+        self.group_by.get(&self.place).copied().unwrap_or(if matches!(self.place, Place::All | Place::Done) { GroupBy::Status } else { GroupBy::Attention })
+    }
+    pub fn board(&self) -> bool {
+        self.boards.contains(&self.place)
+    }
+    pub fn set_board(&mut self, on: bool) {
+        if on {
+            self.boards.insert(self.place.clone());
+        } else {
+            self.boards.remove(&self.place);
+        }
     }
 
     /// The Inbox shows a docket inside it, as the Mac app's `embedded`
@@ -717,7 +734,7 @@ fn toolbar(s: &Main, state: Option<&HubState>, k: &K, kit: &rune_kit::Kit) -> To
     }
     if s.place.is_list() {
         // Group by: a native menu, as the SwiftUI toolbar's.
-        let cur = match s.group_by {
+        let cur = match s.group() {
             GroupBy::Attention => "attention",
             GroupBy::Status => "status",
             GroupBy::Session => "session",
@@ -737,18 +754,19 @@ fn toolbar(s: &Main, state: Option<&HubState>, k: &K, kit: &rune_kit::Kit) -> To
                 .on_press_tx(move |_: &mut Main, tx| {
                     let menu = rune::PopupMenu::picker([("attention", "Attention"), ("status", "Status"), ("session", "Rex session")], cur);
                     tx.popup_menu(menu, "group-by", |s: &mut Main, picked, _| {
-                        s.group_by = match picked {
+                        let g = match picked {
                             Some("status") => GroupBy::Status,
                             Some("session") => GroupBy::Session,
                             Some(_) => GroupBy::Attention,
-                            None => s.group_by,
+                            None => return,
                         };
+                        s.group_by.insert(s.place.clone(), g);
                     });
                 })
                 .child(rune::icon(&crate::icons::LIST, 14.0).color(k.muted))
                 .child(rune::icon(&crate::icons::CHEVRON, 10.0).color(k.muted)),
         );
-        trailing = trailing.child(widgets::segmented("layout", &[("List", !s.board), ("Board", s.board)], |s: &mut Main, i| s.board = i == 1, k));
+        trailing = trailing.child(widgets::segmented("layout", &[("List", !s.board()), ("Board", s.board())], |s: &mut Main, i| s.set_board(i == 1), k));
     }
     let Some(d) = s.shown_docket().and_then(|id| state.and_then(|st| st.docket(&id).cloned())) else {
         let _ = kit;
@@ -820,7 +838,7 @@ fn content(s: &Main, st: &HubState, k: &K, kit: &rune_kit::Kit) -> El {
     match &s.place {
         Place::Agents => lists::agents(s, st, k),
         Place::Recap => recap::view(s, k),
-        p if p.is_list() && s.board => lists::board(s, st, k),
+        p if p.is_list() && s.board() => lists::board(s, st, k),
         _ => {
             let list = lists::list(s, st, k, kit);
             let detail = match s.current() {
@@ -871,7 +889,7 @@ pub const SCENES: &[(&str, fn(&mut Main))] = &[
     ("builds", |s| scene(s, Place::Builds, None)),
     ("board", |s| {
         scene(s, Place::All, None);
-        s.board = true;
+        s.set_board(true);
     }),
     ("all", |s| scene(s, Place::All, None)),
     ("done", |s| scene(s, Place::Done, None)),
