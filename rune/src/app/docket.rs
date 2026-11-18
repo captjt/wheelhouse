@@ -10,14 +10,56 @@ use crate::icons;
 use crate::model::{self, Docket, DocketPage, HubState, LiveState, Status};
 use crate::theme::{self, K, font, mono};
 
-/// Markdown as the app writes it: GitHub's alerts (`> [!NOTE]`) read as a
-/// quote headed by their kind, as rune-kit's Markdown has no alerts.
-pub fn markdown(src: &str, kit: &Kit) -> El {
-    let mut s = src.to_string();
-    for (tag, word) in [("NOTE", "Note"), ("TIP", "Tip"), ("IMPORTANT", "Important"), ("WARNING", "Warning"), ("CAUTION", "Caution")] {
-        s = s.replace(&format!("[!{tag}]"), &format!("**{word}**  "));
+/// GitHub's alerts (`> [!NOTE]`) as a quote headed by their kind, since
+/// rune-kit's Markdown has no alerts; with where each rewrite moved the text,
+/// so an offset in the result maps back to the source.
+fn prepared(src: &str) -> (String, Vec<(usize, isize)>) {
+    let tags = [("[!NOTE]", "**Note**  "), ("[!TIP]", "**Tip**  "), ("[!IMPORTANT]", "**Important**  "), ("[!WARNING]", "**Warning**  "), ("[!CAUTION]", "**Caution**  ")];
+    let (mut out, mut shifts, mut i) = (String::new(), vec![], 0);
+    while i < src.len() {
+        if let Some((tag, word)) = tags.iter().find(|(tag, _)| src[i..].starts_with(tag)) {
+            out.push_str(word);
+            shifts.push((out.len(), word.len() as isize - tag.len() as isize));
+            i += tag.len();
+        } else {
+            let c = src[i..].chars().next().unwrap_or(' ');
+            out.push(c);
+            i += c.len_utf8();
+        }
     }
-    Markdown::new(s).selectable(true).build(kit)
+    (out, shifts)
+}
+
+fn source_offset(off: usize, shifts: &[(usize, isize)]) -> usize {
+    let moved: isize = shifts.iter().filter(|(at, _)| *at <= off).map(|(_, d)| *d).sum();
+    (off as isize - moved).max(0) as usize
+}
+
+/// Markdown as the app writes it.
+pub fn markdown(src: &str, kit: &Kit) -> El {
+    Markdown::new(prepared(src).0).selectable(true).build(kit)
+}
+
+/// The intent, with its task boxes live: ticking one saves the intent as a
+/// new version, as the Mac app does.
+fn intent_markdown(id: &str, src: &str, kit: &Kit) -> El {
+    let (shown, shifts) = prepared(src);
+    let (id, src) = (id.to_string(), src.to_string());
+    Markdown::new(shown)
+        .selectable(true)
+        .on_task(move |s: &mut Main, _: &str, at: usize, checked: bool| {
+            let at = source_offset(at, &shifts);
+            let mut body = src.clone();
+            if body.get(at..at + 1) == Some("[") && body.get(at + 2..at + 3) == Some("]") {
+                body.replace_range(at + 1..at + 2, if checked { "x" } else { " " });
+                let id = id.clone();
+                s.act(&format!("intent:{id}"), format!("/api/dockets/{id}/intent"), serde_json::json!({ "body": body }), move |r| match r {
+                    Ok(_) => (format!("{id}: intent saved"), false),
+                    Err(e) => (e, true),
+                });
+            }
+        })
+        .build(kit)
 }
 
 pub fn detail(s: &Main, st: &HubState, id: &str, k: &K, kit: &Kit) -> El {
@@ -237,7 +279,7 @@ fn intent(s: &Main, d: &Docket, page: Option<&DocketPage>, k: &K, kit: &Kit) -> 
             .child(text("Edit").font(font(12.0, 400.0).lh(15.0)).color(k.muted)),
     );
     let content = match body {
-        Some(b) => markdown(&b, kit),
+        Some(b) => intent_markdown(&id, &b, kit),
         None => row()
             .w_full()
             .padding(14.0)
@@ -400,7 +442,7 @@ fn verify(s: &Main, d: &Docket, p: &DocketPage, k: &K) -> El {
                 .child(text("not run on this docket yet").font(font(12.5, 400.0).lh(16.0)).color(k.muted)),
         );
     }
-    let mut c = col().w_full().gap(8.0).child(head);
+    let mut c = col().key("verify").w_full().gap(8.0).child(head);
     if !(lines.is_empty() && checks.is_empty() && !needs && never.is_empty()) {
         c = c.child(card);
     }
@@ -729,4 +771,17 @@ fn record_sheet(s: &Main, id: &str, k: &K, kit: &Kit) -> El {
         return sheet_card(&format!("{id}'s record"), body, k);
     }
     sheet_card(&format!("{id}'s record"), text("Loading…").font(font(12.5, 400.0).lh(16.0)).color(k.muted).padding(18.0), k)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_task_box_maps_back_past_an_alert() {
+        let src = "> [!NOTE]\n> x\n\n- [ ] a";
+        let (shown, shifts) = prepared(src);
+        let at = shown.find("[ ]").unwrap();
+        assert_eq!(&src[source_offset(at, &shifts)..][..3], "[ ]");
+    }
 }

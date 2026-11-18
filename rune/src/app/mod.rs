@@ -124,6 +124,8 @@ pub struct Main {
     pub theme: Option<bool>,
     pub clock: f64,
     pub pending_g: bool,
+    /// A section to scroll to once it's laid out (a scene's `verify`).
+    pub scroll_to: Option<String>,
 }
 
 impl Main {
@@ -157,6 +159,7 @@ impl Main {
             },
             clock: 0.0,
             pending_g: false,
+            scroll_to: None,
         };
         // Told whenever the hub's state changes: build again, and refresh the
         // docket on show.
@@ -450,6 +453,15 @@ impl Main {
 /// Before each frame: toasts age out.
 pub fn poll(s: &mut Main, t: f64, tx: &mut Tx) -> bool {
     s.clock = t;
+    // After the first frame, so the section has a place to scroll to.
+    if t > 0.05 {
+        if let Some(key) = s.scroll_to.take() {
+            tx.scroll_into_view(key);
+            return true;
+        }
+    } else if s.scroll_to.is_some() {
+        tx.wake_after(std::time::Duration::from_millis(60));
+    }
     let before = s.toasts.len();
     s.toasts.retain(|x| t - x.at < 4.0);
     if !s.toasts.is_empty() {
@@ -707,6 +719,18 @@ pub const SCENES: &[(&str, fn(&mut Main))] = &[
     ("palette", |s| {
         scene(s, Place::Inbox, None);
         s.open_palette();
+    }),
+    ("start-agent", |s| {
+        scene(s, Place::Active, Some("D-6"));
+        s.open_form(Sheet::StartAgent("D-6".into()));
+    }),
+    ("verify", |s| {
+        scene(s, Place::Active, Some("D-6"));
+        s.scroll_to = Some("verify".into());
+    }),
+    ("verify-held", |s| {
+        scene(s, Place::Active, Some("D-3"));
+        s.scroll_to = Some("verify".into());
     }),
     ("hold", |s| {
         scene(s, Place::Active, Some("D-6"));
