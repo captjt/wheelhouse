@@ -55,7 +55,19 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // What the banner shows, so an answer from it is to exactly that.
         for (k, v) in ev["seen"].object ?? [:] { if let s = v.str { info["seen_\(k)"] = s } }
         c.userInfo = info
-        c.sound = kind == "turn" ? nil : .default
+        if SoundPacks.shared.chosen != nil {
+            // A pack's line in place of the macOS sound, when the banner would
+            // sound: not while you're in the app, nor with sounds turned off
+            // for it in System Settings.
+            c.sound = nil
+            if let sound = SoundCategory.of(ev), !NSApp.isActive {
+                Task {
+                    if await center.notificationSettings().soundSetting == .enabled { SoundPacks.shared.play(sound) }
+                }
+            }
+        } else {
+            c.sound = kind == "turn" ? nil : .default
+        }
         c.interruptionLevel = kind == "needs" || kind == "message" ? .timeSensitive : .active
 
         switch kind {
@@ -171,7 +183,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let c = UNMutableNotificationContent()
         c.title = "Wheelhouse"
         c.body = "Notifications are on. Prompts, messages, finished turns and reviews show up like this."
-        c.sound = .default
+        if let pack = SoundPacks.shared.chosen {
+            c.sound = nil
+            SoundPacks.shared.preview(.needs, pack: pack)
+        } else {
+            c.sound = .default
+        }
         center.add(UNNotificationRequest(identifier: "test", content: c, trigger: nil))
     }
 

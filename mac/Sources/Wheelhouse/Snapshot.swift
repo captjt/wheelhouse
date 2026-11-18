@@ -107,6 +107,25 @@ enum Snapshot {
             }
         },
         Shot(name: "settings-general", place: .inbox, target: .settings, tab: "general"),
+        // Sound: the macOS sound, a pack picked, and the packs to pick from
+        // (WH_SOUND_PACKS and WH_SOUND_REGISTRY point them at made-up ones).
+        Shot(name: "settings-notifications", place: .inbox, target: .settings, tab: "notifications") { _ in UserDefaults.standard.set("", forKey: "soundPack") },
+        Shot(name: "settings-sound", place: .inbox, target: .settings, tab: "notifications") { _ in
+            UserDefaults.standard.set(SoundPacks.shared.installed.first?.name ?? "", forKey: "soundPack")
+        },
+        Shot(name: "settings-packs", place: .inbox, target: .settingsSheet, tab: "notifications") { _ in
+            Task {
+                try? await Task.sleep(for: .milliseconds(600))
+                NotificationCenter.default.post(name: .snapshotSounds, object: "")
+            }
+        },
+        Shot(name: "settings-packs-search", place: .inbox, target: .settingsSheet, tab: "notifications") { _ in
+            UserDefaults.standard.set(SoundPacks.shared.installed.first?.name ?? "", forKey: "soundPack")
+            Task {
+                try? await Task.sleep(for: .milliseconds(600))
+                NotificationCenter.default.post(name: .snapshotSounds, object: "peon")
+            }
+        },
         // Refused (nothing is written): the hub's sentence, under the builder.
         Shot(name: "settings-error", place: .inbox, target: .settings, tab: "agents") { _ in
             Task {
@@ -248,6 +267,7 @@ enum Snapshot {
         NotificationCenter.default.post(name: .snapshotCheck, object: nil)
         NotificationCenter.default.post(name: .snapshotGuide, object: "")
         NotificationCenter.default.post(name: .snapshotPatch, object: nil)
+        NotificationCenter.default.post(name: .snapshotSounds, object: nil)
     }
 
     /// The menu bar item, clicked: its panel opens (or closes).

@@ -63,7 +63,9 @@ and words in the system's own controls:
   options, Post.
 - **Notifications you answer from the banner.** Approve a prompt, reply to
   an agent, pick one of its options, post a review. Each is withdrawn once
-  it's answered, here or on your phone.
+  it's answered, here or on your phone. They sound like the Mac, or like a
+  [peon-ping](https://www.peonping.com/) pack you pick in Settings: an orc
+  peon's "Work complete!" when an agent finishes.
 - **The Mac's own ways.** Kept files open in Quick Look once their bytes
   match the record's hash; drop a file on a docket to keep it there; swipe
   a row to Done; the Dock badge counts what needs you, and its menu lists

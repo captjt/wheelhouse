@@ -77,6 +77,11 @@ pub struct Note {
     pub docket: Option<String>,
     pub message: Option<i64>,
     pub key: Option<String>,
+    /// Its sound, as a sound pack's category (CESP: openpeon.com/spec):
+    /// `input.required` when it waits on you, `task.complete` when work
+    /// finished, `task.error` when it failed or stalled. Wheelhouse.app
+    /// plays one from the pack you picked, if you picked one.
+    pub sound: &'static str,
     /// What an answer from the banner must match: a prompt as it was shown
     /// (record, time, words), or the checked review's digest.
     pub seen: Value,
@@ -95,6 +100,7 @@ impl Note {
             "docket": self.docket,
             "message": self.message,
             "key": self.key,
+            "sound": self.sound,
             "seen": self.seen,
         })
     }
@@ -126,6 +132,7 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 docket: Some(docket),
                 message: None,
                 key: None,
+                sound: if h.state == "error" { "task.error" } else { "input.required" },
                 seen: serde_json::json!({ "record": h.id, "updated_at": h.updated_at, "msg": h.msg.clone().or_else(|| h.title.clone()) }),
             })
         }
@@ -144,6 +151,7 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 docket: Some(docket),
                 message: None,
                 key: None,
+                sound: "task.complete",
                 seen: Value::Null,
             })
         }
@@ -166,6 +174,7 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 docket: m.docket.clone(),
                 message: Some(m.id),
                 key: None,
+                sound: "input.required",
                 seen: Value::Null,
             })
         }
@@ -195,6 +204,7 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 docket: Some(docket),
                 message: None,
                 key: None,
+                sound: sound(&a.kind),
                 seen: Value::Null,
             })
         }
@@ -225,6 +235,7 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 docket: Some(docket),
                 message: None,
                 key: Some(key.to_string()),
+                sound: sound(&a.kind),
                 seen: crate::review::all(&core)
                     .ok()
                     .and_then(|prs| prs.into_iter().find(|p| p.key() == key))
@@ -233,6 +244,17 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
             })
         }
         _ => None,
+    }
+}
+
+/// A build's or a review's attention, as its sound: ready to post is work
+/// done, blocked waits on you, and the rest (stalled, didn't start, lost a
+/// pane) went wrong.
+fn sound(attention: &str) -> &'static str {
+    match attention {
+        "ready" => "task.complete",
+        "blocked" => "input.required",
+        _ => "task.error",
     }
 }
 
@@ -280,6 +302,7 @@ mod tests {
             docket: Some("D-1".into()),
             message: Some(1),
             key: None,
+            sound: "input.required",
             seen: Value::Null,
         };
         let ev = n.event();
@@ -289,5 +312,15 @@ mod tests {
         assert_eq!(ev["docket"], "D-1");
         assert_eq!(ev["message"], 1);
         assert!(ev["key"].is_null());
+        assert_eq!(ev["sound"], "input.required");
+    }
+
+    #[test]
+    fn attention_sounds_as_done_waiting_or_wrong() {
+        assert_eq!(sound("ready"), "task.complete");
+        assert_eq!(sound("blocked"), "input.required");
+        for k in ["stalled", "start-failed", "pane-closed", "anything-new"] {
+            assert_eq!(sound(k), "task.error", "{k}");
+        }
     }
 }

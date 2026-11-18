@@ -236,28 +236,33 @@ private struct NotificationSettings: View {
     @AppStorage("notify") private var notify = true
     @State private var status: UNAuthorizationStatus = .notDetermined
 
+    @AppStorage("soundPack") private var pack = ""
+
     var body: some View {
         Form {
-            Toggle("Notify me about what needs me", isOn: $notify)
-                .onChange(of: notify) { Store.shared.reconnect() }
-            Text("Prompts to approve, messages and questions, a finished turn from an agent you messaged, and reviews ready to post. Each has its answer on the banner, and goes away once answered anywhere.")
-                .font(.caption).foregroundStyle(.secondary)
-            LabeledContent("macOS") {
-                switch status {
-                case .authorized, .provisional: Text("Allowed").foregroundStyle(K.working)
-                case .denied: Text("Turned off in System Settings").foregroundStyle(K.error)
-                default: Text("Not asked yet").foregroundStyle(.secondary)
+            Section {
+                Toggle("Notify me about what needs me", isOn: $notify)
+                    .onChange(of: notify) { Store.shared.reconnect() }
+                Text("Prompts to approve, messages and questions, a finished turn from an agent you messaged, and reviews ready to post. Each has its answer on the banner, and goes away once answered anywhere.")
+                    .font(.caption).foregroundStyle(.secondary)
+                LabeledContent("macOS") {
+                    switch status {
+                    case .authorized, .provisional: Text("Allowed").foregroundStyle(K.working)
+                    case .denied: Text("Turned off in System Settings").foregroundStyle(K.error)
+                    default: Text("Not asked yet").foregroundStyle(.secondary)
+                    }
+                }
+                HStack {
+                    Button("Send a Test") { Notifier.shared.test() }
+                    Button("Open System Settings…") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=dev.wheelhouse.app")!)
+                    }
                 }
             }
-            HStack {
-                Button("Send a Test") { Notifier.shared.test() }
-                Button("Open System Settings…") {
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=dev.wheelhouse.app")!)
-                }
-            }
+            SoundSection()
         }
         .formStyle(.grouped)
-        .frame(width: 560, height: 260)
+        .frame(width: 560, height: SoundPacks.shared.installed.contains { $0.name == pack } ? 590 : 420)
         .task { status = await Notifier.shared.status() }
     }
 }

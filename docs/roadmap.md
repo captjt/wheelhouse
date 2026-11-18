@@ -150,6 +150,9 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [x] Notifications with their answers on the banner: Approve and Deny, a
       reply to an agent, an agent's options, Post; withdrawn once answered
       anywhere. The hub posts none while the app does.
+- [x] Notification sounds from peon-ping's packs, picked, heard and
+      installed in Settings › Notifications, each file checked against the
+      hash the registry pins
 - [ ] Signed and notarized builds, so a teammate can install it without
       building it
 
