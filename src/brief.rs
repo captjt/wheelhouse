@@ -36,6 +36,53 @@ pub fn brief(core: &Core, id: &str) -> Result<String> {
         out.push_str("\n## Decisions in force\n\nWhat you were asked, and what stands. Don't ask again; work from these.\n\n");
         out.push_str(&crate::decisions::brief(&ds));
     }
+    // Verify: what the hub will run, how it went, and whether it's held.
+    let numbered: Vec<(i64, crate::record::Entry)> = entries.iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+    let v = crate::evidence::view(core, &st, &numbered);
+    let configured = v["configured"].as_array().cloned().unwrap_or_default();
+    if !configured.is_empty() || st.hold.is_some() {
+        out.push_str(
+            "
+## Verify
+
+",
+        );
+        if let Some(h) = &st.hold {
+            out.push_str(&format!(
+                "On hold: {h}. Wheelhouse takes no steps on it until it's resumed.
+
+"
+            ));
+        }
+        if !configured.is_empty() {
+            out.push_str(
+                "Wheelhouse runs these checks itself, at the commit you hand over, and the PR waits for the required ones. Run the same commands before you say you're done:
+
+",
+            );
+            for c in &configured {
+                let name = c["name"].as_str().unwrap_or("");
+                let last = st
+                    .checks
+                    .get(name)
+                    .map(|r| format!(" Last: {} at {}.", if r.ok { "passed" } else { "failed" }, r.head.chars().take(7).collect::<String>()))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- `{name}`: `{}`{}.{last}
+",
+                    c["run"].as_str().unwrap_or(""),
+                    if c["required"] == false { " (optional)" } else { "" }
+                ));
+            }
+        }
+        if v["needs"] == true {
+            out.push_str(
+                "
+Its intent has acceptance items, so it closes on evidence (passing checks, a merged PR), not on what anyone says.
+",
+            );
+        }
+    }
     let mut recent = Vec::new();
     for s in entries.iter().rev() {
         let Ok(e) = s.entry() else { continue };

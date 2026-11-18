@@ -57,9 +57,10 @@ In the app, **Build it** on a docket does the same as `wh build start`.
 | Plan gate | The plan: Intent, Acceptance, Decisions, Approach, Out of scope, Notes | **Approve / Revise / Discard** |
 | Build | The builder implements, tests, commits, drafts the PR | |
 | Check | The checker checks the branch against the plan; up to two fix rounds | |
+| Verify | The hub runs the repo's `checks` itself at that commit ([verify.md](verify.md)); a required one that fails goes back to the builder | |
 | Pre-review | With `prereview` set: reviewers review the branch blind, as they would its PR, posting nothing; blocking findings go back to the builder | |
 | Preview | When there's something to see, `wh share` puts it on your tailnet | **Looks right / Needs work** |
-| Open gate | The PR as it will open: title, body, commits, the check | **Open PR / Needs changes / Discard** |
+| Open gate | The PR as it will open: title, body, commits, the check, and how the witnessed checks went (a PR doesn't open over a failing one unless you say so) | **Open PR / Needs changes / Discard** |
 | Open | Wheelhouse pushes the checked head and opens a draft PR with the plan | |
 | Follow | Each poll reads the PR: review threads, review bodies and comments that need an answer, failing checks, and whether the base moved on | **Address it / Not now** |
 | Round | The builder reopens on what's new: fixes, merges the base in, drafts a reply to each; the checker checks the fixes and the replies | |
@@ -123,11 +124,13 @@ briefs are in `briefs/build/`; a file of the same name in
 `review.lua`. [examples/build.lua](../examples/build.lua) is a commented
 copy to start from. Without the file, Build uses `review.lua`'s repos,
 agents, PATH and caches, with the defaults below. `WH_BUILD_CONFIG` points
-the hub at another file.
+the hub at another file. Settings, in the apps, changes what isn't code
+(gates, agents, notes, checks) in `settings.json`, laid over this file
+([settings.md](settings.md)).
 
 | Key | What | Default |
 | --- | --- | --- |
-| `repos["owner/name"]` | `checkout`, `notes`, `base`, `plan` (`"full"`, `"summary"`, `false`). A repo in `review.lua` is already listed; `checkout` is required only for one that isn't. | `review.lua`'s repos |
+| `repos["owner/name"]` | `checkout`, `notes`, `base`, `plan` (`"full"`, `"summary"`, `false`), and `checks`: witnessed checks the hub runs itself ([verify.md](verify.md)). A repo in `review.lua` is already listed; `checkout` is required only for one that isn't. | `review.lua`'s repos |
 | `sources.github` | `{ label = "agent" }`: open issues assigned to you, in Build's repos, with the label start a Build | off |
 | `sources.linear` | `{ teams, label, cycle, skip_label }`: Linear issues assigned to you start a Build or are offered one (below) | off |
 | `builder`, `checker` | `"claude"`, `"codex"`, or `{ agent, extra_args, effort }` | `"claude"`, `"claude"` |

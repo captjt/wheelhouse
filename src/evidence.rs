@@ -87,11 +87,15 @@ pub fn view(core: &Core, st: &DocketState, entries: &[(i64, Entry)]) -> Value {
         })
         .collect();
     let task = crate::build::get(core, &st.id).ok().flatten();
-    let specs = task.as_ref().and_then(|t| core.build.specs(&t.repo)).unwrap_or_default();
+    let (repo, specs) = match &task {
+        Some(t) => (Some(t.repo.clone()), core.build.specs(&t.repo).unwrap_or_default()),
+        None => st.agent.as_ref().and_then(|a| a.cwd.as_deref()).and_then(|c| core.build.repo_of(&crate::paths::expand(c))).map(|(r, s)| (Some(r), s)).unwrap_or_default(),
+    };
     json!({
         "needs": needs(st),
         "evidence": of(st, entries),
         "checks": checks,
+        "repo": repo,
         "configured": specs.iter().map(|s| json!({ "name": s.name, "run": s.run, "required": s.required })).collect::<Vec<_>>(),
         "running": crate::checks::running(&st.id),
         "verdicts": verdicts,

@@ -8,6 +8,10 @@
 -- Lua read with LuaJIT, and the hub reads it again whenever it changes.
 -- `wh build` says what's wrong with it, if anything, and `wh build --json`
 -- shows what it read. docs/build.md describes every key.
+--
+-- Settings, in the apps, changes the parts that aren't code (gates, agents,
+-- notes, checks) in settings.json, which wins over this file
+-- (docs/settings.md).
 
 return {
   -- The repos Build works in. Every repo in review.lua is one already, with
@@ -24,6 +28,14 @@ return {
       -- "summary" (for a public repo whose issues are private: the plan in
       -- the builder's own words), or false (none).
       plan = "full",
+      -- Witnessed checks (docs/verify.md): the hub runs these itself, in the
+      -- worktree, at each commit the checker passes. A required one that
+      -- fails goes back to the builder, and holds the PR and each push.
+      checks = {
+        test = "just test",
+        lint = { run = "just lint", required = false }, -- only informs
+        -- e2e = { run = "just e2e", timeout = 1800 },   -- seconds (1200 by default)
+      },
     },
     -- ["acme/storefront"] = { checkout = "~/code/acme-storefront", plan = "summary" },
   },

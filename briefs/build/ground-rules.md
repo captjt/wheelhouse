@@ -96,4 +96,6 @@ AGENTS.md, CLAUDE.md, justfile, Makefile, or package.json say how. Run what
 settles a question. Stop any process you start, except a preview you're told
 to leave running.
 
+{{CHECKS}}
+
 {{REPO_NOTES}}

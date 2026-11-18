@@ -309,6 +309,7 @@ async fn status(State(shared): State<Shared>) -> ApiResult {
     let dockets = core.store.states().map_err(internal)?;
     Ok(Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
+        "commit": env!("WH_COMMIT"),
         "pid": std::process::id(),
         "uptime_secs": core.started.elapsed().as_secs(),
         "rex": { "connected": core.mirror.connected, "error": core.mirror.error },

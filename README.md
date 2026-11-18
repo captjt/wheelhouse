@@ -159,6 +159,17 @@ Both are off until you set them up.
 Only the hub writes to GitHub, with your `gh` login, and only what you
 approved: agents' panes have no GitHub token, and their pushes fail.
 
+- **Verify:** list a repo's `checks` (in build.lua or Settings) and the
+  hub runs them itself, at each commit the checker passes, and records
+  them as witnessed. A failing one goes back to the builder and holds the
+  PR. A docket with acceptance items closes on evidence, or on your word
+  with a reason. `wh hold` pauses a docket's protocol. See
+  [docs/verify.md](docs/verify.md).
+- **Settings,** in both apps: the standing orders as sentences, gates,
+  agents, each repo's notes and checks, and every guide and brief the
+  agents are given, editable, with the built-in one a click away. See
+  [docs/settings.md](docs/settings.md).
+
 ## Commands
 
 | | |
@@ -166,7 +177,8 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh`, `wh ls [--all]` | What needs you, and what's in flight |
 | `wh show D-4` | One docket's record, each entry with how it's known |
 | `wh new "title"`, `wh new --linear ENG-142` | Open a docket by hand, or from a Linear issue |
-| `wh note D-4 "text"`, `wh set D-4 --title … --status done` | Add a note; rename, or set the status |
+| `wh note D-4 "text"`, `wh set D-4 --title … --status done` | Add a note; rename, or set the status (`--anyway --reason …` closes one with acceptance items on your word) |
+| `wh check D-4 [--wait]`, `wh hold D-4 ["why"] [--off]`, `wh attention` | Run its witnessed checks; hold or resume it; what needs a look |
 | `wh intent D-4 [TEXT\|-]` | Print a docket's intent, or set it |
 | `wh link D-4 ENG-142` | Link a Linear issue |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or a link with a docket |
@@ -223,6 +235,7 @@ odd setups.
 | `WH_TAILNET` | `127.0.0.1:7501` | The listener `wh web --publish` serves (`off` for none) |
 | `WH_SOCKET` | `$WH_STATE/wh.sock` | The CLI's and hooks' socket |
 | `WH_REVIEW_CONFIG`, `WH_BUILD_CONFIG` | `~/.config/wheelhouse/review.lua`, `build.lua` | The protocols' configs |
+| `WH_SETTINGS` | `~/.config/wheelhouse/settings.json` | What Settings changed, laid over them |
 | `WH_NOTIFY` | on | `off`: no Mac notifications or Web Push |
 | `WH_REX`, `WH_GH`, `WH_LUAJIT`, `WH_TAILSCALE` | found on PATH | The tools the hub runs |
 | `WH_LINEAR_KEY` | the Keychain | A Linear API key |
