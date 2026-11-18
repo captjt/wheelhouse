@@ -2,10 +2,11 @@
 
 [Rune](https://github.com/anomalyco/rune) is a GPU-rendered Rust UI framework
 (macOS, Windows, Linux, and an experimental web target) from Anomaly, the
-OpenCode team. This branch tries it on one Wheelhouse surface to decide
-whether, and where, it belongs in Wheelhouse. Nothing here replaces
-Wheelhouse.app (SwiftUI) or the web app (React). The docket's intent holds the
-acceptance items; this page holds the context and the rules.
+OpenCode team. This branch tried it first on one Wheelhouse surface (the
+quick panel), then rebuilt the whole Mac app in it, beside the SwiftUI one
+([The whole app](#the-whole-app)). Nothing here replaces Wheelhouse.app
+(SwiftUI) or the web app (React). The docket's intent holds the acceptance
+items; this page holds the context and the rules.
 
 ## What Rune is (November 2026)
 
@@ -33,8 +34,8 @@ acceptance items; this page holds the context and the rules.
 | Wheelhouse needs | Rune today |
 | --- | --- |
 | The phone (the web app on iPhone) | Web target experimental (one WebGPU canvas); its docs say real iPhone keyboard, dictation, autocorrect and Safari WebGPU aren't verified. iOS comes after web, Android after that. |
-| Notifications with Approve, Deny, a reply | `rune-notify` posts, withdraws and reports clicks; no actions |
-| The menu bar item and its panel | The app owns its tray; Rune gives compact windows and handles |
+| Notifications with Approve, Deny, a reply | `rune-notify` posts with buttons and a reply box on macOS, withdraws, and reports clicks and answers; no subtitle, grouping, sound or permission check |
+| The menu bar item and its panel | No status item API: the app draws its wheel in AppKit, and Rune shows the panel |
 | Quick Look for kept files | None |
 | ⌥⌘K from any app, a floating panel | Global shortcuts, panels and overlays: there |
 | VoiceOver | AccessKit: there |
@@ -213,14 +214,14 @@ table you must copy grew from one crate to five.
 - **What it would be for:** a native Wheelhouse beyond the Mac (Windows,
   Linux) from one Rust codebase beside the hub's, which agents can check
   headlessly end to end. Rune does that better than anything Wheelhouse has
-  now. The phone stays the web app until Rune's iOS target exists, and the
-  menu bar app needs notification actions (rune-notify has none) before Rune
-  could carry it.
+  now. The phone stays the web app until Rune's iOS target exists. (The
+  trial said rune-notify had no notification actions; the whole-app port
+  found it has buttons and a reply box on macOS, and uses them.)
 
 Look again when Rune tags a release: run `rune/scripts/bump-rune.sh`, redo
 the checks above (they're scripted), and, if Wheelhouse wants a desktop app
-off the Mac by then, start it from this panel. The iOS target and
-notification actions are the triggers for anything past the panel.
+off the Mac by then, start it from the port below. The iOS target is the
+trigger for anything past the desktop.
 
 ### For Rune's issues
 
@@ -240,14 +241,87 @@ Not filed (Rune takes issues only; Jordan's call):
 ### Trying it on your own dockets
 
 Since the trial, Wheelhouse Dev (`just dev-install`, on `main`) runs a
-second hub on :7600 with a copy of your dockets and nothing live. The
-panel's bundle follows it: `rune/scripts/bundle.sh`, then `open
-"rune/target/Wheelhouse Rune.app"`. It shows the panel, wears the hub's DEV
-badge, and ⌃⌥⌘K brings it back, beside Wheelhouse.app's ⌥⌘K and Wheelhouse
-Dev's ⇧⌥⌘K. What it answers there stays in the copy.
+second hub on :7600 with a copy of your dockets and nothing live. The Rune
+app's bundle follows it: `rune/scripts/bundle.sh`, then `open
+"rune/target/Wheelhouse Rune.app"`. It opens on the main window, wears the
+hub's DEV badge, and ⌃⌥⌘K shows its quick panel, beside Wheelhouse.app's ⌥⌘K
+and Wheelhouse Dev's ⇧⌥⌘K. What it answers there stays in the copy.
 
 ### Left by hand
 
 Typing with a real keyboard and input method, and listening to VoiceOver,
 in the panel opened as above: type in Japanese (にほん, then Return), turn
 VoiceOver on (⌘F5), and arrow through the list.
+
+## The whole app
+
+After the trial, Wheelhouse.app was rebuilt in Rune end to end (`rune/src/app/`),
+to review against the SwiftUI one on the same data. Every place, sheet and
+window the SwiftUI app's `--snapshot` shoots exists in Rune, and
+`rune/scripts/compare.sh` shoots both on the made-up world, light and dark.
+The pairs, and what still differs on each, are on one review page:
+[Wheelhouse in Rune](https://claude.ai/artifact/DyN5GQkgJKyCJNHB8Wepxu)
+(private to Jordan).
+
+- **The main window:** Inbox (its docket embedded, as SwiftUI's), Reviews with
+  its toolbar and bar, Builds, Active, All, Done, Rex sessions, Agents and
+  Recap; lists grouped per place by attention, status or session; the board.
+- **A docket:** the prompt and failure callouts, the Review and Build panels,
+  an agent's asks, the intent with live task boxes and GitHub's alerts,
+  decisions, Verify (checks, their output, close on your word), kept files,
+  activity, the composer, chat, and the inspector row for row.
+- **Over it:** ⌘K in SwiftUI's order, the record (Find, marks, envelopes,
+  Export), New docket, Start an agent, Link a Linear issue, Hold, Shortcuts.
+  Native menus for status, Group by, a docket's actions and folders.
+- **Other windows:** dockets in their own windows, the menu bar's wheel and
+  panel, the quick panel on ⌃⌥⌘K, Settings with every tab.
+- **The Mac:** notifications you answer on the banner, the Dock badge.
+- **How it was checked:** headlessly, on the made-up world (`--scene` for
+  every screen, `--script` for the keys, menus and sheets), plus 23 unit
+  tests. Writes call the same endpoints as Store.swift; the ones a scene can't
+  exercise without changing the shared world (send, post, discard, run
+  checks) were not tried live.
+
+After the first comparison, the structural differences were fixed. 18 of
+29 screens match; the other 11 differ in polish, mostly where SF Symbols
+and system controls are redrawn, and in rune-kit's shell, which frames the
+content as a card where macOS 26 floats a glass sidebar. One difference is
+SwiftUI's own bug: its `stamp()` drops AM/PM from a two-digit hour, so 2:54
+PM reads "02:54"; Rune shows "14:54".
+
+| | Rune, the whole app | SwiftUI |
+| --- | --- | --- |
+| Code | 16,305 lines of Rust in 39 files (12k in `src/app/`): its own hub client and model, and the drawing AppKit does | 10,241 lines of Swift in 29 files |
+| Binary | 30.2 MB stripped (36.1 MB; 40.4 MB with the agent tooling) | 11.6 MB |
+| Cold release build | 6 min (every crate, without the tooling) | 68 s |
+| Release, after a one-line change | 2.8 s | 45 s (whole-module) |
+
+Gaps Rune left, each worked around in the app (for its issues, beside the
+trial's list above):
+
+7. Windows can't be added while the app runs: four docket windows are made
+   at launch and reused.
+8. No status item API, and no Dock badge without a window: both are AppKit
+   calls in the app.
+9. rune-notify: no subtitle, grouping, sound or interruption level; it can't
+   say whether notifications are allowed or list delivered ones, and it posts
+   from whichever thread macOS calls back on, so a banner's buttons can go
+   missing.
+10. No chart component (Recap's sparklines are canvas shapes), and no
+    measuring pass to decide when a long reply needs Show more.
+11. `--snap` ignores a window's fitted height, a headless run shows one
+    window, and it draws no traffic lights.
+12. The Markdown component has no GitHub alerts; the app splits them out.
+
+Not ported: hiding the menu bar item, opening at login and another hub
+address (Settings shows them off, with why); Settings and preferences last
+for the run only; Export saves to Downloads and the folder menu has no
+Choose…, both because Rune's file dialog would add `rfd`; undo after closing
+on your word. None of it has run on screen yet: the menu bar panel,
+notifications, docket windows and Settings resizing per tab are untested
+outside headless runs.
+
+To try it beside your daily Wheelhouse, on Wheelhouse Dev's copy of your
+dockets: `rune/scripts/bundle.sh`, then `open "rune/target/Wheelhouse
+Rune.app"`. It opens on the main window, with its wheel in the menu bar.
+
