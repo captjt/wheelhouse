@@ -12,7 +12,10 @@ import { HubProvider, LiveProvider, go, useHub, useRoute, useTheme, type Theme }
 import { NewDocket, Palette } from "./Palette";
 import { PaneProvider } from "./Pane";
 import { PushHint, registerWorker } from "./Push";
-import { ToastProvider, typing, useToast } from "./ui";
+import { ToastProvider, typing, usePhone, useToast } from "./ui";
+import { MoreSheet, TabBar, nav, popBack, tabs, usePullToRefresh, useScrolledViews, useSwipeBack } from "./mobile";
+import { lastList } from "./live";
+import { post } from "./api";
 import { AgentsView, DocketListView } from "./views";
 import "./styles.css";
 
@@ -81,12 +84,50 @@ function ThemeSwitch() {
   );
 }
 
+/** The list (or other) view a route shows; a docket's is in `DocketScreen`. */
+function RouteView({ route }: { route: string[] }) {
+  const page = route[0] || "view";
+  if (page === "inbox") return <InboxView />;
+  if (page === "agents") return <AgentsView />;
+  if (page === "reviews") return <ReviewsView />;
+  if (page === "recap") return <RecapView />;
+  if (page === "builds") return <BuildsView />;
+  if (page === "session" && route[1]) {
+    const s = route[1];
+    return (
+      <DocketListView
+        key={`s-${s}`}
+        path={`/session/${s}`}
+        title={s}
+        icon={<SessionIcon name={s} />}
+        filter={(d) => isOpen(d) && d.agent?.rex_session === s}
+        defaultGroup="attention"
+        empty="No open dockets in this Rex session."
+      />
+    );
+  }
+  const v = (route[1] as keyof typeof FILTERS) || "active";
+  const meta = {
+    active: { title: "Active", icon: <IconActive size={15} />, group: "attention" as const, empty: "No open dockets. Start an agent in Rex, or press C." },
+    all: { title: "All dockets", icon: <IconLayers size={15} />, group: "status" as const, empty: "No dockets yet." },
+    done: { title: "Done", icon: <IconDone size={15} />, group: "status" as const, empty: "Nothing done yet." },
+  }[v] ?? { title: "Active", icon: <IconActive size={15} />, group: "attention" as const, empty: "" };
+  return <DocketListView key={v} path={`/view/${v}`} title={meta.title} icon={meta.icon} filter={FILTERS[v] ?? FILTERS.active} defaultGroup={meta.group} empty={meta.empty} />;
+}
+
+const routeOf = (path: string) =>
+  decodeURIComponent(path.replace(/^#?\/?/, ""))
+    .split("/")
+    .filter(Boolean);
+
 function App() {
   const hub = useHub();
   const route = useRoute();
   const [palette, setPalette] = useState(false);
   const [creating, setCreating] = useState<false | "blank" | "linear" | "agent">(false);
-  const [nav, setNav] = useState(false);
+  const [drawer, setDrawer] = useState(false);
+  const [more, setMore] = useState(false);
+  const phone = usePhone();
   const page = route[0] || "view";
 
   const inboxCount = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.review?.prs ?? []).length, [hub.state]);
@@ -105,7 +146,19 @@ function App() {
     if (urgent > 0) nav.setAppBadge?.(urgent).catch(() => {});
     else nav.clearAppBadge?.().catch(() => {});
   }, [urgent]);
-  useEffect(() => setNav(false), [route.join("/")]);
+  useEffect(() => (setDrawer(false), setMore(false)), [route.join("/")]);
+  // Where a docket goes back to: the view it was opened from, whichever.
+  useEffect(() => {
+    if (page === "d") return;
+    const path = `/${route.map(encodeURIComponent).join("/")}` || "/view/active";
+    const titles: Record<string, string> = { inbox: "Inbox", reviews: "Reviews", builds: "Builds", recap: "Recap", agents: "Agents" };
+    const views: Record<string, string> = { active: "Active", all: "All dockets", done: "Done" };
+    const title = page === "session" ? route[1] : page === "view" ? views[route[1] || "active"] : titles[page];
+    if (!title) return;
+    if (lastList.path !== path) lastList.ids = [];
+    lastList.path = path === "/" ? "/view/active" : path;
+    lastList.title = title;
+  }, [route.join("/")]);
 
   // Global keys: ⌘K or / for the palette, C to create, G then a letter to go.
   const pending = useRef<number | null>(null);
@@ -160,38 +213,48 @@ function App() {
     </a>
   );
 
-  let main: React.ReactNode;
-  if (page === "d" && route[1]) main = <DocketScreen key={route[1]} id={route[1]} />;
-  else if (page === "inbox") main = <InboxView />;
-  else if (page === "agents") main = <AgentsView />;
-  else if (page === "reviews") main = <ReviewsView />;
-  else if (page === "recap") main = <RecapView />;
-  else if (page === "builds") main = <BuildsView />;
-  else if (page === "session" && route[1]) {
-    const s = route[1];
-    main = (
-      <DocketListView
-        key={`s-${s}`}
-        path={`/session/${s}`}
-        title={s}
-        icon={<SessionIcon name={s} />}
-        filter={(d) => isOpen(d) && d.agent?.rex_session === s}
-        defaultGroup="attention"
-        empty="No open dockets in this Rex session."
+  const docket = page === "d" && route[1] ? route[1] : null;
+  const main = docket ? <DocketScreen key={docket} id={docket} /> : <RouteView route={route} />;
+  const foot = (
+    <>
+      {hub.state && !hub.state.hooks && <HooksHint />}
+      {hub.state && !hub.state.linear && <LinearHint />}
+      <PushHint />
+      <div className="conn">
+        <span className={`conn-dot ${hub.state ? (hub.state.rex.connected ? "on" : "off") : ""}`} />
+        {hub.state ? (hub.state.rex.connected ? "Following Rex" : `Rex: ${hub.state.rex.error || "connecting"}`) : hub.error ? "Hub unreachable" : "Connecting…"}
+        <span className="spacer" />
+        <ThemeSwitch />
+      </div>
+    </>
+  );
+  const overlays = (
+    <>
+      {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} onNewAgent={openNewAgent} context={context} />}
+      {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} onClose={() => setCreating(false)} />}
+    </>
+  );
+
+  if (phone)
+    return (
+      <PhoneApp
+        route={route}
+        docket={docket}
+        here={here}
+        tabItems={tabs({ inbox: inboxCount, urgent: urgent > 0, reviews: reviewAlerts || reviewCount, reviewAlerts: reviewAlerts > 0, builds: buildAlerts || buildCount, buildAlerts: buildAlerts > 0, active: counts.active })}
+        more={more}
+        setMore={setMore}
+        sessions={sessions}
+        agents={counts.agents}
+        foot={foot}
+        onSearch={() => setPalette(true)}
+        onNew={() => setCreating("blank")}
+        overlays={overlays}
       />
     );
-  } else {
-    const v = (route[1] as keyof typeof FILTERS) || "active";
-    const meta = {
-      active: { title: "Active", icon: <IconActive size={15} />, group: "attention" as const, empty: "No open dockets. Start an agent in Rex, or press C." },
-      all: { title: "All dockets", icon: <IconLayers size={15} />, group: "status" as const, empty: "No dockets yet." },
-      done: { title: "Done", icon: <IconDone size={15} />, group: "status" as const, empty: "Nothing done yet." },
-    }[v] ?? { title: "Active", icon: <IconActive size={15} />, group: "attention" as const, empty: "" };
-    main = <DocketListView key={v} path={`/view/${v}`} title={meta.title} icon={meta.icon} filter={FILTERS[v] ?? FILTERS.active} defaultGroup={meta.group} empty={meta.empty} />;
-  }
 
   return (
-    <div className={`app${nav ? " nav-open" : ""}`}>
+    <div className={`app${drawer ? " nav-open" : ""}`}>
       <aside className="sidebar">
         <div className="side-top">
           <a className="workspace" href="#/view/active">
@@ -233,27 +296,110 @@ function App() {
           </>
         )}
         <span className="spacer-v" />
-        <div className="side-foot">
-          {hub.state && !hub.state.hooks && <HooksHint />}
-          {hub.state && !hub.state.linear && <LinearHint />}
-          <PushHint />
-          <div className="conn">
-            <span className={`conn-dot ${hub.state ? (hub.state.rex.connected ? "on" : "off") : ""}`} />
-            {hub.state ? (hub.state.rex.connected ? "Following Rex" : `Rex: ${hub.state.rex.error || "connecting"}`) : hub.error ? "Hub unreachable" : "Connecting…"}
-            <span className="spacer" />
-            <ThemeSwitch />
-          </div>
-        </div>
+        <div className="side-foot">{foot}</div>
       </aside>
-      <div className="scrim" onClick={() => setNav(false)} />
+      <div className="scrim" onClick={() => setDrawer(false)} />
       <main className="main">
-        <button className="icon-btn nav-toggle" onClick={() => setNav(true)} aria-label="Menu">
+        <button className="icon-btn nav-toggle" onClick={() => setDrawer(true)} aria-label="Menu">
           <IconMenu size={16} />
         </button>
         {main}
       </main>
-      {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} onNewAgent={openNewAgent} context={context} />}
-      {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} onClose={() => setCreating(false)} />}
+      {overlays}
+    </div>
+  );
+}
+
+/**
+ * The phone: a tab bar, and a stack. The list stays mounted under a docket
+ * (so going back is instant and keeps your place); the docket slides on,
+ * and a swipe right takes it off.
+ */
+function PhoneApp({
+  route,
+  docket,
+  here,
+  tabItems,
+  more,
+  setMore,
+  sessions,
+  agents,
+  foot,
+  onSearch,
+  onNew,
+  overlays,
+}: {
+  route: string[];
+  docket: string | null;
+  here: string;
+  tabItems: ReturnType<typeof tabs>;
+  more: boolean;
+  setMore: (b: boolean) => void;
+  sessions: [string, number][];
+  agents: number;
+  foot: React.ReactNode;
+  onSearch: () => void;
+  onNew: () => void;
+  overlays: React.ReactNode;
+}) {
+  const base = useRef<HTMLDivElement>(null);
+  const top = useRef<HTMLDivElement>(null);
+  const shade = useRef<HTMLDivElement>(null);
+  const ptr = useRef<HTMLDivElement>(null);
+  const back = useCallback(() => go(lastList.path), []);
+  useEffect(() => {
+    nav.back = () => popBack(top.current, base.current, shade.current, back);
+    return () => {
+      nav.back = back;
+    };
+  }, [back]);
+  useSwipeBack(top, base, shade, docket ?? false, back);
+  useScrolledViews(true);
+  const page = route[0] || "view";
+  usePullToRefresh(base, ptr, !docket, () => {
+    window.dispatchEvent(new Event("wh:refresh"));
+    return page === "reviews" ? post("/api/review/check", {}).catch(() => {}) : Promise.resolve();
+  });
+  // Under a docket, the list it came from.
+  const under = docket ? routeOf(lastList.path) : route;
+  return (
+    <div className={`app phone${docket ? " pushed" : ""}`}>
+      <main className="main m-main">
+        <div ref={base} className={`m-base${docket ? " covered" : ""}`} aria-hidden={docket ? true : undefined}>
+          <RouteView route={under} />
+        </div>
+        <div ref={ptr} className="ptr" aria-hidden="true">
+          <span className="ptr-spin" />
+        </div>
+        {docket && (
+          <>
+            <div ref={shade} className="m-shade" />
+            <div ref={top} className="m-top" key={docket}>
+              <DocketScreen key={docket} id={docket} />
+            </div>
+          </>
+        )}
+      </main>
+      {!docket && <TabBar here={here} items={tabItems} onMore={() => setMore(true)} />}
+      {more && (
+        <MoreSheet
+          here={here}
+          onClose={() => setMore(false)}
+          actions={[
+            { key: "search", label: "Search", icon: <IconSearch size={18} />, run: onSearch },
+            { key: "new", label: "New docket", icon: <IconPlus size={18} />, run: onNew },
+          ]}
+          links={[
+            { path: "/view/all", label: "All dockets", icon: <IconLayers size={18} /> },
+            { path: "/view/done", label: "Done", icon: <IconDone size={18} /> },
+            { path: "/agents", label: "Agents", icon: <IconAgents size={18} />, count: agents },
+            { path: "/recap", label: "Recap", icon: <IconChart size={18} /> },
+          ]}
+          sessions={sessions.map(([s, n]) => ({ path: `/session/${encodeURIComponent(s)}`, label: s, icon: <SessionIcon name={s} size={18} />, count: n }))}
+          footer={foot}
+        />
+      )}
+      {overlays}
     </div>
   );
 }

@@ -1,25 +1,54 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { renderInline, renderMarkdown } from "./markdown";
 
+// ---- the phone ----
+
+const PHONE = "(max-width: 760px)";
+
+/** Whether the screen is a phone's: the app lays out natively there. */
+export const isPhone = () => typeof window !== "undefined" && window.matchMedia(PHONE).matches;
+
+export function usePhone() {
+  const [p, setP] = useState(isPhone);
+  useEffect(() => {
+    const m = window.matchMedia(PHONE);
+    const on = () => setP(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return p;
+}
+
 // ---- toasts ----
 
-type Toast = { id: number; text: string; tone?: "error" };
-const ToastCtx = createContext<(text: string, tone?: "error") => void>(() => {});
+/** A toast's one action, such as Undo. */
+export type ToastAction = { label: string; run: () => void };
+type Toast = { id: number; text: string; tone?: "error"; action?: ToastAction };
+const ToastCtx = createContext<(text: string, tone?: "error", action?: ToastAction) => void>(() => {});
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const push = useCallback((text: string, tone?: "error") => {
-    const id = Date.now() + Math.random();
-    setToasts((t) => [...t.slice(-3), { id, text, tone }]);
-    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tone === "error" ? 6000 : 3200);
-  }, []);
+  const drop = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+  const push = useCallback(
+    (text: string, tone?: "error", action?: ToastAction) => {
+      const id = Date.now() + Math.random();
+      setToasts((t) => [...t.slice(-3), { id, text, tone, action }]);
+      window.setTimeout(() => drop(id), action ? 5500 : tone === "error" ? 6000 : 3200);
+    },
+    [drop],
+  );
   return (
     <ToastCtx.Provider value={push}>
       {children}
       <div className="toasts" role="status">
         {toasts.map((t) => (
           <div key={t.id} className={`toast${t.tone ? ` toast-${t.tone}` : ""}`}>
-            {t.text}
+            <span className="toast-text">{t.text}</span>
+            {t.action && (
+              <button className="toast-action" onClick={() => (t.action!.run(), drop(t.id))}>
+                {t.action.label}
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -64,8 +93,36 @@ export function useKeys(map: Record<string, (e: KeyboardEvent) => void>, active 
 
 export type MenuItem = { key: string; label: ReactNode; icon?: ReactNode; hint?: string; checked?: boolean; onPick: () => void };
 
+/** A menu: a popover under `anchor`, or on a phone, a sheet from the bottom. */
+export function Menu(p: { anchor: DOMRect; items: MenuItem[]; onClose: () => void; title?: string }) {
+  return usePhone() ? <MenuSheet {...p} /> : <MenuPopover {...p} />;
+}
+
+function MenuSheet({ items, onClose, title }: { items: MenuItem[]; onClose: () => void; title?: string }) {
+  return (
+    <Sheet onClose={onClose} title={title} className="menu-sheet">
+      {(close) =>
+        items.map((it) => (
+          <button
+            key={it.key}
+            className={`sheet-item${it.checked ? " on" : ""}`}
+            onClick={() => {
+              it.onPick();
+              close();
+            }}
+          >
+            {it.icon && <span className="sheet-item-icon">{it.icon}</span>}
+            <span className="sheet-item-label">{it.label}</span>
+            {it.checked && <span className="menu-check">✓</span>}
+          </button>
+        ))
+      }
+    </Sheet>
+  );
+}
+
 /** A popover menu under `anchor`, with arrow keys, numbers, and Escape. */
-export function Menu({ anchor, items, onClose, title }: { anchor: DOMRect; items: MenuItem[]; onClose: () => void; title?: string }) {
+function MenuPopover({ anchor, items, onClose, title }: { anchor: DOMRect; items: MenuItem[]; onClose: () => void; title?: string }) {
   const [sel, setSel] = useState(Math.max(0, items.findIndex((i) => i.checked)));
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ top: anchor.bottom + 4, left: anchor.left });
@@ -139,7 +196,22 @@ export function useMenu() {
 
 // ---- modals ----
 
-export function Modal({ children, onClose, className }: { children: ReactNode; onClose: () => void; className?: string }) {
+/** A dialog: centered, or on a phone, a sheet from the bottom (the pane's
+ * view stays full screen). */
+export function Modal(p: { children: ReactNode; onClose: () => void; className?: string }) {
+  const phone = usePhone();
+  if (phone && !p.className?.includes("pane-sheet")) {
+    const tall = /palette|new-docket|linear-modal|history-modal|preview-modal/.test(p.className ?? "");
+    return (
+      <Sheet onClose={p.onClose} className={`modal-sheet ${p.className ?? ""}`} tall={tall}>
+        {p.children}
+      </Sheet>
+    );
+  }
+  return <CenteredModal {...p} />;
+}
+
+function CenteredModal({ children, onClose, className }: { children: ReactNode; onClose: () => void; className?: string }) {
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -154,6 +226,130 @@ export function Modal({ children, onClose, className }: { children: ReactNode; o
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className={`modal ${className || ""}`} role="dialog">
         {children}
+      </div>
+    </div>
+  );
+}
+
+// ---- sheets ----
+
+/** The nearest element that scrolls vertically, from `el` up to `stop`. */
+function scrollerOf(el: HTMLElement | null, stop: HTMLElement): HTMLElement | null {
+  for (let n = el; n && n !== stop.parentElement; n = n.parentElement) {
+    const o = getComputedStyle(n).overflowY;
+    if ((o === "auto" || o === "scroll") && n.scrollHeight > n.clientHeight + 1) return n;
+  }
+  return null;
+}
+
+/**
+ * A sheet that rises from the bottom, as on iOS: drag it down (or tap
+ * outside, or press Escape) to close it. `children` may be a function of
+ * `close`, to close it with its animation.
+ */
+export function Sheet({
+  children,
+  onClose,
+  title,
+  className,
+  tall,
+}: {
+  children: ReactNode | ((close: () => void) => ReactNode);
+  onClose: () => void;
+  title?: ReactNode;
+  className?: string;
+  tall?: boolean;
+}) {
+  const panel = useRef<HTMLDivElement>(null);
+  const back = useRef<HTMLDivElement>(null);
+  const [closing, setClosing] = useState(false);
+  const close = useCallback(() => setClosing(true), []);
+  // A tap that lands in its first moment belongs to what opened it.
+  const opened = useRef(Date.now());
+  useEffect(() => {
+    if (!closing) return;
+    const t = window.setTimeout(onClose, 220);
+    return () => window.clearTimeout(t);
+  }, [closing, onClose]);
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    };
+    window.addEventListener("keydown", on, true);
+    return () => window.removeEventListener("keydown", on, true);
+  }, [close]);
+  useEffect(() => {
+    const el = panel.current;
+    if (!el) return;
+    let x0 = 0;
+    let y0 = 0;
+    let t0 = 0;
+    let dy = 0;
+    let decided = false;
+    let dragging = false;
+    let scroller: HTMLElement | null = null;
+    let target: HTMLElement | null = null;
+    const start = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      x0 = e.touches[0].clientX;
+      y0 = e.touches[0].clientY;
+      t0 = Date.now();
+      dy = 0;
+      decided = false;
+      dragging = false;
+      target = e.target as HTMLElement;
+      scroller = scrollerOf(target, el);
+    };
+    const move = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const y = e.touches[0].clientY;
+      const x = e.touches[0].clientX;
+      if (!decided) {
+        if (Math.abs(y - y0) < 6 && Math.abs(x - x0) < 6) return;
+        decided = true;
+        const typingIn = !!target?.closest("textarea, input, [contenteditable]") && !target.closest(".sheet-grab");
+        dragging = y - y0 > 0 && Math.abs(y - y0) > Math.abs(x - x0) && (!scroller || scroller.scrollTop <= 0) && !typingIn;
+      }
+      if (!dragging) return;
+      e.preventDefault();
+      dy = Math.max(0, y - y0);
+      el.style.transition = "none";
+      el.style.transform = `translateY(${dy}px)`;
+      if (back.current) back.current.style.opacity = String(1 - Math.min(1, dy / Math.max(1, el.offsetHeight)));
+    };
+    const end = () => {
+      if (!dragging) return;
+      dragging = false;
+      const v = dy / Math.max(1, Date.now() - t0);
+      el.style.transition = "";
+      if (dy > el.offsetHeight * 0.28 || (v > 0.5 && dy > 30)) close();
+      else {
+        el.style.transform = "";
+        if (back.current) back.current.style.opacity = "";
+      }
+    };
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", move, { passive: false });
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", end);
+    return () => {
+      el.removeEventListener("touchstart", start);
+      el.removeEventListener("touchmove", move);
+      el.removeEventListener("touchend", end);
+      el.removeEventListener("touchcancel", end);
+    };
+  }, [close]);
+  return (
+    <div ref={back} className={`sheet-backdrop${closing ? " closing" : ""}`} onClick={(e) => e.target === e.currentTarget && Date.now() - opened.current > 400 && close()}>
+      <div ref={panel} className={`sheet${tall ? " tall" : ""}${closing ? " closing" : ""} ${className ?? ""}`} role="dialog" aria-modal="true">
+        <div className="sheet-grab" aria-hidden="true">
+          <span />
+        </div>
+        {title && <div className="sheet-title">{title}</div>}
+        <div className="sheet-body">{typeof children === "function" ? children(close) : children}</div>
       </div>
     </div>
   );

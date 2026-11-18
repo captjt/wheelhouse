@@ -3,6 +3,7 @@ import { post, type Docket, type ReviewPr, type ReviewStatus } from "./api";
 import { IconChevronDown, IconExternal, IconIssue, IconPause, IconPlay, IconPR, IconRefresh, LiveIcon } from "./icons";
 import { ago, agoLong, stamp, useHub } from "./live";
 import { InlineMd, Modal, Prose, useToast } from "./ui";
+import { LargeTitle } from "./mobile";
 
 
 export const verdictWord = (v?: string | null) =>
@@ -333,6 +334,7 @@ export function ReviewsView() {
           </>
         )}
       </header>
+      <LargeTitle title="Reviews" count={live} />
       {rv?.enabled && (
         <div className="rv-bar">
           <span className={`rv-pill ${rv.paused ? "paused" : "on"}`}>{rv.paused ? "Paused" : "On"}</span>

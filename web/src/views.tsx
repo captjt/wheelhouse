@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { appName, type Docket } from "./api";
 import { AppAvatar, IconBoard, IconChevronDown, IconEye, SessionChip, SessionIcon, TitleText, shortPath, IconCopy, IconDisplay, IconList, IconTerminal, LiveIcon, StatusIcon, liveWord } from "./icons";
 import { ago, go, lastList, store, useHub } from "./live";
-import { useKeys, useMenu, type MenuItem } from "./ui";
+import { useKeys, useMenu, usePhone, type MenuItem } from "./ui";
+import { LargeTitle, SwipeRow, type SwipeAction } from "./mobile";
+import { IconCheck, IconX } from "./icons";
 import { onThisMac, usePane } from "./Pane";
 
 export const STATUSES: { key: Docket["status"]; label: string }[] = [
@@ -113,6 +115,9 @@ export function DocketListView({
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [sel, setSel] = useState<string | null>(null);
   const menu = useMenu();
+  const phone = usePhone();
+  // A phone shows the list; the board needs the width.
+  const shown = phone ? "list" : layout;
 
   const list = useMemo(() => (hub.state?.dockets ?? []).filter(filter), [hub.state, filter]);
   const groups = useMemo(() => groupDockets(list, group), [list, group]);
@@ -175,16 +180,17 @@ export function DocketListView({
             <IconBoard size={14} />
           </button>
         </div>
-        <button className="btn btn-ghost" onClick={(e) => displayMenu(e.currentTarget)}>
-          <IconDisplay size={14} /> Display
+        <button className="btn btn-ghost" onClick={(e) => displayMenu(e.currentTarget)} aria-label="Display">
+          <IconDisplay size={14} /> <span className="m-hide">Display</span>
         </button>
       </header>
+      <LargeTitle title={title} count={list.length} />
 
       {!hub.state ? (
         <div className="view-empty">{hub.error ? `Can't reach the hub: ${hub.error}` : ""}</div>
       ) : list.length === 0 ? (
         <div className="view-empty">{empty}</div>
-      ) : layout === "board" ? (
+      ) : shown === "board" ? (
         <div className="board">
           {groups.map((g) => (
             <div className="board-col" key={g.key}>
@@ -224,20 +230,35 @@ export function DocketListView({
                 <span className="view-count">{g.items.length}</span>
               </button>
               {!collapsed.has(g.key) &&
-                g.items.map((d) => (
-                  <Row
-                    key={d.id}
-                    d={d}
-                    selected={sel === d.id}
-                    onHover={() => setSel(d.id)}
-                    onStatus={(el) => menu.open(el, statusItems(d, (s) => hub.setStatus(d.id, s)), "Change status")}
-                    onMenu={(e) => {
-                      e.preventDefault();
-                      setSel(d.id);
-                      menu.open({ x: e.clientX, y: e.clientY }, rowMenu(d, hub, pane));
-                    }}
-                  />
-                ))}
+                g.items.map((d) => {
+                  const row = (
+                    <Row
+                      key={d.id}
+                      d={d}
+                      selected={!phone && sel === d.id}
+                      onHover={() => setSel(d.id)}
+                      onStatus={(el) => menu.open(el, statusItems(d, (s) => hub.setStatus(d.id, s, d.status)), "Change status")}
+                      onMenu={(e) => {
+                        e.preventDefault();
+                        setSel(d.id);
+                        menu.open({ x: e.clientX, y: e.clientY }, rowMenu(d, hub, pane));
+                      }}
+                    />
+                  );
+                  return phone ? (
+                    <SwipeRow
+                      key={d.id}
+                      leading={[{ key: "status", label: "Status", icon: <StatusIcon status="in_progress" />, tone: "status", run: () => menu.open(new DOMRect(), statusItems(d, (s) => hub.setStatus(d.id, s, d.status)), `${d.id} · Change status`) }]}
+                      trailing={swipeEnd(d, hub)}
+                      fullTrailing
+                      onLongPress={() => menu.open(new DOMRect(), rowMenu(d, hub, pane), d.id)}
+                    >
+                      {row}
+                    </SwipeRow>
+                  ) : (
+                    row
+                  );
+                })}
             </div>
           ))}
         </div>
@@ -245,6 +266,16 @@ export function DocketListView({
       {menu.node}
     </div>
   );
+}
+
+/** A row's swipe to the left: Done (or Reopen), then Drop. */
+export function swipeEnd(d: Docket, hub: ReturnType<typeof useHub>): SwipeAction[] {
+  const open = d.status === "todo" || d.status === "in_progress";
+  if (!open) return [{ key: "reopen", label: "Reopen", icon: <StatusIcon status="in_progress" />, tone: "status", run: () => void hub.setStatus(d.id, "in_progress", d.status) }];
+  return [
+    { key: "done", label: "Done", icon: <IconCheck size={18} />, tone: "done", run: () => void hub.setStatus(d.id, "done", d.status) },
+    { key: "drop", label: "Drop", icon: <IconX size={18} />, tone: "drop", run: () => void hub.setStatus(d.id, "dropped", d.status) },
+  ];
 }
 
 export function Row({
@@ -346,8 +377,9 @@ export function AgentsView() {
           <IconTerminal size={15} /> Agents <span className="view-count">{total}</span>
         </span>
         <span className="spacer" />
-        <span className="muted small">Every Claude Code and Codex pane in Rex, live</span>
+        <span className="muted small m-hide">Every Claude Code and Codex pane in Rex, live</span>
       </header>
+      <LargeTitle title="Agents" count={total} />
       {total === 0 ? (
         <div className="view-empty">No agents running in Rex.</div>
       ) : (

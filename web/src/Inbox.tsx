@@ -5,8 +5,10 @@ import { MessageCard, msgFrom, msgTitle } from "./Messages";
 import { DocketScreen } from "./Docket";
 import { AppAvatar, IconInbox, IconPR, LiveIcon, TitleText } from "./icons";
 import { ago, go, lastList, useHub } from "./live";
-import { InlineMd, useKeys, useMenu } from "./ui";
-import { rowMenu } from "./views";
+import { InlineMd, useKeys, useMenu, usePhone } from "./ui";
+import { rowMenu, swipeEnd } from "./views";
+import { LargeTitle, SwipeRow, type SwipeAction } from "./mobile";
+import { IconCheck, IconX } from "./icons";
 import { AnswerButtons, usePane } from "./Pane";
 
 type Item = { d: Docket; kind: "blocked" | "error" | "done" | "message" | "review"; line: string; at?: string | null; m?: Msg; p?: ReviewPr; key: string };
@@ -40,9 +42,13 @@ export function inboxItems(dockets: Docket[], messages: Msg[] = [], prs: ReviewP
   }
   for (const d of dockets) {
     const s = d.live?.state;
+    // A turn finished, or a failure, on a docket you've closed isn't your
+    // move; an agent waiting on a prompt still is.
+    const open = d.status === "todo" || d.status === "in_progress";
     if (s === "blocked") items.push({ d, kind: "blocked", line: d.live?.msg || `${appName(d.agent?.app)} needs you`, at: d.live?.since, key: d.id });
-    else if (s === "error") items.push({ d, kind: "error", line: d.live?.msg || "Failed", at: d.live?.since, key: d.id });
-    else if (s === "done") items.push({ d, kind: "done", line: firstLine(d.last_turn) || "Finished its turn", at: d.live?.since || d.updated_at, key: d.id });
+    else if (s === "error" && open) items.push({ d, kind: "error", line: d.live?.msg || "Failed", at: d.live?.since, key: d.id });
+    else if (s === "done" && open)
+      items.push({ d, kind: "done", line: firstLine(d.last_turn) || "Finished its turn", at: d.live?.since || d.updated_at, key: d.id });
   }
   const rank = { blocked: 0, review: 1, message: 2, error: 3, done: 4 };
   return items.sort((a, b) => rank[a.kind] - rank[b.kind] || (b.at || "").localeCompare(a.at || ""));
@@ -61,7 +67,26 @@ export function InboxView() {
   const items = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.review?.prs ?? []), [hub.state]);
   const [sel, setSel] = useState<string | null>(null);
   const menu = useMenu();
+  const phone = usePhone();
   const current = items.find((i) => i.key === sel) ?? items[0];
+  // On a phone each kind swipes to what it's waiting for: a message files,
+  // a prompt approves or denies (a tap, never a full swipe), and a docket's
+  // turn or failure closes.
+  const swipes = (it: Item): { leading: SwipeAction[]; trailing: SwipeAction[]; full: boolean } => {
+    if (it.kind === "message" && it.m) {
+      const id = it.m.id;
+      return { leading: [], trailing: [{ key: "file", label: "File", icon: <IconCheck size={18} />, tone: "done", run: () => void hub.fileMessage(id) }], full: true };
+    }
+    if (it.kind === "review") return { leading: [], trailing: [], full: false };
+    const leading: SwipeAction[] =
+      it.kind === "blocked" && it.d.live?.answerable
+        ? [
+            { key: "approve", label: "Approve", icon: <IconCheck size={18} />, tone: "approve", run: () => void hub.answer(it.d, true) },
+            { key: "deny", label: "Deny", icon: <IconX size={18} />, tone: "deny", run: () => void hub.answer(it.d, false) },
+          ]
+        : [];
+    return { leading, trailing: it.d.entries ? swipeEnd(it.d, hub).slice(0, 1) : [], full: it.kind !== "blocked" };
+  };
 
   useEffect(() => {
     lastList.path = "/inbox";
@@ -97,6 +122,7 @@ export function InboxView() {
         {counts.blocked > 0 && <span className="inbox-sum blocked">{counts.blocked} waiting on you</span>}
         {counts.error > 0 && <span className="inbox-sum error">{counts.error} failed</span>}
       </header>
+      <LargeTitle title="Inbox" count={items.length} />
       {items.length === 0 ? (
         <div className="view-empty inbox-zero">
           <IconInbox size={28} />
@@ -106,7 +132,8 @@ export function InboxView() {
       ) : (
         <div className="split">
           <div className="split-list">
-            {items.map((it) => (
+            {items.map((it) => {
+              const el = (
               <a
                 key={it.key}
                 data-inbox={it.key}
@@ -165,7 +192,15 @@ export function InboxView() {
                   )}
                 </span>
               </a>
-            ))}
+              );
+              if (!phone) return el;
+              const sw = swipes(it);
+              return (
+                <SwipeRow key={it.key} leading={sw.leading} trailing={sw.trailing} fullTrailing={sw.full} onLongPress={it.d.entries ? () => menu.open(new DOMRect(), rowMenu(it.d, hub, pane), it.d.id) : undefined}>
+                  {el}
+                </SwipeRow>
+              );
+            })}
           </div>
           <div className="split-detail">
             {current && current.d.entries > 0 ? (
