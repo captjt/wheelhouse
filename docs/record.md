@@ -113,6 +113,7 @@ Verify adds. The protocols write others (`question`, `decision`,
 | `release` | hub | The session no longer holds the docket: `reason` |
 | `check` | hub | A witnessed check (docs/verify.md): `name`, `command`, `required`, `repo`, `head` (the commit it ran at), `base`, `dirty`, `patch` (`sha256:` of the diff it covered), `exit` (null when it timed out), `ok`, `ms`, `output` (`sha256:` of its output), `run`, `why`. `blobs` names the output and the patch |
 | `verdict` | agent | A checker's judgment of a Build: `role`, `n`, `verdict`, `findings`, `head`, `round`, `independent` (its session and pane differ from the builder's), and the builder's `session` and `block` |
+| `standing` | person | A decision made standing for a repo: `repo`, `key`, `question`, `answer`; `body` is the rule as it went into the repo's notes |
 | `artifact` | hub, agent, person | Something the work made, kept with the docket. `body` is its title. A file: `name`, `media_type`, `size`, `digest` (`sha256:<hex>`, also in `blobs`). A link: `url`, `provider` (`claude`). Also `source` (`review`, `build`, `agent`, `turn`, `you`), `group` (`Round 3`, `Plan`), and per source `round`, `role`, `reviewer` |
 
 Status is one of `todo`, `in_progress`, `done`, `dropped`.

@@ -28,6 +28,21 @@ They're worked out from the config, so they always say what will happen.
 | Guides & briefs | The Markdown each agent is given: edit, compare with the built-in, reset, or write a guide of your own |
 | Review | Posting (ask or auto) and pausing, as before |
 
+## Standing decisions
+
+A decision you answered on one docket can stand for its repo: **Make
+standing** on the decision (or `POST /api/dockets/D-6/standing {key}`)
+adds it to the repo's notes, under "Standing decisions", with where it was
+decided:
+
+```
+- How many retries? 3: To match the API docs. (Decided on D-6, November 18.)
+```
+
+The notes go into every later brief in that repo, the builder's,
+checker's and reviewers' alike, and Settings → Repos shows and edits them.
+The docket keeps a `standing` entry saying you made it so.
+
 ## Where it's kept
 
 Values go in `~/.config/wheelhouse/settings.json` (`$WH_SETTINGS`),

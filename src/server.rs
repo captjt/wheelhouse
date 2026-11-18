@@ -44,6 +44,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/set", post(set))
         .route("/api/dockets/{id}/open", post(open_in_rex))
         .route("/api/dockets/{id}/hold", post(hold))
+        .route("/api/dockets/{id}/standing", post(standing))
         .route("/api/dockets/{id}/check", post(run_checks))
         .route("/api/dockets/{id}/screen", get(screen))
         .route("/api/dockets/{id}/send", post(send))
@@ -470,6 +471,52 @@ async fn hold(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
     let s = core.append(&id, "set", &Who::Owner, None, data).map_err(internal)?;
     core.build.check_now.notify_one();
     Ok(Json(json!({ "seq": s.seq })))
+}
+
+#[derive(Deserialize)]
+struct Standing {
+    /// The decision's key, as the docket's decisions name it.
+    key: String,
+}
+
+/// Make a docket's decision standing for its repo: it joins the repo's
+/// notes, which every later brief there includes, reviewers' too.
+async fn standing(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<Standing>) -> ApiResult {
+    let (d, repo) = {
+        let core = shared.lock();
+        let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+        let read: Vec<record::Entry> = core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| s.entry().ok()).collect();
+        let d = crate::decisions::of(&read).into_iter().find(|d| d.key == req.key).ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no decision {}", req.key)))?;
+        let repo = crate::build::get(&core, &id)
+            .ok()
+            .flatten()
+            .map(|t| t.repo)
+            .or_else(|| st.review.as_ref().and_then(|r| r.key.split('#').next().map(str::to_string)))
+            .or_else(|| st.agent.as_ref().and_then(|a| a.cwd.as_deref()).and_then(|c| core.build.repo_of(&crate::paths::expand(c))).map(|(r, _)| r));
+        (d, repo)
+    };
+    let repo = repo.ok_or_else(|| fail(StatusCode::CONFLICT, format!("{id} isn't in a repo Wheelhouse knows, so there's no repo to make it standing for")))?;
+    if d.answer.is_none() {
+        return Err(fail(StatusCode::CONFLICT, "it has no answer yet"));
+    }
+    let rule = crate::decisions::rule(&d, &id);
+    let view = settings_now(&shared);
+    let mut patch = json!({});
+    for part in ["build", "review"] {
+        let Some(r) = view[part]["config"]["repos"].get(&repo) else { continue };
+        if let Some(notes) = crate::decisions::with_rule(r["notes"].as_str().unwrap_or(""), &rule) {
+            patch[part] = json!({ "repos": { &repo: { "notes": notes } } });
+        }
+    }
+    if patch.as_object().is_some_and(|o| o.is_empty()) {
+        return Err(fail(StatusCode::CONFLICT, format!("{repo} has no notes in Build's or Review's config, or the decision's there already")));
+    }
+    crate::settings::change(&patch).map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
+    let mut core = shared.lock();
+    core.build.config = None;
+    core.review.config = None;
+    let s = core.append(&id, "standing", &Who::Owner, Some(rule.clone()), json!({ "repo": repo, "key": d.key, "question": d.question, "answer": d.answer })).map_err(internal)?;
+    Ok(Json(json!({ "seq": s.seq, "repo": repo, "rule": rule })))
 }
 
 /// Run a docket's witnessed checks now; the entries say how they went.
