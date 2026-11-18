@@ -22,8 +22,11 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
   checker that merges their drafts and rates the merge risk, and a post
   you approve. The round's reports stay with the docket.
 - **Build.** A docket's intent becomes a PR: a builder plans and builds, a
-  checker checks, and you approve the plan and the PR before anything
-  reaches GitHub.
+  checker checks, blind pre-reviewers can look before it opens, and you
+  approve the plan and the PR before anything reaches GitHub. Once it's
+  open, review comments, failing checks and a base that moved become
+  rounds of fixes, with one reply per thread you approve before it posts.
+  Linear issues with a label (or in your cycle) can start one.
 - **Recap.** What happened today, this week, or in 30 days, as a standup
   note.
 
@@ -149,7 +152,9 @@ Both are off until you set them up.
   docket. See [docs/review.md](docs/review.md).
 - **Build:** copy [examples/build.lua](examples/build.lua) to
   `~/.config/wheelhouse/build.lua`. Press **Build it** on a docket with an
-  intent, or `wh build start D-12`. See [docs/build.md](docs/build.md).
+  intent, or `wh build start D-12`. Pre-review (`prereview`), Linear intake
+  (`sources.linear`) and how rounds update the base (`update`) are set
+  there too. See [docs/build.md](docs/build.md).
 
 Only the hub writes to GitHub, with your `gh` login, and only what you
 approved: agents' panes have no GitHub token, and their pushes fail.
@@ -252,7 +257,8 @@ doesn't.
 ## Develop
 
 ```sh
-just check          # what a pull request needs to pass
+just check          # what a pull request needs to pass (there's no CI: run it)
+just e2e            # a Build end to end, with stand-ins for Rex, gh, GitHub and Linear
 just app            # build Wheelhouse.app into ~/Applications
 just dev            # the web app with hot reload on :5180, against a running hub
 just screenshots    # the README's images, from a made-up world
