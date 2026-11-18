@@ -81,6 +81,14 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [x] GitHub issues assigned to you with a label start on their own
       (`sources.github.label`)
 - [x] The Builds view and a Build panel on each docket
+- [x] After the PR opens, address rounds: review threads, review bodies and
+      comments that need an answer, failing checks (with the failing part
+      of their logs), and a base that moved become a round of fixes, with
+      one reply per thread as the `pr-reply` contract writes them, behind a
+      **Push and reply** gate. The base merges in (no force-push), or with
+      `update = "rebase"` is rebased and pushed with a lease.
+- [x] `scripts/build-e2e.sh`: a Build end to end on a scratch hub, with
+      stand-in agents, gh and origin
 
 ### Recap and the phone
 
@@ -111,11 +119,6 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### Build after the PR opens
 
-- [ ] Address rounds: review comments on the PR become a round of fixes,
-      with one reply per thread, behind a **Push & reply** gate
-- [ ] CI: a failing check on the PR starts a fix round
-- [ ] Rebase: when the base moves on and the PR falls behind or conflicts,
-      a rebase round, pushed only after you approve it
 - [ ] Pre-review: a Review of the branch before the PR opens, with your
       own reviewers, posting nothing
 - [ ] Build run live on more real repos

@@ -17,13 +17,13 @@ use crate::review::{agentcli, github};
 
 const PLAN_PROMPT: &str = "Read .tmp/ground-rules.md, then .tmp/tasks/plan.md, and do the task.";
 /// An agent idle this long with its work unfinished has stalled.
-const STALLED: i64 = 600;
+pub(super) const STALLED: i64 = 600;
 
-fn now() -> String {
+pub(super) fn now() -> String {
     crate::time::now()
 }
 
-fn short(s: &str) -> String {
+pub(super) fn short(s: &str) -> String {
     s.chars().take(7).collect()
 }
 
@@ -31,11 +31,11 @@ fn epoch() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-fn att(kind: &str, text: impl Into<String>) -> Option<Attention> {
+pub(super) fn att(kind: &str, text: impl Into<String>) -> Option<Attention> {
     Some(Attention { kind: kind.into(), text: text.into() })
 }
 
-fn wt(t: &Task) -> PathBuf {
+pub(super) fn wt(t: &Task) -> PathBuf {
     PathBuf::from(t.worktree.clone().unwrap_or_default())
 }
 
@@ -213,7 +213,7 @@ pub async fn prep(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     Ok(())
 }
 
-fn brief(name: &str) -> String {
+pub(super) fn brief(name: &str) -> String {
     let own = crate::review::config::dir().join("briefs/build").join(name);
     if let Ok(s) = std::fs::read_to_string(own) {
         return s;
@@ -222,12 +222,13 @@ fn brief(name: &str) -> String {
         "ground-rules.md" => include_str!("../../briefs/build/ground-rules.md"),
         "plan.md" => include_str!("../../briefs/build/plan.md"),
         "build.md" => include_str!("../../briefs/build/build.md"),
+        "address.md" => include_str!("../../briefs/build/address.md"),
         _ => include_str!("../../briefs/build/check.md"),
     }
     .to_string()
 }
 
-fn vars(cfg: &Config, t: &Task, login: &str) -> crate::review::briefs::Vars {
+pub(super) fn vars(cfg: &Config, t: &Task, login: &str) -> crate::review::briefs::Vars {
     let mut v = crate::review::briefs::Vars::new();
     let repo = cfg.repos.get(&t.repo);
     v.insert("KEY", t.key.clone());
@@ -277,7 +278,7 @@ fn app_of(agent: &str) -> &'static str {
 }
 
 /// Open a role's pane behind the wall and hand it `prompt`.
-async fn open_role(shared: &Shared, cfg: &Config, t: &mut Task, role: &str, prompt: &str, place: Place<'_>) -> Result<()> {
+pub(super) async fn open_role(shared: &Shared, cfg: &Config, t: &mut Task, role: &str, prompt: &str, place: Place<'_>) -> Result<()> {
     let w = wt(t);
     let r = if role == "builder" { &cfg.builder } else { &cfg.checker };
     let view = json!({ "key": t.key, "title": t.title, "repo": t.repo, "source": t.source });
@@ -366,7 +367,7 @@ pub async fn start(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
 // ---- Asks ----
 
 /// Ask you something on the docket; a re-ask replaces the last one.
-fn send_ask(shared: &Shared, t: &mut Task, what: &str, subject: &str, body: &str, options: &[&str]) -> Result<()> {
+pub(super) fn send_ask(shared: &Shared, t: &mut Task, what: &str, subject: &str, body: &str, options: &[&str]) -> Result<()> {
     let mut core = shared.lock();
     let version = t.asks.get(what).map_or(0, |a| a.version) + 1;
     if let Some(old) = t.asks.get(what) {
@@ -376,6 +377,13 @@ fn send_ask(shared: &Shared, t: &mut Task, what: &str, subject: &str, body: &str
     let m = crate::messages::ask(&mut core, &t.docket, subject, body, opts.clone(), json!({ "ask": what, "version": version, "protocol": "build" }))?;
     t.asks.insert(what.to_string(), super::Ask { message: m.id, version, options: opts });
     Ok(())
+}
+
+/// Close one ask that's moot now.
+pub(super) fn close_ask(shared: &Shared, t: &mut Task, what: &str, why: &str) {
+    if let Some(a) = t.asks.remove(what) {
+        let _ = shared.lock().store.set_message_status(a.message, "done", Some(why));
+    }
 }
 
 fn close_asks(shared: &Shared, t: &mut Task) {
@@ -388,7 +396,7 @@ fn close_asks(shared: &Shared, t: &mut Task) {
 }
 
 /// Send the builder a prompt now if it's free, else keep it for later.
-async fn tell_builder(shared: &Shared, t: &mut Task, text: &str, status: &str) -> Result<()> {
+pub(super) async fn tell_builder(shared: &Shared, t: &mut Task, text: &str, status: &str) -> Result<()> {
     let w = wt(t);
     if builder_free(shared, t) {
         set_status(&w, status)?;
@@ -424,7 +432,11 @@ pub async fn step(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<Option<
     };
     for (what, r) in answers {
         t.asks.remove(&what);
-        answer(shared, cfg, t, &what, r).await?;
+        if what == "push" {
+            super::address::answer_push(shared, cfg, t, r).await?;
+        } else {
+            answer(shared, cfg, t, &what, r).await?;
+        }
         if t.state != "active" {
             return Ok(None);
         }
@@ -435,7 +447,7 @@ pub async fn step(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<Option<
     let bpane = pane(shared, &t.builder);
     let free = bpane.as_ref().is_some_and(|(s, _)| s != "working" && s != "blocked");
     let phase = t.phase().to_string();
-    if matches!(phase.as_str(), "planning" | "building") {
+    if matches!(phase.as_str(), "planning" | "building" | "addressing") {
         if bpane.is_none() && bstat.starts_with("WORKING") {
             return Ok(att("pane-closed", "the builder's pane closed mid-task"));
         }
@@ -473,6 +485,26 @@ pub async fn step(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<Option<
                 built(shared, cfg, t).await?;
             } else if bstat.starts_with("WORKING") && idle_for(bpane.as_ref().and_then(|p| p.1.as_deref())).is_some_and(|s| s >= STALLED) {
                 return Ok(att("stalled", "the builder went idle without finishing; look at its pane"));
+            }
+        }
+        "addressing" => {
+            let idle = idle_for(bpane.as_ref().and_then(|p| p.1.as_deref()));
+            return super::address::step(shared, cfg, t, &bstat, free, idle).await;
+        }
+        "pushing" => {
+            if let Err(e) = super::address::push(shared, cfg, t).await.and_then(|a| a.map_or(Ok(()), |a| Err(anyhow!(a.text)))) {
+                let e = format!("{e:#}");
+                if t.phase() == "pushing" {
+                    super::address::ask_push(shared, t)?;
+                    let _ = shared.lock().append(
+                        &t.docket,
+                        "observed",
+                        &Who::Hub,
+                        Some(format!("Pushing round {} failed: {e}", t.rounds)),
+                        json!({ "what": "build-attention", "kind": "error" }),
+                    );
+                }
+                return Ok(att("error", format!("round {}: {e}", t.rounds)));
             }
         }
         "checking" => {
@@ -788,7 +820,7 @@ async fn built(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     start_check(shared, cfg, t).await
 }
 
-async fn start_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
+pub(super) async fn start_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     let w = wt(t);
     let head = git(&w, &["rev-parse", "HEAD"]).await?.trim().to_string();
     let old = t.built_head.clone();
@@ -799,20 +831,25 @@ async fn start_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     let n = t.check_n;
     let checker_open = pane(shared, &t.checker).is_some();
     if checker_open && t.checker.session.is_some() {
+        let round = if t.round.is_some() { super::address::check_note(t) } else { String::new() };
         let text = format!(
-            "The builder changed the branch since your last check ({}..{}). Check it again as .tmp/tasks/check.md says. This is check {n}: write .tmp/check/check-{n}.json.",
+            "The builder changed the branch since your last check ({}..{}). Check it again as .tmp/tasks/check.md says. This is check {n}: write .tmp/check/check-{n}.json.{round}",
             old.as_deref().map(short).unwrap_or_default(),
             short(&head)
         );
         let (s, b) = (t.session_id.clone().unwrap_or_default(), t.checker.block.clone().unwrap_or_default());
         panes::deliver(shared, &s, &b, &text).await?;
     } else {
-        let prompt = format!("Read .tmp/ground-rules.md, then .tmp/tasks/check.md, and do it. This is check {n}.");
+        let round = if t.round.is_some() { super::address::check_note(t) } else { String::new() };
+        let prompt = format!("Read .tmp/ground-rules.md, then .tmp/tasks/check.md, and do it. This is check {n}.{round}");
         let anchor = t.builder.block.clone();
         match anchor {
             Some(a) if panes::state(shared, &a).is_some() => open_role(shared, cfg, t, "checker", &prompt, Place::Beside { anchor: &a, dir: "right" }).await?,
             _ => open_role(shared, cfg, t, "checker", &prompt, Place::Tab).await?,
         }
+    }
+    if t.round.is_some() {
+        set_status(&w, "WORKING addressing").ok();
     }
     t.phase = Some("checking".into());
     let mut core = shared.lock();
@@ -821,7 +858,7 @@ async fn start_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
 }
 
 /// Keep a file the Build made on its docket; a failure is logged, never the Build's.
-fn keep(core: &mut crate::hub::Core, t: &Task, title: String, name: String, bytes: Vec<u8>, group: &str, extra: Value) {
+pub(super) fn keep(core: &mut crate::hub::Core, t: &Task, title: String, name: String, bytes: Vec<u8>, group: &str, extra: Value) {
     let a = crate::artifacts::New { title, name, bytes: Some(bytes), url: None, source: "build".into(), group: Some(group.into()), extra };
     if let Err(e) = crate::artifacts::attach(core, &t.docket, &Who::Hub, a) {
         say!("build: {}: keeping a file: {e:#}", t.docket);
@@ -860,6 +897,18 @@ async fn after_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
                 keep(&mut core, t, title, file, bytes, "Checks", json!({ "role": role, "n": n, "head": head }));
             }
         }
+    }
+    if t.round.is_some() {
+        if verdict == "fix" && !findings.is_empty() && t.fix_used < cfg.fix_loops {
+            t.fix_used += 1;
+            t.phase = Some("addressing".into());
+            let text = format!(
+                "The checker found problems with round {}: .tmp/check/check-{n}.json (and its report, .tmp/check/report-{n}.md). Fix each one, or say in the report why it stands; update the replies if they change. Commit, and write BUILT. This is fix round {} of {}.",
+                t.rounds, t.fix_used, cfg.fix_loops
+            );
+            return tell_builder(shared, t, &text, "WORKING addressing").await;
+        }
+        return super::address::ask_push(shared, t);
     }
     if verdict == "fix" && !findings.is_empty() && t.fix_used < cfg.fix_loops {
         t.fix_used += 1;
@@ -1104,7 +1153,7 @@ pub async fn open_pr(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     Ok(())
 }
 
-async fn close_panes(shared: &Shared, t: &mut Task) {
+pub(super) async fn close_panes(shared: &Shared, t: &mut Task) {
     if let Some(s) = t.session_id.clone() {
         for a in [&t.builder, &t.checker] {
             if let Some(b) = a.block.as_deref().filter(|b| panes::state(shared, b).is_some()) {
@@ -1144,19 +1193,43 @@ async fn remove_worktree(shared: &Shared, t: &Task, branch_too: bool) {
 }
 
 /// An open PR merged or closed: clean up.
-pub async fn follow_pr(shared: &Shared, t: &mut Task) -> Result<()> {
-    let Some(n) = t.pr_number else { return Ok(()) };
-    let state = github::gh(&["pr", "view", &n.to_string(), "--repo", &t.repo, "--json", "state", "--jq", ".state"], None).await?.trim().to_string();
-    if state != "MERGED" && state != "CLOSED" {
-        return Ok(());
-    }
-    let merged = state == "MERGED";
+pub(super) async fn ended(shared: &Shared, t: &mut Task, merged: bool) -> Result<()> {
+    close_asks(shared, t);
     remove_worktree(shared, t, merged).await;
     t.state = if merged { "merged" } else { "closed" }.into();
+    t.phase = None;
     t.ended_at = Some(now());
     let mut core = shared.lock();
-    super::event(&mut core, &t.docket, &t.state.clone(), if merged { "Merged.".to_string() } else { "Closed without merging; the branch stays.".to_string() }, json!({ "pr": n }))?;
+    super::event(
+        &mut core,
+        &t.docket,
+        &t.state.clone(),
+        if merged { "Merged.".to_string() } else { "Closed without merging; the branch stays.".to_string() },
+        json!({ "pr": t.pr_number }),
+    )?;
     Ok(())
+}
+
+/// An open PR's step: your answer to "address it?" at once; GitHub on
+/// each poll, for its end and for anything new to address.
+pub async fn step_open(shared: &Shared, cfg: &Config, t: &mut Task, poll: bool) -> Result<Option<Attention>> {
+    let answers: Vec<(String, Reply)> = {
+        let core = shared.lock();
+        t.asks.iter().filter_map(|(what, a)| crate::messages::answer_to(&core, a.message).map(|m| (what.clone(), decide::read(&a.options, m.choice.as_deref(), &m.body)))).collect()
+    };
+    for (what, r) in answers {
+        t.asks.remove(&what);
+        if what == "address" {
+            super::address::answer(shared, cfg, t, r).await?;
+            if t.state != "open" {
+                return Ok(None);
+            }
+        }
+    }
+    if poll {
+        return super::address::follow(shared, cfg, t).await;
+    }
+    Ok(None)
 }
 
 #[cfg(test)]

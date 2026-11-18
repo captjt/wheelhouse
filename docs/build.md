@@ -60,6 +60,10 @@ In the app, **Build it** on a docket does the same as `wh build start`.
 | Preview | When there's something to see, `wh share` puts it on your tailnet | **Looks right / Needs work** |
 | Open gate | The PR as it will open: title, body, commits, the check | **Open PR / Needs changes / Discard** |
 | Open | Wheelhouse pushes the checked head and opens a draft PR with the plan | |
+| Follow | Each poll reads the PR: review threads, review bodies and comments that need an answer, failing checks, and whether the base moved on | **Address it / Not now** |
+| Round | The builder reopens on what's new: fixes, merges the base in, drafts a reply to each; the checker checks the fixes and the replies | |
+| Push gate | The round's commits, and every reply as it will post | **Push and reply / Needs changes / Drop the round** |
+| Push | Wheelhouse pushes the round, posts the replies from your account, and asks the reviewers again | |
 | End | Merged or closed: the worktree goes (the branch too, on merge) | |
 
 Approving the plan **is** approving the intent: its Intent, Acceptance and
@@ -125,8 +129,9 @@ the hub at another file.
 | `repos["owner/name"]` | `checkout`, `notes`, `base`, `plan` (`"full"`, `"summary"`, `false`). A repo in `review.lua` is already listed; `checkout` is required only for one that isn't. | `review.lua`'s repos |
 | `sources.github` | `{ label = "agent" }`: open issues assigned to you, in Build's repos, with the label start a Build | off |
 | `builder`, `checker` | `"claude"`, `"codex"`, or `{ agent, extra_args, effort }` | `"claude"`, `"claude"` |
-| `gates` | `plan`, `preview`, `open`: `"ask"` or `"auto"` | `"ask"` |
-| `fix_loops` | fix rounds after the checker finds something | 2 |
+| `gates` | `plan`, `preview`, `open`, `address`, `push`: `"ask"` or `"auto"` | `"ask"` |
+| `update` | how a round brings the branch up to date with its base: `"merge"`, or `"rebase"` (pushed with a lease) | `"merge"` |
+| `fix_loops` | fix rounds after the checker finds something (each address round has its own) | 2 |
 | `max_decisions` | decisions a plan may leave open at once | 3 |
 | `max_tasks` | Builds working at once (one waiting on a gate doesn't count) | 2 |
 | `poll_seconds` | how often to check GitHub for labeled issues and open PRs | 180 |
@@ -146,9 +151,54 @@ Planned, not read yet:
 - `gates.start = { label = …, cycle = … }`: whether those Linear starts ask
   you first.
 
-## Next
+## After it opens
 
-After the PR opens, Build follows it until it merges or closes. Rounds that
-answer review comments (one reply per thread), fix CI, and rebase are next,
-with pre-review through the Review protocol before opening, and Linear
-intake. [roadmap.md](roadmap.md) has the order.
+Build follows the PR until it merges or closes. Each poll reads it the way
+the `pr-reply` contract does, so what counts as open is what a person
+answering by hand would answer:
+
+- review threads not resolved, whose last comment isn't yours;
+- review bodies, and conversation comments from people (not bots), that no
+  later comment of yours links to;
+- checks that failed on the PR's head, once every check has finished;
+- the base, when the PR is behind it or conflicts with it.
+
+Something new is an ask, with each thing in a line. **Address it** starts a
+round; **Not now** sets these aside, and anything newer asks again. Words
+with Address it go to the builder too. With `gates.address = "auto"`, a
+round starts without asking.
+
+A round reopens the builder in its own session, so it remembers the work.
+Its brief (`briefs/build/address.md`) is the contract: fix what's valid
+with a test, leave what isn't and say why, find each failing check's cause
+in its log (Wheelhouse fetches the failing part of each GitHub Actions
+job's log), bring the branch up to date with the base, commit, and write
+`.tmp/address/round-N/replies.json`: one reply per thread, one answer per
+review body or comment, and the reviewers to ask again. Wheelhouse
+refuses a draft that skips anything open, speaks in the first person,
+mentions `.tmp/`, or names a commit that isn't on the branch, and says why.
+
+The checker checks the round's commits against what reviewers and CI said,
+and that each reply is true to the change it names. Then the push gate
+shows the commits and every reply exactly as it will post, footer and all.
+**Push and reply** pushes (fast-forward), posts the thread replies, one
+comment answering the reviews and comments (each under a link to what it
+answers), and asks the reviewers for another review, from your account.
+What posts is what you saw: if the replies change after you're asked, or
+the branch moves, nothing goes out. **Drop the round** throws its commits
+away. Threads are never resolved: the reviewers do that.
+
+`update = "rebase"` rebases instead of merging the base in, and pushes the
+rebased branch with a lease: only over the head the round started from,
+never over anyone's newer commits.
+
+Pre-review (a Review of the branch before the PR opens) and Linear intake
+are next. [roadmap.md](roadmap.md) has the order.
+
+## Trying it
+
+`scripts/build-e2e.sh` (`just e2e`) runs a Build end to end on a scratch
+hub, with a made-up Rex and gh and a local origin: the plan, the check,
+opening the PR, a round on review feedback and a failing check (a reply in
+the first person is refused first), a round on a base that moved, and the
+merge. It plays the agents and you, and checks what would reach GitHub.

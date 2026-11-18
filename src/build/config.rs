@@ -34,7 +34,9 @@ pub struct Config {
     pub github_label: Option<String>,
     pub builder: Role,
     pub checker: Role,
-    /// `ask` or `auto`, by gate: `start`, `plan`, `preview`, `open`.
+    /// `ask` or `auto`, by gate: `start`, `plan`, `preview`, `open`, and
+    /// after it opens, `address` (start a round) and `push` (push a round
+    /// and post its replies).
     pub gates: BTreeMap<String, String>,
     pub fix_loops: i64,
     pub max_decisions: i64,
@@ -47,6 +49,9 @@ pub struct Config {
     pub path_dirs: Vec<String>,
     pub caches: Vec<PathBuf>,
     pub mcp: bool,
+    /// How a round brings the branch up to date with its base: `merge` (no
+    /// force-push) or `rebase` (pushed with a lease).
+    pub update: String,
 }
 
 pub fn path() -> PathBuf {
@@ -101,8 +106,10 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
             Repo { checkout, notes: r["notes"].as_str().map(str::to_string).or(prev.map(|p| p.notes)).unwrap_or_default(), base: r["base"].as_str().map(str::to_string), plan },
         );
     }
-    let mut gates: BTreeMap<String, String> =
-        [("start", "auto"), ("plan", "ask"), ("preview", "ask"), ("open", "ask")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let mut gates: BTreeMap<String, String> = [("start", "auto"), ("plan", "ask"), ("preview", "ask"), ("open", "ask"), ("address", "ask"), ("push", "ask")]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     for (k, v) in raw["gates"].as_object().into_iter().flatten() {
         let v = match v {
             Value::String(s) => s.clone(),
@@ -141,7 +148,9 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
         fix_loops: raw["fix_loops"].as_i64().unwrap_or(2).max(0),
         max_decisions: raw["max_decisions"].as_i64().unwrap_or(3).max(1),
         max_tasks: raw["max_tasks"].as_u64().unwrap_or(2).max(1) as usize,
-        poll_seconds: raw["poll_seconds"].as_u64().unwrap_or(180).max(30),
+        // At least 30 seconds, for GitHub's sake; tests ask for less with
+        // WH_BUILD_POLL_SECONDS.
+        poll_seconds: std::env::var("WH_BUILD_POLL_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or_else(|| raw["poll_seconds"].as_u64().unwrap_or(180).max(30)),
         pr_draft: raw["pr"]["draft"].as_bool().unwrap_or(true),
         pr_reviewers: strings(&raw["pr"]["reviewers"]),
         branch_prefix: raw["branch_prefix"].as_str().unwrap_or("wh/").to_string(),
@@ -149,6 +158,11 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
         path_dirs,
         caches,
         mcp: raw["wall"]["mcp"].as_bool().unwrap_or(false),
+        update: match raw["update"].as_str() {
+            None | Some("merge") => "merge".into(),
+            Some("rebase") => "rebase".into(),
+            Some(o) => bail!("update is merge or rebase, not {o}"),
+        },
         raw,
     })
 }

@@ -265,7 +265,7 @@ func tokens(_ n: Int) -> String {
 func buildPhase(_ t: BuildTask) -> String {
     switch t.state {
     case "queued": return t.startError != nil ? "Didn't start" : "Queued"
-    case "open": return "PR open"
+    case "open": return t.asks.contains("address") ? "Feedback: your call" : t.rounds > 0 ? "PR open · \(plural(t.rounds, "round"))" : "PR open"
     case "merged": return "Merged"
     case "closed": return "Closed"
     case "discarded": return "Discarded"
@@ -274,6 +274,7 @@ func buildPhase(_ t: BuildTask) -> String {
     return [
         "planning": "Planning", "not_ready": "Not ready: your call", "plan_gate": "Plan: your call", "building": "Building",
         "checking": "Checking (check \(t.checkN))", "preview_gate": "Preview: your call", "open_gate": "Ready to open", "opening": "Opening",
+        "addressing": "Round \(t.round["n"].int ?? t.rounds): addressing", "push_gate": "Round \(t.round["n"].int ?? t.rounds): your call", "pushing": "Pushing",
     ][t.phase ?? ""] ?? "Working"
 }
 
@@ -305,7 +306,14 @@ struct BuildPanel: View {
                     }
                 }
                 .font(.system(size: 12.5))
-                if ["active", "queued", "open"].contains(t.state) {
+                if let n = t.round["n"].int {
+                    let round: [(String, [String])] = [("Feedback", []), ("Round \(n)", ["addressing"]), ("Check", ["checking"]), ("Your call", ["push_gate"]), ("Pushed", ["pushing"])]
+                    Steps(steps: round.map(\.0), at: round.firstIndex { $0.1.contains(t.phase ?? "") } ?? 1)
+                    if let sum = t.round["summary"].text {
+                        Text("Round \(n): \(sum)\(t.round["update"].str.map { $0 == "rebase" ? " · rebasing onto \(t.base ?? "the base")" : " · merging \(t.base ?? "the base")" } ?? "")")
+                            .font(.system(size: 12)).foregroundStyle(K.muted)
+                    }
+                } else if ["active", "queued", "open"].contains(t.state) {
                     let steps: [(String, [String])] = [("Plan", ["planning", "not_ready"]), ("Your call", ["plan_gate"]), ("Build", ["building"]), ("Check", ["checking", "preview_gate"]), ("Open", ["open_gate", "opening"])]
                     let at = t.state == "open" || t.state == "merged" ? steps.count : t.state == "queued" ? -1 : steps.firstIndex { $0.1.contains(t.phase ?? "") } ?? 0
                     Steps(steps: steps.enumerated().map { i, s in s.0 == "Check" && i == at && t.checkN > 0 ? "Check \(t.checkN)" : s.0 == "Your call" && i == at ? "Plan: your call" : s.0 }, at: at)

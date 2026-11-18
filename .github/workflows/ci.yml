@@ -37,3 +37,5 @@ jobs:
         run: brew install just luajit
       - name: just check
         run: just check
+      - name: A Build, end to end, with stand-ins
+        run: just e2e
