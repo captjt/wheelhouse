@@ -70,13 +70,30 @@ export const typing = (e: KeyboardEvent) => {
 };
 
 /** Keys while `active`: a map from key to handler. Ignored while typing. */
+// When G was last pressed: the key after it goes somewhere (G then D is All
+// dockets), so a list's own keys leave it alone. Without this, G D in the
+// Inbox would also deny the prompt under the cursor. Recorded in the
+// capture phase, before any list sees the key.
+let gAt = 0;
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "g" && !typing(e) && !e.metaKey && !e.ctrlKey && !e.altKey) gAt = Date.now();
+    },
+    true,
+  );
+}
+/** Whether this key is the second of a G chord. */
+export const afterG = (e: KeyboardEvent) => e.key !== "g" && Date.now() - gAt < 900;
+
 export function useKeys(map: Record<string, (e: KeyboardEvent) => void>, active = true) {
   const ref = useRef(map);
   ref.current = map;
   useEffect(() => {
     if (!active) return;
     const on = (e: KeyboardEvent) => {
-      if (typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (typing(e) || e.metaKey || e.ctrlKey || e.altKey || afterG(e)) return;
       if (document.querySelector(".modal-backdrop, .menu")) return;
       const f = ref.current[e.key];
       if (f) {

@@ -213,6 +213,8 @@ works from any app, and ⌘/ lists them all.
 | `G` then `I`, `A`, `D`, `X`, `N`, `R`, `B`, `P` | Inbox, Active, All, Done, Agents, Reviews, Builds, Recap |
 | `J`, `K`, `↩`, `Esc` | Move, open, back |
 | `S`, `R`, `M`, `O` | Status, rename, note, the agent's pane |
+| `A`, `D`, `1`–`6`, `E` | In the Inbox: approve or deny a prompt, pick a message's option, mark done |
+| `⌘,`, `G` then `S` | Settings |
 
 On a phone it's laid out natively: a tab bar, a docket that slides onto
 its list (swipe right to go back), rows that swipe to Done or Status, and
