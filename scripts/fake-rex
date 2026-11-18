@@ -1,8 +1,11 @@
 #!/bin/bash
-# A made-up Rex server, for screenshots and demos: it answers the calls the
-# hub makes from a world file ($WH_WORLD), so the hub follows that world,
-# never your own Rex. Point the hub at it with WH_REX. scripts/screenshots.sh
-# writes the world and runs the hub this way. (From rex-inbox's.)
+# A made-up Rex server, for screenshots, demos and tests: it answers the
+# calls the hub makes from a world file ($WH_WORLD), so the hub follows that
+# world, never your own Rex. Point the hub at it with WH_REX.
+# scripts/screenshots.sh and scripts/build-e2e.sh run the hub this way.
+# Opening a session or a pane adds one to the world, running an idle agent;
+# closing a pane takes it out. A test plays the agents by changing the world
+# and the worktree's files. (From rex-inbox's.)
 #
 # The world is JSON: {"sessions": [{"session_id", "label", "windows": [{"window_id",
 # "label", "blocks": [{"block_id", "label", "cwd", "process", "records": [...]}]}]}],
@@ -25,6 +28,22 @@ while [ $# -gt 0 ]; do
 done
 set -- "${args[@]}"
 
+# Change the world: a jq filter over the whole file, one writer at a time.
+edit() { # filter [jq args...]
+  local f=$1
+  shift
+  until mkdir "$world.lock" 2>/dev/null; do sleep 0.05; done
+  if jq "$@" "$f" "$world" >"$world.tmp"; then mv "$world.tmp" "$world"; fi
+  rmdir "$world.lock"
+}
+
+# A new pane runs an agent that's ready for its prompt: idle, as Claude Code
+# reports itself once it's up.
+pane_json() { # block label cwd
+  jq -nc --arg b "$1" --arg l "$2" --arg c "$3" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{block_id: $b, label: $l, cwd: $c, process: "claude", records: [{state: "idle", app: "claude-code", updated_at: $at}]}'
+}
+
 # jq over this server's part of the world: $w.
 q() { # filter [jq args...]
   local f=$1
@@ -42,8 +61,61 @@ case "${1:-}" in
     jq -c '{hosts: [(.hosts // {}) | keys[] | {host: {label: .}}], home: {label: "mac", this_machine: true}}' "$world"
     ;;
   events)
-    # Nothing ever happens in this world. Stay until the hub goes.
-    while kill -0 "$PPID" 2>/dev/null; do sleep 1; done
+    # Something happens only when the world file changes (a pane opened, an
+    # agent's status changed): then the hub reads it all again. Stay until
+    # the hub goes.
+    last=$(md5 -q "$world" 2>/dev/null || true)
+    while kill -0 "$PPID" 2>/dev/null; do
+      now=$(md5 -q "$world" 2>/dev/null || true)
+      if [ "$now" != "$last" ]; then
+        last=$now
+        echo '{"type":"session_world_changed"}'
+      fi
+      sleep 0.4
+    done
+    ;;
+  new)
+    # new NAME -c CWD --window LABEL --json -- ARGV: a session with one pane
+    name=$2
+    shift 2
+    cwd=/ label=$name
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do
+      case $1 in -c) cwd=$2; shift ;; --window) label=$2; shift ;; esac
+      shift
+    done
+    n=$RANDOM
+    sid="session:$name" wid="window:$label-$n" bid="block:$label-$n"
+    pane=$(pane_json "$bid" "$label" "$cwd")
+    edit '.sessions += [{session_id: $s, label: $n, windows: [{window_id: $wi, label: $l, blocks: [$p]}]}]' \
+      --arg s "$sid" --arg n "$name" --arg wi "$wid" --arg l "$label" --argjson p "$pane"
+    jq -nc --arg s "$sid" --arg wi "$wid" --arg b "$bid" '{session_id: $s, initial_windows: [{window_id: $wi, block_ids: [$b]}]}'
+    ;;
+  run)
+    # run -s SESSION --label L -c CWD --focus=false --json [--split DIR -b ANCHOR] -- ARGV
+    shift
+    sid="" label=pane cwd=/ anchor=""
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do
+      case $1 in -s) sid=$2; shift ;; --label) label=$2; shift ;; -c) cwd=$2; shift ;; -b) anchor=$2; shift ;; esac
+      shift
+    done
+    n=$RANDOM
+    bid="block:$label-$n"
+    pane=$(pane_json "$bid" "$label" "$cwd")
+    if [ -n "$anchor" ]; then
+      # Beside the anchor, in its window.
+      wid=$(q '[$w.sessions[] | select(.session_id == $s) | .windows[] | select(any(.blocks[]; .block_id == $a)) | .window_id][0]' --arg s "$sid" --arg a "$anchor" | jq -r .)
+      edit '(.sessions[] | select(.session_id == $s) | .windows[] | select(.window_id == $wi) | .blocks) += [$p]' \
+        --arg s "$sid" --arg wi "$wid" --argjson p "$pane"
+    else
+      wid="window:$label-$n"
+      edit '(.sessions[] | select(.session_id == $s) | .windows) += [{window_id: $wi, label: $l, blocks: [$p]}]' \
+        --arg s "$sid" --arg wi "$wid" --arg l "$label" --argjson p "$pane"
+    fi
+    jq -nc --arg wi "$wid" --arg b "$bid" '{window_id: $wi, block_ids: [$b]}'
+    ;;
+  window)
+    # window rename: the label was set when the window opened.
+    echo '{}'
     ;;
   api)
     # api call [-s SESSION] METHOD -   (the params come on stdin)
@@ -69,6 +141,22 @@ case "${1:-}" in
     esac
     ;;
   block)
+    case $2 in
+      rename)
+        # block rename -s SESSION BLOCK NAME
+        edit '(.sessions[] | select(.session_id == $s) | .windows[].blocks[] | select(.block_id == $b) | .label) = $l' \
+          --arg s "$4" --arg b "$5" --arg l "$6"
+        echo '{}'
+        exit 0
+        ;;
+      close)
+        # block close -s SESSION BLOCK: the pane goes, and an empty window with it.
+        edit '(.sessions[] | select(.session_id == $s) | .windows) |= [.[] | .blocks |= [.[] | select(.block_id != $b)] | select(.blocks | length > 0)]' \
+          --arg s "$4" --arg b "$5"
+        echo '{}'
+        exit 0
+        ;;
+    esac
     # block call -s SESSION -b BLOCK METHOD ARGS
     case $7 in
       program_status) block "$4" "$6" '{records: .records}' ;;

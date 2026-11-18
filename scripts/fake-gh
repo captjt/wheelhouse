@@ -1,0 +1,95 @@
+#!/bin/bash
+# A made-up GitHub CLI, for tests: it answers the `gh` calls Build makes from
+# files in $WH_FAKE_GH, and writes down every write instead of making it.
+# Point the hub at it with WH_GH. scripts/build-e2e.sh uses it.
+#
+# $WH_FAKE_GH holds:
+#   login               the signed-in user (default: you)
+#   pr-N.json           what `gh api graphql` answers for PR N (the address
+#                       query), written by the test as the PR changes
+#   job-J.log           a failing job's log, for `gh run view --job J`
+#   prs.json            open PRs Build made: [{number, url, head, repo}]
+#   writes.jsonl        every write: a PR made, a reply, a comment, a request
+set -euo pipefail
+dir=${WH_FAKE_GH:?set WH_FAKE_GH to a directory}
+login=$(cat "$dir/login" 2>/dev/null || echo you)
+[ -f "$dir/prs.json" ] || echo '[]' >"$dir/prs.json"
+
+log() { # kind json
+  jq -c --arg k "$1" '. + {kind: $k}' <<<"$2" >>"$dir/writes.jsonl"
+}
+
+arg() { # name args...: the value after --name
+  local want=$1
+  shift
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "$want" ]; then
+      echo "$2"
+      return
+    fi
+    shift
+  done
+}
+
+case "${1:-} ${2:-}" in
+  "auth git-credential")
+    # A local origin needs no credentials.
+    cat >/dev/null || true
+    ;;
+  "api user")
+    echo "$login"
+    ;;
+  "api graphql")
+    pr=""
+    for a in "$@"; do case $a in pr=*) pr=${a#pr=} ;; esac; done
+    if [ -f "$dir/pr-$pr.json" ]; then cat "$dir/pr-$pr.json"; else echo "gh: no PR $pr" >&2; exit 1; fi
+    ;;
+  "api -X")
+    path=$4
+    body=$(cat)
+    case $path in
+      */comments/*/replies)
+        id=${path%/replies}
+        id=${id##*/}
+        log reply "$(jq -c --arg id "$id" '{comment_id: $id, body}' <<<"$body")"
+        echo '{}'
+        ;;
+      */issues/*/comments)
+        n=$(echo "$path" | sed 's|.*/issues/\([0-9]*\)/comments|\1|')
+        log comment "$(jq -c --arg n "$n" '{pr: $n, body}' <<<"$body")"
+        echo "https://github.com/acme/api/pull/$n#issuecomment-$RANDOM"
+        ;;
+      */requested_reviewers)
+        log rerequest "$(jq -c '{reviewers}' <<<"$body")"
+        echo '{}'
+        ;;
+      *) echo "gh: not in the stand-in: api -X POST $path" >&2; exit 1 ;;
+    esac
+    ;;
+  "pr list")
+    head=$(arg --head "$@")
+    jq -c --arg h "$head" '[.[] | select(.head == $h) | {number, url}]' "$dir/prs.json"
+    ;;
+  "pr create")
+    repo=$(arg --repo "$@")
+    head=$(arg --head "$@")
+    title=$(arg --title "$@")
+    body=$(cat)
+    n=45
+    url="https://github.com/$repo/pull/$n"
+    jq --arg h "$head" --arg u "$url" --arg r "$repo" --argjson n "$n" '. += [{number: $n, url: $u, head: $h, repo: $r}]' "$dir/prs.json" >"$dir/prs.tmp" && mv "$dir/prs.tmp" "$dir/prs.json"
+    log pr "$(jq -nc --arg r "$repo" --arg h "$head" --arg t "$title" --arg b "$body" --argjson draft "$(printf '%s\n' "$@" | grep -qx -- --draft && echo true || echo false)" '{repo: $r, head: $h, title: $t, body: $b, draft: $draft}')"
+    echo "$url"
+    ;;
+  "run view")
+    job=$(arg --job "$@")
+    cat "$dir/job-$job.log" 2>/dev/null || { echo "gh: no log for job $job" >&2; exit 1; }
+    ;;
+  "search issues")
+    echo '[]'
+    ;;
+  *)
+    echo "gh: not in the stand-in: $*" >&2
+    exit 1
+    ;;
+esac

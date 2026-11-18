@@ -260,7 +260,10 @@ struct BuildTask: Hashable, Identifiable {
     var startError: String? { j["start_error"].text }
     var updatedAt: String? { j["updated_at"].text }
     var attention: Attention? { j["attention"].object == nil ? nil : Attention(j: j["attention"]) }
-    var needsYou: Bool { attention != nil || (!asks.isEmpty && state == "active") }
+    var needsYou: Bool { attention != nil || (!asks.isEmpty && (state == "active" || state == "open")) }
+    /// Address rounds since the PR opened, and the one in progress.
+    var rounds: Int { j["rounds"].int ?? 0 }
+    var round: JSON { j["round"] }
     var finished: Bool { ["merged", "closed", "discarded"].contains(state) }
 }
 

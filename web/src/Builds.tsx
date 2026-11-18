@@ -11,7 +11,7 @@ export function buildPhase(t: BuildTask): string {
     case "queued":
       return t.start_error ? "Didn't start" : "Queued";
     case "open":
-      return "PR open";
+      return t.asks.includes("address") ? "Feedback: your call" : t.rounds ? `PR open · ${t.rounds} round${t.rounds === 1 ? "" : "s"}` : "PR open";
     case "merged":
       return "Merged";
     case "closed":
@@ -29,11 +29,14 @@ export function buildPhase(t: BuildTask): string {
       preview_gate: "Preview: your call",
       open_gate: "Ready to open",
       opening: "Opening",
+      addressing: `Round ${t.round?.n ?? t.rounds ?? 1}: addressing`,
+      push_gate: `Round ${t.round?.n ?? t.rounds ?? 1}: your call`,
+      pushing: "Pushing",
     }[t.phase ?? ""] ?? "Working"
   );
 }
 
-const needsYou = (t: BuildTask) => !!t.attention || (t.asks.length > 0 && t.state === "active");
+const needsYou = (t: BuildTask) => !!t.attention || (t.asks.length > 0 && (t.state === "active" || t.state === "open"));
 
 export function buildLive(t: BuildTask): string {
   if (t.attention) return t.attention.kind === "blocked" ? "blocked" : "error";
@@ -51,7 +54,29 @@ const STEPS: [string, string[]][] = [
   ["Open", ["open_gate", "opening"]],
 ];
 
+/** An address round's steps, once the PR is open. */
+const ROUND: [string, string[]][] = [
+  ["Feedback", []],
+  ["Fix", ["addressing"]],
+  ["Check", ["checking"]],
+  ["Your call", ["push_gate"]],
+  ["Pushed", ["pushing"]],
+];
+
 function Steps({ t }: { t: BuildTask }) {
+  if (t.round) {
+    const at = ROUND.findIndex(([, ps]) => ps.includes(t.phase ?? ""));
+    return (
+      <div className="rv-steps">
+        {ROUND.map(([s], i) => (
+          <span key={s} className={`rv-step${i < at ? " done" : i === at ? " now" : ""}`}>
+            <span className="rv-dot" />
+            {s === "Fix" ? `Round ${t.round!.n}` : s}
+          </span>
+        ))}
+      </div>
+    );
+  }
   const at = t.state === "open" || t.state === "merged" ? STEPS.length : t.state === "queued" ? -1 : STEPS.findIndex(([, ps]) => ps.includes(t.phase ?? ""));
   return (
     <div className="rv-steps">
@@ -108,6 +133,8 @@ export function BuildPanel({ d }: { d: Docket }) {
         )}
       </div>
       {t.state === "active" || t.state === "queued" || t.state === "open" ? <Steps t={t} /> : <div className="rv-state muted small">{buildPhase(t)}{t.why ? `: ${t.why}` : ""}</div>}
+      {t.round?.summary && <div className="rv-state muted small">Round {t.round.n}: {t.round.summary}{t.round.update ? ` · ${t.round.update === "rebase" ? "rebasing onto" : "merging"} ${t.base ?? "the base"}` : ""}</div>}
+      {t.state === "open" && !t.round && (t.rounds ?? 0) > 0 && <div className="rv-state muted small">{t.rounds} address round{t.rounds === 1 ? "" : "s"} pushed</div>}
       {t.attention && (
         <div className={`callout ${t.attention.kind === "blocked" ? "callout-blocked" : "callout-error"}`}>
           <LiveIcon state={t.attention.kind === "blocked" ? "blocked" : "error"} />

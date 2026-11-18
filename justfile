@@ -28,6 +28,11 @@ check: deps
 check-app:
     cd ./mac && swift test && swift build -c release
 
+# A Build end to end on a scratch hub, with stand-ins for Rex, gh and
+# GitHub: the plan, the PR, two address rounds, and the merge.
+e2e:
+    scripts/build-e2e.sh
+
 # Build Wheelhouse.app and put it in ~/Applications.
 app:
     ./mac/build.sh --install

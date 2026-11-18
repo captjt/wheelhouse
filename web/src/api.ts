@@ -189,6 +189,11 @@ export type BuildTask = {
   updated_at?: string | null;
   tokens?: number | null;
   attention?: { kind: string; text: string } | null;
+  /** Address rounds since the PR opened, and the one in progress. */
+  rounds?: number;
+  round?: { n: number; summary?: string | null; update?: string | null } | null;
+  /** Things open on the PR waiting on "address it?". */
+  pending?: number | null;
 };
 
 export type BuildStatus = {

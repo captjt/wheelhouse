@@ -5,6 +5,7 @@
 //! your sign-ins, and only what you approved. Each docket's working state is
 //! in `build_tasks`; what happened is on the docket's record.
 
+pub mod address;
 pub mod agents;
 pub mod config;
 pub mod decide;
@@ -144,6 +145,16 @@ pub struct Task {
     pub ended_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// Address rounds since the PR opened, and the one in progress:
+    /// `{n, items, update, from, summary}`.
+    #[serde(default)]
+    pub rounds: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<Value>,
+    /// What's been addressed on the PR, or set aside, by id: a thread's
+    /// latest comment, a review, a comment, a failing head, a base.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seen: Vec<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -238,6 +249,8 @@ pub fn summary(t: &Task) -> Value {
         "decisions": t.decisions.iter().map(|(id, d)| json!({ "id": id, "question": d.question, "answered": d.answer.is_some(), "label": d.answer.as_ref().and_then(|a| a["label"].as_str()) })).collect::<Vec<_>>(),
         "asks": t.asks.keys().collect::<Vec<_>>(),
         "why": t.why, "start_error": t.start_error, "updated_at": t.updated_at,
+        "rounds": t.rounds, "round": t.round.as_ref().map(|r| json!({ "n": r["n"], "summary": r["summary"], "update": r["update"] })),
+        "pending": t.extra.get("pending").map(|p| p["ids"].as_array().map_or(0, Vec::len)),
         "tokens": t.tokens.as_ref().and_then(|x| x["total"].as_i64()),
     })
 }

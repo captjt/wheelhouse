@@ -113,7 +113,7 @@ async fn advance(shared: &Shared, cfg: &super::config::Config, poll: bool) {
                 }
             }
             "active" => steps::step(shared, cfg, &mut t).await,
-            "open" if poll => steps::follow_pr(shared, &mut t).await.map(|_| None),
+            "open" => steps::step_open(shared, cfg, &mut t, poll).await,
             _ => Ok(None),
         };
         set_doing(shared, None);
