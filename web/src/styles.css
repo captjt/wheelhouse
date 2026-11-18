@@ -3211,3 +3211,816 @@ code {
     display: none;
   }
 }
+
+/* ================================================================
+   The phone, native: a tab bar, large titles, a stack with swipe back,
+   rows that swipe, sheets from the bottom, and room for the notch and
+   the home bar. `.phone` is the phone's app; sheets and toasts sit
+   outside it, so they go by the media query.
+   ================================================================ */
+
+@media (max-width: 760px) {
+  html {
+    -webkit-text-size-adjust: 100%;
+    touch-action: manipulation;
+  }
+  body {
+    overscroll-behavior: none;
+    background: var(--main);
+  }
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.phone {
+  flex-direction: column;
+  background: var(--main);
+}
+.phone .main.m-main {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+.m-base,
+.m-top {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--main);
+}
+.m-base {
+  transition: transform 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.m-base.covered {
+  transform: translateX(-22%);
+  pointer-events: none;
+}
+.m-top {
+  z-index: 3;
+  animation: m-push 0.34s cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: -10px 0 28px oklch(0% 0 0 / 0.14);
+  will-change: transform;
+}
+@keyframes m-push {
+  from {
+    transform: translateX(100%);
+  }
+}
+.m-shade {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: oklch(0% 0 0 / 0.16);
+  pointer-events: none;
+  animation: fade 0.34s ease-out;
+}
+
+/* Each view scrolls as a whole, under its bar. */
+.phone .view {
+  display: block;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding-bottom: calc(76px + env(safe-area-inset-bottom));
+}
+.phone .view.docket {
+  display: flex;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.phone .view:not(.docket) .list,
+.phone .split,
+.phone .split-list,
+.phone .rc-scroll {
+  display: block;
+  overflow: visible;
+  height: auto;
+  width: auto;
+  border: 0;
+  padding-bottom: 0;
+}
+.phone .split-detail {
+  display: none;
+}
+.phone .view-empty {
+  min-height: 52vh;
+}
+
+/* The bar: the title shows in it once the large title scrolls away. */
+.phone .view-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  height: auto;
+  min-height: calc(46px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) 10px 0 16px;
+  background: color-mix(in oklch, var(--main) 84%, transparent);
+  -webkit-backdrop-filter: saturate(1.8) blur(18px);
+  backdrop-filter: saturate(1.8) blur(18px);
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.phone .view.m-scrolled > .view-head {
+  border-bottom-color: var(--line);
+}
+.phone .view:not(.docket) > .view-head .view-title {
+  font-size: 16px;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s, transform 0.18s;
+}
+.phone .view.m-scrolled > .view-head .view-title {
+  opacity: 1;
+  transform: none;
+}
+.phone .view-head .view-title .glyph,
+.phone .view-head .view-title .view-count,
+.phone .view-head .seg:not(.seg-text),
+.phone .m-hide {
+  display: none;
+}
+.phone .view-head .btn {
+  height: 34px;
+  min-width: 34px;
+  justify-content: center;
+}
+.m-large {
+  display: none;
+}
+.phone .m-large {
+  display: block;
+  padding: 0 16px 10px;
+}
+.m-large h1 {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 31px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.022em;
+}
+.m-large-count {
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--faint);
+  letter-spacing: 0;
+}
+.phone .group-head {
+  top: calc(46px + env(safe-area-inset-top));
+  height: 34px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+.phone .group-head .caret {
+  display: none;
+}
+.phone .rv-bar {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* Rows: two lines, for a thumb. */
+.phone .row,
+.phone .inbox-item,
+.phone .sw,
+.tabbar {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.phone .row {
+  height: auto;
+  min-height: 62px;
+  flex-wrap: wrap;
+  align-content: center;
+  row-gap: 3px;
+  padding: 10px 16px 10px 14px;
+}
+.phone .row > * {
+  order: 5;
+}
+.phone .row > .row-live {
+  order: 0;
+  width: 20px;
+  margin-right: 10px;
+}
+.phone .row > .row-title {
+  order: 1;
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text);
+  margin-left: 0;
+}
+.phone .row > .spacer {
+  display: none;
+}
+.phone .row > .row-end {
+  display: contents;
+}
+.phone .row .row-age {
+  order: 2;
+  margin-left: 10px;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+.phone .row::after {
+  content: "";
+  order: 3;
+  flex-basis: 100%;
+  height: 0;
+}
+.phone .row > .row-id {
+  order: 4;
+  width: auto;
+  margin: 0 6px 0 30px;
+  font-size: 12.5px;
+}
+.phone .row > .row-status {
+  order: 4;
+  padding: 4px;
+  margin: -4px 2px -4px -4px;
+}
+.phone .row .chip {
+  display: inline-flex;
+  order: 6;
+  margin-left: 4px;
+}
+.phone .row .avatar {
+  order: 7;
+  margin-left: 6px;
+}
+.phone .row .chip-mini,
+.phone .row .row-note {
+  display: none;
+}
+.phone .row:active,
+.phone .inbox-item:active {
+  background: var(--hover);
+}
+.phone .inbox-item {
+  padding: 13px 16px;
+  gap: 12px;
+}
+.phone .inbox-item.sel {
+  background: none;
+  box-shadow: none;
+}
+.phone .inbox-title {
+  font-size: 15px;
+}
+.phone .inbox-line {
+  font-size: 13px;
+}
+
+/* Swiped rows: the actions behind. */
+.sw {
+  position: relative;
+  overflow: hidden;
+  touch-action: pan-y;
+  --sw: 0px;
+}
+.sw-front {
+  position: relative;
+  z-index: 1;
+  background: var(--main);
+}
+.sw-side {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  width: var(--sw);
+  overflow: hidden;
+  visibility: hidden;
+}
+.sw-lead {
+  left: 0;
+}
+.sw-trail {
+  right: 0;
+  flex-direction: row-reverse;
+}
+.sw.lead-open .sw-lead,
+.sw.trail-open .sw-trail {
+  visibility: visible;
+}
+.sw-act {
+  flex: none;
+  width: 78px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  transition: width 0.16s ease;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.sw-act:first-child {
+  flex: 1 0 78px;
+}
+.sw.armed-trail .sw-trail .sw-act:not(:first-child),
+.sw.armed-lead .sw-lead .sw-act:not(:first-child) {
+  width: 0;
+}
+.sw-act .glyph,
+.sw-act .si {
+  color: #fff;
+}
+.sw-act.tone-done,
+.sw-act.tone-approve {
+  background: oklch(62% 0.16 152);
+}
+.sw-act.tone-status {
+  background: var(--accent);
+}
+.sw-act.tone-drop {
+  background: oklch(58% 0 0);
+}
+.sw-act.tone-deny {
+  background: var(--error);
+}
+.sw.pressed .sw-front {
+  background: var(--sel);
+  transition: background 0.2s;
+}
+
+/* The tab bar. */
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  padding: 5px 4px env(safe-area-inset-bottom);
+  background: color-mix(in oklch, var(--main) 84%, transparent);
+  -webkit-backdrop-filter: saturate(1.8) blur(20px);
+  backdrop-filter: saturate(1.8) blur(20px);
+  border-top: 1px solid var(--line);
+}
+.tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-height: 49px;
+  padding-top: 3px;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+}
+.tab.on {
+  color: var(--accent);
+}
+.tab:active .tab-icon {
+  transform: scale(0.92);
+}
+.tab-icon {
+  position: relative;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  transition: transform 0.12s;
+}
+.tab-badge {
+  position: absolute;
+  top: -2px;
+  left: 14px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  border: 2px solid var(--main);
+  background: var(--muted);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.tab-badge.alert {
+  background: var(--error);
+}
+
+/* Pull to refresh. */
+.ptr {
+  display: none;
+}
+.phone .ptr {
+  display: grid;
+  place-items: center;
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  top: calc(env(safe-area-inset-top) + 50px);
+  width: 32px;
+  height: 32px;
+  margin-left: -16px;
+  border-radius: 50%;
+  background: var(--popover);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+}
+.ptr-spin {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--accent);
+}
+.ptr.armed .ptr-spin {
+  border-color: var(--accent);
+  border-top-color: transparent;
+}
+.ptr.spinning .ptr-spin {
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The docket: a bar with Back, chips under the title, the composer kept at the bottom. */
+.phone .view.docket > .view-head.m-nav {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  padding: env(safe-area-inset-top) 4px 0 2px;
+  min-height: calc(46px + env(safe-area-inset-top));
+  border-bottom-color: var(--line);
+  background: var(--main);
+}
+.m-back {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 44px;
+  padding: 0 8px 0 2px;
+  color: var(--accent);
+  font-size: 16px;
+}
+.m-back span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-back:active {
+  opacity: 0.5;
+}
+.m-nav-title {
+  font-weight: 600;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.m-nav-end {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.m-icon {
+  width: 40px;
+  height: 40px;
+  color: var(--accent);
+}
+.phone .docket-body {
+  overscroll-behavior-y: contain;
+}
+.phone .docket-main {
+  padding: 18px 16px 0;
+}
+.phone .title {
+  font-size: 23px;
+  line-height: 1.25;
+  letter-spacing: -0.018em;
+}
+.m-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin: 10px -16px 8px;
+  padding: 0 16px 2px;
+  scrollbar-width: none;
+}
+.m-chips::-webkit-scrollbar {
+  display: none;
+}
+.m-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 15px;
+  border: 1px solid var(--line-2);
+  background: var(--main);
+  color: var(--text-2);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.m-chip:active {
+  background: var(--hover);
+}
+.phone .composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin: 16px -16px 0;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: color-mix(in oklch, var(--main) 88%, transparent);
+  -webkit-backdrop-filter: saturate(1.8) blur(18px);
+  backdrop-filter: saturate(1.8) blur(18px);
+}
+.phone .composer textarea {
+  border-radius: 18px;
+  background: var(--recessed);
+  border: 1px solid var(--line);
+  padding: 8px 12px;
+}
+.phone .composer-bar .muted,
+.phone .composer-bar .kbd {
+  display: none;
+}
+
+/* Sheets. */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: var(--scrim);
+  animation: fade 0.24s ease-out;
+  transition: opacity 0.22s;
+}
+.sheet-backdrop.closing {
+  opacity: 0 !important;
+}
+.sheet {
+  width: 100%;
+  max-width: 640px;
+  max-height: calc(100dvh - env(safe-area-inset-top) - 24px);
+  display: flex;
+  flex-direction: column;
+  background: var(--popover);
+  border-radius: 14px 14px 0 0;
+  box-shadow: var(--shadow);
+  padding-bottom: env(safe-area-inset-bottom);
+  animation: sheet-up 0.36s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.sheet.tall {
+  height: calc(100dvh - env(safe-area-inset-top) - 12px);
+}
+.sheet.closing {
+  transform: translateY(105%) !important;
+  transition: transform 0.22s ease-in !important;
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+.sheet-grab {
+  flex: none;
+  height: 22px;
+  display: grid;
+  place-items: center;
+}
+.sheet-grab span {
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--line-2);
+}
+.sheet-title {
+  flex: none;
+  padding: 0 20px 10px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+}
+.sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 8px 10px;
+}
+.sheet-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 50px;
+  padding: 0 14px;
+  border-radius: 10px;
+  text-align: left;
+  font-size: 16px;
+  color: var(--text);
+}
+.sheet-item:active {
+  background: var(--hover);
+}
+.sheet-item-icon {
+  width: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.sheet-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-item.on,
+.sheet-item.on .sheet-item-icon {
+  color: var(--accent);
+}
+.sheet-item-count {
+  color: var(--muted);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.sheet-section {
+  padding: 16px 14px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.more-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 2px 6px 10px;
+}
+.more-action {
+  height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 12px;
+  background: var(--hover);
+  font-size: 15px;
+  font-weight: 500;
+}
+.more-action:active {
+  background: var(--sel);
+}
+.more-foot {
+  margin-top: 10px;
+  padding: 12px 6px 4px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* A dialog in a sheet: its own layout, edge to edge. */
+.modal-sheet .sheet-body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.modal-sheet .hist {
+  flex-direction: column;
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+.modal-sheet .hist-list {
+  width: auto;
+  display: flex;
+  overflow-x: auto;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  gap: 4px;
+  flex: none;
+}
+.modal-sheet .hist-list .pal-group {
+  display: none;
+}
+.modal-sheet .hist-item {
+  flex: none;
+  width: auto;
+}
+.modal-sheet .hist-body {
+  flex: 1;
+  min-height: 0;
+}
+.modal-sheet .preview-body {
+  max-height: none;
+  flex: 1;
+}
+.details-sheet .props {
+  width: auto;
+  border: 0;
+  padding: 0 10px 8px;
+  overflow: visible;
+}
+.details-sheet .prop {
+  min-height: 40px;
+}
+
+/* Toasts sit above the tab bar, full width, with their action. */
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+.toast-action {
+  flex: none;
+  color: var(--link);
+  font-weight: 600;
+}
+@media (max-width: 760px) {
+  .toasts {
+    left: 12px;
+    right: 12px;
+    bottom: calc(68px + env(safe-area-inset-bottom));
+  }
+  .toast {
+    max-width: none;
+    padding: 13px 16px;
+    border-radius: 13px;
+    font-size: 14px;
+  }
+  .toast-action {
+    padding: 4px 2px;
+    font-size: 15px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .m-top,
+  .sheet,
+  .m-base {
+    animation: none;
+    transition: none;
+  }
+}
+/* The composer on a phone: the box and its button on one line, as in Messages. */
+.phone .composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.phone .composer textarea {
+  flex: 1;
+  min-width: 0;
+}
+.phone .composer-bar {
+  flex: none;
+  padding-bottom: 2px;
+}
+.phone .composer-bar .spacer {
+  display: none;
+}
+.phone .composer-bar .btn {
+  height: 34px;
+  border-radius: 17px;
+  padding: 0 14px;
+}
+@media (max-width: 760px) {
+  /* Under a sheet, not over its items. */
+  .toasts {
+    z-index: 44;
+  }
+}

@@ -4,6 +4,7 @@ import { AppAvatar, IconChart, IconClipboard, IconExternal, StatusIcon } from ".
 import { ago, useHub } from "./live";
 import { RiskChip } from "./Reviews";
 import { InlineMd, useToast } from "./ui";
+import { LargeTitle } from "./mobile";
 
 type PrRecap = {
   key: string;
@@ -237,6 +238,7 @@ export function RecapView() {
           <IconClipboard size={14} /> <span className="rv-btn-label">Copy as Markdown</span>
         </button>
       </header>
+      <LargeTitle title="Recap" />
       {!data ? (
         <div className="view-empty">{error ? `Couldn't make the recap: ${error}` : ""}</div>
       ) : (

@@ -26,9 +26,13 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       };
     };
     connect();
+    // A pull to refresh: everything fetches again, now.
+    const refresh = () => setVersion((v) => ({ n: v.n + 1, tick: v.tick + 1 }));
+    window.addEventListener("wh:refresh", refresh);
     // Ages ("4m") move on even when nothing happens.
     const tick = window.setInterval(() => setVersion((v) => ({ n: v.n + 1, tick: v.tick + 1 })), 30000);
     return () => {
+      window.removeEventListener("wh:refresh", refresh);
       es?.close();
       window.clearTimeout(timer);
       window.clearTimeout(retry);
@@ -92,7 +96,8 @@ type Hub = {
   error: string | null;
   reload: () => void;
   byId: Map<string, Docket>;
-  setStatus: (id: string, status: Docket["status"]) => Promise<void>;
+  /** With `undo`, the toast offers to put it back to that status. */
+  setStatus: (id: string, status: Docket["status"], undo?: Docket["status"]) => Promise<void>;
   rename: (id: string, title: string) => Promise<void>;
   note: (id: string, body: string) => Promise<void>;
   openInRex: (id: string) => Promise<void>;
@@ -118,9 +123,15 @@ export function HubProvider({ children }: { children: ReactNode }) {
     error,
     reload,
     byId,
-    setStatus: (id, status) =>
+    setStatus: (id, status, undo) =>
       post(`/api/dockets/${id}/set`, { status }).then(() => {
-        toast(`${id} moved to ${words[status]}`);
+        toast(
+          `${id} moved to ${words[status]}`,
+          undefined,
+          undo && undo !== status
+            ? { label: "Undo", run: () => void post(`/api/dockets/${id}/set`, { status: undo }).then(() => (toast(`${id} is back in ${words[undo]}`), reload()), fail) }
+            : undefined,
+        );
         reload();
       }, fail),
     rename: (id, title) => post(`/api/dockets/${id}/set`, { title }).then(reload, fail),

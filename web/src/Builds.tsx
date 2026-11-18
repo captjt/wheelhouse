@@ -3,6 +3,7 @@ import { post, type BuildTask, type Docket } from "./api";
 import { IconBuild, IconChevronDown, IconExternal, IconPause, IconPlay, LiveIcon } from "./icons";
 import { ago, useHub } from "./live";
 import { InlineMd, useMenu, useToast } from "./ui";
+import { LargeTitle } from "./mobile";
 
 /** What a Build is doing, in a few words. */
 export function buildPhase(t: BuildTask): string {
@@ -214,6 +215,7 @@ export function BuildsView() {
           </button>
         )}
       </header>
+      <LargeTitle title="Builds" count={live} />
       {bs && (
         <div className="rv-bar">
           <span className={`rv-pill ${bs.paused ? "paused" : "on"}`}>{bs.paused ? "Paused" : "On"}</span>

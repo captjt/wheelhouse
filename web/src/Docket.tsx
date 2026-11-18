@@ -2,7 +2,9 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type Reac
 import { appName, type Docket, type DocketPage, type EntryView } from "./api";
 import { AppAvatar, HubAvatar, IconChevron, IconDown, IconDownload, IconShield, IconUp, LiveIcon, PersonAvatar, SessionIcon, StatusIcon, TitleText, liveWord, shortPath } from "./icons";
 import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
-import { Kbd, Prose, useKeys, useMenu } from "./ui";
+import { Kbd, Prose, Sheet, useKeys, useMenu, usePhone } from "./ui";
+import { nav } from "./mobile";
+import { IconBack, IconBuild, IconInfo } from "./icons";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { IntentSection } from "./Intent";
 import { markdownKeys } from "./Editor";
@@ -26,6 +28,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   const statusRef = useRef<HTMLButtonElement>(null);
   const titleRef = useRef<{ edit: () => void }>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const phone = usePhone();
+  const [details, setDetails] = useState(false);
 
   const ids = lastList.ids;
   const pos = ids.indexOf(id);
@@ -53,104 +57,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   if (error && !data) return <div className="view-empty">{error}</div>;
   if (!data || !d) return <div className="view" />;
   const { entries, verify } = data;
-
-  return (
-    <div className={`view docket${embedded ? " embedded" : ""}`}>
-      {!embedded && (
-        <header className="view-head">
-          <a className="crumb" href={`#${lastList.path}`}>
-            {lastList.title}
-          </a>
-          <IconChevron size={12} />
-          <span className="crumb-here">{d.id}</span>
-          {pos >= 0 && (
-            <span className="pager">
-              <button className="icon-btn" title="Previous (K)" disabled={pos <= 0} onClick={() => step(-1)}>
-                <IconUp size={14} />
-              </button>
-              <button className="icon-btn" title="Next (J)" disabled={pos >= ids.length - 1} onClick={() => step(1)}>
-                <IconDown size={14} />
-              </button>
-              <span className="muted small">
-                {pos + 1} / {ids.length}
-              </span>
-            </span>
-          )}
-          <span className="spacer" />
-          {d.live && <PaneButton id={d.id} />}
-        </header>
-      )}
-
-      <div className="docket-body">
-        <div className="docket-main">
-          <div className="docket-col">
-          {embedded && (
-            <div className="embedded-head">
-              <a className="row-id" href={`#/d/${d.id}`}>
-                {d.id}
-              </a>
-              <span className="spacer" />
-              {d.live && <PaneButton id={d.id} small />}
-              <a className="btn btn-small" href={`#/d/${d.id}`}>
-                Open docket
-              </a>
-            </div>
-          )}
-          <Title ref={titleRef} d={d} onSave={(t) => hub.rename(d.id, t).then(reload)} />
-          {d.live?.state === "blocked" && (
-            <div className="callout callout-blocked">
-              <LiveIcon state="blocked" />
-              <div>
-                <strong>{appName(d.agent?.app)} is waiting on you{d.live.kind ? ` · ${d.live.kind}` : ""}</strong>
-                {d.live.msg && <div className="callout-msg">{d.live.msg}</div>}
-              </div>
-              <span className="spacer" />
-              {d.live.answerable ? (
-                <span className="callout-actions">
-                  <AnswerButtons d={d} small />
-                  <PaneButton id={d.id} small />
-                </span>
-              ) : (
-                <PaneButton id={d.id} small label={onThisMac() ? "Answer in Rex" : "View pane"} />
-              )}
-            </div>
-          )}
-          {d.live?.state === "error" && (
-            <div className="callout callout-error">
-              <LiveIcon state="error" />
-              <div>
-                <strong>{appName(d.agent?.app)} failed</strong>
-                {d.live.msg && <div className="callout-msg">{d.live.msg}</div>}
-              </div>
-            </div>
-          )}
-
-          <ReviewPanel d={d} />
-          <BuildPanel d={d} />
-          {(hub.state?.messages ?? [])
-            .filter((m) => m.docket === d.id)
-            .map((m) => (
-              <MessageCard key={m.id} m={m} />
-            ))}
-
-          <IntentSection d={d} entries={entries} onSaved={reload} />
-
-          <div className="activity-head">
-            <span>Activity</span>
-            <span className="spacer" />
-            <span className={`verify-chip ${verify.ok ? "ok" : "bad"}`} title={verify.ok ? `Every entry's id, chain link and signature checks. Head ${verify.head}` : verify.problems.join("\n")}>
-              <IconShield size={13} /> {verify.ok ? `Verified · ${verify.entries} signed` : "Record doesn't check"}
-            </span>
-          </div>
-          <div className="activity">
-            {entries.map((e) => (
-              <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} />
-            ))}
-          </div>
-          <Composer ref={composerRef} onSend={(t) => hub.note(d.id, t).then(reload)} />
-          </div>
-        </div>
-
+  const aside = (
         <aside className="props">
           <Prop label="Status">
             <button ref={statusRef} className="prop-btn" onClick={openStatus} title="Change status (S)">
@@ -288,6 +195,162 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </a>
           </Prop>
         </aside>
+  );
+
+  return (
+    <div className={`view docket${embedded ? " embedded" : ""}`}>
+      {!embedded && phone && (
+        <header className="view-head m-nav">
+          <button className="m-back" onClick={() => nav.back()} aria-label={`Back to ${lastList.title}`}>
+            <IconBack size={20} />
+            <span>{lastList.title}</span>
+          </button>
+          <span className="m-nav-title">{d.id}</span>
+          <span className="m-nav-end">
+            {d.live && <PaneButton id={d.id} small />}
+            <button className="icon-btn m-icon" onClick={() => setDetails(true)} aria-label="Details">
+              <IconInfo size={20} />
+            </button>
+          </span>
+        </header>
+      )}
+      {!embedded && !phone && (
+        <header className="view-head">
+          <a className="crumb" href={`#${lastList.path}`}>
+            {lastList.title}
+          </a>
+          <IconChevron size={12} />
+          <span className="crumb-here">{d.id}</span>
+          {pos >= 0 && (
+            <span className="pager">
+              <button className="icon-btn" title="Previous (K)" disabled={pos <= 0} onClick={() => step(-1)}>
+                <IconUp size={14} />
+              </button>
+              <button className="icon-btn" title="Next (J)" disabled={pos >= ids.length - 1} onClick={() => step(1)}>
+                <IconDown size={14} />
+              </button>
+              <span className="muted small">
+                {pos + 1} / {ids.length}
+              </span>
+            </span>
+          )}
+          <span className="spacer" />
+          {d.live && <PaneButton id={d.id} />}
+        </header>
+      )}
+
+      <div className="docket-body">
+        <div className="docket-main">
+          <div className="docket-col">
+          {embedded && (
+            <div className="embedded-head">
+              <a className="row-id" href={`#/d/${d.id}`}>
+                {d.id}
+              </a>
+              <span className="spacer" />
+              {d.live && <PaneButton id={d.id} small />}
+              <a className="btn btn-small" href={`#/d/${d.id}`}>
+                Open docket
+              </a>
+            </div>
+          )}
+          <Title ref={titleRef} d={d} onSave={(t) => hub.rename(d.id, t).then(reload)} />
+          {phone && (
+            <div className="m-chips">
+              <button className="m-chip" onClick={() => menu.open(new DOMRect(), statusItems(d, (s) => hub.setStatus(d.id, s).then(reload)), "Change status")}>
+                <StatusIcon status={d.status} />
+                {STATUSES.find((s) => s.key === d.status)?.label}
+              </button>
+              {d.live && (
+                <span className={`m-chip live-${d.live.state}`}>
+                  <LiveIcon state={d.live.state} />
+                  {liveWord(d.live.state)}
+                </span>
+              )}
+              {d.review && (
+                <a className="m-chip" href={d.review.url || "#"} target="_blank" rel="noreferrer">
+                  <IconPR size={14} />
+                  {d.review.key}
+                  {d.review.verdict ? <span className="muted"> · {d.review.verdict.replace("_", " ").toLowerCase()}</span> : null}
+                </a>
+              )}
+              {[...(d.linear ? [d.linear] : []), ...(d.linear_also ?? [])].map((l) => (
+                <a key={l.key} className="m-chip" href={l.url || "#"} target="_blank" rel="noreferrer">
+                  <IconIssue size={14} />
+                  {l.key}
+                </a>
+              ))}
+              {building && (
+                <span className="m-chip">
+                  <IconBuild size={14} />
+                  Building
+                </span>
+              )}
+            </div>
+          )}
+          {d.live?.state === "blocked" && (
+            <div className="callout callout-blocked">
+              <LiveIcon state="blocked" />
+              <div>
+                <strong>{appName(d.agent?.app)} is waiting on you{d.live.kind ? ` · ${d.live.kind}` : ""}</strong>
+                {d.live.msg && <div className="callout-msg">{d.live.msg}</div>}
+              </div>
+              <span className="spacer" />
+              {d.live.answerable ? (
+                <span className="callout-actions">
+                  <AnswerButtons d={d} small />
+                  <PaneButton id={d.id} small />
+                </span>
+              ) : (
+                <PaneButton id={d.id} small label={onThisMac() ? "Answer in Rex" : "View pane"} />
+              )}
+            </div>
+          )}
+          {d.live?.state === "error" && (
+            <div className="callout callout-error">
+              <LiveIcon state="error" />
+              <div>
+                <strong>{appName(d.agent?.app)} failed</strong>
+                {d.live.msg && <div className="callout-msg">{d.live.msg}</div>}
+              </div>
+            </div>
+          )}
+
+          <ReviewPanel d={d} />
+          <BuildPanel d={d} />
+          {(hub.state?.messages ?? [])
+            .filter((m) => m.docket === d.id)
+            .map((m) => (
+              <MessageCard key={m.id} m={m} />
+            ))}
+
+          <IntentSection d={d} entries={entries} onSaved={reload} />
+
+          <div className="activity-head">
+            <span>Activity</span>
+            <span className="spacer" />
+            <span className={`verify-chip ${verify.ok ? "ok" : "bad"}`} title={verify.ok ? `Every entry's id, chain link and signature checks. Head ${verify.head}` : verify.problems.join("\n")}>
+              <IconShield size={13} /> {verify.ok ? `Verified · ${verify.entries} signed` : "Record doesn't check"}
+            </span>
+          </div>
+          <div className="activity">
+            {entries.map((e) => (
+              <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} />
+            ))}
+          </div>
+          <Composer ref={composerRef} onSend={(t) => hub.note(d.id, t).then(reload)} />
+          </div>
+        </div>
+
+        {phone ? (
+          details && (
+            <Sheet title={`${d.id} · Details`} onClose={() => setDetails(false)} className="details-sheet">
+              {aside}
+            </Sheet>
+          )
+        ) : (
+          aside
+        )}
       </div>
       {menu.node}
       {linking !== false && (
@@ -575,7 +638,7 @@ const Composer = forwardRef<HTMLTextAreaElement, { onSend: (t: string) => Promis
     <div className="composer">
       <textarea
         ref={ref}
-        placeholder="Leave a note on the record… (Markdown)"
+        placeholder="Leave a note… (Markdown)"
         value={text}
         rows={text.split("\n").length > 2 ? 5 : 2}
         onChange={(e) => setText(e.target.value)}
