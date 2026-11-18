@@ -62,20 +62,34 @@ pub struct Tracker {
     pub remote: std::collections::HashSet<String>,
 }
 
-/// Pick up the agent dockets that were open when the hub last stopped.
+/// Pick up the dockets agents held when the hub last stopped: open, not
+/// released, with an agent on the record. That's the hub's own Agent
+/// dockets, and dockets you opened and put an agent on (wh start --docket,
+/// or a resumed session). Review's and Build's panes come back through
+/// their own maps. When two claim one pane, the one with a session wins
+/// over one without: a docket opened for the pane before it was found.
 pub fn load(core: &mut Core) -> Result<()> {
     for st in core.store.states()? {
-        let (true, Some(a), None) = (st.protocol == "agent" && st.is_open(), &st.agent, &st.released) else { continue };
-        core.agents.by_block.entry(a.block.clone()).or_insert(Tracked {
-            docket: st.id.clone(),
-            app: a.app.clone(),
-            session: st.session.clone(),
-            state: None,
-            root: None,
-            blocked_seen: None,
-            missing_since: None,
-            pending_prompt: None,
-        });
+        let Some(a) = &st.agent else { continue };
+        if !st.is_open() || st.released.is_some() || matches!(st.protocol.as_str(), "review" | "build") || core.store.build_task(&st.id)?.is_some() {
+            continue;
+        }
+        if core.agents.by_block.get(&a.block).is_some_and(|cur| cur.session.is_some() || st.session.is_none()) {
+            continue;
+        }
+        core.agents.by_block.insert(
+            a.block.clone(),
+            Tracked {
+                docket: st.id.clone(),
+                app: a.app.clone(),
+                session: st.session.clone(),
+                state: None,
+                root: None,
+                blocked_seen: None,
+                missing_since: None,
+                pending_prompt: None,
+            },
+        );
     }
     Ok(())
 }
@@ -771,6 +785,35 @@ mod tests {
         assert!(fork != first && fork != second);
         assert_eq!(docket_of(&core, "b3").unwrap(), first);
         assert_eq!(core.store.state(&first).unwrap().unwrap().status, "in_progress");
+    }
+
+    #[test]
+    fn a_restarted_hub_finds_each_pane_its_docket() {
+        let mut core = test_core();
+        // A docket you opened, with an agent on it.
+        let yours = core.open(&Who::Owner, "Customization of reviewers", json!({ "protocol": "none" })).unwrap();
+        let a = |b: &str| AgentRef { app: "claude-code".into(), host: "local".into(), block: b.into(), ..Default::default() };
+        adopt(&mut core, &yours, &a("b1"), None);
+        claim_in(&mut core, "b1", "s-1", "resume", Some(a("b1"))).unwrap();
+        // The hub's own Agent docket, in another pane.
+        let own = open_for(&mut core, a("b2"), Some("s-2"), Some("startup")).unwrap();
+        // Released, and a Review docket's pane: not this map's.
+        let gone = open_for(&mut core, a("b3"), Some("s-3"), Some("startup")).unwrap();
+        release(&mut core, "b3", "pane closed").unwrap();
+        let review = core.open(&Who::Hub, "Review acme/api#3", json!({ "protocol": "review" })).unwrap();
+        adopt(&mut core, &review, &a("b4"), None);
+        claim_in(&mut core, "b4", "s-4", "wheelhouse", Some(a("b4"))).unwrap();
+        // A restart that came back before the pane was found: an empty
+        // docket opened for it, newer than yours.
+        let empty = open_for(&mut core, a("b1"), None, None).unwrap();
+
+        core.agents.by_block.clear();
+        load(&mut core).unwrap();
+        assert_eq!(docket_of(&core, "b1").as_deref(), Some(yours.as_str()), "the one with a session, over {empty}");
+        assert_eq!(docket_of(&core, "b2").as_deref(), Some(own.as_str()));
+        assert!(docket_of(&core, "b3").is_none(), "{gone} was released");
+        assert!(docket_of(&core, "b4").is_none(), "Review's panes come back through its own map");
+        assert_eq!(core.agents.by_block["b1"].session.as_deref(), Some("s-1"));
     }
 
     #[test]
