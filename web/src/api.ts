@@ -223,6 +223,10 @@ export type ReviewPr = {
   /** The checked review of the round in progress, once it's written. */
   /** The checked review, in brief; `digest` names its exact text, so a post is of what you saw. */
   draft?: { event: string; verdict?: string | null; blocking: number; non_blocking: number; merge_risk?: string | null; digest?: string } | null;
+  /** How a checked review posts in this PR's repo now: `ask`, `auto` or `rule`. */
+  post?: "ask" | "auto" | "rule" | null;
+  /** Under a rule, what the hub decided for this round's checked review, and why; `refused` if its post was. */
+  post_decision?: { auto: boolean; why: string; refused?: string | null } | null;
 };
 
 /** A docket's Build. */
@@ -274,8 +278,24 @@ export type BuildStatus = {
 export type ReviewStatus = {
   enabled: boolean;
   paused: boolean;
-  post?: "ask" | "auto" | null;
-  config?: { path: string; repos: string[]; reviewers: { name: string; agent: string }[]; checker: string; post: string; max_rounds: number; poll_seconds: number } | null;
+  /** What posting does now, by default, after any override. */
+  post?: "ask" | "auto" | "rule" | null;
+  /** `text` ends "A checked review …". */
+  post_rule?: { mode: string; text: string } | null;
+  /** `wh review post-mode ask|auto`, over every repo's rule. */
+  post_override?: "ask" | "auto" | null;
+  config?: {
+    path: string;
+    repos: string[];
+    reviewers: { name: string; agent: string }[];
+    checker: string;
+    /** The config's own posting by default, without the override. */
+    post: string;
+    /** Repos that post their own way. */
+    repo_posts?: Record<string, { mode: string; text: string }>;
+    max_rounds: number;
+    poll_seconds: number;
+  } | null;
   config_error?: string | null;
   last_scan_at?: string | null;
   scan_error?: string | null;

@@ -222,6 +222,14 @@ struct ReviewPr: Hashable, Identifiable {
     var history: [ReviewRound] { j["history"].array.map(ReviewRound.init) }
     var draft: Draft? { j["draft"].object == nil ? nil : Draft(j: j["draft"]) }
     var ready: Bool { state == "reviewing" && phase == "awaiting" }
+    /// How a checked review posts in this PR's repo now: ask, auto or rule.
+    var post: String? { j["post"].text }
+    /// Why its checked review waits for you under a posting rule, or nil.
+    var waitsWhy: String? {
+        let d = j["post_decision"]
+        if let r = d["refused"].text { return "your rule would post it, but the post was refused: \(r)" }
+        return d.exists && !d["auto"].bool ? d["why"].text : nil
+    }
 
     static func == (a: ReviewPr, b: ReviewPr) -> Bool { a.j == b.j }
     func hash(into h: inout Hasher) { h.combine(j) }
@@ -233,6 +241,12 @@ struct ReviewStatus: Hashable {
     var paused: Bool { j["paused"].bool }
     var auto: Bool { j["post"].str == "auto" }
     var config: JSON { j["config"] }
+    /// `wh review post-mode ask|auto`, over every repo's rule.
+    var postOverride: String? { j["post_override"].text }
+    /// A rule, or a repo that posts its own way.
+    var ruled: Bool { config["post"].str == "rule" || !(config["repo_posts"].object ?? [:]).isEmpty }
+    /// What the toolbar's switch shows: the override, else rule, auto or ask.
+    var posting: String { postOverride ?? (ruled ? "rule" : config["post"].str == "auto" ? "auto" : "ask") }
     var configError: String? { j["config_error"].text }
     var lastScanAt: String? { j["last_scan_at"].text }
     var scanError: String? { j["scan_error"].text }

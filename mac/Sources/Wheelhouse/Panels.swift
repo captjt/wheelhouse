@@ -185,7 +185,8 @@ struct ReviewPanel: View {
                 .font(.system(size: 12.5))
                 if p.state == "reviewing" || p.state == "queued" {
                     let at = p.state != "reviewing" ? -1 : p.phase == "checking" ? 1 : p.phase == "awaiting" ? 2 : 0
-                    Steps(steps: rv.auto ? ["Reviewers \(p.reviewersDone)/\(p.reviewersTotal)", "Checker", "Posted"] : ["Reviewers \(p.reviewersDone)/\(p.reviewersTotal)", "Checker", "Your call", "Posted"], at: rv.auto && at >= 2 ? at - 1 : at)
+                    let auto = (p.post ?? rv.j["post"].str) == "auto"
+                    Steps(steps: auto ? ["Reviewers \(p.reviewersDone)/\(p.reviewersTotal)", "Checker", "Posted"] : ["Reviewers \(p.reviewersDone)/\(p.reviewersTotal)", "Checker", "Your call", "Posted"], at: auto && at >= 2 ? at - 1 : at)
                 } else {
                     Text("\(phaseText(p, paused: rv.paused))\(p.postedAt.map { " · last posted \(agoLong($0))" } ?? "")").font(.system(size: 12)).foregroundStyle(K.muted)
                 }
@@ -202,6 +203,7 @@ struct ReviewPanel: View {
                             if a.kind == "ready", p.draft != nil {
                                 Text(draftLine(p) ?? "").font(.system(size: 12.5)).foregroundStyle(K.text2)
                                 if let v = p.draft?.verdict { Text(v).font(.system(size: 12.5)).foregroundStyle(K.text2).lineLimit(3) }
+                                if let w = p.waitsWhy { Text("Waits for you: \(w)").font(.system(size: 12.5)).foregroundStyle(K.muted).fixedSize(horizontal: false, vertical: true) }
                             } else {
                                 Text(a.text).font(.system(size: 12.5)).foregroundStyle(K.text2).textSelection(.enabled)
                             }

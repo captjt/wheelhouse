@@ -90,6 +90,14 @@ enum Snapshot {
                 NotificationCenter.default.post(name: .snapshotCheck, object: "lint")
             }
         },
+        // Who posts a checked review: a repo's own, and the rule's editor.
+        Shot(name: "settings-posting", place: .inbox, target: .settings, tab: "repos") { _ in Snapshot.scroll("posting") },
+        Shot(name: "settings-rule", place: .inbox, target: .settingsSheet, tab: "orders") { _ in
+            Task {
+                try? await Task.sleep(for: .milliseconds(600))
+                NotificationCenter.default.post(name: .snapshotRule, object: "")
+            }
+        },
         Shot(name: "settings-guides", place: .inbox, target: .settings, tab: "guides") { _ in UserDefaults.standard.set("guide/plan-format.md", forKey: "settingsGuide") },
         Shot(name: "settings-brief", place: .inbox, target: .settings, tab: "guides") { _ in
             UserDefaults.standard.set("build/brief/plan.md", forKey: "settingsGuide")

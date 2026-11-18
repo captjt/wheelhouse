@@ -14,6 +14,7 @@ pub mod links;
 pub mod lua;
 pub mod panes;
 pub mod post;
+pub mod posting;
 pub mod pr;
 pub mod rounds;
 pub mod rules;
@@ -141,9 +142,25 @@ pub fn paused(core: &Core) -> bool {
     core.store.meta_get("review.paused").ok().flatten().as_deref() != Some("0")
 }
 
-/// `ask` or `auto`: yours if you set one here, else the config's.
-pub fn post_mode(core: &Core, cfg: &Config) -> String {
-    core.store.meta_get("review.post").ok().flatten().filter(|p| p == "ask" || p == "auto").unwrap_or_else(|| cfg.post.clone())
+/// What `wh review post-mode ask|auto` set, over every repo's rule; `None`
+/// follows the config.
+pub fn post_override(core: &Core) -> Option<posting::Post> {
+    match core.store.meta_get("review.post").ok().flatten().as_deref() {
+        Some("ask") => Some(posting::Post::Ask),
+        Some("auto") => Some(posting::Post::Auto),
+        _ => None,
+    }
+}
+
+/// Who posts a checked review in `repo` (or, without one, by default): the
+/// override, the repo's own `post`, or the config's.
+pub fn post_for(core: &Core, cfg: &Config, repo: Option<&str>) -> posting::Post {
+    post_override(core).unwrap_or_else(|| repo.map_or(&cfg.post, |r| cfg.post_for(r)).clone())
+}
+
+/// `ask`, `auto` or `rule`, for `repo` (or by default).
+pub fn post_mode(core: &Core, cfg: &Config, repo: Option<&str>) -> &'static str {
+    post_for(core, cfg, repo).kind()
 }
 
 /// The config, read again when its file changes.
@@ -322,9 +339,13 @@ pub fn event(core: &mut Core, p: &Pr, kind: &str, data: Value, who: &Who) -> Res
         "awaiting" => format!("Round {}'s checked review is ready to post.", d["round"]),
         "delta" => format!("The head moved from {} to {head}: the reviewers review the new commits.", short(d.get("from"))),
         "repointed" => format!("The head moved from {} to {head}, but the PR's own diff didn't change: the checker checks again.", short(d.get("from"))),
+        "decided" if d["auto"] == json!(true) => format!("Round {}'s checked review posts itself, by your rule: {}.", d["round"], d["why"].as_str().unwrap_or("?")),
+        "decided" => format!("Round {}'s checked review waits for you: {}.", d["round"], d["why"].as_str().unwrap_or("?")),
+        "post-refused" => format!("Your rule would post round {}, but the post was refused: {}. It waits for you.", d["round"], d["error"].as_str().unwrap_or("?")),
         "posted" => format!(
-            "Posted round {}: {}{}.",
+            "Posted round {}{}: {}{}.",
             d["round"],
+            if d["by"] == "rule" { " by your rule" } else { "" },
             d["verdict"].as_str().unwrap_or("?").replace('_', " ").to_lowercase(),
             d["note"].as_str().map(|n| format!(", {n}")).unwrap_or_default()
         ),

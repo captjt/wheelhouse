@@ -716,6 +716,16 @@ fn print_review_status(v: &Value) {
             c["checker"].as_str().unwrap_or("?"),
             v["post"].as_str().unwrap_or("?")
         );
+        let how = v["post_rule"]["text"].as_str().unwrap_or("?");
+        match v["post_override"].as_str() {
+            Some(o) => println!("posting  a checked review {how} (wh review post-mode {o}; config follows review.lua and Settings)"),
+            None => {
+                println!("posting  a checked review {how}");
+                for (slug, p) in c["repo_posts"].as_object().into_iter().flatten() {
+                    println!("         in {slug}, it {}", p["text"].as_str().unwrap_or("?"));
+                }
+            }
+        }
     }
     if v["rex_reviewer_running"].as_bool() == Some(true) {
         println!("         rex-reviewer's watcher is running too (rex-reviewer down stops it)");

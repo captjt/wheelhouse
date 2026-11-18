@@ -22,9 +22,11 @@ return {
 Run `just test` for the unit tests and `just lint` before a finding about style.
 Migrations live in db/migrations/ and must be reversible.
 ]],
-      -- This repo's own effort and guides win over the ones further down.
+      -- This repo's own effort, guides and posting win over the ones
+      -- further down.
       -- effort = { review = "high" },
       -- guides = { review = "Check every new handler for an auth check." },
+      -- post = "ask",
     },
     -- ["acme/storefront"] = { checkout = "~/code/acme-storefront" },
   },
@@ -48,10 +50,20 @@ Migrations live in db/migrations/ and must be reversible.
   -- checker = { agent = "claude", extra_args = { "--model", "opus" }, effort = "high" },
   checker = "claude",
 
-  -- "ask": a checked review waits for you to Post, Preview or Dismiss it.
-  -- "auto": the checker posts it. `wh review post-mode ask|auto|config`
+  -- Who posts a checked review:
+  --   "ask"   it waits for you to Post, Preview or Dismiss it.
+  --   "auto"  the checker posts it.
+  --   { auto = { … } }  it posts itself when every condition holds, and
+  --           otherwise waits for you, saying why. The conditions:
+  --           verdict = "approve", merge_risk = "low" or "medium",
+  --           max_lines = N, authors = { … }, labels = { … },
+  --           not_touching = { paths… }.
+  --   A function of the PR and its checked review (verdict, blocking,
+  --   merge_risk, and what effort gets), returning "ask" or "auto".
+  -- A repo's own `post` wins. `wh review post-mode ask|auto|config`
   -- overrides this without editing the file.
   post = "ask",
+  -- post = { auto = { verdict = "approve", merge_risk = "low", max_lines = 300 } },
 
   -- How often to check GitHub for PRs that request you, in seconds (at
   -- least 30).

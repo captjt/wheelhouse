@@ -125,13 +125,13 @@ pub const REVIEW: Words = &[
     ("pause", "stop new rounds"),
     ("resume", "restart new rounds"),
     ("check", "check GitHub now"),
-    ("post-mode", "who posts a checked review: ask, auto or config"),
+    ("post-mode", "who posts a checked review: ask, auto, or config (your rules)"),
     ("pickup", "review a PR that didn't request you"),
     ("preview", "see a round's checked review"),
     ("post", "post a round's checked review"),
     ("dismiss", "drop a round's checked review"),
 ];
-const POST_MODE: Words = &[("ask", "you post it"), ("auto", "the checker posts it"), ("config", "what review.lua says")];
+const POST_MODE: Words = &[("ask", "you post it"), ("auto", "the checker posts it"), ("config", "your rules, from Settings and review.lua")];
 pub const BUILD: Words = &[
     ("status", "every Build, and what each needs"),
     ("start", "Build a docket, a PR (owner/name#45) or a Linear issue"),

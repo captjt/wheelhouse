@@ -571,7 +571,7 @@ pub async fn start(shared: &Shared, key: &str) -> Result<()> {
         let core = shared.lock();
         let e = super::get(&core, key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
         let d = super::docket_of(&core, key).ok_or_else(|| anyhow!("{key} has no docket"))?;
-        let mode = super::post_mode(&core, &cfg);
+        let mode = super::post_mode(&core, &cfg, Some(&e.repo));
         (e, d, mode)
     };
     if e.state != "queued" {
@@ -608,7 +608,7 @@ pub async fn start(shared: &Shared, key: &str) -> Result<()> {
     for (i, r) in rs.iter_mut().enumerate() {
         let wt = PathBuf::from(r.worktree.clone().unwrap_or_default());
         let run = async {
-            let v = vars(&cfg, &e, round, Some(r), &snapshot, &login, &mode)?;
+            let v = vars(&cfg, &e, round, Some(r), &snapshot, &login, mode)?;
             for d in [format!(".tmp/rounds/{round}"), ".tmp/probes".into(), ".tmp/gh-empty".into()] {
                 std::fs::create_dir_all(wt.join(d))?;
             }
@@ -739,7 +739,7 @@ pub async fn start_checker(shared: &Shared, key: &str) -> Result<()> {
         let core = shared.lock();
         let e = super::get(&core, key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
         let d = super::docket_of(&core, key).ok_or_else(|| anyhow!("{key} has no docket"))?;
-        let mode = super::post_mode(&core, &cfg);
+        let mode = super::post_mode(&core, &cfg, Some(&e.repo));
         (e, d, mode)
     };
     let round = e.round;
@@ -762,7 +762,7 @@ pub async fn start_checker(shared: &Shared, key: &str) -> Result<()> {
     let view = effort_view(&e, round, Some(&rs));
     e.checker_effort = cfg.effort(&e.repo, "check", &view, None)?;
     let login = github::login().await?;
-    let mut v = vars(&cfg, &e, round, None, &rs, &login, &mode)?;
+    let mut v = vars(&cfg, &e, round, None, &rs, &login, mode)?;
     let head = e.round_head.clone().unwrap_or_default();
     let program = |a: &str| agentcli::program(&cfg, a);
     if rs.len() <= 1 {
@@ -828,6 +828,8 @@ pub async fn start_checker(shared: &Shared, key: &str) -> Result<()> {
     }
     e.checker_session = session;
     e.checker_agent = Some(cfg.checker.clone());
+    e.checker_post = Some(mode.to_string());
+    e.post_decision = None;
     e.phase = Some("checking".into());
     e.checker_pane = Some(check_label);
     e.checker_block = Some(created.block_id);
@@ -880,7 +882,7 @@ pub async fn follow_head(shared: &Shared, key: &str, new: &str) -> Result<&'stat
     e.checker_block = None;
     let (docket, mode) = {
         let core = shared.lock();
-        (super::docket_of(&core, key).unwrap_or_default(), super::post_mode(&core, &cfg))
+        (super::docket_of(&core, key).unwrap_or_default(), super::post_mode(&core, &cfg, Some(&e.repo)))
     };
     let login = github::login().await?;
     let round = e.round;
@@ -890,7 +892,7 @@ pub async fn follow_head(shared: &Shared, key: &str, new: &str) -> Result<&'stat
     let mut anchor: Option<String> = None;
     for mut r in rs.clone() {
         let wt = PathBuf::from(r.worktree.clone().unwrap_or_default());
-        let mut v = vars(&cfg, &e, round, Some(&r), &rs, &login, &mode)?;
+        let mut v = vars(&cfg, &e, round, Some(&r), &rs, &login, mode)?;
         v.insert("MOVED_FROM", old.clone());
         v.insert("MOVED_FROM_SHORT", short(&old));
         super::write_atomic(&wt.join(format!(".tmp/rounds/{round}/delta-{h7}.md")), &render(&brief("delta.md"), &v))?;
@@ -932,6 +934,8 @@ pub enum Asker {
     Checker,
     /// Any other agent.
     Agent(String),
+    /// The hub, when your posting rule passed for the checked review.
+    Hub,
 }
 
 fn worktree_tokens(e: &Pr) -> (Vec<(String, Value)>, Value) {
@@ -996,7 +1000,9 @@ pub async fn post(shared: &Shared, key: &str, dry: bool, asker: Asker, seen: Opt
     let cfg = super::config(shared)?;
     let (mut e, mode) = {
         let core = shared.lock();
-        (super::get(&core, key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?, super::post_mode(&core, &cfg))
+        let e = super::get(&core, key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+        let mode = super::post_mode(&core, &cfg, Some(&e.repo));
+        (e, mode)
     };
     if e.state != "reviewing" {
         bail!("{} has no round in progress", e.short());
@@ -1004,13 +1010,14 @@ pub async fn post(shared: &Shared, key: &str, dry: bool, asker: Asker, seen: Opt
     if !dry {
         match &asker {
             Asker::Agent(_) => bail!("only {}'s checker, or you, can post its review", e.short()),
+            Asker::Checker if mode == "rule" => bail!("posting in {} is a rule the hub checks once you've previewed the review; preview it and stop", e.repo),
             Asker::Checker if mode != "auto" => {
                 bail!("post = \"ask\": {} posts this review, not the checker; preview it and stop", github::login().await.unwrap_or_else(|_| "the user".into()))
             }
             _ => {}
         }
         if mode != "auto" && e.phase() != "awaiting" {
-            bail!("{} round {} isn't waiting for you (post = \"ask\" and its phase is {}); nothing was posted", e.short(), e.round, e.phase());
+            bail!("{} round {} isn't waiting for you (posting is {mode} and its phase is {}); nothing was posted", e.short(), e.round, e.phase());
         }
     }
     let path = draft_path(&e, "review.verified.json").ok_or_else(|| anyhow!("{key} has no worktree"))?;
@@ -1079,7 +1086,7 @@ pub async fn post(shared: &Shared, key: &str, dry: bool, asker: Asker, seen: Opt
         &mut core,
         &e,
         "posted",
-        json!({ "round": e.round, "head": head, "verdict": verdict, "review_id": res["review_id"], "note": note, "by": if asker == Asker::Owner { "you" } else { "checker" } }),
+        json!({ "round": e.round, "head": head, "verdict": verdict, "review_id": res["review_id"], "note": note, "by": match asker { Asker::Owner => "you", Asker::Hub => "rule", _ => "checker" } }),
         &Who::Hub,
     )?;
     if let (Some(d), Some(url)) = (super::docket_of(&core, key), res["url"].as_str()) {
@@ -1089,6 +1096,99 @@ pub async fn post(shared: &Shared, key: &str, dry: bool, asker: Asker, seen: Opt
     core.review.attention.remove(key);
     core.review.check_now.notify_one();
     Ok(res)
+}
+
+// ---- Posting by your rule ----
+
+/// The facts a posting rule is checked against: the PR, as an effort
+/// function sees it, and its checked review.
+pub fn posting_facts(e: &Pr, draft: &Value) -> Value {
+    let mut v = effort_view(e, e.round, None);
+    let blocking = super::post::blocking_count(draft);
+    let total = draft["findings"].as_array().map_or(0, Vec::len);
+    v["verdict"] = json!(match draft["event"].as_str() {
+        Some("APPROVE") => "approve",
+        Some("REQUEST_CHANGES") => "request_changes",
+        _ => "none",
+    });
+    v["blocking"] = json!(blocking);
+    v["non_blocking"] = json!(total - blocking);
+    v["findings"] = json!(total);
+    if draft["merge_risk"].is_object()
+        && let Ok(r) = super::post::risk_level(&draft["merge_risk"])
+    {
+        v["merge_risk"] = json!(r);
+    }
+    v
+}
+
+/// What the hub did with a checked review.
+#[derive(Debug, PartialEq)]
+pub enum Decided {
+    /// Posting wasn't a rule when the round's checker started: you decide.
+    NotRule,
+    Posted,
+    /// It waits for you, and why.
+    Waits(String),
+}
+
+/// Under a posting rule, the hub decides once for each checked review:
+/// post it (through the same refusals, pinned to the digest it checked),
+/// or leave it waiting for you with the reason. Both go on the record.
+pub async fn decide(shared: &Shared, key: &str) -> Result<Decided> {
+    let cfg = super::config(shared)?;
+    let (mut e, rule) = {
+        let core = shared.lock();
+        let e = super::get(&core, key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
+        let rule = super::post_for(&core, &cfg, Some(&e.repo));
+        (e, rule)
+    };
+    if e.checker_post.as_deref() != Some("rule") || e.state != "reviewing" || e.phase() != "awaiting" {
+        return Ok(Decided::NotRule);
+    }
+    let Some(path) = draft_path(&e, "review.verified.json") else { return Ok(Decided::NotRule) };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(Decided::Waits("there's no checked review for your rule to look at".into()));
+    };
+    let digest = draft_digest(&text);
+    let (round, head) = (e.round, e.round_head.clone());
+    let decided = e.post_decision.clone().filter(|d| d["round"] == json!(round) && d["head"] == json!(head) && d["digest"] == json!(digest));
+    let decision = match decided {
+        Some(d) => d,
+        None => {
+            let d = match serde_json::from_str::<Value>(&text) {
+                Ok(draft) => rule.decide(&posting_facts(&e, &draft), &cfg.path),
+                Err(err) => super::posting::Decision { auto: false, why: format!("the checked review isn't valid JSON ({err})") },
+            };
+            let v = json!({ "round": round, "head": head, "digest": digest, "auto": d.auto, "why": d.why });
+            e.post_decision = Some(v.clone());
+            let mut core = shared.lock();
+            super::save(&mut core, &mut e)?;
+            super::event(&mut core, &e, "decided", json!({ "round": round, "head": head, "auto": d.auto, "why": d.why, "rule": rule.json() }), &Who::Hub)?;
+            v
+        }
+    };
+    if decision["auto"] != json!(true) {
+        return Ok(Decided::Waits(decision["why"].as_str().unwrap_or_default().to_string()));
+    }
+    if let Some(r) = decision["refused"].as_str() {
+        return Ok(Decided::Waits(format!("your rule would post it, but the post was refused: {r}")));
+    }
+    match post(shared, key, false, Asker::Hub, Some(&digest)).await {
+        Ok(_) => Ok(Decided::Posted),
+        Err(err) => {
+            let err = format!("{err:#}");
+            let mut core = shared.lock();
+            if let Some(mut e) = super::get(&core, key)? {
+                if let Some(d) = e.post_decision.as_mut() {
+                    d["refused"] = json!(err);
+                }
+                super::save(&mut core, &mut e)?;
+                super::event(&mut core, &e, "post-refused", json!({ "round": round, "head": head, "error": err }), &Who::Hub)?;
+            }
+            Ok(Decided::Waits(format!("your rule would post it, but the post was refused: {err}")))
+        }
+    }
 }
 
 /// Keep the round's work on its docket before cleanup removes the
@@ -1313,6 +1413,76 @@ pub async fn pickup(shared: &Shared, repo: &str, n: i64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_rule_decides_once_per_checked_review_and_says_why() {
+        let wt = std::env::temp_dir().join(format!("wh-decide-{}", std::process::id()));
+        let out = wt.join(".tmp/rounds/1");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::create_dir_all(wt.join(".tmp/context/round-1")).unwrap();
+        std::fs::write(wt.join(".tmp/context/round-1/pr.json"), r#"{"files":[{"path":"src/api.rs"}],"labels":[{"name":"safe"}]}"#).unwrap();
+        let shared = Shared::new(crate::hub::test_core());
+        // The hub's cached config, so nothing reads your own review.lua.
+        let cfg = super::super::config::from_value(
+            super::super::config::path(),
+            json!({ "repos": { "acme/api": { "checkout": wt, "post": { "auto": { "verdict": "approve", "max_lines": 100, "labels": "safe" } } } } }),
+        )
+        .unwrap();
+        let mtime = std::fs::metadata(super::super::config::path()).and_then(|m| m.modified()).ok().max(crate::settings::mtime());
+        shared.lock().review.config = Some((std::sync::Arc::new(cfg), mtime));
+        let key = "acme/api#42";
+        let mut e = Pr {
+            repo: "acme/api".into(),
+            pr: 42,
+            state: "reviewing".into(),
+            phase: Some("awaiting".into()),
+            round: 1,
+            round_head: Some("a1b2c3d4".into()),
+            worktree: Some(wt.display().to_string()),
+            author: Some("dana".into()),
+            additions: Some(30),
+            deletions: Some(4),
+            checker_post: Some("rule".into()),
+            ..Default::default()
+        };
+        let d = super::super::save(&mut shared.lock(), &mut e).unwrap();
+        let count = |s: &Shared| s.lock().store.state(&d).unwrap().unwrap().entries;
+
+        // It requests changes: it waits for you, and the record says why, once.
+        let blocking = r#"{"event":"REQUEST_CHANGES","verdict":"Retries can loop.","findings":[{"severity":"blocking","bullet":"Retries can loop forever."}]}"#;
+        std::fs::write(out.join("review.verified.json"), blocking).unwrap();
+        assert_eq!(decide(&shared, key).await.unwrap(), Decided::Waits("it requests changes (auto needs an approval)".into()));
+        let n = count(&shared);
+        assert_eq!(decide(&shared, key).await.unwrap(), Decided::Waits("it requests changes (auto needs an approval)".into()));
+        assert_eq!(count(&shared), n, "decided once");
+        let e1 = super::super::get(&shared.lock(), key).unwrap().unwrap();
+        assert_eq!(e1.post_decision.as_ref().unwrap()["auto"], json!(false));
+
+        // A new checked review that the rule passes: the hub posts it, and
+        // a post the refusals stop waits for you with the reason.
+        std::fs::write(out.join("review.verified.json"), r#"{"event":"APPROVE","verdict":"Looks right.","findings":[]}"#).unwrap();
+        let Decided::Waits(why) = decide(&shared, key).await.unwrap() else { panic!("the post is refused: no merge risk") };
+        assert!(why.starts_with("your rule would post it, but the post was refused: the draft has no merge_risk"), "{why}");
+        let e2 = super::super::get(&shared.lock(), key).unwrap().unwrap();
+        assert_eq!(e2.post_decision.as_ref().unwrap()["auto"], json!(true));
+        assert_eq!(e2.post_decision.as_ref().unwrap()["why"], "it approves, it changes 34 lines, and it's labeled `safe`");
+        assert!(e2.post_decision.as_ref().unwrap()["refused"].is_string());
+        let n = count(&shared);
+        assert!(matches!(decide(&shared, key).await.unwrap(), Decided::Waits(_)));
+        assert_eq!(count(&shared), n, "a refused post isn't tried again");
+        let bodies: Vec<String> = shared.lock().store.entries(&d).unwrap().iter().filter_map(|s| s.entry().unwrap().body).collect();
+        assert!(bodies.iter().any(|b| b == "Round 1's checked review waits for you: it requests changes (auto needs an approval)."), "{bodies:?}");
+        assert!(bodies.iter().any(|b| b == "Round 1's checked review posts itself, by your rule: it approves, it changes 34 lines, and it's labeled `safe`."), "{bodies:?}");
+        assert!(bodies.iter().any(|b| b.starts_with("Your rule would post round 1, but the post was refused: the draft has no merge_risk")), "{bodies:?}");
+
+        // A round whose checker started under ask: yours to decide.
+        let mut e3 = super::super::get(&shared.lock(), key).unwrap().unwrap();
+        e3.checker_post = Some("ask".into());
+        super::super::save(&mut shared.lock(), &mut e3).unwrap();
+        assert_eq!(decide(&shared, key).await.unwrap(), Decided::NotRule);
+        assert!(shared.lock().verify(&d).unwrap().ok);
+        let _ = std::fs::remove_dir_all(&wt);
+    }
 
     #[test]
     fn a_rounds_work_is_kept_on_its_docket() {

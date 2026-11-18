@@ -207,7 +207,7 @@ final class Store {
         for p in state.prs {
             guard let a = p.attention else { continue }
             let d = p.docket.flatMap { state.byId[$0] }
-            let what = a.kind == "ready" ? draftLine(p) ?? a.text : a.text
+            let what = a.kind == "ready" ? [draftLine(p) ?? a.text, p.waitsWhy.map { "waits for you: \($0)" }].compactMap { $0 }.joined(separator: " · ") : a.text
             items.append(InboxItem(kind: .review, docket: d, docketId: p.docket ?? p.key, title: d?.title ?? "Review \(p.key)\(p.title.map { ": \($0)" } ?? "")", line: "\(attention[a.kind] ?? "Needs you") (round \(a.round)): \(what)", at: p.updatedAt, msg: nil, pr: p, id: "rv:\(p.fullKey)"))
         }
         for m in state.messages {

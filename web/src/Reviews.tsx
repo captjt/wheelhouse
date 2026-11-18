@@ -19,6 +19,14 @@ export function draftLine(p: ReviewPr): string | null {
   return [ask, `${d.blocking} blocking, ${d.non_blocking} non-blocking`, d.merge_risk && `merge risk ${d.merge_risk}`].filter(Boolean).join(" · ");
 }
 
+/** Why a checked review waits for you under a posting rule, or null. */
+export function waitsWhy(p: ReviewPr): string | null {
+  const d = p.post_decision;
+  if (!d) return null;
+  if (d.refused) return `your rule would post it, but the post was refused: ${d.refused}`;
+  return d.auto ? null : d.why;
+}
+
 /** What a PR's review is doing, in a couple of words. */
 export function phaseText(p: ReviewPr, paused?: boolean): string {
   if (p.attention?.kind === "ready") return "Ready to post";
@@ -171,8 +179,9 @@ export function ReviewPanel({ d }: { d: Docket }) {
   const rv = hub.state?.review;
   const p = rv?.prs.find((x) => x.docket === d.id);
   if (!rv?.enabled || !p) return null;
-  const auto = rv.post === "auto";
+  const auto = (p.post ?? rv.post) === "auto";
   const att = p.attention;
+  const why = waitsWhy(p);
   return (
     <section className={`rv-panel${att ? " rv-alert" : ""}`}>
       <div className="rv-head">
@@ -216,6 +225,7 @@ export function ReviewPanel({ d }: { d: Docket }) {
               <div className="rv-draft">
                 <span className="rv-draft-line">{draftLine(p)}</span>
                 {p.draft.verdict && <span className="rv-draft-verdict">{p.draft.verdict}</span>}
+                {why && <span className="rv-draft-why">Waits for you: {why}</span>}
               </div>
             ) : (
               <div className="callout-msg">{att.text}</div>
@@ -309,6 +319,10 @@ export function ReviewsView() {
   }, [rv]);
   const live = (rv?.prs ?? []).filter((p) => ["queued", "reviewing", "posted"].includes(p.state)).length;
   const cfg = rv?.config;
+  // Rules: a rule, or a repo that posts its own way. The switch shows the
+  // override (wh review post-mode) when there is one, else the config.
+  const ruled = cfg?.post === "rule" || Object.keys(cfg?.repo_posts ?? {}).length > 0;
+  const posting = rv?.post_override ?? (ruled ? "rule" : cfg?.post === "auto" ? "auto" : "ask");
 
   return (
     <div className="view">
@@ -319,13 +333,17 @@ export function ReviewsView() {
         <span className="spacer" />
         {rv?.enabled && (
           <>
-            <div className="seg seg-text" title="Who posts a checked review: you (Ask), or the checker (Auto)">
-              <button className={rv.post !== "auto" ? "on" : ""} onClick={() => rv.post === "auto" && set({ post: "ask" }, "You post each review")}>
-                Ask
-              </button>
-              <button className={rv.post === "auto" ? "on" : ""} onClick={() => rv.post !== "auto" && set({ post: "auto" }, "The checker posts each review")}>
-                Auto
-              </button>
+            <div className="seg seg-text" title={ruled ? "Who posts a checked review: you (Ask), the checker (Auto), or your rules, repo by repo (Rules, in Settings)" : "Who posts a checked review: you (Ask), or the checker (Auto)"}>
+              {(["ask", "auto"] as const).map((m) => (
+                <button key={m} className={posting === m ? "on" : ""} onClick={() => posting !== m && set({ post: rv.post_override && !ruled && cfg?.post === m ? "config" : m }, m === "auto" ? "The checker posts each review" : "You post each review")}>
+                  {m === "ask" ? "Ask" : "Auto"}
+                </button>
+              ))}
+              {ruled && (
+                <button className={posting === "rule" ? "on" : ""} onClick={() => posting !== "rule" && set({ post: "config" }, "Each repo posts as your rules say")}>
+                  Rules
+                </button>
+              )}
             </div>
             <button className="btn btn-ghost" onClick={() => set({ paused: !rv.paused }, rv.paused ? "Reviews resumed" : "Reviews paused: no new rounds start")}>
               {rv.paused ? <IconPlay size={13} /> : <IconPause size={13} />} <span className="rv-btn-label">{rv.paused ? "Resume" : "Pause"}</span>
