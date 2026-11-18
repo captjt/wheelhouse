@@ -604,6 +604,9 @@ async fn approve_plan(shared: &Shared, t: &mut Task, note: &str, auto: bool) -> 
         let mut core = shared.lock();
         let who = if auto { Who::Hub } else { Who::Owner };
         let s = core.append(&t.docket, "intent", &who, Some(plan::intent(&p)), json!({ "source": "plan", "version": t.plan_version }))?;
+        if let Some(md) = t.plan.clone() {
+            keep(&mut core, t, format!("The approved plan (v{})", t.plan_version), format!("plan-v{}.md", t.plan_version), md.into_bytes(), "Plan", json!({ "role": "plan", "version": t.plan_version }));
+        }
         core.append(&t.docket, "approval", &who, if note.trim().is_empty() { None } else { Some(note.trim().to_string()) }, json!({ "what": "plan", "gate": "plan", "version": t.plan_version, "intent_seq": s.seq, "auto": auto }))?;
     }
     let mut msg = String::from("The plan is approved.\n\nThe decisions, as they stand (each answer is also in .tmp/decisions/):\n");
@@ -730,6 +733,14 @@ async fn start_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     Ok(())
 }
 
+/// Keep a file the Build made on its docket; a failure is logged, never the Build's.
+fn keep(core: &mut crate::hub::Core, t: &Task, title: String, name: String, bytes: Vec<u8>, group: &str, extra: Value) {
+    let a = crate::artifacts::New { title, name, bytes: Some(bytes), url: None, source: "build".into(), group: Some(group.into()), extra };
+    if let Err(e) = crate::artifacts::attach(core, &t.docket, &Who::Hub, a) {
+        say!("build: {}: keeping a file: {e:#}", t.docket);
+    }
+}
+
 async fn after_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     let w = wt(t);
     let n = t.check_n;
@@ -748,6 +759,11 @@ async fn after_check(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     {
         let mut core = shared.lock();
         core.append(&t.docket, "verdict", &Who::Hub, c["summary"].as_str().map(str::to_string), json!({ "role": "checker", "n": n, "verdict": verdict, "findings": findings.len(), "head": head }))?;
+        for (file, title, role) in [(format!("check-{n}.json"), format!("Check {n}"), "check"), (format!("report-{n}.md"), format!("Check {n}'s report"), "check-report")] {
+            if let Ok(bytes) = std::fs::read(w.join(".tmp/check").join(&file)) {
+                keep(&mut core, t, title, file, bytes, "Checks", json!({ "role": role, "n": n, "head": head }));
+            }
+        }
     }
     if verdict == "fix" && !findings.is_empty() && t.fix_used < cfg.fix_loops {
         t.fix_used += 1;

@@ -27,6 +27,21 @@ wh intent D-12 - < intent.md
 Leave a note on the record for anything someone should find later:
 `wh note D-12 "Chose a token bucket; see bench/limits.md"`.
 
+## Keeping what you made
+
+Something you made that the user should be able to open later (a report,
+a design doc, a page, a screenshot, a benchmark's results), especially from
+`.tmp/` or a scratch folder that goes away: attach it to your docket. The
+record pins a file by its hash, so it's checkable later.
+
+```sh
+wh attach report.md --title "Load test results"
+wh attach https://claude.ai/artifact/… --title "Retry design"   # a link
+```
+
+A Claude artifact you link in your reply is kept as a link on its own.
+Don't attach secrets, `.env` files, or anything with credentials in it.
+
 ## Reaching the user
 
 A decision only the user can make, or something they should know while

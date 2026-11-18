@@ -257,6 +257,18 @@ export type EntryView = {
   key?: string | null;
 };
 
+/** The record as the record view reads it: each entry with its key, mark and problems. */
+export type RecordEntry = EntryView & { blobs: string[]; replaces?: string | null; keyid?: string | null; problems: string[] };
+export type RecordView = {
+  docket: string;
+  title: string;
+  head: string;
+  short_head: string;
+  keys: { keyid: string; name?: string | null; entries: number }[];
+  verify: Verify;
+  entries: RecordEntry[];
+};
+
 export type Verify = {
   docket: string;
   ok: boolean;

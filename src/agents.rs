@@ -265,7 +265,14 @@ fn flush_turn(core: &mut Core, block: &str) -> Result<()> {
     let Some(t) = core.agents.by_block.get(block) else { return Ok(()) };
     let docket = t.docket.clone();
     let summary = pt.message.as_deref().and_then(summarize);
+    let links = pt.message.clone();
     core.append(&docket, "turn", &Who::Hub, pt.message, json!({ "state": pt.status, "summary": summary }))?;
+    // A Claude artifact the turn names is kept with the docket, as a link.
+    if let Some(text) = links
+        && let Err(e) = crate::artifacts::keep_links(core, &docket, &text)
+    {
+        say!("{docket}: keeping the turn's links: {e:#}");
+    }
     Ok(())
 }
 

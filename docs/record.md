@@ -111,8 +111,16 @@ concept).
 | `observed` | hub | Something the hub saw in Rex: `what` (`blocked`, `error`), `kind`, `record` |
 | `set` | person, hub | Any of `title`, `title_source`, `status` |
 | `release` | hub | The session no longer holds the docket: `reason` |
+| `artifact` | hub, agent, person | Something the work made, kept with the docket. `body` is its title. A file: `name`, `media_type`, `size`, `digest` (`sha256:<hex>`, also in `blobs`). A link: `url`, `provider` (`claude`). Also `source` (`review`, `build`, `agent`, `turn`, `you`), `group` (`Round 3`, `Plan`), and per source `round`, `role`, `reviewer` |
 
 Status is one of `todo`, `in_progress`, `done`, `dropped`.
+
+## Files
+
+An entry's `blobs` names files by `sha256:<hex>` of their exact bytes. The
+hub keeps each file once, in its store's `blobs` table, under that hex. The
+signature covers the digest, so the record pins the bytes: a changed file
+no longer matches, and a lost one is missing. A file is at most 25 MB.
 
 ## Rebuilding a docket
 
@@ -137,9 +145,16 @@ Applying entries in order, from nothing:
 4. The envelope's `payloadType` is the entry type above, and its one
    signature checks against a known key.
 5. The payload is an entry for this docket.
+6. Every file an entry names is kept, and (in the full check: `wh verify`,
+   the app's record view) its bytes hash to the digest.
 
 A changed byte fails 2 (or 4, if the id was recomputed). A removed or
-reordered entry fails 1 or 3.
+reordered entry fails 1 or 3. A changed or lost file fails 6.
+
+What a passing check means: since each entry was written, nothing in it has
+changed, nothing was removed, added in between or reordered, each was signed
+by the key it names, and each file is as it was. It doesn't mean an entry is
+true: its mark says how it's known.
 
 ## Export
 

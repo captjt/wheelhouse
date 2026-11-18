@@ -82,7 +82,8 @@ from Cloudflare's Kumo design system; the tokens are at the top of
 | `wh new "title"` | Open a docket by hand. |
 | `wh note D-4 "text"` | Add a note. From an agent's pane, it's signed as the agent. |
 | `wh set D-4 --title … --status done` | Rename, or set the status. |
-| `wh verify [D-4]` | Check ids, order, chain and signatures. |
+| `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned in the record by its hash) or a link with a docket. From an agent's pane, its own. |
+| `wh verify [D-4]` | Check ids, order, chain and signatures, and every kept file against its hash. |
 | `wh export D-4 > D-4.jsonl`, `wh verify --file D-4.jsonl` | A record that checks without the hub. |
 | `wh build start D-12\|owner/name#45\|GRD-142 [--repo owner/name]` | Build it: a builder plans and builds, a checker checks, you approve the plan and the PR (docs/build.md). |
 | `wh build`, `wh build discard D-12`, `pause`, `resume` | Builds at a glance; stop one (its branch stays). |

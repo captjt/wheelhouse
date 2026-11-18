@@ -97,6 +97,12 @@ CREATE TABLE IF NOT EXISTS keys (
   name TEXT NOT NULL,
   added_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS blobs (  -- files entries name, by the sha256 of their bytes; never changed
+  digest TEXT PRIMARY KEY,
+  size INTEGER NOT NULL,
+  bytes BLOB NOT NULL,
+  added_at TEXT NOT NULL
+);
 ";
 
 /// Columns added after a table was first made.
@@ -130,6 +136,25 @@ impl Store {
         conn.execute_batch(SCHEMA)?;
         migrate(&conn)?;
         Ok(Store { conn })
+    }
+
+    #[cfg(test)]
+    pub fn conn_for_tests(&self) -> &Connection {
+        &self.conn
+    }
+
+    /// Keep a file under the hex sha256 of its bytes (once).
+    pub fn put_blob(&mut self, digest: &str, bytes: &[u8], at: &str) -> Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO blobs (digest, size, bytes, added_at) VALUES (?1, ?2, ?3, ?4)", params![digest, bytes.len() as i64, bytes, at])?;
+        Ok(())
+    }
+
+    pub fn blob(&self, digest: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.conn.query_row("SELECT bytes FROM blobs WHERE digest = ?1", params![digest], |r| r.get::<_, Vec<u8>>(0)).optional()?)
+    }
+
+    pub fn has_blob(&self, digest: &str) -> Result<bool> {
+        Ok(self.conn.query_row("SELECT 1 FROM blobs WHERE digest = ?1", params![digest], |_| Ok(())).optional()?.is_some())
     }
 
     pub fn meta_get(&self, k: &str) -> Result<Option<String>> {

@@ -7,6 +7,7 @@ import { nav } from "./mobile";
 import { IconBack, IconBuild, IconInfo } from "./icons";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { IntentSection } from "./Intent";
+import { ArtifactViewer, ArtifactsSection, RecordViewer } from "./Artifacts";
 import { markdownKeys } from "./Editor";
 import { MessageCard } from "./Messages";
 import { ReviewPanel } from "./Reviews";
@@ -30,6 +31,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const phone = usePhone();
   const [details, setDetails] = useState(false);
+  const [viewing, setViewing] = useState<EntryView | null>(null);
+  const [record, setRecord] = useState(false);
 
   const ids = lastList.ids;
   const pos = ids.indexOf(id);
@@ -179,20 +182,25 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
 
           <div className="props-section">Record</div>
           <Prop label="Check">
-            <span className={`prop-val ${verify.ok ? "ok" : "bad"}`}>
+            <button className={`prop-btn ${verify.ok ? "ok" : "bad"}`} onClick={() => setRecord(true)} title="Open the record: every signed entry, and what the check means">
               <IconShield size={14} />
-              {verify.ok ? `Intact · ${verify.entries} signed` : verify.problems[0]}
-            </span>
+              <span className="prop-text">{verify.ok ? `Intact · ${verify.entries} signed` : verify.problems[0]}</span>
+            </button>
           </Prop>
           <Prop label="Head">
             <button className="prop-btn mono-s" title={`Copy: Docket: ${d.id} @ ${d.short_head}`} onClick={() => navigator.clipboard?.writeText(`Docket: ${d.id} @ ${d.short_head}`)}>
               {d.short_head}
             </button>
           </Prop>
-          <Prop label="Export">
-            <a className="prop-btn" href={`/api/dockets/${d.id}/export`} download={`${d.id}.jsonl`}>
-              <IconDownload size={14} /> {d.id}.jsonl
-            </a>
+          <Prop label="Record">
+            <span className="prop-pair">
+              <button className="prop-btn" onClick={() => setRecord(true)} title="Read the record here">
+                Open
+              </button>
+              <a className="prop-btn" href={`/api/dockets/${d.id}/export`} download={`${d.id}.jsonl`} title="Download it: it checks without the hub (wh verify --file)">
+                <IconDownload size={14} /> {d.id}.jsonl
+              </a>
+            </span>
           </Prop>
         </aside>
   );
@@ -325,17 +333,18 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             ))}
 
           <IntentSection d={d} entries={entries} onSaved={reload} />
+          <ArtifactsSection entries={entries} onOpen={setViewing} />
 
           <div className="activity-head">
             <span>Activity</span>
             <span className="spacer" />
-            <span className={`verify-chip ${verify.ok ? "ok" : "bad"}`} title={verify.ok ? `Every entry's id, chain link and signature checks. Head ${verify.head}` : verify.problems.join("\n")}>
+            <button className={`verify-chip ${verify.ok ? "ok" : "bad"}`} onClick={() => setRecord(true)} title={verify.ok ? `Every entry's id, chain link and signature checks. Head ${verify.head}. Open the record.` : verify.problems.join("\n")}>
               <IconShield size={13} /> {verify.ok ? `Verified · ${verify.entries} signed` : "Record doesn't check"}
-            </span>
+            </button>
           </div>
           <div className="activity">
             {entries.map((e) => (
-              <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} />
+              <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} onOpen={setViewing} />
             ))}
           </div>
           <Composer ref={composerRef} onSend={(t) => hub.note(d.id, t).then(reload)} />
@@ -353,6 +362,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
         )}
       </div>
       {menu.node}
+      {viewing && <ArtifactViewer e={viewing} onClose={() => setViewing(null)} />}
+      {record && <RecordViewer d={d} onClose={() => setRecord(false)} />}
       {linking !== false && (
         <LinearModal
           title={`Link a Linear issue to ${d.id}`}
@@ -386,7 +397,7 @@ function Prop({ label, children }: { label: string; children: ReactNode }) {
 
 // ---- the activity feed ----
 
-function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
+function Activity({ e, d, owner, onOpen }: { e: EntryView; d: Docket; owner: string; onOpen: (e: EntryView) => void }) {
   const agent = appName(d.agent?.app);
   const time = (
     <span className="act-time" title={`${stamp(e.at)}\n#${e.seq} · ${e.mark}, signed by ${e.key || "?"}\n${e.id}`}>
@@ -556,6 +567,21 @@ function Activity({ e, d, owner }: { e: EntryView; d: Docket; owner: string }) {
           {e.body ? <>: <span className="act-path">{e.body}</span></> : null}
         </>,
         ok ? "approved" : "denied",
+      );
+    }
+    case "artifact": {
+      const by = e.actor.type === "person" ? you : e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : hubA;
+      const name = e.actor.type === "person" ? "You" : e.actor.type === "agent" ? appName(String(e.actor.id).split("@")[0]) : "Wheelhouse";
+      return sys(
+        by,
+        <>
+          <b>{name}</b> {data.url ? "linked" : "kept"}{" "}
+          <button className="act-link link-btn" onClick={() => onOpen(e)}>
+            {e.body || data.name}
+          </button>
+          {data.group ? <span className="muted"> · {data.group}</span> : null}
+        </>,
+        "artifact",
       );
     }
     case "release":
