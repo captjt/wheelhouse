@@ -142,9 +142,6 @@ struct Sidebar: View {
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) { SidebarFoot() }
         .toolbar {
-            if Flavor.isDev {
-                ToolbarItem(placement: .navigation) { DevBadge() }
-            }
             ToolbarItem {
                 Button { nav.palette = true } label: { Label("Search", systemImage: "magnifyingglass") }
                     .help("Search dockets and commands (⌘K)")
@@ -178,7 +175,8 @@ struct SidebarFoot: View {
                     Text(Flavor.build ?? "Wheelhouse Dev").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
             }
-            if let s = store.state {
+            // Dev has Rex, Linear and the hooks off on purpose: no hints to turn them on.
+            if let s = store.state, !Flavor.isDev {
                 if !s.hooks { hint("Hooks off", "wh hooks install", "Claude Code's hooks are off, so dockets are named after their panes and turns carry no message.", symbol: "link") }
                 if !s.linear { hint("Linear off", "wh setup-linear", "Connect Linear to start dockets from issues and link issues to dockets.", symbol: "circle.hexagongrid") }
             }
@@ -202,11 +200,13 @@ struct SidebarFoot: View {
     }
 
     private var dotColor: Color {
+        if Flavor.isDev, store.state != nil { return K.brand }
         guard let s = store.state else { return store.error == nil ? K.faint : K.error }
         return s.rexConnected && store.live ? K.working : K.blocked
     }
 
     private var connection: String {
+        if Flavor.isDev, store.state != nil { return "Nothing live" }
         guard let s = store.state else { return store.error == nil ? "Connecting…" : "Hub unreachable" }
         if !store.live { return store.wasLive ? "Reconnecting to the hub…" : "Connecting…" }
         return s.rexConnected ? "Following Rex" : "Rex: \(s.rexError ?? "connecting")"
