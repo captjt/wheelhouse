@@ -1,8 +1,10 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { appName, post, type Docket, type EntryView } from "./api";
 import { IconEdit, IconHistory, IconIssue } from "./icons";
 import { agoLong, stamp } from "./live";
 import { Kbd, Modal, Prose, useToast } from "./ui";
+import { MarkdownEditor, type EditorHandle } from "./Editor";
+import { renderMarkdown, toggleTask } from "./markdown";
 
 /** Who wrote an intent version, in words. */
 function author(e: { actor: EntryView["actor"]; data: EntryView["data"] }, d: Docket) {
@@ -23,7 +25,7 @@ export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: Ent
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState(false);
-  const area = useRef<HTMLTextAreaElement>(null);
+  const area = useRef<EditorHandle>(null);
   const versions = useMemo(() => entries.filter((e) => e.kind === "intent"), [entries]);
   const current = versions[versions.length - 1];
   const intent = d.intent;
@@ -36,6 +38,23 @@ export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: Ent
     setEditing(true);
     window.setTimeout(() => area.current?.focus(), 0);
   };
+  // Ticking a box in the intent saves a new version, as an edit would.
+  const tick = useCallback(
+    (index: number, checked: boolean): Promise<boolean> => {
+      const body = d.intent?.body ?? "";
+      const count = (renderMarkdown(body).match(/<input /g) ?? []).length;
+      const next = toggleTask(body, index, checked, count);
+      if (next === null) {
+        toast("That box isn't plain in the text: edit the intent to change it", "error");
+        return Promise.resolve(false);
+      }
+      return post(`/api/dockets/${d.id}/intent`, { body: next }).then(
+        () => (toast(`${d.id}: ${checked ? "ticked off" : "unticked"}, saved as version ${(d.intent_versions ?? 0) + 1}`), onSaved(), true),
+        (e: Error) => (toast(e.message, "error"), false),
+      );
+    },
+    [d.id, d.intent?.body, d.intent_versions, onSaved, toast],
+  );
   const save = () => {
     if (busy) return;
     setBusy(true);
@@ -93,31 +112,30 @@ export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: Ent
       )}
       {editing ? (
         <div className="intent-editor">
-          <textarea
+          <MarkdownEditor
             ref={area}
             value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={Math.min(24, Math.max(6, text.split("\n").length + 1))}
-            placeholder={"What must be true when this is done?\n\n## Acceptance\n- …\n\n## Out of scope\n- …"}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), save());
-              if (e.key === "Escape") (e.preventDefault(), e.stopPropagation(), setEditing(false));
-            }}
+            onChange={setText}
+            onSubmit={save}
+            onCancel={() => setEditing(false)}
+            placeholder={"What must be true when this is done?\n\n## Acceptance\n- [ ] …\n\n## Out of scope\n- …"}
+            footer={
+              <div className="intent-bar">
+                <span className="muted small">Each save is a new version on the record, signed as you.</span>
+                <span className="spacer" />
+                <button className="btn btn-small" onClick={() => setEditing(false)}>
+                  Cancel
+                </button>
+                <button className="btn btn-primary btn-small" disabled={busy || text.trim() === (intent?.body ?? "").trim()} onClick={save}>
+                  Save <Kbd>⌘↩</Kbd>
+                </button>
+              </div>
+            }
           />
-          <div className="intent-bar">
-            <span className="muted small">Markdown. Each save is a new version on the record, signed as you.</span>
-            <span className="spacer" />
-            <button className="btn btn-small" onClick={() => setEditing(false)}>
-              Cancel
-            </button>
-            <button className="btn btn-primary btn-small" disabled={busy || text.trim() === (intent?.body ?? "").trim()} onClick={save}>
-              Save <Kbd>⌘↩</Kbd>
-            </button>
-          </div>
         </div>
       ) : intent?.body.trim() ? (
         <div className="intent-body" onDoubleClick={edit}>
-          <Prose text={intent.body} />
+          <Prose text={intent.body} onTask={tick} />
         </div>
       ) : (
         <button className="intent-empty" onClick={edit}>
@@ -134,6 +152,8 @@ function IntentHistory({ d, versions, onClose }: { d: Docket; versions: EntryVie
   const v = versions[i];
   const prev = versions[i - 1];
   const diff = useMemo(() => lineDiff(prev?.body ?? "", v?.body ?? ""), [prev, v]);
+  const [view, setView] = useState<"rendered" | "changes">("rendered");
+  const showing = prev ? view : "rendered";
   return (
     <Modal onClose={onClose} className="history-modal">
       <div className="hist">
@@ -154,16 +174,33 @@ function IntentHistory({ d, versions, onClose }: { d: Docket; versions: EntryVie
           <div className="hist-title">
             v{i + 1} · {author(v, d)} · {stamp(v.at)}
             <span className="spacer" />
-            <span className="muted small">{prev ? `changes from v${i}` : "first version"}</span>
+            {prev ? (
+              <span className="seg seg-text hist-seg">
+                <button className={showing === "rendered" ? "on" : ""} onClick={() => setView("rendered")}>
+                  Rendered
+                </button>
+                <button className={showing === "changes" ? "on" : ""} onClick={() => setView("changes")} title={`What changed from v${i}`}>
+                  Changes
+                </button>
+              </span>
+            ) : (
+              <span className="muted small">first version</span>
+            )}
           </div>
-          <pre className="diff">
-            {diff.map((l, n) => (
-              <div key={n} className={`dl dl-${l.op}`}>
-                <span className="dl-op">{l.op === "add" ? "+" : l.op === "del" ? "−" : " "}</span>
-                {l.text || " "}
-              </div>
-            ))}
-          </pre>
+          {showing === "rendered" ? (
+            <div className="hist-rendered">
+              <Prose text={v?.body ?? ""} />
+            </div>
+          ) : (
+            <pre className="diff">
+              {diff.map((l, n) => (
+                <div key={n} className={`dl dl-${l.op}`}>
+                  <span className="dl-op">{l.op === "add" ? "+" : l.op === "del" ? "−" : " "}</span>
+                  {l.text || " "}
+                </div>
+              ))}
+            </pre>
+          )}
         </div>
       </div>
     </Modal>

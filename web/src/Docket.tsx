@@ -5,6 +5,7 @@ import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
 import { Kbd, Prose, useKeys, useMenu } from "./ui";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { IntentSection } from "./Intent";
+import { markdownKeys } from "./Editor";
 import { MessageCard } from "./Messages";
 import { ReviewPanel } from "./Reviews";
 import { BuildIt, BuildPanel } from "./Builds";
@@ -574,13 +575,14 @@ const Composer = forwardRef<HTMLTextAreaElement, { onSend: (t: string) => Promis
     <div className="composer">
       <textarea
         ref={ref}
-        placeholder="Leave a note on the record…"
+        placeholder="Leave a note on the record… (Markdown)"
         value={text}
         rows={text.split("\n").length > 2 ? 5 : 2}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), send());
-          if (e.key === "Escape") (e.currentTarget.blur(), e.stopPropagation());
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) return (e.preventDefault(), send());
+          if (e.key === "Escape") return (e.currentTarget.blur(), e.stopPropagation());
+          markdownKeys(e);
         }}
       />
       <div className="composer-bar">

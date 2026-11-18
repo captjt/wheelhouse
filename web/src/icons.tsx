@@ -202,3 +202,16 @@ export const IconRefresh = glyph("M13 8a5 5 0 1 1-1.5-3.6M13 2.8v2.6h-2.6");
 export const IconChart = glyph("M2.5 13h11M4.5 10.5v-3M8 10.5V4.5M11.5 10.5V6.5");
 export const IconClipboard = glyph("M5.5 3.5h-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1M6 2.5h4v2H6v-2Z");
 export const IconBuild = glyph("M9.5 2.8 13.2 6.5 11.4 8.3 7.7 4.6ZM8.6 5.5 3 11.1a1.3 1.3 0 0 0 1.9 1.9L10.5 7.4");
+// The Markdown toolbar.
+export const IconHeading = glyph("M4 3v10M12 3v10M4 8h8");
+export const IconBold = glyph("M4.5 3h4.2a2.3 2.3 0 0 1 0 4.6H4.5V3ZM4.5 7.6h4.9a2.7 2.7 0 0 1 0 5.4H4.5V7.6Z");
+export const IconItalic = glyph("M7 3h5M4 13h5M9.5 3l-3 10");
+export const IconStrike = glyph("M2.5 8h11M10.8 4.6C10.3 3.6 9.3 3 8 3 6.3 3 5 4 5 5.4c0 .9.5 1.6 1.4 2M5.2 11.3c.5 1 1.6 1.7 2.9 1.7 1.8 0 3.1-1 3.1-2.5 0-.9-.4-1.6-1.2-2");
+export const IconCode = glyph("M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5");
+export const IconLink = glyph("M7 9a2.8 2.8 0 0 0 4 0l2-2a2.8 2.8 0 0 0-4-4l-.8.8M9 7a2.8 2.8 0 0 0-4 0l-2 2a2.8 2.8 0 0 0 4 4l.8-.8");
+export const IconQuote = glyph("M3 4v8M6 5h7M6 8h7M6 11h5");
+export const IconListBullet = glyph("M6 4h7.5M6 8h7.5M6 12h7.5M2.8 4h.01M2.8 8h.01M2.8 12h.01");
+export const IconListNumber = glyph("M6.5 4h7M6.5 8h7M6.5 12h7M2.5 3.2l1-.7v3M2.4 7.4a.8.8 0 0 1 1.5.3c0 .5-1.5 1.3-1.5 1.8h1.6M2.4 11h1.4l-.8 1a.8.8 0 1 1-.6 1.3");
+export const IconListTask = glyph("M2.5 3h3v3h-3V3ZM2.5 10h3v3h-3v-3ZM3.2 11.6l.7.7 1.3-1.4M8 4.5h5.5M8 11.5h5.5");
+export const IconCodeBlock = glyph("M2.5 3h11v10h-11V3ZM6 6.5 4.5 8 6 9.5M10 6.5 11.5 8 10 9.5");
+export const IconTable = glyph("M2.5 3h11v10h-11V3ZM2.5 6.5h11M2.5 9.8h11M7 6.5V13");

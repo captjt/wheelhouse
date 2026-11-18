@@ -11,11 +11,11 @@ build: web
 web:
     cd ./web && npm install --no-audit --no-fund && npm run build
 
-# Every check: Rust tests, clippy, and the web app's types.
+# Every check: Rust tests, clippy, the web app's types and its tests.
 check:
     cargo test
     cargo clippy --all-targets -- -D warnings
-    cd ./web && npm run typecheck
+    cd ./web && npm run typecheck && npm test
 
 # Run the hub from this checkout.
 serve: build
