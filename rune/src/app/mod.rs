@@ -304,11 +304,18 @@ impl Main {
     /// The docket the window shows beside its list, if any: none on Recap,
     /// Agents or a board.
     pub fn shown_docket(&self) -> Option<String> {
-        if matches!(self.place, Place::Agents | Place::Recap) || (self.place.is_list() && self.board) {
+        if self.embedded() || matches!(self.place, Place::Agents | Place::Recap) || (self.place.is_list() && self.board) {
             return None;
         }
         let id = self.current()?;
         self.state()?.docket(&id).map(|_| id)
+    }
+
+    /// The Inbox shows a docket inside it, as the Mac app's `embedded`
+    /// DocketView: its id row has the docket's buttons, and there's no
+    /// inspector, chat or toolbar of its own.
+    pub fn embedded(&self) -> bool {
+        self.place == Place::Inbox && self.window == Window::Main
     }
 
     /// A docket in a window of its own (windows.rs).
@@ -667,6 +674,9 @@ pub fn view(s: &Main, cx: &mut Cx<Main>) -> El {
     }
     let split = split
         .toolbar(toolbar)
+        // The toggle at the sidebar's end, Search and New docket past the
+        // traffic lights (the sidebar's toolbar in RootView).
+        .sidebar_toggle(rune_kit::shell::SidebarToggle::new().in_header())
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(8.0)
         .toolbar_in_panel()
@@ -674,6 +684,18 @@ pub fn view(s: &Main, cx: &mut Cx<Main>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(&kit);
     let mut root = col().key("root").w_full().h_full().fill(if dark { theme::hex("#1b1b1d") } else { theme::hex("#f1f1f3") }).child(split);
+    if s.sidebar.is_open() {
+        let x = if cx.titlebar_inset() > 0.0 { cx.titlebar_inset() + 8.0 } else { 12.0 };
+        root = root.child(
+            row()
+                .key("sidebar-tools")
+                .raise()
+                .absolute(x, 8.0 + (48.0 - 26.0) / 2.0)
+                .gap(2.0)
+                .child(widgets::icon_button("search", &crate::icons::SEARCH, "Search dockets and commands (⌘K)", |s: &mut Main| s.open_palette(), &k))
+                .child(widgets::icon_button("compose", &crate::icons::COMPOSE, "New docket (⌘N)", |s: &mut Main| s.open_form(Sheet::NewDocket(NewMode::Blank)), &k)),
+        );
+    }
     if let Some(sheet) = &s.sheet {
         root = root.child(docket::sheet(s, sheet, &k, &kit));
     }
@@ -736,15 +758,25 @@ fn toolbar(s: &Main, state: Option<&HubState>, k: &K, kit: &rune_kit::Kit) -> To
             k,
         ));
     }
-    if let (Some(st), Some(id)) = (state, s.current()) {
-        if st.docket(&id).is_some_and(|d| d.talks()) && !s.board {
-            trailing = trailing.child(widgets::segmented("tab", &[("Chat", s.chat), ("Docket", !s.chat)], |s: &mut Main, i| s.chat = i == 0, k));
-        }
-    }
-    if s.shown_docket().is_none() {
+    let Some(d) = s.shown_docket().and_then(|id| state.and_then(|st| st.docket(&id).cloned())) else {
         let _ = kit;
         return Toolbar::new().leading(title).trailing(trailing);
+    };
+    // The docket's own toolbar (DocketView.toolbar): Chat or Docket, its pane, its menu.
+    if d.talks() {
+        trailing = trailing.child(widgets::segmented("tab", &[("Chat", s.chat), ("Docket", !s.chat)], |s: &mut Main, i| s.chat = i == 0, k));
     }
+    if d.live().is_some() {
+        let (a, b) = (d.id(), d.id());
+        trailing = trailing
+            .child(widgets::icon_button("open-rex", &crate::icons::TERMINAL, "Bring the agent's pane to the front in Rex (O)", move |s: &mut Main| s.open_in_rex(&a), k))
+            .child(widgets::icon_button("peek", &crate::icons::EYE, "Peek at the agent's pane here", move |s: &mut Main| chat::open_pane(s, &b), k));
+    }
+    let d2 = d.clone();
+    trailing = trailing.child(
+        widgets::icon_button("docket-menu", &crate::icons::MORE, "Everything you can do to this docket", |_: &mut Main| {}, k)
+            .on_press_tx(move |_: &mut Main, tx| menus::open(&d2, "docket-menu", tx)),
+    );
     trailing = trailing.child(widgets::icon_button(
         "inspector-toggle",
         &crate::icons::INSPECTOR,

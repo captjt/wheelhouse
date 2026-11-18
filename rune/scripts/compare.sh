@@ -41,15 +41,15 @@ pairs=(
   "window|docket|review|1000x840|A docket in a window of its own"
   "menubar|menubar|inbox|380x324|The menu bar item's panel"
   "quick|panel||648x520|The quick panel from any app (⌥⌘K; ⌃⌥⌘K in Rune)"
-  "settings-general|settings|general|720x560|Settings: General"
-  "settings-orders|settings|orders|720x560|Settings: Standing Orders"
-  "settings-rule|settings|rule|720x560|Settings: a rule's editor"
-  "settings-agents|settings|agents|720x560|Settings: Agents"
-  "settings-repos|settings|repos|720x560|Settings: Repos"
-  "settings-check|settings|check|720x560|Settings: a repo's check"
-  "settings-posting|settings|posting|720x560|Settings: who posts a checked review"
-  "settings-guides|settings|guides|720x560|Settings: Guides"
-  "settings-brief|settings|brief|720x560|Settings: the agents' brief"
+  "settings-general|settings|settings-general|auto|Settings: General"
+  "settings-orders|settings|settings-orders|auto|Settings: Standing Orders"
+  "settings-rule|settings|settings-rule|auto|Settings: a rule's editor"
+  "settings-agents|settings|settings-agents|auto|Settings: Agents"
+  "settings-repos|settings|settings-repos|auto|Settings: Repos"
+  "settings-check|settings|settings-check|auto|Settings: a repo's check"
+  "settings-posting|settings|settings-posting|auto|Settings: who posts a checked review"
+  "settings-guides|settings|settings-guides|auto|Settings: Guides"
+  "settings-brief|settings|settings-brief|auto|Settings: the agents' brief"
 )
 only=${ONLY:-}
 keep() { [ -z "$only" ] || [[ " $only " == *" $1 "* ]]; }
@@ -76,10 +76,14 @@ for p in "${pairs[@]}"; do
   for theme in light dark; do
     r="$out/rune/$s-$theme.png"
     rm -f "$r"
+    sw="$out/swift/mac-$s-$theme.png"
+    # Settings resizes per tab: the Rune window takes the SwiftUI shot's size.
+    if [ "$size" = auto ] && [ -f "$sw" ]; then
+      size="$(sips -g pixelWidth "$sw" | awk '/pixelWidth/{print $2}')x$(sips -g pixelHeight "$sw" | awk '/pixelHeight/{print $2}')"
+    fi
     args=(--window "$window" --theme "$theme" --size "$size" --scale 1 --scroll-bars always --at 0.8 --snap "$r")
     [ -n "$scene" ] && args+=(--scene "$scene")
     WH_HUB="$hub" $bin "${args[@]}" >/dev/null 2>&1 || true
-    sw="$out/swift/mac-$s-$theme.png"
     pair="$out/pairs/$s-$theme.png"
     if [ -f "$sw" ] && [ -f "$r" ]; then
       # Side by side at one height, each padded on a neutral ground.

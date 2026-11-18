@@ -5,7 +5,7 @@
 use rune::{Color, El, ScrollSpec, col, el, icon, row, spacer, text, text_input};
 use rune_kit::{Kit, Markdown, ScrollBar};
 
-use super::{Main, Place, Sheet, activity, chat, forms, lists, menus, panels, parts, record, shortcuts, verify, widgets};
+use super::{Main, Place, Sheet, activity, chat, forms, lists, panels, parts, record, shortcuts, verify, widgets};
 use crate::icons;
 use crate::model::{self, Docket, DocketPage, HubState, LiveState, Status};
 use crate::theme::{self, K, font, mono};
@@ -66,11 +66,11 @@ pub fn detail(s: &Main, st: &HubState, id: &str, k: &K, kit: &Kit) -> El {
     let Some(d) = st.docket(id) else {
         return widgets::empty(&icons::STACK, "No docket", "It isn't in the hub's state.", k);
     };
-    if s.chat && d.talks() {
+    if s.chat && d.talks() && !s.embedded() {
         return chat::view(s, st, d, k, kit);
     }
     let page = s.pages.get(id);
-    let mut c = col().key("docket").w_full().max_w(860.0).px(28.0).pt(22.0).pb(40.0).gap(18.0);
+    let mut c = col().key("docket").w_full().max_w(860.0).px(if s.embedded() { 24.0 } else { 36.0 }).pt(22.0).pb(40.0).gap(18.0);
     c = c.child(header(s, d, k));
     if let Some(h) = verify::hold_banner(d, k) {
         c = c.child(h);
@@ -114,33 +114,18 @@ pub fn detail(s: &Main, st: &HubState, id: &str, k: &K, kit: &Kit) -> El {
 
 fn header(s: &Main, d: &Docket, k: &K) -> El {
     let id = d.id();
-    let mut top = row().w_full().gap(6.0).center_y().child(theme::id_text(&id, k)).child(spacer());
+    // Inside the Inbox, the docket's buttons sit on its id row (DocketBody's
+    // `embedded`); elsewhere they're in the toolbar or the window's title bar.
+    let embedded = s.embedded();
+    let mut top = row().w_full().gap(8.0).center_y().child(theme::id_text(&id, k)).child(spacer());
     if d.live().is_some() {
-        let a = id.clone();
-        top = top.child(widgets::button("open-rex", "Open in Rex", false, true, k, move |s: &mut Main, _| s.open_in_rex(&a)));
+        let (a, b) = (id.clone(), id.clone());
+        top = top
+            .child(widgets::button("open-rex", "Open in Rex", false, true, k, move |s: &mut Main, _| s.open_in_rex(&a)))
+            .child(widgets::icon_button("peek", &icons::EYE, "Peek at the pane", move |s: &mut Main| chat::open_pane(s, &b), k).size(26.0, 22.0));
     }
-    // In a window of its own (windows.rs): from the main one. A docket's own
-    // window has its id and Open in Rex in its title bar instead.
-    let main = s.window == super::Window::Main;
-    if main {
-        let b = id.clone();
-        top = top.child(widgets::button("open-docket", "Open Docket", false, true, k, move |s: &mut Main, _| s.open_window(&b)));
-    }
-    // Everything else you can do to it: the docket's menu, as its context menu.
-    let d2 = d.clone();
-    top = top.child(
-        row()
-            .key("docket-menu")
-            .size(24.0, 22.0)
-            .radius(6.0)
-            .center()
-            .hover(k.hover)
-            .role("button")
-            .label("More")
-            .help("More")
-            .on_press_tx(move |_: &mut Main, tx| menus::open(&d2, "docket-menu", tx))
-            .child(text("⋯").font(font(14.0, 600.0).lh(16.0)).color(k.muted)),
-    );
+    let b = id.clone();
+    top = top.child(widgets::button("open-docket", "Open Docket", false, true, k, move |s: &mut Main, _| s.open_window(&b)));
     let mut chips = row().gap(6.0).center_y().child(theme::mark_chip(theme::status_icon(d.status(), 12.0, k), d.status().label(), k.text2, k));
     if let Some(l) = d.live() {
         chips = chips.child(theme::mark_chip(theme::live_icon(Some(l.state()), 12.0, k), l.state().word(), k.live(Some(l.state())), k));
@@ -149,7 +134,7 @@ fn header(s: &Main, d: &Docket, k: &K) -> El {
         chips = chips.child(theme::chip(&format!("On hold: {why}"), k.blocked, false));
     }
     let mut c = col().w_full().gap(8.0);
-    if main {
+    if embedded {
         c = c.child(top);
     }
     c.child(text(d.title()).font(font(22.0, 600.0).lh(27.0)).color(k.text).wrap().role("heading").level(1))

@@ -127,3 +127,9 @@ icon!(EXTERNAL, "external", 16.0, r#"<path d="M9 3H13V7M13 3L7.5 8.5M11.5 9.5V12
 icon!(DOWNLOAD, "download", 16.0, r#"<path d="M8 2.5V10M4.5 6.8L8 10.3L11.5 6.8M3 13.2H13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#);
 icon!(BANG, "bang", 14.0, r#"<path d="M7 4V7.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/><circle cx="7" cy="10" r="0.95" fill="currentColor"/>"#);
 icon!(LOGO_WHITE, "logo-white", 32.0, r##"<g stroke="#ffffff" fill="none"><circle cx="16" cy="16" r="11" stroke-width="3.2"/><path d="M16 5V2M25.53 10.5L28.12 9M25.53 21.5L28.12 23M16 27V30M6.47 21.5L3.88 23M6.47 10.5L3.88 9" stroke-width="2.6" stroke-linecap="round"/></g><circle cx="16" cy="16" r="3.4" fill="#ffffff"/>"##);
+// square.and.pencil: a new docket.
+icon!(COMPOSE, "compose", 16.0, r#"<g stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H4.2C3.5 3 3 3.5 3 4.2V11.8C3 12.5 3.5 13 4.2 13H11.8C12.5 13 13 12.5 13 11.8V8"/><path d="M11.6 2.4C12.1 1.9 12.9 1.9 13.4 2.4L13.6 2.6C14.1 3.1 14.1 3.9 13.6 4.4L8.6 9.4L6.6 9.9L7.1 7.9Z"/></g>"#);
+// terminal: a pane in Rex.
+icon!(TERMINAL, "terminal", 16.0, r#"<g stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M4.8 6.3L6.8 8L4.8 9.7M8.3 10H11"/></g>"#);
+// ellipsis.circle: a docket's menu.
+icon!(MORE, "more", 16.0, r#"<g fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><circle cx="5.3" cy="8" r="0.9" fill="currentColor"/><circle cx="8" cy="8" r="0.9" fill="currentColor"/><circle cx="10.7" cy="8" r="0.9" fill="currentColor"/></g>"#);
