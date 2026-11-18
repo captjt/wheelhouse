@@ -121,6 +121,12 @@ export function InboxView() {
     Enter: () => currentId && go(`/d/${currentId}`),
     o: () => currentId && pane.act(currentId),
     e: () => currentId && hub.setStatus(currentId, "done"),
+    // A prompt: approve or deny it. A message with options: 1 to 6 picks one.
+    a: () => current && current.kind !== "message" && current.d.live?.answerable && void hub.answer(current.d, true),
+    d: () => current && current.kind !== "message" && current.d.live?.answerable && void hub.answer(current.d, false),
+    ...Object.fromEntries(
+      [1, 2, 3, 4, 5, 6].map((n) => [String(n), () => current?.m && current.m.options[n - 1] !== undefined && void hub.replyTo(current.m.id, "", current.m.options[n - 1])]),
+    ),
   });
 
   const counts = { blocked: items.filter((i) => i.kind === "blocked").length, error: items.filter((i) => i.kind === "error").length };
