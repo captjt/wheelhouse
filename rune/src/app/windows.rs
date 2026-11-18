@@ -206,7 +206,7 @@ fn view(s: &Main, cx: &mut Cx<Main>) -> El {
 }
 
 /// The title band, 52 pt as a SwiftUI window's toolbar: "D-6 · Its title"
-/// and Chat or Docket, then Open in Rex and the inspector (DocketWindow's
+/// and Chat or Docket, then Open in Rex, Peek and the inspector (DocketWindow's
 /// navigationTitle, DocketView's toolbar). It moves the window.
 fn titlebar(s: &Main, st: Option<&HubState>, id: Option<&str>, insets: rune::ChromeInsets, k: &K, kit: &rune_kit::Kit) -> El {
     let d = st.zip(id).and_then(|(st, id)| st.docket(id));
@@ -218,8 +218,10 @@ fn titlebar(s: &Main, st: Option<&HubState>, id: Option<&str>, insets: rune::Chr
         }
     }
     if let Some(d) = d.filter(|d| d.live().is_some()) {
-        let id = d.id();
-        band = band.trailing(widgets::icon_button("open-rex", &TERMINAL, "Bring the agent's pane to the front in Rex", move |s: &mut Main| s.open_in_rex(&id), k));
+        let (id, peek) = (d.id(), d.id());
+        band = band
+            .trailing(widgets::icon_button("open-rex", &icons::TERMINAL, "Bring the agent's pane to the front in Rex (O)", move |s: &mut Main| s.open_in_rex(&id), k))
+            .trailing(widgets::icon_button("peek", &icons::EYE, "Peek at the agent's pane here", move |s: &mut Main| super::chat::open_pane(s, &peek), k));
     }
     band.trailing(widgets::icon_button(
         "inspector-toggle",
@@ -230,13 +232,6 @@ fn titlebar(s: &Main, st: Option<&HubState>, id: Option<&str>, insets: rune::Chr
     ))
     .build(kit)
 }
-
-/// SF Symbols' `terminal`: Open in Rex.
-static TERMINAL: rune::Icon = rune::Icon {
-    name: "terminal",
-    view: 16.0,
-    body: r#"<g fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M4.8 6.3L6.8 8L4.8 9.7M8.2 10H11"/></g>"#,
-};
 
 // ---- scenes, for headless shots: `--window docket --scene docket` ----
 

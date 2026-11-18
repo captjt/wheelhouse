@@ -219,9 +219,6 @@ impl Docket {
     pub fn linear_key(&self) -> Option<String> {
         text(&self.j["linear"]["key"]).or_else(|| text(&self.j["linear"]["identifier"]))
     }
-    pub fn linear_state(&self) -> Option<String> {
-        text(&self.j["linear"]["state"])
-    }
     pub fn review_key(&self) -> Option<String> {
         text(&self.j["review"]["key"])
     }
@@ -772,7 +769,9 @@ pub fn ago_long(iso: Option<&str>) -> String {
 /// A timestamp: Nov 18, 14:05.
 pub fn stamp(iso: Option<&str>) -> String {
     match date(iso) {
-        Some(d) => d.with_timezone(&Local).format("%b %-d, %H:%M").to_string(),
+        // SwiftUI's words ("Nov 18 at 14:54"), on a 24-hour clock: its
+        // two-digit hour drops AM and PM, so 2:54 PM reads "02:54" there.
+        Some(d) => d.with_timezone(&Local).format("%b %-d at %H:%M").to_string(),
         None => iso.unwrap_or("").to_string(),
     }
 }

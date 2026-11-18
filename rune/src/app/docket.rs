@@ -2,7 +2,7 @@
 //! intent, decisions, Verify, kept files, activity and the composer; the
 //! inspector beside it; and the sheets it opens.
 
-use rune::{Color, El, ScrollSpec, col, el, icon, row, spacer, text, text_input};
+use rune::{Color, El, ScrollSpec, col, icon, row, spacer, text, text_input};
 use rune_kit::{Kit, ScrollBar};
 
 use super::{Main, Place, Sheet, activity, chat, forms, lists, panels, parts, record, shortcuts, verify, widgets};
@@ -362,76 +362,164 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
         .child(widgets::value_text(cur.label(), k))
         .child(icon(&icons::CHEVRON, 10.0).color(k.muted));
     c = c.child(widgets::field("Status", status, k));
-    if let Some(t) = st.task_for(id) {
-        c = c.child(widgets::field("Build", widgets::value_text(lists::build_phase(t), k), k));
-    } else if let Some(p) = st.pr_for(id) {
-        c = c.child(widgets::field("Review", widgets::value_text(format!("{} · round {}", p.key(), p.round()), k), k));
+    let proto = d.protocol();
+    let task = st.task_for(id);
+    let link = |key: &str, label: &str, on: Box<dyn Fn(&mut Main, &mut rune::Tx)>| parts::link(key.to_string(), label, 12.5, k, move |s, tx| on(s, tx));
+    // A Review docket's PR, its round and verdict.
+    let r = &d.j["review"];
+    if let Some(key) = model::text(&r["key"]) {
+        let mut line = key;
+        if let Some(n) = model::int(&r["round"]) {
+            line.push_str(&format!(" · round {n}"));
+        }
+        if let Some(v) = model::text(&r["verdict"]) {
+            line.push_str(&format!(" · {}", v.replace('_', " ").to_lowercase()));
+        }
+        let url = model::text(&r["url"]);
+        c = c.child(widgets::field("Review", link("inspector-review", &line, Box::new(move |_, tx| if let Some(u) = &url { let _ = tx.open_url(u); })), k));
     }
+    if proto != "review" {
+        let build = if let Some(t) = task {
+            widgets::value_text(lists::build_phase(t), k)
+        } else if d.intent_body().is_some_and(|b| !b.trim().is_empty()) {
+            let repos: Vec<String> = model::arr(&st.j["build"]["config"]["repos"]).iter().filter_map(|r| r.as_str().map(str::to_string)).collect();
+            match repos.as_slice() {
+                [] => text("No repos in build.lua").font(font(12.5, 400.0).lh(16.0)).color(k.faint),
+                [repo] => {
+                    let (a, repo) = (id.to_string(), repo.clone());
+                    link("build-it", "Build it", Box::new(move |s, _| s.build(&a, &repo))).help(format!("Give this docket's intent to a builder and a checker, into {}", repos[0]))
+                }
+                _ => {
+                    let (a, list) = (id.to_string(), repos.clone());
+                    link(
+                        "build-it",
+                        "Build it…",
+                        Box::new(move |_, tx| {
+                            let mut m = rune::PopupMenu::new();
+                            for r in &list {
+                                m = m.item(rune::PopupItem::new(r.as_str(), r.as_str()));
+                            }
+                            let a = a.clone();
+                            tx.popup_menu(m, "build-it", move |s: &mut Main, picked, _| {
+                                if let Some(r) = picked {
+                                    s.build(&a, r);
+                                }
+                            });
+                        }),
+                    )
+                }
+            }
+        } else {
+            text("Needs an intent").font(font(12.5, 400.0).lh(16.0)).color(k.faint).help("Write the intent first: what this is for, and how you'll know it's done")
+        };
+        c = c.child(widgets::field("Build", build, k));
+    }
+    let a = id.to_string();
     c = c.child(widgets::field(
         "Linear",
-        match d.linear_key() {
-            Some(key) => widgets::value_text(format!("{key}{}", d.linear_state().map(|s| format!(" · {s}")).unwrap_or_default()), k),
-            None => text("Link issue…").font(font(12.5, 400.0).lh(16.0)).color(k.link),
+        match (d.linear_key(), model::text(&d.j["linear"]["url"])) {
+            (Some(key), url) => link("inspector-linear", &key, Box::new(move |_, tx| if let Some(u) = &url { let _ = tx.open_url(u); })),
+            (None, _) => link("link-issue", "Link issue…", Box::new(move |s, _| s.open_form(Sheet::LinkIssue(a.clone())))),
         },
         k,
     ));
-    if d.has_agent() {
+    let can_start = d.is_open() && proto != "review" && d.live().is_none();
+    if !d.has_agent() && task.is_none() && can_start {
+        let a = id.to_string();
+        c = c.child(widgets::field("Agent", link("start-agent", "Start an agent…", Box::new(move |s, _| s.open_form(Sheet::StartAgent(a.clone())))), k));
+    }
+    if d.has_agent() && proto != "review" && task.is_none() {
         c = c.child(widgets::field(
             "Agent",
-            row().gap(6.0).center_y().child(theme::app_avatar(d.agent_app().as_deref(), 14.0, k)).child(widgets::value_text(model::app_name(d.agent_app().as_deref()), k)),
+            row().gap(6.0).center_y().child(theme::app_avatar(d.agent_app().as_deref(), 15.0, k)).child(widgets::value_text(model::app_name(d.agent_app().as_deref()), k)),
             k,
         ));
-    }
-    if let Some(l) = d.live() {
+        let now = match d.live() {
+            Some(l) => format!("{}{}", l.state().word(), l.since().map(|s| format!(" · {}", model::ago(Some(&s)))).unwrap_or_default()),
+            None => model::text(&d.j["released"]).map(|r| format!("Ended · {r}")).unwrap_or_else(|| "Not running".into()),
+        };
+        let mut now_row = row().gap(6.0).center_y().child(theme::live_icon(Some(d.live().map(|l| l.state()).unwrap_or(LiveState::Idle)), 12.0, k)).child(widgets::value_text(now, k));
+        if can_start {
+            let a = id.to_string();
+            now_row = now_row.child(link("start-again", "Start one…", Box::new(move |s, _| s.open_form(Sheet::StartAgent(a.clone())))));
+        }
+        c = c.child(widgets::field("Now", now_row, k));
+        let sess = d.rex_session().unwrap_or_default();
+        let pane = model::text(&d.j["agent"]["pane"]).unwrap_or_else(|| "pane".into());
+        let a = id.to_string();
+        let live = d.live().is_some();
         c = c.child(widgets::field(
-            "Now",
+            "Rex",
             row()
                 .gap(6.0)
                 .center_y()
-                .child(theme::live_icon(Some(l.state()), 12.0, k))
-                .child(widgets::value_text(format!("{} · {}", l.state().word(), model::ago(l.since().as_deref())), k)),
+                .role("button")
+                .label("Show the pane in Rex")
+                .on_press(move |s: &mut Main| {
+                    if live {
+                        s.open_in_rex(&a)
+                    }
+                })
+                .child(theme::session_icon(&sess, 14.0, k))
+                .child(widgets::value_text(format!("{sess} / {pane}"), k)),
             k,
         ));
-        c = c.child(widgets::field(
-            "Rex",
-            row().gap(6.0).center_y().child(theme::session_icon(&l.rex_session(), 14.0, k)).child(widgets::value_text(format!("{} / {}", l.rex_session(), l.pane()), k)),
-            k,
-        ));
+        if let Some(cwd) = d.agent_cwd() {
+            let short = cwd.replace(&std::env::var("HOME").unwrap_or_default(), "~");
+            c = c.child(widgets::field(
+                "Folder",
+                row()
+                    .role("button")
+                    .label(format!("Open {short} in Finder"))
+                    .help(format!("{cwd}\nClick to open it in Finder"))
+                    .on_press_tx(move |_: &mut Main, tx| {
+                        let _ = tx.open_url(&format!("file://{cwd}"));
+                    })
+                    .child(widgets::value_text(short, k)),
+                k,
+            ));
+        }
+        if let Some(sess) = d.session() {
+            let short: String = sess.chars().take(8).collect();
+            c = c.child(widgets::field(
+                "Session",
+                row()
+                    .role("button")
+                    .label("Copy the agent's session id")
+                    .help("Copy the agent's session id")
+                    .on_press_tx(move |s: &mut Main, tx| {
+                        tx.copy(&sess);
+                        s.toast(format!("Copied {sess}"), false);
+                    })
+                    .child(text(short).font(mono(12.0).lh(16.0)).color(k.text)),
+                k,
+            ));
+        }
     }
-    if let Some(cwd) = d.agent_cwd() {
-        c = c.child(widgets::field("Folder", widgets::value_text(cwd.replace(&std::env::var("HOME").unwrap_or_default(), "~"), k), k));
-    }
-    if let Some(sess) = d.session() {
-        c = c.child(widgets::field("Session", text(sess.chars().take(8).collect::<String>()).font(mono(12.0).lh(16.0)).color(k.text), k));
-    }
-    c = c.child(widgets::field(
-        "Protocol",
-        widgets::value_text(
-            match d.protocol().as_str() {
-                "agent" => "Agent",
-                "review" => "Review",
-                "build" => "Build",
-                _ => "None",
-            },
-            k,
-        ),
-        k,
-    ));
+    let protocol = if task.is_some() {
+        "Build"
+    } else {
+        match proto.as_str() {
+            "agent" => "Agent",
+            "review" => "Review",
+            _ => "By hand",
+        }
+    };
+    c = c.child(widgets::field("Protocol", widgets::value_text(protocol, k), k));
     let a = id.to_string();
     c = c.child(widgets::field(
         "Hold",
         match d.hold() {
-            Some(why) => row().gap(6.0).child(widgets::value_text(why, k)).child(widgets::button("resume", "Resume", false, true, k, move |s: &mut Main, _| s.resume(&a))),
-            None => row()
-                .key("hold")
-                .role("button")
-                .label("Hold…")
-                .on_press(move |s: &mut Main| s.sheet = Some(Sheet::Hold(a.clone())))
-                .child(text("Hold…").font(font(12.5, 400.0).lh(16.0)).color(k.link)),
+            Some(why) => row()
+                .gap(8.0)
+                .center_y()
+                .child(text("On hold").font(font(12.5, 400.0).lh(16.0)).color(k.blocked).help(why))
+                .child(link("resume", "Resume", Box::new(move |s, _| s.resume(&a)))),
+            None => link("hold", "Hold…", Box::new(move |s, _| s.sheet = Some(Sheet::Hold(a.clone())))).help("Build and Review take no steps on it until you resume it"),
         },
         k,
     ));
-    if d.prompts() + d.turns() > 0 {
+    if proto != "review" && task.is_none() {
         c = c.child(widgets::field(
             "Work",
             widgets::value_text(format!("{} · {}", model::plural(d.prompts() as usize, "prompt"), model::plural(d.turns() as usize, "turn")), k),
@@ -440,32 +528,50 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
     }
     c = c.child(widgets::field("Created", widgets::value_text(model::stamp(Some(&d.created_at())), k), k));
     c = c.child(widgets::field("Updated", widgets::value_text(model::ago_long(Some(&d.updated_at())), k), k));
-    c = c.child(el().h(12.0)).child(theme::hairline(k)).child(el().h(10.0));
-    c = c.child(text("RECORD").font(font(10.5, 600.0).lh(14.0).tracking(0.4)).color(k.muted)).child(el().h(4.0));
+    c = c.child(text("RECORD").font(font(10.5, 600.0).lh(14.0).tracking(0.4)).color(k.muted).pt(18.0).pb(6.0));
     if let Some(p) = page {
         let ok = p.verify_ok();
+        let a = id.to_string();
         c = c.child(widgets::field(
             "Check",
-            row().gap(5.0).center_y().child(icon(&icons::SHIELD, 13.0).color(if ok { k.working } else { k.error })).child(
-                text(format!("{} · {} signed", if ok { "Intact" } else { "Broken" }, p.verify_entries())).font(font(12.5, 400.0).lh(16.0)).color(if ok {
-                    k.working
-                } else {
-                    k.error
-                }),
-            ),
+            row()
+                .gap(5.0)
+                .center_y()
+                .role("button")
+                .label("Open the record")
+                .help("Open the record: every signed entry, and what the check means")
+                .on_press(move |s: &mut Main| s.sheet = Some(Sheet::Record(a.clone())))
+                .child(icon(&icons::SHIELD, 13.0).color(if ok { k.working } else { k.error }))
+                .child(
+                    text(if ok { format!("Intact · {} signed", p.verify_entries()) } else { "Doesn't check".into() })
+                        .font(font(12.5, 400.0).lh(16.0))
+                        .color(if ok { k.working } else { k.error }),
+                ),
             k,
         ));
     }
-    c = c.child(widgets::field("Head", text(d.short_head()).font(mono(12.0).lh(16.0)).color(k.text), k));
-    let a = id.to_string();
+    let (head, a) = (d.short_head(), id.to_string());
+    let copy = format!("Docket: {a} @ {head}");
+    c = c.child(widgets::field(
+        "Head",
+        row()
+            .role("button")
+            .label(format!("Copy “{copy}”"))
+            .help(format!("Copy “{copy}”, for a PR or a note"))
+            .on_press_tx(move |s: &mut Main, tx| {
+                tx.copy(&copy);
+                s.toast(format!("Copied {copy}"), false);
+            })
+            .child(text(head).font(mono(12.0).lh(16.0)).color(k.text)),
+        k,
+    ));
+    let (a, b) = (id.to_string(), id.to_string());
     c = c.child(widgets::field(
         "Record",
         row()
-            .key("open-record")
-            .role("button")
-            .label("Open the record")
-            .on_press(move |s: &mut Main| s.sheet = Some(Sheet::Record(a.clone())))
-            .child(text("Open").font(font(12.5, 400.0).lh(16.0)).color(k.link)),
+            .gap(10.0)
+            .child(link("open-record", "Open", Box::new(move |s, _| s.sheet = Some(Sheet::Record(a.clone())))))
+            .child(link("export-record", "Export…", Box::new(move |s, tx| record::export(s, &b, tx))).help(format!("Save {id}.jsonl: it checks without the hub (wh verify --file)"))),
         k,
     ));
     let _ = Place::Inbox;

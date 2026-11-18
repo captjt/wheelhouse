@@ -497,6 +497,15 @@ impl Main {
         });
     }
 
+    /// Build it: the docket's intent to a builder and a checker, into `repo`.
+    pub fn build(&mut self, id: &str, repo: &str) {
+        let (id, repo) = (id.to_string(), repo.to_string());
+        self.act(&format!("build:{id}"), "/api/build/start".into(), json!({ "from": id, "repo": repo }), move |r| match r {
+            Ok(_) => (format!("{id} is queued to build into {repo}"), false),
+            Err(e) => (e, true),
+        });
+    }
+
     /// Run a docket's checks (Verify's Run Checks).
     pub fn run_checks(&mut self, id: &str) {
         verify::run(self, id, false);
@@ -900,6 +909,7 @@ pub const SCENES: &[(&str, fn(&mut Main))] = &[
         s.sheet = Some(Sheet::Record("D-6".into()));
     }),
     ("record-open", fixtures::record_open),
+    ("envelope", fixtures::envelope),
     ("record-find", fixtures::record_find),
     ("chat-peek", fixtures::chat_peek),
     ("chat-blocked", fixtures::chat_blocked),

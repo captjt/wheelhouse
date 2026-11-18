@@ -64,6 +64,18 @@ pub fn record_open(s: &mut Main) {
     record::envelope(s, "D-6", 14);
 }
 
+/// A checkable link's signed envelope, open (the SwiftUI shot's "envelope":
+/// the review docket's oldest checkable entry, scrolled to its top).
+pub fn envelope(s: &mut Main) {
+    show(s, Place::All, "D-7");
+    s.sheet = Some(Sheet::Record("D-7".into()));
+    record::poll(s);
+    let Some(seq) = s.record.entries.iter().filter(|e| e.mark() == "checkable").map(|e| e.seq()).min() else { return };
+    s.record.open.insert(seq);
+    record::envelope(s, "D-7", seq);
+    s.scroll_to = Some(format!("record-row-{seq}"));
+}
+
 pub fn record_find(s: &mut Main) {
     show(s, Place::Active, "D-6");
     s.sheet = Some(Sheet::Record("D-6".into()));

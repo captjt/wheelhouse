@@ -400,7 +400,7 @@ pub fn envelope(s: &mut Main, id: &str, seq: i64) {
 }
 
 /// Save the record as JSON lines: it checks without the hub.
-fn export(s: &mut Main, id: &str, tx: &mut Tx) {
+pub(super) fn export(s: &mut Main, id: &str, tx: &mut Tx) {
     let options = FileDialogOptions { title: format!("Export {id}'s record"), file_name: Some(format!("{id}.jsonl")), ..Default::default() }.filter("JSON Lines", &["jsonl"]);
     let id = id.to_string();
     let _ = s;
