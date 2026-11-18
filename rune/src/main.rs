@@ -46,6 +46,11 @@ fn main() {
             scenes: app::SCENES,
             poll: Some(app::poll),
             on_key: Some(app::on_key),
+            // Code in Markdown and a span marked mono (a check's command,
+            // `test` in "Done rests on `test` passed") in the system's
+            // monospace, as SwiftUI sets them; the UI's own text names
+            // its families.
+            families: ("Inter", "ui-monospace"),
             ..AppSpec::new("Wheelhouse", (1440.0, 900.0), || unreachable!(), app::view)
         };
         // The traffic lights centred on the toolbar, in the framed pane.
