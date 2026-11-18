@@ -38,13 +38,15 @@ fn checks(v: &Value) -> Result<Vec<CheckSpec>> {
     let mut out = Vec::new();
     for (name, c) in v.as_object().into_iter().flatten() {
         let (run, required, timeout) = match c {
+            // `false`: a check build.lua lists, removed in Settings.
+            Value::Bool(false) | Value::Null => continue,
             Value::String(s) => (s.clone(), true, 1200),
             Value::Object(o) => (
                 o.get("run").and_then(Value::as_str).map(str::to_string).ok_or_else(|| anyhow::anyhow!("checks.{name} needs `run`, the command"))?,
                 o.get("required").and_then(Value::as_bool).unwrap_or(true),
                 o.get("timeout").and_then(Value::as_u64).unwrap_or(1200),
             ),
-            _ => bail!("checks.{name} is a command, or {{ run = …, required = …, timeout = … }}"),
+            _ => bail!("checks.{name} is a command, {{ run = …, required = …, timeout = … }}, or false (removed)"),
         };
         if run.trim().is_empty() {
             bail!("checks.{name} has no command");

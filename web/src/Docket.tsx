@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
-import { appName, type Docket, type DocketPage, type EntryView } from "./api";
+import { appName, type CheckRun, type Docket, type DocketPage, type EntryView } from "./api";
 import { AppAvatar, HubAvatar, IconChevron, IconDown, IconDownload, IconShield, IconUp, LiveIcon, PersonAvatar, SessionIcon, StatusIcon, TitleText, liveWord, shortPath } from "./icons";
 import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
 import { Kbd, Prose, Sheet, useKeys, useMenu, usePhone } from "./ui";
@@ -20,6 +20,9 @@ import { post } from "./api";
 import { IconIssue, IconPR } from "./icons";
 import { useToast } from "./ui";
 import { STATUSES, statusItems } from "./views";
+import { CheckOutput, VerifySection } from "./Verify";
+import { checkState, checkWord, independence, shortSha, verifyShown } from "./evidence";
+import { IconPause, IconPlay } from "./icons";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
   const hub = useHub();
@@ -35,6 +38,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   const [details, setDetails] = useState(false);
   const [viewing, setViewing] = useState<EntryView | null>(null);
   const [record, setRecord] = useState(false);
+  const [checkOut, setCheckOut] = useState<CheckRun | null>(null);
   // An agent's docket opens to its conversation on a phone; the record is a tap away.
   const [tab, setTab] = useState<"chat" | "docket" | null>(null);
   // A long record shows its latest entries first; the rest are a tap away.
@@ -66,6 +70,9 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   if (error && !data) return <div className="view-empty">{error}</div>;
   if (!data || !d) return <div className="view" />;
   const { entries, verify } = data;
+  const ev = data.evidence;
+  const verifying = verifyShown(ev);
+  const open = d.status === "todo" || d.status === "in_progress";
   const talks = !embedded && d.protocol === "agent" && !!d.agent;
   const view = tab ?? (talks && phone ? "chat" : "docket");
   const chatting = talks && view === "chat";
@@ -87,6 +94,20 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               {STATUSES.find((s) => s.key === d.status)?.label}
             </button>
           </Prop>
+          {(open || d.hold) && (
+            <Prop label="Hold">
+              {d.hold ? (
+                <button className="prop-btn held" onClick={() => void hub.resume(d.id).catch(() => {})} title={`On hold: ${d.hold}\nClick to resume: Build and Review take steps again`}>
+                  <IconPause size={14} />
+                  <span className="prop-text">On hold</span>
+                </button>
+              ) : (
+                <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "hold", id: d.id })} title="Hold it: Build and Review take no steps on it until you resume">
+                  <IconPause size={14} /> Hold…
+                </button>
+              )}
+            </Prop>
+          )}
           {d.review && (
             <Prop label="Review">
               <a className="prop-btn" href={d.review.url || "#"} target="_blank" rel="noreferrer" title={d.review.title ?? ""}>
@@ -200,6 +221,16 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
           </Prop>
 
           <div className="props-section">Record</div>
+          {ev && !verifying && ev.configured.length > 0 && open && (
+            <Prop label="Checks">
+              <button className="prop-btn" onClick={() => void hub.runChecks(d.id).catch(() => {})} title={`Run ${ev.repo}'s checks now: Wheelhouse runs them itself and writes down what it saw`}>
+                <IconPlay size={14} />
+                <span className="prop-text">
+                  Run {ev.configured.map((c) => c.name).join(", ")}
+                </span>
+              </button>
+            </Prop>
+          )}
           <Prop label="Check">
             <button className={`prop-btn ${verify.ok ? "ok" : "bad"}`} onClick={() => setRecord(true)} title="Open the record: every signed entry, and what the check means">
               <IconShield size={14} />
@@ -315,6 +346,12 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
                   {l.key}
                 </a>
               ))}
+              {d.hold && (
+                <button className="m-chip held" onClick={() => document.getElementById("verify")?.scrollIntoView({ block: "start", behavior: "smooth" })}>
+                  <IconPause size={14} />
+                  On hold
+                </button>
+              )}
               {building && (
                 <span className="m-chip">
                   <IconBuild size={14} />
@@ -360,7 +397,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             ))}
 
           <IntentSection d={d} entries={entries} onSaved={reload} />
-          <DecisionsSection decisions={data.decisions ?? []} />
+          <DecisionsSection decisions={data.decisions ?? []} docket={d.id} repo={ev?.repo ?? null} />
+          {ev && verifying && <VerifySection d={d} ev={ev} onCheck={setCheckOut} />}
           <ArtifactsSection entries={entries} onOpen={setViewing} />
 
           <div className="activity-head">
@@ -377,7 +415,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </button>
             )}
             {(earlier || entries.length <= 200 ? entries : entries.slice(-150)).map((e) => (
-              <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} onOpen={setViewing} />
+              <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} onOpen={setViewing} onCheck={setCheckOut} />
             ))}
           </div>
           <Composer ref={composerRef} onSend={(t) => hub.note(d.id, t).then(reload)} />
@@ -397,6 +435,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
       )}
       {menu.node}
       {viewing && <ArtifactViewer e={viewing} onClose={() => setViewing(null)} />}
+      {checkOut && <CheckOutput c={checkOut} onClose={() => setCheckOut(null)} />}
       {record && <RecordViewer d={d} onClose={() => setRecord(false)} />}
       {linking !== false && (
         <LinearModal
@@ -431,7 +470,7 @@ function Prop({ label, children }: { label: string; children: ReactNode }) {
 
 // ---- the activity feed ----
 
-function Activity({ e, d, owner, onOpen }: { e: EntryView; d: Docket; owner: string; onOpen: (e: EntryView) => void }) {
+function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; owner: string; onOpen: (e: EntryView) => void; onCheck: (c: CheckRun) => void }) {
   const agent = appName(d.agent?.app);
   const time = (
     <span className="act-time" title={`${stamp(e.at)}\n#${e.seq} · ${e.mark}, signed by ${e.key || "?"}\n${e.id}`}>
@@ -584,9 +623,11 @@ function Activity({ e, d, owner, onOpen }: { e: EntryView; d: Docket; owner: str
         parts.push(
           <span key="s">
             moved it to <StatusIcon status={data.status} size={12} /> {st?.label ?? data.status}
+            {data.on === "word" ? <> on your word{data.reason || e.body ? <>: “{data.reason || e.body}”</> : null}</> : null}
           </span>,
         );
       }
+      if ("hold" in data) parts.push(<span key="h">{data.hold ? <>put it on hold: “{data.hold}”</> : "resumed it"}</span>);
       return sys(e.actor.type === "person" ? you : hubA, <><b>{who}</b> {parts.reduce<ReactNode[]>((a, p, i) => (i ? [...a, " and ", p] : [p]), [])}</>);
     }
     case "approval": {
@@ -620,6 +661,34 @@ function Activity({ e, d, owner, onOpen }: { e: EntryView; d: Docket; owner: str
     }
     case "release":
       return sys(hubA, <><b>Wheelhouse</b> saw the session end: {data.reason}</>);
+    case "check": {
+      const st = checkState(data);
+      const c: CheckRun = { ...data, seq: e.seq, at: e.at };
+      return sys(
+        hubA,
+        <>
+          <b>Wheelhouse</b> ran <span className="act-path">{data.name}</span>
+          {data.required === false ? <span className="muted"> (optional)</span> : null}: {checkWord(data)} at <span className="mono-s">{shortSha(data.head)}</span>
+          {data.output ? (
+            <>
+              {" "}
+              <span className="act-dot">·</span>{" "}
+              <button className="act-link link-btn" onClick={() => onCheck(c)}>
+                output
+              </button>
+            </>
+          ) : null}
+        </>,
+        st === "pass" ? "approved" : st === "inform" ? "" : "error",
+      );
+    }
+    case "verdict": {
+      const who = String(e.actor.id).split("@")[0];
+      const ind = independence(data);
+      const line = `judged ${data.n ? `check ${data.n}` : "the work"}: ${String(data.verdict ?? "no verdict").replace(/_/g, " ")}${typeof data.findings === "number" ? ` · ${data.findings} finding${data.findings === 1 ? "" : "s"}` : ""}${ind ? ` · ${ind}` : ""}`;
+      if (e.body) return comment(<AppAvatar app={who} size={18} />, appName(who), line, e.body, data.verdict === "pass" ? "" : "ask");
+      return sys(<AppAvatar app={who} size={18} />, <><b>{appName(who)}</b> {line}</>, data.verdict === "pass" ? "approved" : "error");
+    }
     default:
       return sys(hubA, <>{e.kind}{e.body ? `: ${e.body}` : ""}</>);
   }

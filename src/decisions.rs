@@ -30,6 +30,8 @@ pub struct Decision {
     /// `you`, an agent's app, or `stood` (the recommendation, with the plan).
     pub by: Option<String>,
     pub at: Option<String>,
+    /// The repo it stands for, once you made it standing.
+    pub standing: Option<String>,
 }
 
 impl Decision {
@@ -37,7 +39,7 @@ impl Decision {
         json!({
             "key": self.key, "question": self.question, "options": self.options,
             "asked_by": self.asked_by, "asked_at": self.asked_at, "message": self.message,
-            "answer": self.answer, "note": self.note, "by": self.by, "at": self.at,
+            "answer": self.answer, "note": self.note, "by": self.by, "at": self.at, "standing": self.standing,
         })
     }
 }
@@ -120,6 +122,7 @@ pub fn of(entries: &[Entry]) -> Vec<Decision> {
                         note: None,
                         by: None,
                         at: None,
+                        standing: was.as_ref().and_then(|w| w.standing.clone()),
                     },
                 );
             }
@@ -130,6 +133,11 @@ pub fn of(entries: &[Entry]) -> Vec<Decision> {
                     x.answer = d["label"].as_str().map(str::to_string).or_else(|| e.body.clone());
                     x.by = Some("stood".into());
                     x.at = Some(e.at.clone());
+                }
+            }
+            "standing" => {
+                if let Some(x) = d["key"].as_str().and_then(|k| by_key.get_mut(k)) {
+                    x.standing = d["repo"].as_str().map(str::to_string);
                 }
             }
             "decision" | "note" => {
@@ -187,6 +195,7 @@ mod tests {
             note: Some("To match the API docs.".into()),
             by: Some("you".into()),
             at: Some("2026-11-18T01:00:00Z".into()),
+            standing: None,
         };
         let r = rule(&d, "D-6");
         assert_eq!(r, "- How many retries? 3: To match the API docs. (Decided on D-6, November 18.)");

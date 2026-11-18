@@ -198,6 +198,7 @@ export const IconHook = glyph("M10.5 3v5.5a3 3 0 0 1-6 0V7M10.5 3 9 4.5M10.5 3 1
 export const IconPR = glyph("M3.2 3.5a1.3 1.3 0 1 0 2.6 0a1.3 1.3 0 1 0-2.6 0M4.5 4.8v6.4M3.2 12.5a1.3 1.3 0 1 0 2.6 0a1.3 1.3 0 1 0-2.6 0M10.2 12.5a1.3 1.3 0 1 0 2.6 0a1.3 1.3 0 1 0-2.6 0M11.5 11.2V6.5a2 2 0 0 0-2-2H7.5M8.8 3.2 7.5 4.5l1.3 1.3");
 export const IconPause = glyph("M5.5 3.5v9M10.5 3.5v9");
 export const IconPlay = glyph("M5 3.6v8.8L12 8 5 3.6Z");
+export const IconSettings = glyph("M10.1 8a2.1 2.1 0 1 1-4.2 0a2.1 2.1 0 1 1 4.2 0ZM12.4 8a4.4 4.4 0 1 1-8.8 0a4.4 4.4 0 1 1 8.8 0ZM12.07 9.68L13.73 10.37M9.68 12.07L10.37 13.73M6.32 12.07L5.63 13.73M3.93 9.68L2.27 10.37M3.93 6.32L2.27 5.63M6.32 3.93L5.63 2.27M9.68 3.93L10.37 2.27M12.07 6.32L13.73 5.63");
 export const IconRefresh = glyph("M13 8a5 5 0 1 1-1.5-3.6M13 2.8v2.6h-2.6");
 export const IconChart = glyph("M2.5 13h11M4.5 10.5v-3M8 10.5V4.5M11.5 10.5V6.5");
 export const IconClipboard = glyph("M5.5 3.5h-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1M6 2.5h4v2H6v-2Z");

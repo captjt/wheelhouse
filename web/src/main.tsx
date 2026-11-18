@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import type { Docket } from "./api";
 import { DocketScreen } from "./Docket";
 import { InboxView, inboxItems } from "./Inbox";
-import { IconActive, IconAgents, IconBuild, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSun, Logo, SessionIcon } from "./icons";
+import { IconActive, IconAgents, IconBuild, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSettings, IconSun, Logo, SessionIcon } from "./icons";
 import { ReviewsView } from "./Reviews";
 import { RecapView } from "./Recap";
 import { BuildsView } from "./Builds";
@@ -17,6 +17,8 @@ import { MoreSheet, TabBar, nav, popBack, tabs, usePullToRefresh, useScrolledVie
 import { lastList } from "./live";
 import { post } from "./api";
 import { AgentsView, DocketListView } from "./views";
+import { SettingsView } from "./Settings";
+import { HoldDialog, RefusedDialog } from "./Verify";
 import "./styles.css";
 
 const isOpen = (d: Docket) => d.status === "todo" || d.status === "in_progress";
@@ -92,6 +94,7 @@ function RouteView({ route }: { route: string[] }) {
   if (page === "reviews") return <ReviewsView />;
   if (page === "recap") return <RecapView />;
   if (page === "builds") return <BuildsView />;
+  if (page === "settings") return <SettingsView section={route[1]} />;
   if (page === "session" && route[1]) {
     const s = route[1];
     return (
@@ -151,7 +154,7 @@ function App() {
   useEffect(() => {
     if (page === "d") return;
     const path = `/${route.map(encodeURIComponent).join("/")}` || "/view/active";
-    const titles: Record<string, string> = { inbox: "Inbox", reviews: "Reviews", builds: "Builds", recap: "Recap", agents: "Agents" };
+    const titles: Record<string, string> = { inbox: "Inbox", reviews: "Reviews", builds: "Builds", recap: "Recap", agents: "Agents", settings: "Settings" };
     const views: Record<string, string> = { active: "Active", all: "All dockets", done: "Done" };
     const title = page === "session" ? route[1] : page === "view" ? views[route[1] || "active"] : titles[page];
     if (!title) return;
@@ -160,7 +163,7 @@ function App() {
     lastList.title = title;
   }, [route.join("/")]);
 
-  // Global keys: ⌘K or / for the palette, C to create, G then a letter to go.
+  // Global keys: ⌘K or / for the palette, ⌘, for Settings, C to create, G then a letter to go.
   const pending = useRef<number | null>(null);
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
@@ -169,11 +172,17 @@ function App() {
         setPalette((p) => !p);
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === ",") {
+        e.preventDefault();
+        setPalette(false);
+        go("/settings");
+        return;
+      }
       if (typing(e) || e.metaKey || e.ctrlKey || e.altKey || document.querySelector(".modal-backdrop, .menu")) return;
       if (pending.current) {
         window.clearTimeout(pending.current);
         pending.current = null;
-        const dest = { i: "/inbox", a: "/view/active", d: "/view/all", n: "/agents", x: "/view/done", r: "/reviews", p: "/recap", b: "/builds" }[e.key];
+        const dest = { i: "/inbox", a: "/view/active", d: "/view/all", n: "/agents", x: "/view/done", r: "/reviews", p: "/recap", b: "/builds", s: "/settings" }[e.key];
         if (dest) {
           e.preventDefault();
           go(dest);
@@ -206,7 +215,7 @@ function App() {
 
   const here = route.join("/");
   const item = (path: string, label: string, icon: React.ReactNode, count?: number, alert?: boolean) => (
-    <a className={`nav-item${here === path.slice(1) || (path === "/view/active" && here === "") ? " on" : ""}`} href={`#${path}`}>
+    <a className={`nav-item${here === path.slice(1) || (path === "/view/active" && here === "") || (path === "/settings" && here.startsWith("settings/")) ? " on" : ""}`} href={`#${path}`}>
       {icon}
       <span>{label}</span>
       {!!count && <span className={`nav-count${alert ? " alert" : ""}`}>{count}</span>}
@@ -228,10 +237,13 @@ function App() {
       </div>
     </>
   );
+  const closeDialog = useCallback(() => hub.setDialog(null), [hub.setDialog]);
   const overlays = (
     <>
       {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} onNewAgent={openNewAgent} context={context} />}
       {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} onClose={() => setCreating(false)} />}
+      {hub.dialog?.kind === "refused" && <RefusedDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
+      {hub.dialog?.kind === "hold" && <HoldDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
     </>
   );
 
@@ -296,6 +308,7 @@ function App() {
           </>
         )}
         <span className="spacer-v" />
+        <nav className="nav nav-foot">{item("/settings", "Settings", <IconSettings size={15} />)}</nav>
         <div className="side-foot">{foot}</div>
       </aside>
       <div className="scrim" onClick={() => setDrawer(false)} />
@@ -413,6 +426,7 @@ function PhoneApp({
             { path: "/view/done", label: "Done", icon: <IconDone size={18} /> },
             { path: "/agents", label: "Agents", icon: <IconAgents size={18} />, count: agents },
             { path: "/recap", label: "Recap", icon: <IconChart size={18} /> },
+            { path: "/settings", label: "Settings", icon: <IconSettings size={18} /> },
           ]}
           sessions={sessions.map(([s, n]) => ({ path: `/session/${encodeURIComponent(s)}`, label: s, icon: <SessionIcon name={s} size={18} />, count: n }))}
           footer={foot}

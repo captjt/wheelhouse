@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { appName, type Docket, type Msg, type ReviewPr } from "./api";
+import { appName, type Attention, type Docket, type Msg, type ReviewPr } from "./api";
+import { AttentionIcon } from "./Verify";
+import { attentionShown } from "./evidence";
 import { ReviewActions, draftLine } from "./Reviews";
 import { MessageCard, msgFrom, msgTitle } from "./Messages";
 import { DocketScreen } from "./Docket";
@@ -54,6 +56,9 @@ export function inboxItems(dockets: Docket[], messages: Msg[] = [], prs: ReviewP
   return items.sort((a, b) => rank[a.kind] - rank[b.kind] || (b.at || "").localeCompare(a.at || ""));
 }
 
+/** An attention item's key in the list. */
+const attKey = (a: Attention) => `at:${a.docket ?? a.title}:${a.kind}`;
+
 function firstLine(s?: string) {
   return s
     ?.split("\n")
@@ -65,10 +70,17 @@ export function InboxView() {
   const hub = useHub();
   const pane = usePane();
   const items = useMemo(() => inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.review?.prs ?? []), [hub.state]);
+  // Not asks, but worth a look: held, failing, quiet, closed on your word.
+  const att = useMemo(() => attentionShown(hub.state?.attention, items.map((i) => ({ docket: i.d.id, kind: i.kind }))), [hub.state, items]);
   const [sel, setSel] = useState<string | null>(null);
   const menu = useMenu();
   const phone = usePhone();
-  const current = items.find((i) => i.key === sel) ?? items[0];
+  const selAtt = att.find((a) => attKey(a) === sel);
+  const current = selAtt ? undefined : (items.find((i) => i.key === sel) ?? items[0]);
+  const shownAtt = selAtt ?? (current ? undefined : att[0]);
+  const currentKey = current?.key ?? (shownAtt ? attKey(shownAtt) : undefined);
+  const currentId = current?.d.id ?? shownAtt?.docket ?? undefined;
+  const keys = [...items.map((i) => i.key), ...att.map(attKey)];
   // On a phone each kind swipes to what it's waiting for: a message files,
   // a prompt approves or denies (a tap, never a full swipe), and a docket's
   // turn or failure closes.
@@ -91,24 +103,24 @@ export function InboxView() {
   useEffect(() => {
     lastList.path = "/inbox";
     lastList.title = "Inbox";
-    lastList.ids = items.map((i) => i.d.id);
-  }, [items]);
+    lastList.ids = [...new Set([...items.map((i) => i.d.id), ...att.flatMap((a) => (a.docket ? [a.docket] : []))])];
+  }, [items, att]);
 
   const move = (delta: number) => {
-    if (!items.length) return;
-    const i = Math.max(0, items.findIndex((x) => x.key === current?.key));
-    const next = items[Math.max(0, Math.min(items.length - 1, i + delta))];
-    setSel(next.key);
-    document.querySelector(`[data-inbox="${next.key}"]`)?.scrollIntoView({ block: "nearest" });
+    if (!keys.length) return;
+    const i = Math.max(0, keys.indexOf(currentKey ?? ""));
+    const next = keys[Math.max(0, Math.min(keys.length - 1, i + delta))];
+    setSel(next);
+    document.querySelector(`[data-inbox="${next}"]`)?.scrollIntoView({ block: "nearest" });
   };
   useKeys({
     j: () => move(1),
     ArrowDown: () => move(1),
     k: () => move(-1),
     ArrowUp: () => move(-1),
-    Enter: () => current && go(`/d/${current.d.id}`),
-    o: () => current && pane.act(current.d.id),
-    e: () => current && hub.setStatus(current.d.id, "done"),
+    Enter: () => currentId && go(`/d/${currentId}`),
+    o: () => currentId && pane.act(currentId),
+    e: () => currentId && hub.setStatus(currentId, "done"),
   });
 
   const counts = { blocked: items.filter((i) => i.kind === "blocked").length, error: items.filter((i) => i.kind === "error").length };
@@ -123,7 +135,7 @@ export function InboxView() {
         {counts.error > 0 && <span className="inbox-sum error">{counts.error} failed</span>}
       </header>
       <LargeTitle title="Inbox" count={items.length} />
-      {items.length === 0 ? (
+      {items.length === 0 && att.length === 0 ? (
         <div className="view-empty inbox-zero">
           <IconInbox size={28} />
           <div className="inbox-zero-title">You're all caught up</div>
@@ -132,12 +144,13 @@ export function InboxView() {
       ) : (
         <div className="split">
           <div className="split-list">
+            {items.length === 0 && <div className="inbox-none muted small">Nothing is waiting on your answer.</div>}
             {items.map((it) => {
               const el = (
               <a
                 key={it.key}
                 data-inbox={it.key}
-                className={`inbox-item${current?.key === it.key ? " sel" : ""} kind-${it.kind}`}
+                className={`inbox-item${currentKey === it.key ? " sel" : ""} kind-${it.kind}`}
                 href={`#/d/${it.d.id}`}
                 onClick={(e) => {
                   e.preventDefault();
@@ -201,9 +214,59 @@ export function InboxView() {
                 </SwipeRow>
               );
             })}
+            {att.length > 0 && (
+              <>
+                <div className="group-head static inbox-group">
+                  <span className="group-label">Attention</span>
+                  <span className="view-count">{att.length}</span>
+                  <span className="spacer" />
+                  <span className="muted small">Not asks, but worth a look</span>
+                </div>
+                {att.map((a) => {
+                  const k = attKey(a);
+                  const d = a.docket ? hub.byId.get(a.docket) : undefined;
+                  return (
+                    <a
+                      key={k}
+                      data-inbox={k}
+                      className={`inbox-item att-item att-kind-${a.kind}${currentKey === k ? " sel" : ""}`}
+                      href={a.docket ? `#/d/${a.docket}` : "#/reviews"}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (!a.docket) return go("/reviews");
+                        if (window.matchMedia("(max-width: 760px)").matches || !d) go(`/d/${a.docket}`);
+                        else setSel(k);
+                      }}
+                      onDoubleClick={() => a.docket && go(`/d/${a.docket}`)}
+                      onContextMenu={(e) => {
+                        if (!d) return;
+                        e.preventDefault();
+                        menu.open({ x: e.clientX, y: e.clientY }, rowMenu(d, hub, pane));
+                      }}
+                    >
+                      <span className="inbox-avatar att-avatar">
+                        <AttentionIcon kind={a.kind} size={14} />
+                      </span>
+                      <span className="inbox-main">
+                        <span className="inbox-top">
+                          <span className="inbox-title">{d ? <TitleText d={d} /> : a.title}</span>
+                          <span className="inbox-age">{ago(a.at)}</span>
+                        </span>
+                        <span className="inbox-line">
+                          {a.docket && <span className="row-id">{a.docket}</span>}
+                          <InlineMd text={a.text} links={false} />
+                        </span>
+                      </span>
+                    </a>
+                  );
+                })}
+              </>
+            )}
           </div>
           <div className="split-detail">
-            {current && current.d.entries > 0 ? (
+            {shownAtt?.docket && hub.byId.get(shownAtt.docket) ? (
+              <DocketScreen key={shownAtt.docket} id={shownAtt.docket} embedded />
+            ) : current && current.d.entries > 0 ? (
               <DocketScreen key={current.d.id} id={current.d.id} embedded />
             ) : current?.m ? (
               <div className="docket embedded">
