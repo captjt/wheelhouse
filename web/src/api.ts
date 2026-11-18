@@ -301,11 +301,15 @@ export type ReviewRef = {
   implementation?: string | null;
 };
 
+/** A second hub beside the daily one (Wheelhouse Dev), and the build it runs; null on the daily hub. */
+export type Flavor = { name: string; commit: string; branch: string };
+
 export type HubState = {
   review?: ReviewStatus;
   build?: BuildStatus;
   messages: Msg[];
   owner: string;
+  flavor?: Flavor | null;
   hooks: boolean;
   linear: boolean;
   rex: { connected: boolean; error?: string | null };

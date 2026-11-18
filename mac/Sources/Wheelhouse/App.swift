@@ -13,7 +13,7 @@ struct WheelhouseApp: App {
     @AppStorage("theme") private var theme = "system"
 
     var body: some Scene {
-        Window("Wheelhouse", id: "main") {
+        Window(Flavor.name, id: "main") {
             RootView()
                 .environment(store)
                 .environment(nav)
@@ -65,7 +65,9 @@ private struct Opener: ViewModifier {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
-        Notifier.shared.setUp()
+        // Snapshots post nothing, so they never ask for notifications (a first
+        // launch's prompt, on someone's screen).
+        if Snapshot.requested == nil { Notifier.shared.setUp() }
         MarkdownKeys.install()
         if Snapshot.requested == nil { QuickPanel.apply() }
         Store.shared.start()

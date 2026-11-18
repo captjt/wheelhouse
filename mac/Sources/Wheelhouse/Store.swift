@@ -186,7 +186,7 @@ final class Store {
                 if result.ok {
                     self.toast("The hub is starting")
                 } else {
-                    self.toast(result.output.isEmpty ? "Couldn't find wh: install it with `just setup`" : result.output, error: true)
+                    self.toast(result.output.isEmpty ? "Couldn't find wh: install it with `\(Flavor.setup)`" : result.output, error: true)
                 }
                 Task {
                     try? await Task.sleep(for: .seconds(1.5))
@@ -550,8 +550,10 @@ enum Badge {
 
 /// Running `wh` and friends, as from a login shell.
 enum Shell {
-    /// `wh`: on PATH, or where `cargo install` and Homebrew put it.
+    /// `wh`: on PATH, or where `cargo install` and Homebrew put it. Wheelhouse
+    /// Dev's is its own hub's, and never falls back to the daily one.
     static var wh: String {
+        if let own = Flavor.command { return own }
         let home = NSHomeDirectory()
         for p in ["\(home)/.cargo/bin/wh", "/opt/homebrew/bin/wh", "/usr/local/bin/wh"] where FileManager.default.isExecutableFile(atPath: p) {
             return p

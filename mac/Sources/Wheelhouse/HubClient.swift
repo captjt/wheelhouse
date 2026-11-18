@@ -9,7 +9,8 @@ struct HubError: LocalizedError {
 }
 
 final class HubClient: @unchecked Sendable {
-    static let defaultAddress = "http://127.0.0.1:7500"
+    /// :7500, or the dev hub's for Wheelhouse Dev (Flavor).
+    static let defaultAddress = Flavor.defaultHub
 
     /// Where the hub answers: Settings › Hub, or `WH_APP_HUB` (for a second hub).
     var base: URL {

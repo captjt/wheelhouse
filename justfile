@@ -53,6 +53,20 @@ setup: install
     wh skill install
     just app
 
+# On a copy of your dockets with nothing live: wh-dev, :7600, Wheelhouse
+# Dev.app and ⇧⌥⌘K, never meeting the daily ones (scripts/dev-install.sh).
+# Install or update Wheelhouse Dev: this checkout beside the daily install.
+dev-install:
+    scripts/dev-install.sh
+
+# Copy the daily dockets into Wheelhouse Dev again.
+dev-sync:
+    ~/.local/bin/wh-dev sync
+
+# Take Wheelhouse Dev away (its dockets stay until you delete them).
+dev-remove:
+    scripts/dev-install.sh --remove
+
 # Run the hub from this checkout, in the foreground.
 serve: build
     ./target/release/wh serve
