@@ -72,7 +72,12 @@ reviews. Running as you, an agent can:
 - undo the environment the wall sets up, and push with your credentials;
 - call the hub's API on 127.0.0.1 or its socket, the way the app and `wh`
   do. A caller that doesn't say which pane it's in counts as you, so it
-  can approve prompts, post reviews or start agents.
+  can approve prompts, post reviews or start agents. It can change
+  Settings too (docs/settings.md): a gate to `auto`, a repo's checks, a
+  guide or brief. Settings refuses what reaches outside (agents' programs,
+  PATH, the wall), and keeps what each save replaces in
+  `~/.config/wheelhouse/.history`, but it can't tell such a call from
+  yours.
 
 Claude Code asks before running commands unless you've allowed them, and
 that's the real line of defense today. Wheelhouse makes the honest mistakes

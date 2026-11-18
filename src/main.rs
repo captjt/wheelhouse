@@ -17,6 +17,7 @@ mod build;
 mod checks;
 mod client;
 mod decisions;
+mod doctor;
 mod evidence;
 mod follow;
 mod hooks;
@@ -243,6 +244,8 @@ enum Cmd {
     },
     /// Whether the hub runs, and what it sees.
     Status,
+    /// What's set up, what isn't, and what to do about each.
+    Doctor,
     /// Open a docket (or the Inbox) in Wheelhouse.app, or in the web app
     /// without it
     Open { docket: Option<String> },
@@ -270,6 +273,7 @@ fn main() {
         Some(Cmd::Down) => service::down(),
         Some(Cmd::Logs { lines }) => service::logs(lines),
         Some(Cmd::Status) => status(),
+        Some(Cmd::Doctor) => doctor::run(),
         Some(Cmd::Web { publish }) => tailnet::cli(publish),
         Some(Cmd::Open { docket }) => open(docket.as_deref().map(normalize)),
         Some(Cmd::Ls { all }) => ls(all),

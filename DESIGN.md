@@ -304,9 +304,11 @@ Needs you: D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
   your shell's git and gh sign-ins, not the LaunchAgent's environment.
 - **Config.** Lua files in `~/.config/wheelhouse` (`review.lua` and
   `build.lua`; `examples/` has a commented copy of each), like the tools,
-  because effort and routing are functions. Settings shows them and checks
-  them. Runtime changes (pausing, a gate on one docket) are `set` entries
-  on the record.
+  because effort and routing are functions. Settings shows them as
+  standing orders, and changes what isn't code in `settings.json`, laid
+  over the Lua and checked by the same reader (docs/settings.md). Runtime
+  changes to one docket (hold, closing on your word) are `set` entries on
+  the record.
 
 ## The record format
 
@@ -459,19 +461,30 @@ Each milestone is usable on its own and takes over from one tool.
    GitHub Issues sources, readiness, plans and decisions, gates,
    previews, the open action, address rounds, the Plan tab, and
    pre-review through Review.
-   *Status: built up to the draft PR (docs/build.md): plans, decisions,
-   gates, checks, previews and opening, with GitHub issue intake by label
-   and Linear issues started by hand. Still to come: address rounds
-   (review comments, CI, rebase), pre-review, and Linear intake.*
+   *Status: built (docs/build.md): plans, decisions, gates, checks,
+   previews and opening; address rounds on review comments, failing CI
+   and a base that moved, behind a Push and reply gate; blind pre-review
+   before the PR opens; and intake from GitHub issues and Linear (a label
+   starts a Build, the active cycle offers one). Still to come: more live
+   runs on real repos.*
 4. **Verify.** Witnessed checks and the patch each one covers, verdict
    independence, checks with teeth, the rule for done, the Attention
    list, and Hold.
+   *Status: built (docs/verify.md). The hub runs each repo's checks
+   behind the wall and records them witnessed, with the commit and patch
+   they cover; a failing required check goes back to the builder and holds
+   the PR and each push; the checker signs its own verdict, marked
+   independent of the builder's session; a docket with acceptance items
+   closes on evidence or on your word; Hold; and the Attention list. Both
+   apps show a docket's Verify section and Settings
+   (docs/settings.md). Still to come: per-session keys, so independence
+   rests on the key, not only the session.*
 5. **Your own protocols.** Standing orders and protocols you write,
    boundaries, variants in worktrees, and the trace view.
 6. **A team.** The workspace hub, member keys, and shared dockets, as the
    record design lays out.
 
-Milestones 4 to 6 haven't started. [docs/roadmap.md](docs/roadmap.md)
+Milestones 5 and 6 haven't started. [docs/roadmap.md](docs/roadmap.md)
 tracks what's built and what's next.
 
 Review comes before Build because rex-reviewer is the more settled tool
@@ -494,7 +507,8 @@ Build also gains pre-review by landing second.
 | Teams | Not in v1. The record is built so teams can share it later. | decided |
 | Language | A Rust daemon (rex-inbox's code ports directly), a React UI, and a SwiftUI Mac app (`mac/`). | decided |
 | Protocol rules | Ported to Rust as pure functions, tested by replaying the tools' fixtures | proposed |
-| Config | A Lua file, like the tools', so effort and routing can be functions. Runtime changes are entries. | proposed |
+| Config | Lua files, like the tools', so effort and routing can be functions. Settings writes what isn't code to `settings.json`, laid over the Lua and checked by the same reader. Guides and briefs are files that replace the built-in ones. Runtime changes to a docket are entries. | decided |
+| Done | A docket with acceptance items closes on evidence (a witnessed check or merge, a checkable issue or review), or on your word with a reason the record keeps | decided |
 | Record format | Wheelhouse's own JSON entries, signed as exact bytes in DSSE envelopes with Ed25519 keys, and hash-chained per docket by the hub (see "The record format") | proposed |
 | Nostr | No. Take its shape (signed self-contained entries, ids by hash, a key per actor), not its wire format, curve, or relays. A bridge to Buzz can come later. | proposed |
 | Order | Review before Build | proposed |
@@ -524,9 +538,11 @@ Build also gains pre-review by landing second.
 
 ## Open questions
 
-- **Settings as source of truth?** Keep the Lua file, or move what the
-  Settings page can edit into the record, and keep Lua only for
-  functions?
+- ~~**Settings as source of truth?**~~ Settled: Settings writes
+  `settings.json`, laid over the Lua files as they load and checked by the
+  same reader, and the Lua keeps what's code (effort functions, programs,
+  PATH, the wall). Guides and briefs are files that replace the built-in
+  ones. Whatever a save replaces is kept (docs/settings.md).
 - **Rex layout by repo?** One `wheelhouse` session per host, or one per
   repo?
 - **Quick work.** Where's the line: one prompt and under five minutes?

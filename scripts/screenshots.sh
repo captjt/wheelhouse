@@ -42,6 +42,16 @@ trap cleanup EXIT
 cargo build --release --quiet --manifest-path "$root/Cargo.toml"
 wh="$root/target/release/wh"
 mkdir -p "$images" "$demo/home/code/acme-api" "$demo/home/code/storefront" "$demo/state"
+# acme/api is a real checkout, with checks the hub can run (Verify).
+(
+  cd "$demo/home/code/acme-api"
+  git init --quiet -b main && git config user.email you@example.com && git config user.name You
+  printf '#!/bin/sh\necho "webhooks: 18 passed"\necho "checkout: 41 passed"\necho "Test Files  12 passed (12)"\n' >run-tests
+  printf '#!/bin/sh\necho "src/deliver.ts:14:7  warning  Prefer a named constant for 250  no-magic-numbers" >&2\nexit 1\n' >lint
+  chmod +x run-tests lint
+  printf 'export function deliver() {}\n' >deliver.ts
+  git add -A && git commit --quiet -m "chore: start"
+)
 
 # --- The world --------------------------------------------------------------
 
@@ -93,6 +103,11 @@ chmod +x "$demo/gh"
 cat >"$demo/review.lua" <<EOF
 return { repos = { ["acme/api"] = { checkout = "$demo/home/code/acme-api" } }, reviewers = { "claude", { name = "codex", agent = "codex" } }, checker = "claude", post = "ask" }
 EOF
+# Build: acme/api's checks, which the hub runs itself.
+cat >"$demo/build.lua" <<EOF
+return { repos = { ["acme/api"] = { checkout = "$demo/home/code/acme-api",
+  checks = { test = "./run-tests", lint = { run = "./lint", required = false } } } } }
+EOF
 mkdir -p "$demo/reviewer/repos/acme/storefront"
 echo '{"schema": 1}' >"$demo/reviewer/state.json"
 ago() { date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ; }
@@ -122,7 +137,7 @@ jq -n --arg at "$(ago 12)" \
 export HOME="$demo/home" WH_STATE="$demo/state" WH_SOCKET="$demo/wh.sock" WH_HTTP="127.0.0.1:$port" \
   WH_TAILNET=off WH_NOTIFY=off WH_LINEAR_KEY=demo WH_LINEAR_ENDPOINT=http://127.0.0.1:9 \
   WH_REX="$here/fake-rex" WH_WORLD="$demo/world.json" \
-  WH_GH="$demo/gh" WH_REVIEW_CONFIG="$demo/review.lua" WH_BUILD_CONFIG="$demo/none.lua" \
+  WH_GH="$demo/gh" WH_REVIEW_CONFIG="$demo/review.lua" WH_BUILD_CONFIG="$demo/build.lua" \
   REX_REVIEWER_STATE_DIR="$demo/reviewer" USER=you
 # Claude Code's hooks, in the made-up HOME, so the app shows them on. Never
 # your own config, even when this runs inside Claude Code.
@@ -226,6 +241,9 @@ api -X POST "$base/api/messages" -d "$(jq -n '{to: "me", block: "block:search", 
 api -X POST "$base/api/import/rex-reviewer" -d '{"force": true}' >/dev/null
 api -X POST "$base/api/review/settings" -d '{"enabled": true, "paused": true}' >/dev/null || true
 api -X POST "$base/api/build/settings" -d '{"paused": true}' >/dev/null || true
+# Verify: the hero docket's checks, run by the hub; a docket on hold.
+"$wh" check "$W" --wait >/dev/null || true
+"$wh" hold "$M" "Waiting on the DBA's review of the migration" >/dev/null
 sleep 2
 
 if [ -n "$serve" ]; then

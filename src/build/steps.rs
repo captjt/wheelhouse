@@ -280,6 +280,19 @@ pub(super) fn vars(cfg: &Config, t: &Task, login: &str) -> crate::review::briefs
         v.insert(var, cfg.guide(slot).map(|g| format!("## More on {title}\n\n{g}\n")).unwrap_or_default());
     }
     v.insert("REPO_NOTES", repo.map(|r| r.notes.trim()).filter(|n| !n.is_empty()).map(|n| format!("## Notes on {}\n\n{n}\n", t.repo)).unwrap_or_default());
+    // The witnessed checks, so the builder runs what the hub will.
+    v.insert(
+        "CHECKS",
+        repo.filter(|r| !r.checks.is_empty())
+            .map(|r| {
+                let lines: Vec<String> = r.checks.iter().map(|c| format!("- `{}`: `{}`{}", c.name, c.run, if c.required { "" } else { " (optional)" })).collect();
+                format!(
+                    "## The checks Wheelhouse runs\n\nAfter the checker passes your branch, Wheelhouse runs these itself, at that commit, behind the same wall. A required one that fails comes back to you, and the PR doesn't open until they pass. Run them before you write BUILT:\n\n{}\n",
+                    lines.join("\n")
+                )
+            })
+            .unwrap_or_default(),
+    );
     v
 }
 

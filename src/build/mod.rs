@@ -198,6 +198,11 @@ impl Hub {
     pub fn specs(&self, repo: &str) -> Option<Vec<config::CheckSpec>> {
         self.config.as_ref().and_then(|(c, _, _)| c.repos.get(repo).map(|r| r.checks.clone()))
     }
+
+    /// The repo whose checkout holds `dir`, and its checks.
+    pub fn repo_of(&self, dir: &std::path::Path) -> Option<(String, Vec<config::CheckSpec>)> {
+        self.config.as_ref().and_then(|(c, _, _)| c.repos.iter().find(|(_, r)| dir.starts_with(&r.checkout)).map(|(k, r)| (k.clone(), r.checks.clone())))
+    }
 }
 
 #[derive(Default)]

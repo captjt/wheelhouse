@@ -98,6 +98,31 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [x] `scripts/build-e2e.sh`: a Build end to end on a scratch hub, with
       stand-in agents, gh, origin and Linear
 
+### Verify ([verify.md](verify.md))
+
+- [x] Witnessed checks: each repo's `checks`, run by the hub in the
+      worktree behind the wall, recorded with the commit, the patch they
+      cover and their output; `wh check D-12`
+- [x] Checks with teeth: a failing required check goes back to the
+      builder, and the PR doesn't open, nor a round push, over one unless
+      you approve it (the approval records what failed)
+- [x] The checker's verdict as its own entry, marked independent when its
+      session and pane aren't the builder's
+- [x] The rule for done: acceptance items need evidence (a passing check,
+      a merged PR, a completed issue, a posted review), or your word with a
+      reason
+- [x] Hold (`wh hold`), and the Attention list (`wh attention`, the Inbox)
+- [x] A Verify section on each docket, in both apps
+
+### Settings ([settings.md](settings.md))
+
+- [x] Standing orders as sentences, in both apps
+- [x] Gates, agents, each repo's notes, checks, plan and review guide,
+      changed in the apps and kept in `settings.json` over the Lua,
+      checked before they're written
+- [x] Guides and briefs: edit, compare with the built-in, reset, and
+      write your own; every replaced version kept
+
 ### Recap and the phone
 
 - [x] Recap: today, this week or 30 days. Reviews and their verdicts, PRs
@@ -151,8 +176,8 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ## Later
 
-- **Verify:** witnessed checks and the patch each one covers, and verdict
-  independence (DESIGN.md, milestone 4)
+- **Verify, further:** per-session signing keys, so a verdict's
+  independence rests on its key
 - **Your own protocols:** standing orders and protocols you write
   (milestone 5)
 - **Teams:** a workspace hub, member keys, and shared dockets, so

@@ -10,4 +10,19 @@ fn main() {
             .expect("writing web/dist/index.html");
     }
     println!("cargo:rerun-if-changed=web/dist");
+    // The commit it's built from, so `wh doctor` can tell a running hub
+    // that's older than the `wh` you just installed.
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "--short=10", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=WH_COMMIT={commit}");
+    for p in [".git/HEAD", ".git/refs/heads"] {
+        if std::path::Path::new(p).exists() {
+            println!("cargo:rerun-if-changed={p}");
+        }
+    }
 }

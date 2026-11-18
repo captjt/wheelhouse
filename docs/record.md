@@ -98,9 +98,9 @@ Every entry shows how it's known, worked out from its actor and kind:
 
 ## Kinds
 
-v1 writes these. More come with the protocols (`question`, `decision`,
-`approval`, `artifact`, `link`, `check`, `verdict`, and the rest from the
-concept).
+These are the kinds the hub folds into a docket's state, and the ones
+Verify adds. The protocols write others (`question`, `decision`,
+`approval`, `link`, `intent`), each described with its protocol.
 
 | Kind | Writer | `data` |
 | --- | --- | --- |
@@ -109,8 +109,10 @@ concept).
 | `note` | person, agent, hub | `via`: `prompt` (you typed it to the agent), `message` (another agent's message, delivered), or absent (a note on the docket) |
 | `turn` | hub | An agent's turn ended. `body` is its last message, when its hook sent one. `state` is what the agent reported after the turn (`done`, `idle`) |
 | `observed` | hub | Something the hub saw in Rex: `what` (`blocked`, `error`), `kind`, `record` |
-| `set` | person, hub | Any of `title`, `title_source`, `status` |
+| `set` | person, hub | Any of `title`, `title_source`, `status`, `hold`. Done on your word, without evidence: `on: "word"` and `reason` (docs/verify.md). `hold` is the reason it's held, or `null` to resume |
 | `release` | hub | The session no longer holds the docket: `reason` |
+| `check` | hub | A witnessed check (docs/verify.md): `name`, `command`, `required`, `repo`, `head` (the commit it ran at), `base`, `dirty`, `patch` (`sha256:` of the diff it covered), `exit` (null when it timed out), `ok`, `ms`, `output` (`sha256:` of its output), `run`, `why`. `blobs` names the output and the patch |
+| `verdict` | agent | A checker's judgment of a Build: `role`, `n`, `verdict`, `findings`, `head`, `round`, `independent` (its session and pane differ from the builder's), and the builder's `session` and `block` |
 | `artifact` | hub, agent, person | Something the work made, kept with the docket. `body` is its title. A file: `name`, `media_type`, `size`, `digest` (`sha256:<hex>`, also in `blobs`). A link: `url`, `provider` (`claude`). Also `source` (`review`, `build`, `agent`, `turn`, `you`), `group` (`Round 3`, `Plan`), and per source `round`, `role`, `reviewer` |
 
 Status is one of `todo`, `in_progress`, `done`, `dropped`.
@@ -128,7 +130,9 @@ Applying entries in order, from nothing:
 
 - `open` sets the title (its `body`), the protocol, the status
   (`in_progress` for an agent, otherwise `todo`), and the agent.
-- `set` changes what it names.
+- `set` changes what it names. Done with `on: word` notes the reason it
+  closed on; `hold` holds or resumes.
+- `check` is that check's latest result.
 - `claim` sets the session and the agent.
 - `note` with `via: prompt` counts a prompt and is the last prompt.
 - `turn` counts a turn and is the last turn.
