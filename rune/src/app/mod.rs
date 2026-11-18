@@ -534,12 +534,48 @@ pub fn on_key(s: &mut Main, ev: &KeyEvent, _: &mut Tx) -> bool {
         s.go(place);
         return true;
     }
+    // The Inbox's keys, on the item it shows: approve, deny, an option, done, the pane.
+    if s.place == Place::Inbox && inbox_key(s, t) {
+        return true;
+    }
     match t.as_str() {
         "g" => s.pending_g = true,
         "j" | "k" => lists::step(s, if t == "j" { 1 } else { -1 }),
         "c" => s.open_form(Sheet::NewDocket(NewMode::Blank)),
         "/" => s.open_palette(),
         _ => return false,
+    }
+    true
+}
+
+fn inbox_key(s: &mut Main, t: &str) -> bool {
+    let Some(st) = s.state() else { return false };
+    let items = model::inbox(&st);
+    let sel = s.selection.get(&Place::Inbox).cloned();
+    let Some(it) = items.iter().find(|i| Some(&i.id) == sel.as_ref()).or(items.first()).cloned() else { return false };
+    match t {
+        "a" | "d" => match it.docket.filter(|d| it.kind == model::InboxKind::Blocked && d.live().is_some_and(|l| l.answerable())) {
+            Some(d) => s.answer(&d, t == "a"),
+            None => return false,
+        },
+        "e" => match it.docket.filter(|d| d.is_open()) {
+            Some(d) => s.set_status(&d.id(), Status::Done),
+            None => return false,
+        },
+        "o" => match it.docket.filter(|d| d.live().is_some()) {
+            Some(d) => s.open_in_rex(&d.id()),
+            None => return false,
+        },
+        n => {
+            let Some(i) = n.parse::<usize>().ok().filter(|i| (1..=6).contains(i)) else { return false };
+            match it.msg.filter(|m| i <= m.options().len()) {
+                Some(m) => {
+                    let o = m.options()[i - 1].clone();
+                    s.reply(&m, &o);
+                }
+                None => return false,
+            }
+        }
     }
     true
 }
@@ -589,6 +625,38 @@ fn toolbar(s: &Main, state: Option<&HubState>, k: &K, kit: &rune_kit::Kit) -> To
         .child(text(subtitle).font(font(11.0, 400.0).lh(13.0)).color(k.muted));
     let mut trailing = row().gap(6.0).center_y();
     if s.place.is_list() {
+        // Group by: a native menu, as the SwiftUI toolbar's.
+        let cur = match s.group_by {
+            GroupBy::Attention => "attention",
+            GroupBy::Status => "status",
+            GroupBy::Session => "session",
+        };
+        trailing = trailing.child(
+            row()
+                .key("group-by")
+                .h(24.0)
+                .px(8.0)
+                .gap(4.0)
+                .radius(6.0)
+                .center_y()
+                .hover(k.hover)
+                .role("button")
+                .label("Group by")
+                .help("Group by")
+                .on_press_tx(move |_: &mut Main, tx| {
+                    let menu = rune::PopupMenu::picker([("attention", "Attention"), ("status", "Status"), ("session", "Rex session")], cur);
+                    tx.popup_menu(menu, "group-by", |s: &mut Main, picked, _| {
+                        s.group_by = match picked {
+                            Some("status") => GroupBy::Status,
+                            Some("session") => GroupBy::Session,
+                            Some(_) => GroupBy::Attention,
+                            None => s.group_by,
+                        };
+                    });
+                })
+                .child(rune::icon(&crate::icons::LIST, 14.0).color(k.muted))
+                .child(rune::icon(&crate::icons::CHEVRON, 10.0).color(k.muted)),
+        );
         trailing = trailing.child(widgets::segmented(
             "layout",
             &[("List", !s.board), ("Board", s.board)],
