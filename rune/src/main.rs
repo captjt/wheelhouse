@@ -7,6 +7,8 @@
 //! cargo run --release                                          # the app
 //! target/release/wheelhouse-rune --window main --scene docket --snap docket.png --size 1440x900
 //! target/release/wheelhouse-rune --window panel --snap panel.png
+//! target/release/wheelhouse-rune --window menubar --scene inbox --snap menubar.png --size 380x324   # the panel fits its content: --tree has its height
+//! target/release/wheelhouse-rune --window docket --scene docket --snap docket.png --size 1000x840
 //! ```
 
 mod app;
@@ -55,11 +57,14 @@ fn main() {
         };
         // The traffic lights centred on the toolbar, in the framed pane.
         let chrome = Chrome { full_size_content: true, traffic_lights: Some((16.0, 25.0)), drag_regions: true };
-        let main = App::new(spec).chrome(chrome).keep_running();
+        let main = App::new(spec).chrome(chrome).keep_running().on_reopen(app::windows::reopen);
         let me = main.handle();
         let follow = store.clone();
+        // The menu bar's panel and the docket windows (app/windows.rs).
+        let more = app::windows::more(&store, &me);
         let main = main.init(move || app::Main::new(store, me)).on_ready(move |_| follow.follow());
-        let windows: Vec<rune::AnyWindowSpec> = vec![WindowSpec::from_app("main", main).into(), panel::spec(hub, show_panel).into()];
+        let mut windows: Vec<rune::AnyWindowSpec> = vec![WindowSpec::from_app("main", main).into(), panel::spec(hub, show_panel).into()];
+        windows.extend(more);
         windows
     });
 }
