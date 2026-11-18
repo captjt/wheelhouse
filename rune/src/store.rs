@@ -167,6 +167,20 @@ impl Store {
         self.hub.get(&format!("/api/dockets/{id}")).map(DocketPage::parse)
     }
 
+    /// A headless scene's made-up state: the hub's, as `f` changes it (a
+    /// Build the made-up world has none of). Never in a window.
+    pub fn amend(&self, f: impl FnOnce(&mut Value)) {
+        if !self.headless {
+            return;
+        }
+        let Some(cur) = self.state() else { return };
+        let mut j = cur.j.clone();
+        f(&mut j);
+        if let Ok(mut s) = self.state.lock() {
+            *s = Some(Arc::new(HubState::parse(j)));
+        }
+    }
+
     /// A write to the hub, on this thread. The state follows on the event.
     pub fn post(&self, path: &str, body: Value) -> Result<Value, String> {
         let r = self.hub.post(path, body);

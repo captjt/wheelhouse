@@ -5,7 +5,7 @@
 use rune::{Color, El, ScrollSpec, col, el, icon, row, spacer, text, text_input};
 use rune_kit::{Kit, Markdown, ScrollBar};
 
-use super::{Main, Place, Sheet, activity, lists, widgets};
+use super::{Main, Place, Sheet, activity, chat, lists, panels, parts, record, shortcuts, verify, widgets};
 use crate::icons;
 use crate::model::{self, Docket, DocketPage, HubState, LiveState, Status};
 use crate::theme::{self, K, font, mono};
@@ -25,27 +25,36 @@ pub fn detail(s: &Main, st: &HubState, id: &str, k: &K, kit: &Kit) -> El {
         return widgets::empty(&icons::STACK, "No docket", "It isn't in the hub's state.", k);
     };
     if s.chat && d.talks() {
-        return chat(s, st, d, k, kit);
+        return chat::view(s, st, d, k, kit);
     }
     let page = s.pages.get(id);
     let mut c = col().key("docket").w_full().max_w(860.0).px(28.0).pt(22.0).pb(40.0).gap(18.0);
     c = c.child(header(s, d, k));
-    // What it waits on you for: a prompt, an agent's ask, a review to post.
+    if let Some(h) = verify::hold_banner(d, k) {
+        c = c.child(h);
+    }
+    // What it waits on you for: a prompt, a review to post, a Build's call,
+    // an agent's ask.
     if let Some(l) = d.live().filter(|l| l.state() == LiveState::Blocked) {
         c = c.child(prompt_callout(s, d, &l, k));
     }
+    if let Some(p) = panels::review(s, st, d, k, kit) {
+        c = c.child(p);
+    }
+    if let Some(b) = panels::build(st, d, k) {
+        c = c.child(b);
+    }
     for m in st.messages.iter().filter(|m| m.docket().as_deref() == Some(id)) {
         c = c.child(message_card(s, m, k, kit));
-    }
-    if let Some(p) = st.pr_for(id) {
-        c = c.child(review_panel(s, p, k));
     }
     c = c.child(intent(s, d, page.map(|p| p.as_ref()), k, kit));
     if let Some(p) = page {
         if !p.decisions().is_empty() {
             c = c.child(decisions(p, k));
         }
-        c = c.child(verify(s, d, p, k));
+        if let Some(v) = verify::section(s, d, p, k) {
+            c = c.child(v);
+        }
         let files: Vec<_> = p.entries.iter().filter(|e| e.kind() == "artifact").collect();
         if !files.is_empty() {
             c = c.child(artifacts(&files, k));
@@ -101,7 +110,7 @@ fn prompt_callout(s: &Main, d: &Docket, l: &model::Live, k: &K) -> El {
     theme::callout(LiveState::Blocked, r, k)
 }
 
-fn message_card(s: &Main, m: &model::Msg, k: &K, kit: &Kit) -> El {
+pub(super) fn message_card(s: &Main, m: &model::Msg, k: &K, kit: &Kit) -> El {
     let mut c = col()
         .w_full()
         .padding(14.0)
@@ -120,48 +129,6 @@ fn message_card(s: &Main, m: &model::Msg, k: &K, kit: &Kit) -> El {
         .child(markdown(&m.body(), kit));
     if !m.options().is_empty() {
         c = c.child(lists::option_buttons(s, m, k));
-    }
-    c
-}
-
-fn review_panel(s: &Main, p: &model::ReviewPr, k: &K) -> El {
-    let rv = s.state().map(|st| model::flag(&st.review()["paused"])).unwrap_or(false);
-    let mut c = col()
-        .w_full()
-        .padding(14.0)
-        .gap(8.0)
-        .radius(10.0)
-        .continuous_corners()
-        .fill(k.elev)
-        .border(1.0, k.line2)
-        .child(
-            row()
-                .w_full()
-                .gap(8.0)
-                .center_y()
-                .child(icon(&icons::PULL, 14.0).color(k.muted))
-                .child(text(p.key()).font(mono(12.5).lh(16.0)).color(k.text))
-                .child(text(p.author().map(|a| format!("by {a}")).unwrap_or_default()).font(font(12.0, 400.0).lh(16.0)).color(k.muted))
-                .child(text(if p.round() > 0 { format!("· round {}", p.round()) } else { String::new() }).font(font(12.0, 400.0).lh(16.0)).color(k.muted))
-                .child(spacer())
-                .child(match p.merge_risk() {
-                    Some(r) => theme::chip(&format!("Risk {r}"), k.risk(Some(&r)), false),
-                    None => el(),
-                }),
-        )
-        .child(text(lists::phase_text(p, rv)).font(font(12.0, 400.0).lh(16.0)).color(k.text2));
-    if let Some(a) = p.attention() {
-        c = c.child(text(if a.kind == "ready" { model::draft_line(p).unwrap_or(a.text.clone()) } else { a.text.clone() }).font(font(12.0, 400.0).lh(16.0)).color(k.blocked).wrap());
-        if a.kind == "ready" {
-            c = c.child(lists::review_actions(s, p, k));
-        }
-    }
-    if !p.reviewers().is_empty() {
-        let mut r = row().gap(6.0);
-        for (name, _, effort) in p.reviewers() {
-            r = r.child(theme::chip(&format!("{name}{}", effort.map(|e| format!(" · {e}")).unwrap_or_default()), k.muted, false));
-        }
-        c = c.child(r);
     }
     c
 }
@@ -257,139 +224,6 @@ fn decisions(p: &DocketPage, k: &K) -> El {
     c
 }
 
-fn verify(s: &Main, d: &Docket, p: &DocketPage, k: &K) -> El {
-    let ev = p.evidence();
-    let lines = model::arr(&ev["evidence"]);
-    let checks = model::arr(&ev["checks"]);
-    let configured = model::arr(&ev["configured"]);
-    let needs = model::flag(&ev["needs"]);
-    let running = model::flag(&ev["running"]);
-    let repo = model::text(&ev["repo"]);
-    let id = d.id();
-    let rests = if lines.is_empty() { if needs { "done needs evidence".to_string() } else { "nothing to rest on yet".to_string() } } else { format!("done rests on {}", model::plural(lines.len(), "thing")) };
-    let busy = s.busy.contains(&format!("check:{id}")) || running;
-    let can = !configured.is_empty() && !busy;
-    let a = id.clone();
-    let head = row()
-        .w_full()
-        .gap(8.0)
-        .center_y()
-        .child(theme::section_title("Verify", k))
-        .child(text(format!("{}{rests}", repo.map(|r| format!("{r} · ")).unwrap_or_default())).font(font(12.0, 400.0).lh(16.0)).color(k.muted))
-        .child(spacer())
-        .child(
-            row()
-                .key("run-checks")
-                .gap(5.0)
-                .px(6.0)
-                .py(2.0)
-                .radius(5.0)
-                .center_y()
-                .hover(k.hover)
-                .role("button")
-                .label("Run checks")
-                .opacity(if can { 1.0 } else { 0.45 })
-                .on_press(move |s: &mut Main| {
-                    if can {
-                        s.run_checks(&a)
-                    }
-                })
-                .child(icon(&icons::PLAY, 10.0).color(k.muted))
-                .child(text(if busy { "Running…" } else { "Run Checks" }).font(font(12.0, 400.0).lh(15.0)).color(k.muted)),
-        );
-    let mut card = col().w_full().radius(10.0).continuous_corners().border(1.0, k.line2).fill(k.elev);
-    let mut first = true;
-    let mut push = |card: El, row_el: El| {
-        let sep = if first { el() } else { theme::hairline(k) };
-        first = false;
-        card.child(sep).child(row_el)
-    };
-    if let Some(l) = lines.first() {
-        card = push(
-            card,
-            row()
-                .w_full()
-                .px(14.0)
-                .py(10.0)
-                .gap(10.0)
-                .center_y()
-                .child(icon(&icons::APPROVE, 15.0).color(k.working))
-                .child(text(format!("Done rests on {}", model::str_or(&l["what"], "").replace('`', ""))).font(font(13.0, 400.0).lh(17.0)).color(k.text).wrap().shrink())
-                .child(spacer())
-                .child(text(model::str_or(&l["how"], "said").to_string()).font(font(11.0, 500.0).lh(14.0)).color(k.working))
-                .child(text(model::ago(l["at"].as_str())).font(font(11.5, 400.0).lh(14.0)).color(k.faint)),
-        );
-    } else if needs {
-        card = push(
-            card,
-            col()
-                .w_full()
-                .px(14.0)
-                .py(10.0)
-                .gap(3.0)
-                .child(text("Nothing yet but what was said.").font(font(13.0, 600.0).lh(17.0)).color(k.text))
-                .child(text("Its intent has acceptance items, so done needs a passing check, a merged PR, or a completed issue. Or your word, with a reason.").font(font(12.0, 400.0).lh(16.0)).color(k.muted).wrap()),
-        );
-    }
-    for c in checks {
-        let ok = model::flag(&c["ok"]);
-        let required = c["required"].as_bool().unwrap_or(true);
-        let outcome = if ok {
-            if model::flag(&c["dirty"]) { "passed, with uncommitted changes".to_string() } else { "passed".to_string() }
-        } else if c["exit"].is_null() {
-            "timed out".to_string()
-        } else {
-            format!("failed, exit {}", model::int(&c["exit"]).unwrap_or(1))
-        };
-        let head_sha: String = model::str_or(&c["head"], "").chars().take(7).collect();
-        let mut name = row().gap(6.0).center_y().child(text(model::str_or(&c["name"], "").to_string()).font(mono(12.5).lh(16.0)).color(k.text));
-        if !required {
-            name = name.child(theme::chip("optional", k.muted, false));
-        }
-        name = name.child(text(outcome).font(font(12.5, 400.0).lh(16.0)).color(k.text2));
-        card = push(
-            card,
-            row()
-                .w_full()
-                .px(14.0)
-                .py(10.0)
-                .gap(10.0)
-                .child(el().pt(1.0).child(if ok { icon(&icons::APPROVE, 15.0).color(k.working) } else { icon(&icons::DENY, 15.0).color(if required { k.error } else { k.muted }) }))
-                .child(
-                    col()
-                        .gap(2.0)
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .child(name)
-                        .child(text(format!("{} at {head_sha} · {}", model::str_or(&c["command"], ""), model::duration(model::int(&c["ms"])))).font(mono(11.5).lh(15.0)).color(k.muted)),
-                )
-                .child(text("witnessed").font(font(11.0, 500.0).lh(14.0)).color(k.working))
-                .child(text(model::ago(c["at"].as_str())).font(font(11.5, 400.0).lh(14.0)).color(k.faint)),
-        );
-    }
-    let ran: Vec<&str> = checks.iter().filter_map(|c| c["name"].as_str()).collect();
-    let never: Vec<String> = configured.iter().filter_map(|c| c["name"].as_str()).filter(|n| !ran.contains(n)).map(str::to_string).collect();
-    if !never.is_empty() {
-        card = push(
-            card,
-            row()
-                .w_full()
-                .px(14.0)
-                .py(9.0)
-                .gap(10.0)
-                .center_y()
-                .child(icon(&icons::RING, 14.0).color(k.faint))
-                .child(text(never.join(", ")).font(mono(12.5).lh(16.0)).color(k.text))
-                .child(text("not run on this docket yet").font(font(12.5, 400.0).lh(16.0)).color(k.muted)),
-        );
-    }
-    let mut c = col().w_full().gap(8.0).child(head);
-    if !(lines.is_empty() && checks.is_empty() && !needs && never.is_empty()) {
-        c = c.child(card);
-    }
-    c
-}
-
 fn artifacts(files: &[&model::Entry], k: &K) -> El {
     let mut grid = row().w_full().gap(10.0).wrap();
     for e in files {
@@ -463,51 +297,6 @@ fn composer(s: &Main, d: &Docket, to_agent: bool, k: &K) -> El {
                 .child(spacer())
                 .child(widgets::button("composer-send", if to_agent { "Send" } else { "Note" }, true, ready, k, move |s: &mut Main, _| if to_agent { s.send(&b) } else { s.note(&b) })),
         )
-}
-
-/// Chat: the prompts and turns, as a conversation, and the box to the agent.
-fn chat(s: &Main, st: &HubState, d: &Docket, k: &K, kit: &Kit) -> El {
-    let mut c = col().key("chat").w_full().max_w(760.0).px(28.0).pt(22.0).pb(24.0).gap(14.0);
-    match s.pages.get(&d.id()) {
-        Some(p) => {
-            for e in &p.entries {
-                let data = e.data();
-                let (mine, body) = match e.kind().as_str() {
-                    "note" if model::str_or(&data["via"], "") == "prompt" => (true, e.body()),
-                    "turn" => (false, e.body()),
-                    _ => continue,
-                };
-                let Some(body) = body.filter(|b| !b.trim().is_empty()) else { continue };
-                let bubble = col()
-                    .max_w(600.0)
-                    .padding(12.0)
-                    .gap(6.0)
-                    .radius(14.0)
-                    .continuous_corners()
-                    .fill(if mine { k.accent_soft } else { k.elev })
-                    .border(1.0, if mine { k.accent.alpha(0.2) } else { k.line2 })
-                    .child(
-                        row()
-                            .gap(6.0)
-                            .center_y()
-                            .child(if mine { theme::person_avatar(&st.owner(), 16.0, k) } else { theme::app_avatar(d.agent_app().as_deref(), 16.0, k) })
-                            .child(text(if mine { "You".to_string() } else { model::app_name(d.agent_app().as_deref()) }).font(font(12.0, 600.0).lh(15.0)).color(k.text))
-                            .child(text(model::ago_long(Some(&e.at()))).font(font(11.5, 400.0).lh(15.0)).color(k.faint)),
-                    )
-                    .child(markdown(&body, kit));
-                c = c.child(if mine { row().w_full().justify_end().child(bubble) } else { row().w_full().child(bubble) });
-            }
-            for (_, q) in p.queued() {
-                c = c.child(row().w_full().justify_end().child(theme::chip(&format!("Queued: {q}"), k.muted, false)));
-            }
-        }
-        None => c = c.child(text("Loading the conversation…").font(font(12.0, 400.0).lh(16.0)).color(k.muted)),
-    }
-    if let Some(l) = d.live() {
-        c = c.child(row().gap(6.0).center_y().child(theme::live_icon(Some(l.state()), 12.0, k)).child(text(format!("{} · {}", model::app_name(d.agent_app().as_deref()), l.state().word())).font(font(12.0, 400.0).lh(15.0)).color(k.muted)));
-    }
-    let list = col().key("chat-scroll").w_full().grow(1.0).min_h(0.0).items_center().child(c).scroll(ScrollSpec { stick_bottom: true }).scroll_bar(kit);
-    col().w_full().h_full().child(list).child(row().w_full().max_w(760.0).px(28.0).pb(16.0).child(composer(s, d, true, k)))
 }
 
 // ---- the inspector ----
@@ -613,8 +402,15 @@ pub fn inspector(s: &Main, st: &HubState, id: &str, k: &K) -> El {
 pub fn sheet(s: &Main, sheet: &Sheet, k: &K, kit: &Kit) -> El {
     let card = match sheet {
         Sheet::Hold(id) => hold_sheet(s, id, k),
-        Sheet::Record(id) => record_sheet(s, id, k, kit),
         Sheet::NewDocket => new_docket_sheet(s, k),
+        // Recap's, Chat's, the record's, Verify's and the panels' sheets,
+        // centred as the Mac app's are.
+        Sheet::Record(id) => return parts::scrim(record::sheet(s, id, k, kit), k),
+        Sheet::Shortcuts => return parts::scrim(shortcuts::sheet(s, k, kit), k),
+        Sheet::CheckOutput(d, c) => return parts::scrim(verify::output_sheet(s, d, c, k, kit), k),
+        Sheet::CloseOnWord(id, from) => return parts::scrim(verify::close_sheet(s, id, *from, k), k),
+        Sheet::Pane(id) => return parts::scrim(chat::pane_sheet(s, id, k, kit), k),
+        Sheet::Preview(full) => return parts::scrim(panels::preview_sheet(s, full, k, kit), k),
     };
     col()
         .key("sheet-scrim")
@@ -674,41 +470,6 @@ fn hold_sheet(s: &Main, id: &str, k: &K) -> El {
                 .child(widgets::button("hold-go", "Hold", true, true, k, move |s: &mut Main, _| s.hold(&a))),
         );
     sheet_card(&format!("Hold {id}"), body, k)
-}
-
-fn record_sheet(s: &Main, id: &str, k: &K, kit: &Kit) -> El {
-    let mut rows = col().w_full().gap(0.0);
-    if let Some(p) = s.pages.get(id) {
-        for e in &p.entries {
-            rows = rows.child(
-                row()
-                    .w_full()
-                    .px(18.0)
-                    .py(7.0)
-                    .gap(10.0)
-                    .center_y()
-                    .child(text(format!("#{}", e.seq())).font(mono(11.5).lh(15.0)).color(k.faint).w(34.0))
-                    .child(text(e.kind()).font(mono(12.0).lh(15.0)).color(k.text).w(80.0))
-                    .child(text(e.actor_type()).font(font(12.0, 400.0).lh(15.0)).color(k.muted).w(60.0))
-                    .child(text(model::stamp(Some(&e.at()))).font(font(12.0, 400.0).lh(15.0)).color(k.muted).grow(1.0))
-                    .child(text(e.mark()).font(font(11.0, 500.0).lh(14.0)).color(if e.mark() == "witnessed" { k.working } else if e.mark() == "checkable" { k.accent } else { k.faint })),
-            );
-        }
-        let ok = p.verify_ok();
-        let top = row()
-            .w_full()
-            .px(18.0)
-            .py(10.0)
-            .gap(8.0)
-            .center_y()
-            .child(icon(&icons::SHIELD, 14.0).color(if ok { k.working } else { k.error }))
-            .child(text(if ok { format!("Chain intact, {} signatures good", p.verify_entries()) } else { "The chain doesn't check".into() }).font(font(12.5, 500.0).lh(16.0)).color(if ok { k.working } else { k.error }));
-        let body = col().w_full().child(top).child(theme::hairline(k)).child(rows.scroll(ScrollSpec { stick_bottom: false }).max_h(460.0).scroll_bar(kit)).child(
-            row().w_full().px(18.0).py(12.0).child(spacer()).child(widgets::button("record-done", "Done", true, true, k, |s: &mut Main, _| s.sheet = None)),
-        );
-        return sheet_card(&format!("{id}'s record"), body, k);
-    }
-    sheet_card(&format!("{id}'s record"), text("Loading…").font(font(12.5, 400.0).lh(16.0)).color(k.muted).padding(18.0), k)
 }
 
 fn new_docket_sheet(s: &Main, k: &K) -> El {

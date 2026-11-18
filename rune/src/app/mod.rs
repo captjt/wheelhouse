@@ -3,9 +3,18 @@
 //! window reads the one Store and is told when it changes.
 
 mod activity;
+mod chat;
 mod docket;
+mod fixtures;
+mod glyphs;
 mod lists;
+mod panels;
+mod parts;
+mod recap;
+mod record;
+mod shortcuts;
 mod sidebar;
+mod verify;
 pub mod widgets;
 
 use std::collections::{HashMap, HashSet};
@@ -84,6 +93,16 @@ pub enum Sheet {
     Record(String),
     Hold(String),
     NewDocket,
+    /// ⌘/ or ?: the keyboard's shortcuts.
+    Shortcuts,
+    /// A check's output: (docket, check).
+    CheckOutput(String, String),
+    /// Done needs evidence: close on your word, from the status it was in.
+    CloseOnWord(String, Status),
+    /// A live look at an agent's pane.
+    Pane(String),
+    /// A review as it would post, by its full key.
+    Preview(String),
 }
 
 pub struct Main {
@@ -109,6 +128,11 @@ pub struct Main {
     pub theme: Option<bool>,
     pub clock: f64,
     pub pending_g: bool,
+    pub recap: recap::Recap,
+    pub talk: chat::Talk,
+    pub record: record::Record,
+    pub verify: verify::Verify,
+    pub panels: panels::Panels,
 }
 
 impl Main {
@@ -140,6 +164,11 @@ impl Main {
             },
             clock: 0.0,
             pending_g: false,
+            recap: Default::default(),
+            talk: Default::default(),
+            record: Default::default(),
+            verify: Default::default(),
+            panels: Default::default(),
         };
         // Told whenever the hub's state changes: build again, and refresh the
         // docket on show.
@@ -388,12 +417,9 @@ impl Main {
         });
     }
 
+    /// Run a docket's checks (Verify's Run Checks).
     pub fn run_checks(&mut self, id: &str) {
-        let id = id.to_string();
-        self.act(&format!("check:{id}"), format!("/api/dockets/{id}/check"), json!({}), move |r| match r {
-            Ok(v) => (format!("Running {}", model::strings(&v["checks"]).join(", ")), false),
-            Err(e) => (e, true),
-        });
+        verify::run(self, id, false);
     }
 
     pub fn open_in_rex(&mut self, id: &str) {
@@ -433,7 +459,10 @@ pub fn poll(s: &mut Main, t: f64, tx: &mut Tx) -> bool {
     if !s.toasts.is_empty() {
         tx.wake_after(std::time::Duration::from_millis(500));
     }
-    before != s.toasts.len()
+    // Recap, a record or a check's output that just opened, and Chat's peek.
+    let loaded = recap::poll(s) | record::poll(s) | verify::poll(s);
+    let ticked = chat::poll(s, t, tx);
+    before != s.toasts.len() || loaded || ticked
 }
 
 /// The window's keys: G then a letter goes somewhere, / searches, C creates,
@@ -445,6 +474,11 @@ pub fn on_key(s: &mut Main, ev: &KeyEvent, _: &mut Tx) -> bool {
     }
     if ev.is_command('i') && ev.mods.alt {
         s.inspector.toggle();
+        return true;
+    }
+    // ⌘/ (and ? below): the keyboard's shortcuts.
+    if ev.is_command('/') || (ev.mods.cmd && ev.is_command('?')) {
+        s.sheet = Some(Sheet::Shortcuts);
         return true;
     }
     if ev.mods.cmd {
@@ -485,6 +519,7 @@ pub fn on_key(s: &mut Main, ev: &KeyEvent, _: &mut Tx) -> bool {
         "g" => s.pending_g = true,
         "j" | "k" => lists::step(s, if t == "j" { 1 } else { -1 }),
         "c" => s.sheet = Some(Sheet::NewDocket),
+        "?" => s.sheet = Some(Sheet::Shortcuts),
         _ => return false,
     }
     true
@@ -531,6 +566,9 @@ fn toolbar(s: &Main, state: Option<&HubState>, k: &K, kit: &rune_kit::Kit) -> To
         .child(text(s.place.title()).font(font(13.0, 600.0).lh(16.0)).color(k.text))
         .child(text(subtitle).font(font(11.0, 400.0).lh(13.0)).color(k.muted));
     let mut trailing = row().gap(6.0).center_y();
+    if s.place == Place::Recap {
+        trailing = trailing.child(recap::toolbar(s, k));
+    }
     if s.place.is_list() {
         trailing = trailing.child(widgets::segmented(
             "layout",
@@ -594,7 +632,7 @@ fn subtitle(s: &Main, st: &HubState) -> String {
 fn content(s: &Main, st: &HubState, k: &K, kit: &rune_kit::Kit) -> El {
     match &s.place {
         Place::Agents => lists::agents(s, st, k),
-        Place::Recap => lists::recap(s, st, k),
+        Place::Recap => recap::view(s, k),
         p if p.is_list() && s.board => lists::board(s, st, k),
         _ => {
             let list = lists::list(s, st, k, kit);
@@ -646,11 +684,26 @@ pub const SCENES: &[(&str, fn(&mut Main))] = &[
     ("all", |s| scene(s, Place::All, None)),
     ("done", |s| scene(s, Place::Done, None)),
     ("agents", |s| scene(s, Place::Agents, None)),
-    ("recap", |s| scene(s, Place::Recap, None)),
+    ("recap", fixtures::recap),
     ("record", |s| {
         scene(s, Place::Active, Some("D-6"));
         s.sheet = Some(Sheet::Record("D-6".into()));
     }),
+    ("record-open", fixtures::record_open),
+    ("record-find", fixtures::record_find),
+    ("chat-peek", fixtures::chat_peek),
+    ("chat-blocked", fixtures::chat_blocked),
+    ("pane", fixtures::pane),
+    ("output", fixtures::output),
+    ("close", fixtures::close),
+    ("verdicts", fixtures::verdicts),
+    ("shortcuts", fixtures::shortcuts),
+    ("review-ready", fixtures::review_ready),
+    ("review-live", fixtures::review_live),
+    ("preview", fixtures::preview),
+    ("build-plan", fixtures::build_plan),
+    ("build-check", fixtures::build_check),
+    ("build-round", fixtures::build_round),
     ("new", |s| {
         scene(s, Place::Inbox, None);
         s.sheet = Some(Sheet::NewDocket);

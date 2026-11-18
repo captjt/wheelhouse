@@ -687,30 +687,3 @@ pub fn agents(_s: &Main, st: &HubState, k: &K) -> El {
     }
     rows.key("agents").w_full().h_full().scroll(ScrollSpec { stick_bottom: false })
 }
-
-// ---- Recap ----
-
-pub fn recap(_s: &Main, st: &HubState, k: &K) -> El {
-    let open = st.dockets.iter().filter(|d| d.is_open()).count();
-    let done = st.dockets.iter().filter(|d| d.status() == Status::Done).count();
-    let turns: i64 = st.dockets.iter().map(|d| d.turns()).sum();
-    let tile = |label: &str, n: String| {
-        col()
-            .w(160.0)
-            .padding(14.0)
-            .gap(4.0)
-            .radius(10.0)
-            .fill(k.elev)
-            .border(1.0, k.line)
-            .child(text(n).font(font(24.0, 600.0).lh(28.0)).color(k.text))
-            .child(text(label.to_string()).font(font(12.0, 400.0).lh(15.0)).color(k.muted))
-    };
-    col()
-        .key("recap")
-        .w_full()
-        .h_full()
-        .padding(24.0)
-        .gap(16.0)
-        .child(text("This week").font(font(20.0, 600.0).lh(24.0)).color(k.text))
-        .child(row().gap(12.0).child(tile("Open dockets", open.to_string())).child(tile("Done", done.to_string())).child(tile("Turns", turns.to_string())).child(tile("Reviews", st.prs.len().to_string())))
-}
