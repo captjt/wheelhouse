@@ -1,4 +1,4 @@
-# Rune: a trial on `dev/rune`
+# Rune: a trial on `dev/rune` (decided: stay native)
 
 [Rune](https://github.com/anomalyco/rune) is a GPU-rendered Rust UI framework
 (macOS, Windows, Linux, and an experimental web target) from Anomaly, the
@@ -200,6 +200,22 @@ Cheap this time, but that's one week: 436 commits, no tags, and the patch
 table you must copy grew from one crate to five.
 
 ## Decision
+
+**Stay native on the Mac (Jordan, 2026-11-18). `dev/rune` isn't merged;** it
+stays as the reference: the whole app in `rune/`, the screen-by-screen
+comparison, and the profiles. After the whole port, SwiftUI was the more
+efficient app where it counts ([Performance](#performance-the-whole-app)):
+about half Rune's CPU with an agent at work in view, a third to half the
+memory on large data, and less than half the binary. Rune redraws the whole
+window every frame while anything animates, which is its model, not the
+port's. Rune's lead (a window 150 ms sooner on half the launch CPU, cheaper
+changes from the hub) doesn't outweigh that day to day. The profile also
+found a bug in the SwiftUI app (an unfocused note field kept WindowServer at
+a third of a core), fixed on its own branch for `main`.
+
+What would reopen it: wanting a Windows or Linux desktop app from one Rust
+codebase, Rune drawing only what changed, or its iOS target. The trial's
+reasoning, from before the whole port:
 
 **Wait, for Rune's first tagged release.** Nothing moves to `main` now.
 
