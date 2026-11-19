@@ -31,6 +31,7 @@ QUICK = "--quick" in sys.argv
 WINTOOL = os.path.join(ROOT, ".tmp/wintool")
 FRAME = (384, 120, 1440, 900)
 SCROLL_AT = (FRAME[0] + 420, FRAME[1] + 480)  # over the list column, in both apps
+DOCKET_AT = (FRAME[0] + 900, FRAME[1] + 480)  # over the docket's page
 
 APPS = {
     "rune": dict(cmd=[os.path.join(ROOT, "rune/target/ship/ship/wheelhouse-rune")], hub="WH_HUB", env={"WH_RUNE_NOTIFY": "off"}),
@@ -40,10 +41,16 @@ APPS = {
     "swiftui-no-note": dict(cmd=[os.path.join(ROOT, ".tmp/profile/WheelhouseExp.app/Contents/MacOS/Wheelhouse"), "-ApplePersistenceIgnoreState", "YES"], hub="WH_APP_HUB", env={"WH_EXP_NO_COMPOSER": "1"}),
 }
 MAIN = ["rune", "swiftui"]
+# Notes go to a docket that's never on screen, so every session sees the
+# same data; D-1, which the Inbox shows, is seeded with its own history.
 DATASETS = {
     "yours": dict(port=7601, log=os.path.join(ROOT, ".tmp/profile/proxy-yours.log"), writes=False),
-    "large": dict(port=7461, log=os.path.join(ROOT, ".tmp/profile/proxy-large.log"), writes=True, hub=7459),
+    "large": dict(port=7463, log=os.path.join(ROOT, ".tmp/profile/proxy-clean.log"), writes=True, hub=7462, target="D-400"),
+    "extreme": dict(port=7461, log=os.path.join(ROOT, ".tmp/profile/proxy-large.log"), writes=False, short=True),
 }
+ONLY = [a.split("=", 1)[1].split(",") for a in sys.argv if a.startswith("--datasets=")]
+if ONLY:
+    DATASETS = {k: v for k, v in DATASETS.items() if k in ONLY[0]}
 LAUNCHES = 2 if QUICK else 5
 SESSIONS = 1 if QUICK else 2
 PHASES = dict(settle=15, inbox=45, list_settle=8, list=30, scroll=20, scroll_settle=5, active=30, updates=60, after=30)
@@ -158,7 +165,7 @@ def notes(stop_at, ds):
     i = 0
     while time.time() < stop_at:
         body = json.dumps({"body": f"Progress {i}: ran the suite, 3 left."}).encode()
-        req = urllib.request.Request(f"{base}/api/dockets/D-1/note", data=body, headers={"Content-Type": "application/json", "X-Wheelhouse": "profile"}, method="POST")
+        req = urllib.request.Request(f"{base}/api/dockets/{DATASETS[ds]['target']}/note", data=body, headers={"Content-Type": "application/json", "X-Wheelhouse": "profile"}, method="POST")
         try:
             urllib.request.urlopen(req, timeout=5).read()
         except Exception as e:  # noqa: BLE001
@@ -179,6 +186,16 @@ def session(app, ds):
     ph = Phase(p.pid)
     time.sleep(P["inbox"])
     out.append(ph.end("inbox idle", ds))
+    wintool("front", p.pid)
+    ph = Phase(p.pid)
+    wintool("scroll", p.pid, *DOCKET_AT, P["scroll"], 60, 40)
+    out.append(ph.end("scrolling a docket", ds))
+    time.sleep(P["scroll_settle"])
+    if DATASETS[ds].get("short"):
+        stop(p)
+        for r in out:
+            r.update(app=app, dataset=ds)
+        return out
     wintool("key", p.pid, "cmd+5")  # All dockets, in both
     time.sleep(P["list_settle"])
     ph = Phase(p.pid)
@@ -187,7 +204,7 @@ def session(app, ds):
     wintool("front", p.pid)
     ph = Phase(p.pid)
     wintool("scroll", p.pid, *SCROLL_AT, P["scroll"], 60, 40)
-    out.append(ph.end("scrolling", ds))
+    out.append(ph.end("scrolling the list", ds))
     time.sleep(P["scroll_settle"])
     wintool("key", p.pid, "cmd+4")  # Active: on the made-up world, an agent at work in view
     time.sleep(P["list_settle"])
@@ -215,7 +232,7 @@ def main():
     save = lambda: json.dump(results, open(os.path.join(OUT, "results.json"), "w"), indent=1)  # noqa: E731
     log("baseline: WindowServer with neither app")
     results["baseline_ws_cpu_pct"].append(baseline(10 if QUICK else 30))
-    for ds in DATASETS:
+    for ds in [d for d in DATASETS if not DATASETS[d].get("short")]:
         for i in range(LAUNCHES):
             for app in (MAIN if i % 2 == 0 else MAIN[::-1]):
                 r = launch(app, ds)

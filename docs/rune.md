@@ -325,3 +325,78 @@ To try it beside your daily Wheelhouse, on Wheelhouse Dev's copy of your
 dockets: `rune/scripts/bundle.sh`, then `open "rune/target/Wheelhouse
 Rune.app"`. It opens on the main window, with its wheel in the menu bar.
 
+
+## Performance: the whole app
+
+Both apps profiled the same way, one at a time, on one Mac (M2 Max, a
+3840×1080 display at 120 Hz) with `rune/scripts/profile/profile.py`:
+Rune's shipping build (`--profile ship`: LTO, one codegen unit) and
+SwiftUI's release build, both with notifications off, the window brought
+forward and placed at the same 1440×900 frame, keys and scrolling sent to
+the window, never through the cursor. Counters come from the kernel
+(`proc_pid_rusage`); WindowServer's CPU is measured beside each app, above
+its baseline with neither running (6–11%), since SwiftUI hands its
+drawing to WindowServer and Rune draws in its own process. Medians of 5
+launches and 2 sessions per app, run twice to check (the repeats agree
+within a couple of points). Three sets of data: Wheelhouse Dev's copy of
+your dockets (59 dockets, 64 PRs, read only), a made-up world of 500
+dockets whose Inbox docket has 300 entries (twice your longest), and one
+docket of 2,943 entries.
+
+| 500 dockets | Rune | SwiftUI |
+| --- | --- | --- |
+| Window on screen | 230 ms | 376 ms |
+| The docket's page asked for | 435 ms | 433 ms |
+| CPU to launch | 300 ms | 653 ms |
+| Memory after launch | 81 MB | 59 MB |
+| At rest, nothing moving: app CPU, WindowServer | 0.2%, +1% | 0.1%, **+45%** (0.1%, +1% without the note field) |
+| At rest, an agent at work in view (Active, 283 rows) | **45%, +28%** | 22%, +12% |
+| Scrolling the list | 47%, +30% | 34%, +34% (33%, +20% without the note field) |
+| Scrolling a 300-entry docket | 42%, +27% | 37%, +43% (37%, +30% without) |
+| Ten changes a second, an agent in view | 43%, +33% | 40%, +4% |
+| Memory: Inbox, All dockets | 86 MB, 144 MB | 59 MB, 81 MB |
+| Memory with a 2,943-entry docket open | 230–242 MB | 70–78 MB |
+| Binary | 26.5 MB | 11.6 MB |
+
+On your own dockets the two are close at rest (both about 0%, Rune 68–85 MB
+against SwiftUI's 49–87 MB, with nothing live in that copy to animate);
+launch is the same story (Rune's window at 229 ms against 375 ms, 276 ms of
+CPU against 465 ms), and scrolling a 59-row list costs Rune 47% + 38% of
+WindowServer against SwiftUI's 34% + 29% (16% without the note field).
+
+What's behind the numbers:
+
+- **SwiftUI's note field costs WindowServer about a third of a core**
+  whenever a docket is on screen, at rest and unfocused. The same build
+  without the composer's `NSTextView` (Editor.swift's `TextViewBox`) idles
+  at WindowServer's baseline. This is a bug in the daily app, not in
+  SwiftUI's model, and worth fixing on `main` whatever the direction.
+- **Any animation makes Rune redraw and present the whole window every
+  frame,** at the display's 120 Hz. The working agent's pulse alone costs
+  Rune 22% + 38% of WindowServer on an 8-docket list and 45% + 28% on a
+  283-row one: every frame lays out and paints every row, because the port
+  doesn't virtualize its lists. SwiftUI's pulse redraws at 24 fps (its
+  `TimelineView`) and costs 21% + 11%. An agent at work is Wheelhouse's
+  normal state, so this is the number that matters most day to day.
+- **Rune's memory grows with what it lays out:** every row and every entry,
+  where SwiftUI's lists are lazy. Virtualizing lists and the activity feed
+  (Rune has virtual rows) should fix both this and the per-frame cost
+  above; that's untested.
+- **Rune launches faster and cheaper:** its window is up 150 ms sooner on
+  half the CPU. Both have the docket's page at about 435 ms, because Rune
+  waits out a 150 ms debounce meant for bursts of events before its first
+  fetch; fetching at once would put its data on screen about 150 ms
+  sooner.
+- **Changes are cheaper in Rune.** Under ten changes a second it refetched
+  more often (7.9 a second against 5.4) and spent no more of its own CPU
+  than at rest with the pulse, where SwiftUI spent 18% more than at rest:
+  about 33 ms per refresh to diff its lists.
+- **Scrolling:** Rune's own CPU runs about a third higher than SwiftUI's,
+  and with the note-field bug fixed, SwiftUI's total is the lower of the
+  two.
+
+Not measured: GPU time (neither app's; WindowServer's CPU stands in for
+compositing), frame drops or hitches (SwiftUI's need Instruments, which
+needs Developer Mode), battery drain (`powermetrics` needs root), and
+anything on Intel Macs or other displays. The kernel's energy counter
+read 0 at 37% CPU, so it isn't used.
