@@ -23,6 +23,7 @@ import { STATUSES, canStartAgent, statusItems } from "./views";
 import { CheckOutput, VerifySection } from "./Verify";
 import { checkState, checkWord, independence, shortSha, verifyShown } from "./evidence";
 import { IconAgents, IconPause, IconPlay } from "./icons";
+import { SubagentsSection } from "./Subagents";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
   const hub = useHub();
@@ -404,6 +405,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
 
           <ReviewPanel d={d} />
           <BuildPanel d={d} />
+          <SubagentsSection d={d} />
           {(hub.state?.messages ?? [])
             .filter((m) => m.docket === d.id)
             .map((m) => (

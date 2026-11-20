@@ -326,7 +326,7 @@ fn codex_db() -> Option<PathBuf> {
     dbs.pop().map(|(_, p)| p)
 }
 
-fn codex_conn() -> Option<rusqlite::Connection> {
+pub fn codex_conn() -> Option<rusqlite::Connection> {
     let db = codex_db()?;
     let ro = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI;
     rusqlite::Connection::open_with_flags(&db, ro).ok().filter(|c| c.query_row("select 1 from threads limit 1", [], |_| Ok(())).is_ok()).or_else(|| {

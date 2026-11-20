@@ -39,6 +39,7 @@ mod service;
 mod settings;
 mod start;
 mod store;
+mod subagents;
 mod tailnet;
 mod time;
 
