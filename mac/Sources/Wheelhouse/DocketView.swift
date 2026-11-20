@@ -185,6 +185,7 @@ struct DocketBody: View {
             }
             ReviewPanel(d: d)
             BuildPanel(d: d)
+            SubagentsSection(d: d)
             ForEach((store.state?.messages ?? []).filter { $0.docket == d.id }) { m in MessageCard(m: m) }
             IntentSection(d: d, entries: page.entries)
             DecisionsSection(decisions: page.decisions, docket: d.id, repo: page.evidence.repo)

@@ -6162,3 +6162,106 @@ code {
     display: none;
   }
 }
+
+/* Subagents: what the docket's agents spawned (Subagents.tsx). */
+.subagents {
+  margin-top: 22px;
+}
+.sa-group + .sa-group {
+  margin-top: 14px;
+}
+.sa-agent {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--elev);
+  overflow: hidden;
+}
+.sa-agent + .sa-agent {
+  margin-top: 8px;
+}
+.sa-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border-bottom: 1px solid var(--line);
+  background: var(--group);
+  min-width: 0;
+}
+.sa-agent-label {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sa-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sa-row + .sa-row {
+  border-top: 1px solid var(--line);
+}
+.sa-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 11px 7px 5px;
+  text-align: left;
+  font-size: 13px;
+}
+.sa-line:hover {
+  background: var(--hover);
+}
+.sa-name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.sa-task {
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.sa-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.sa-tok {
+  min-width: 38px;
+  text-align: right;
+}
+.sa-when {
+  min-width: 52px;
+  text-align: right;
+}
+.sa-running .sa-when {
+  color: var(--accent);
+}
+.sa-idle .sa-name,
+.sa-stopped .sa-name {
+  color: var(--muted);
+}
+.sa-words {
+  padding: 4px 14px 10px 26px;
+  font-size: 13px;
+}
+.sa-ids {
+  margin-top: 6px;
+}
+.sa-more {
+  margin-top: 8px;
+}
+@media (max-width: 640px) {
+  .sa-model {
+    display: none;
+  }
+}

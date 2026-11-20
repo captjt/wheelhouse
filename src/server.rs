@@ -40,6 +40,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/status", get(status))
         .route("/api/dockets", post(new_docket))
         .route("/api/dockets/{id}", get(docket))
+        .route("/api/dockets/{id}/subagents", get(docket_subagents))
         .route("/api/dockets/{id}/note", post(note))
         .route("/api/dockets/{id}/set", post(set))
         .route("/api/dockets/{id}/open", post(open_in_rex))
@@ -364,6 +365,18 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
     let numbered: Vec<(i64, record::Entry)> = entries.iter().filter_map(|v| v["seq"].as_i64()).zip(read.iter().cloned()).collect();
     let verify_view = crate::evidence::view(&core, &st, &numbered);
     Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions, "evidence": verify_view })))
+}
+
+/// What the docket's agents spawned, read live from their own files.
+async fn docket_subagents(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let entries: Vec<record::Entry> = {
+        let core = shared.lock();
+        core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+        core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| s.entry().ok()).filter(|e| e.kind == "claim" || e.kind == "release").collect()
+    };
+    let claims = crate::subagents::claims(&entries);
+    let v = tokio::task::spawn_blocking(move || crate::subagents::of(&claims)).await.map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    Ok(Json(v))
 }
 
 #[derive(Deserialize)]
