@@ -188,6 +188,61 @@ pub async fn pr_view(repo: &str, pr: i64, fields: &str) -> Result<Value> {
     Ok(serde_json::from_str(&out)?)
 }
 
+/// The PR's diff. When GitHub refuses it as too large, one rebuilt from the
+/// PR's files instead (`diff_from_files`); any other failure is an error.
+pub async fn pr_diff(repo: &str, pr: i64) -> Result<String> {
+    match gh(&["pr", "diff", &pr.to_string(), "-R", repo], None).await {
+        Err(e) if diff_too_large(&e) => {
+            let path = format!("repos/{repo}/pulls/{pr}/files?per_page=100");
+            let out = gh(&["api", "--paginate", &path], None).await.with_context(|| format!("GitHub's diff of #{pr} is too large to show, and its files can't be read"))?;
+            let files: Vec<Value> = serde_json::from_str(&merge_pages(&out)).with_context(|| format!("reading #{pr}'s files"))?;
+            Ok(diff_from_files(&files))
+        }
+        other => other,
+    }
+}
+
+/// GitHub refused a PR's diff as too large to show (HTTP 406, `too_large`:
+/// over 20,000 lines or 300 files), as `gh pr diff` reports it.
+pub fn diff_too_large(e: &anyhow::Error) -> bool {
+    let e = format!("{e:#}");
+    e.contains("HTTP 406") && (e.contains("too_large") || e.contains("diff exceeded the maximum"))
+}
+
+/// The most files GitHub's PR files API lists.
+const FILES_CAP: usize = 3000;
+
+/// A diff rebuilt from the PR files API's entries, for a PR whose diff
+/// GitHub won't show: each file's `patch` under git's headers, renames
+/// from `previous_filename`. A file GitHub gives no patch for (binary, or
+/// too large) has a note and no lines, so a comment on it goes in the
+/// review's body.
+pub fn diff_from_files(files: &[Value]) -> String {
+    let mut out = String::from("# GitHub won't show this PR's diff (too large), so this one is rebuilt from its files.\n");
+    if files.len() >= FILES_CAP {
+        out.push_str(&format!("# GitHub lists only the first {FILES_CAP} files; any after those are left out.\n"));
+    }
+    for f in files {
+        let Some(new) = f["filename"].as_str() else { continue };
+        let old = f["previous_filename"].as_str().unwrap_or(new);
+        out.push_str(&format!("diff --git a/{old} b/{new}\n"));
+        if old != new {
+            out.push_str(&format!("rename from {old}\nrename to {new}\n"));
+        }
+        match f["patch"].as_str().filter(|p| !p.is_empty()) {
+            Some(p) => {
+                let from = if f["status"] == "added" { "/dev/null".to_string() } else { format!("a/{old}") };
+                let to = if f["status"] == "removed" { "/dev/null".to_string() } else { format!("b/{new}") };
+                out.push_str(&format!("--- {from}\n+++ {to}\n{}\n", p.trim_end_matches('\n')));
+            }
+            // A rename alone has nothing to show.
+            None if old != new && f["changes"].as_i64() == Some(0) => {}
+            None => out.push_str("# GitHub gives no patch for this file (binary, or too large); read it in the worktree. A comment on it goes in the body.\n"),
+        }
+    }
+    out
+}
+
 /// `gh api --paginate` prints one array per page; one array of them all.
 fn merge_pages(out: &str) -> String {
     let mut all = Vec::new();
@@ -240,7 +295,6 @@ pub async fn fetch_context(repo: &str, pr: i64, dir: &Path) -> Result<()> {
             ],
             false,
         ),
-        ("pr.diff", vec!["pr", "diff", &n, "-R", repo], false),
         ("reviews.json", vec!["api", "--paginate", &reviews], true),
         ("review-comments.json", vec!["api", "--paginate", &comments], true),
         ("issue-comments.json", vec!["api", "--paginate", &issue], true),
@@ -256,6 +310,10 @@ pub async fn fetch_context(repo: &str, pr: i64, dir: &Path) -> Result<()> {
             Err(e) => say!("review: {repo}#{pr}: {file}: {e:#}"),
         }
     }
+    match pr_diff(repo, pr).await {
+        Ok(d) => super::write_atomic(&dir.join("pr.diff"), &d)?,
+        Err(e) => say!("review: {repo}#{pr}: pr.diff: {e:#}"),
+    }
     Ok(())
 }
 
@@ -268,5 +326,17 @@ mod tests {
         assert_eq!(merge_pages("[1,2]\n[3]"), "[1,2,3]");
         assert_eq!(merge_pages("[]"), "[]");
         assert_eq!(merge_pages("{\"a\":1}"), "{\"a\":1}");
+    }
+
+    #[test]
+    fn only_githubs_too_large_answer_is_too_large() {
+        let real = anyhow!(
+            "could not find pull request diff: HTTP 406: Sorry, the diff exceeded the maximum number of lines (20000) (https://api.github.com/repos/acme/api/pulls/341)\nPullRequest.diff too_large"
+        );
+        assert!(diff_too_large(&real));
+        assert!(diff_too_large(&anyhow!("HTTP 406: Sorry, the diff exceeded the maximum number of files (300)")));
+        assert!(!diff_too_large(&anyhow!("HTTP 406: Not Acceptable")));
+        assert!(!diff_too_large(&anyhow!("could not find pull request diff: HTTP 404: Not Found")));
+        assert!(!diff_too_large(&anyhow!("gh pr took over 2 minutes")));
     }
 }
