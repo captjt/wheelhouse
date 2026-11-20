@@ -28,6 +28,29 @@ struct Editor: View {
     }
 }
 
+/// Editable only while it has the keyboard. On macOS 26 an editable text
+/// view that has never had the keyboard keeps its insertion point
+/// animating in WindowServer: a docket's note box cost WindowServer about a
+/// third of a core for as long as the docket was on screen. A click, Tab or
+/// `focus` makes it the first responder, and that makes it editable.
+private final class NoteTextView: NSTextView {
+    /// Whether it may be edited at all (the Editor's `isEnabled`).
+    var wantsEditable = true {
+        didSet { isEditable = wantsEditable && window?.firstResponder === self }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        isEditable = wantsEditable
+        return super.becomeFirstResponder()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { isEditable = false }
+        return ok
+    }
+}
+
 private struct TextViewBox: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
@@ -41,12 +64,13 @@ private struct TextViewBox: NSViewRepresentable {
     func makeCoordinator() -> Coord { Coord(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
+        let scroll = NoteTextView.scrollableTextView()
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
-        let tv = scroll.documentView as! NSTextView
+        let tv = scroll.documentView as! NoteTextView
         tv.delegate = context.coordinator
+        tv.wantsEditable = enabled
         tv.drawsBackground = false
         tv.isRichText = false
         tv.allowsUndo = true
@@ -65,8 +89,8 @@ private struct TextViewBox: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
-        guard let tv = scroll.documentView as? NSTextView else { return }
-        tv.isEditable = enabled
+        guard let tv = scroll.documentView as? NoteTextView else { return }
+        tv.wantsEditable = enabled
         tv.isSelectable = enabled
         if tv.string != text {
             // Set from outside (sent, so cleared; or a new draft): the
