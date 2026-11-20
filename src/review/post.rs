@@ -447,12 +447,17 @@ pub async fn run(a: &Args<'_>, draft: &Value) -> Result<Value, Refusal> {
         && let Some(v) = find_posted(a.repo, a.pr, m).await
     {
         let me = github::login().await.unwrap_or_default();
-        let diff = github::gh(&["pr", "diff", &pr, "-R", a.repo], None).await.unwrap_or_default();
+        // Only for the preview of what's already up: without the diff, say so
+        // rather than show every inline comment in the body.
+        let (lines, warning) = match github::pr_diff(a.repo, a.pr).await {
+            Ok(diff) => (right_lines(&diff), None),
+            Err(e) => (HashSet::new(), Some(format!("can't read #{pr}'s diff, so this preview shows every inline comment in the body: {e:#}"))),
+        };
         let byline = Byline { by: a.by, checked_by: a.checked_by, marker: a.marker, me: &me };
-        let r = render(draft, &byline, a.head.unwrap_or(&live_head), &right_lines(&diff), risk.as_deref());
+        let r = render(draft, &byline, a.head.unwrap_or(&live_head), &lines, risk.as_deref());
         let inline = r.payload["comments"].as_array().map_or(0, Vec::len);
         return Ok(
-            json!({ "review_id": v["id"], "state": v["state"], "url": v["html_url"], "inline": inline, "replies": 0, "merge_risk": risk, "preview": preview_text(&r), "already": true }),
+            json!({ "review_id": v["id"], "state": v["state"], "url": v["html_url"], "inline": inline, "replies": 0, "merge_risk": risk, "preview": preview_text(&r), "already": true, "warning": warning }),
         );
     }
     let mut warning = None;
@@ -471,7 +476,7 @@ pub async fn run(a: &Args<'_>, draft: &Value) -> Result<Value, Refusal> {
     }
     let head = a.head.map(str::to_string).unwrap_or(live_head);
     let me = github::login().await.map_err(|e| Refusal::Other(format!("can't read the signed-in GitHub account: {e:#}")))?;
-    let diff = github::gh(&["pr", "diff", &pr, "-R", a.repo], None).await.map_err(|e| Refusal::Other(format!("can't read #{pr}'s diff: {e:#}")))?;
+    let diff = github::pr_diff(a.repo, a.pr).await.map_err(|e| Refusal::Other(format!("can't read #{pr}'s diff: {e:#}")))?;
     let lines = right_lines(&diff);
     let byline = Byline { by: a.by, checked_by: a.checked_by, marker: a.marker, me: &me };
     let r = render(draft, &byline, &head, &lines, risk.as_deref());
@@ -541,6 +546,65 @@ mod tests {
         }
         assert!(!l.contains(&("src/pay.rs".into(), 14)));
         assert!(l.contains(&("my file.txt".into(), 1)), "{l:?}");
+    }
+
+    /// GitHub's PR files API, for a PR whose diff is too large to show: a
+    /// change, a rename with changes, a rename alone, an addition, a
+    /// removal, a binary file, and a file too large for a patch.
+    const FILES: &str = r#"[
+      { "sha": "a1", "filename": "src/pay.rs", "status": "modified", "additions": 3, "deletions": 1, "changes": 4,
+        "patch": "@@ -10,3 +10,4 @@ fn x\n ctx\n+++counter;\n-old\n+new\n ctx2" },
+      { "sha": "a2", "filename": "src/new name.rs", "previous_filename": "src/old.rs", "status": "renamed", "additions": 1, "deletions": 1, "changes": 2,
+        "patch": "@@ -4,2 +4,2 @@\n-fn old() {}\n+fn new() {}\n }\n" },
+      { "sha": "a3", "filename": "docs/moved.md", "previous_filename": "docs/was.md", "status": "renamed", "additions": 0, "deletions": 0, "changes": 0 },
+      { "sha": "a4", "filename": "src/added.rs", "status": "added", "additions": 2, "deletions": 0, "changes": 2,
+        "patch": "@@ -0,0 +1,2 @@\n+one\n+two\n\\ No newline at end of file" },
+      { "sha": "a5", "filename": "src/gone.rs", "status": "removed", "additions": 0, "deletions": 2, "changes": 2,
+        "patch": "@@ -1,2 +0,0 @@\n-one\n-two" },
+      { "sha": "a6", "filename": "web/logo.png", "status": "modified", "additions": 0, "deletions": 0, "changes": 0 },
+      { "sha": "a7", "filename": "web/bundle.js", "status": "modified", "additions": 40000, "deletions": 2, "changes": 40002 }
+    ]"#;
+
+    #[test]
+    fn a_diff_too_large_for_github_is_read_from_its_files() {
+        let files: Vec<Value> = serde_json::from_str(FILES).unwrap();
+        let diff = github::diff_from_files(&files);
+        let l = right_lines(&diff);
+        // The same lines `gh pr diff` gives for src/pay.rs.
+        for n in 10..=13 {
+            assert!(l.contains(&("src/pay.rs".into(), n)), "{n}");
+        }
+        assert_eq!(l.iter().filter(|(p, _)| p == "src/pay.rs").count(), 4, "{l:?}");
+        // A rename anchors on its new name, never the old one.
+        assert!(l.contains(&("src/new name.rs".into(), 4)) && l.contains(&("src/new name.rs".into(), 5)), "{l:?}");
+        assert!(!l.iter().any(|(p, _)| p == "src/old.rs"));
+        assert!(diff.contains("diff --git a/src/old.rs b/src/new name.rs\nrename from src/old.rs\nrename to src/new name.rs\n--- a/src/old.rs\n+++ b/src/new name.rs\n"), "{diff}");
+        assert!(l.contains(&("src/added.rs".into(), 1)) && l.contains(&("src/added.rs".into(), 2)));
+        assert!(!l.iter().any(|(p, _)| p == "src/gone.rs" || p == "docs/moved.md"));
+        // No patch: no lines, and a note for the reviewers, but none for a rename alone.
+        assert!(!l.iter().any(|(p, _)| p.starts_with("web/")));
+        assert_eq!(diff.matches("gives no patch").count(), 2, "{diff}");
+        assert_eq!(l.len(), 4 + 2 + 2);
+
+        // A comment on a file with no patch goes in the body.
+        let mut d = draft();
+        d["findings"][1]["path"] = json!("web/bundle.js");
+        d["findings"][1]["line"] = json!(3);
+        let b = Byline { by: "Codex", checked_by: None, marker: None, me: "you" };
+        let r = render(&d, &b, "abc", &l, None);
+        let c = r.payload["comments"].as_array().unwrap();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0]["path"], "src/pay.rs");
+        assert!(r.payload["body"].as_str().unwrap().contains("(`web/bundle.js:3`)"));
+    }
+
+    #[test]
+    fn a_files_list_at_githubs_cap_says_some_may_be_missing() {
+        let one = |i: usize| json!({ "filename": format!("f{i}"), "status": "added", "changes": 1, "patch": "@@ -0,0 +1 @@\n+x" });
+        assert!(!github::diff_from_files(&(0..2999).map(one).collect::<Vec<_>>()).contains("only the first 3000"));
+        let diff = github::diff_from_files(&(0..3000).map(one).collect::<Vec<_>>());
+        assert!(diff.contains("only the first 3000 files"));
+        assert_eq!(right_lines(&diff).len(), 3000);
     }
 
     #[test]
