@@ -1286,13 +1286,20 @@ async fn review_act(shared: Shared, req: ReviewAct, what: &str) -> ApiResult {
     if what == "dismiss" && who != crate::review::rounds::Asker::Owner {
         return Err(fail(StatusCode::FORBIDDEN, "only you can dismiss a review"));
     }
-    let lock = crate::review::lock(&shared, &key);
-    let _g = lock.lock().await;
-    let r = match what {
-        "preview" => crate::review::rounds::post(&shared, &key, true, who, None).await,
-        "post" => crate::review::rounds::post(&shared, &key, false, who, req.digest.as_deref()).await,
-        _ => crate::review::rounds::dismiss(&shared, &key).await,
-    };
+    // In a task of its own: a client that stops waiting (the app gives up
+    // after a while; a post with many replies takes longer) doesn't cut a
+    // post off between GitHub taking it and the record saying so.
+    let what = what.to_string();
+    let work = tokio::spawn(async move {
+        let lock = crate::review::lock(&shared, &key);
+        let _g = lock.lock().await;
+        match what.as_str() {
+            "preview" => crate::review::rounds::post(&shared, &key, true, who, None).await,
+            "post" => crate::review::rounds::post(&shared, &key, false, who, req.digest.as_deref()).await,
+            _ => crate::review::rounds::dismiss(&shared, &key).await,
+        }
+    });
+    let r = work.await.map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
     r.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
 }
 
@@ -1620,6 +1627,30 @@ mod tests {
             req = req.header("tailscale-user-login", l);
         }
         app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn a_review_act_finishes_when_its_caller_stops_waiting() {
+        let shared = Shared::new(crate::hub::test_core());
+        let key = "acme/web#7";
+        let mut e = crate::review::pr::Pr { repo: "acme/web".into(), pr: 7, state: "reviewing".into(), phase: Some("reviewer".into()), round: 1, ..Default::default() };
+        crate::review::save(&mut shared.lock(), &mut e).unwrap();
+        // The watcher has the PR, so the act waits its turn, and the app
+        // gives up meanwhile (as it did on a post with many replies).
+        let lock = crate::review::lock(&shared, key);
+        let held = lock.lock().await;
+        let req = ReviewAct { key: key.into(), block: None, digest: None };
+        assert!(tokio::time::timeout(Duration::from_millis(100), review_act(shared.clone(), req, "dismiss")).await.is_err());
+        drop(held);
+        let mut state = String::new();
+        for _ in 0..100 {
+            state = crate::review::get(&shared.lock(), key).unwrap().unwrap().state;
+            if state != "reviewing" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(state, "posted", "the act went on without its caller");
     }
 
     #[tokio::test]

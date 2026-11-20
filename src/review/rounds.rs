@@ -842,6 +842,43 @@ pub async fn start_checker(shared: &Shared, key: &str) -> Result<()> {
 
 // ---- A head that moved mid-round ----
 
+/// The PR is at `live` on GitHub now (read live, ahead of the next scan):
+/// keep it, put it on the record if it's news, and wake the watcher so it
+/// follows at once.
+pub fn saw_head(shared: &Shared, key: &str, live: &str) -> Result<()> {
+    let mut core = shared.lock();
+    let Some(mut e) = super::get(&core, key)? else { return Ok(()) };
+    if e.head.as_deref() != Some(live) {
+        e.head = Some(live.to_string());
+        super::save(&mut core, &mut e)?;
+        if e.state == "reviewing" && e.round_head.as_deref() != Some(live) {
+            super::event(&mut core, &e, "head-moved", json!({ "round": e.round, "head": live, "round_head": e.round_head }), &Who::Hub)?;
+        }
+    }
+    if e.state == "reviewing" && e.round_head.as_deref() != Some(live) {
+        core.review.check_now.notify_one();
+    }
+    Ok(())
+}
+
+/// Where the round's PR is now, when it isn't where the round is: `None`
+/// while the round still covers its head. The last scan's head is only a
+/// hint, read again live before acting on it (a scan from before the round
+/// started is behind it, not ahead); with `confirm`, it's read live even
+/// when the scan agrees.
+pub async fn moved_head(shared: &Shared, e: &Pr, confirm: bool) -> Result<Option<String>> {
+    let Some(rh) = e.round_head.as_deref() else { return Ok(None) };
+    if !confirm && e.head.as_deref().is_none_or(|h| h == rh) {
+        return Ok(None);
+    }
+    let live = github::live_head(&e.repo, e.pr).await?;
+    if live.is_empty() {
+        return Ok(None);
+    }
+    saw_head(shared, &e.key(), &live)?;
+    Ok((live != rh).then_some(live))
+}
+
 /// The PR's own diff (against where it branched from the base), without
 /// index lines, so a merge of the base into it compares equal.
 async fn pr_diff(checkout: &Path, base: &str, sha: &str) -> Result<String> {
@@ -997,6 +1034,17 @@ pub fn draft_digest(text: &str) -> String {
 /// the digest of the draft you looked at: if the file changed since, it
 /// doesn't post.
 pub async fn post(shared: &Shared, key: &str, dry: bool, asker: Asker, seen: Option<&str>) -> Result<Value> {
+    post_as(shared, key, dry, asker, seen, true).await
+}
+
+/// The round's review, as `post` would put it on GitHub: `round=R head=SHA`.
+fn post_marker(e: &Pr) -> String {
+    format!("round={} head={}", e.round, e.round_head.as_deref().unwrap_or(""))
+}
+
+/// `post`; with `approve` false, your approval is already on the record
+/// (the review is on GitHub, and only its record is missing).
+async fn post_as(shared: &Shared, key: &str, dry: bool, asker: Asker, seen: Option<&str>, approve: bool) -> Result<Value> {
     let cfg = super::config(shared)?;
     let (mut e, mode) = {
         let core = shared.lock();
@@ -1033,19 +1081,28 @@ pub async fn post(shared: &Shared, key: &str, dry: bool, asker: Asker, seen: Opt
     let by = agentcli::byline(&names);
     let checked_by = e.checker_agent.as_deref().map(|a| agentcli::display_name(a, &primary, e.checker_session.as_deref()));
     let head = e.round_head.clone();
-    let marker = format!("round={} head={}", e.round, head.as_deref().unwrap_or(""));
+    let marker = post_marker(&e);
     let require_risk = cfg.merge_risk_enabled(&e.repo, &serde_json::to_value(&e)?);
-    if !dry && asker == Asker::Owner {
+    if !dry && approve && asker == Asker::Owner {
         let mut core = shared.lock();
         if let Some(d) = super::docket_of(&core, key) {
             core.append(&d, "approval", &Who::Owner, None, json!({ "what": "post-review", "round": e.round, "head": head, "draft": digest }))?;
         }
     }
     let args = super::post::Args { repo: &e.repo, pr: e.pr, head: head.as_deref(), by: &by, checked_by: checked_by.as_deref(), marker: Some(&marker), require_risk, dry };
-    let res = super::post::run(&args, &draft).await.map_err(|r| match r {
-        super::post::Refusal::HeadMoved(_) => anyhow!("{} moved since this round started at {}; review the new commits first", e.short(), short(head.as_deref().unwrap_or(""))),
-        other => anyhow!("{other}"),
-    })?;
+    let res = match super::post::run(&args, &draft).await {
+        Ok(res) => res,
+        Err(super::post::Refusal::HeadMoved { live, .. }) => {
+            saw_head(shared, key, &live)?;
+            bail!(
+                "{} moved to {} after this review was checked at {}, so nothing was posted. Wheelhouse is following it now: the reviewers look at the new commits (or the checker checks again, if only the base was merged in), then it's back for you.",
+                e.short(),
+                short(&live),
+                short(head.as_deref().unwrap_or(""))
+            );
+        }
+        Err(other) => bail!("{other}"),
+    };
     if dry {
         let p = primary.join(format!(".tmp/rounds/{}/preview.md", e.round));
         super::write_atomic(&p, res["preview"].as_str().unwrap_or(""))?;
@@ -1250,6 +1307,18 @@ pub async fn dismiss(shared: &Shared, key: &str) -> Result<Value> {
     let mut e = super::get(&shared.lock(), key)?.ok_or_else(|| anyhow!("{key} isn't tracked"))?;
     if e.state != "reviewing" {
         bail!("{} has no round in progress", e.short());
+    }
+    // Posted, but the record never heard (a post cut off before it was
+    // recorded, a crash): it's on GitHub, so it's recorded as posted, not
+    // as dismissed with nothing posted.
+    if matches!(e.phase(), "checking" | "awaiting")
+        && let Some(v) = super::post::find_posted(&e.repo, e.pr, &post_marker(&e)).await
+    {
+        say!("review: {key}: round {} is on GitHub already ({}); recording it as posted", e.round, v["html_url"].as_str().unwrap_or(""));
+        let url = v["html_url"].as_str().unwrap_or_default().to_string();
+        return post_as(shared, key, false, Asker::Owner, None, false)
+            .await
+            .with_context(|| format!("round {} is on GitHub already ({url}), so it isn't dismissed; recording it failed", e.round));
     }
     let d = draft_path(&e, "review.verified.json").and_then(|p| read_json(&p)).or_else(|| draft_path(&e, "review.json").and_then(|p| read_json(&p)));
     let checking = matches!(e.phase(), "checking" | "awaiting");
@@ -1480,6 +1549,99 @@ mod tests {
         e3.checker_post = Some("ask".into());
         super::super::save(&mut shared.lock(), &mut e3).unwrap();
         assert_eq!(decide(&shared, key).await.unwrap(), Decided::NotRule);
+        assert!(shared.lock().verify(&d).unwrap().ok);
+        let _ = std::fs::remove_dir_all(&wt);
+    }
+
+    #[tokio::test]
+    async fn a_round_follows_a_head_the_scan_hasnt_seen_yet() {
+        let wt = std::env::temp_dir().join(format!("wh-moved-{}", std::process::id()));
+        std::fs::create_dir_all(wt.join(".tmp/rounds/2")).unwrap();
+        let risk = r#""merge_risk":{"alignment":{"verdict":"good","gaps":[]},"impact":{"verdict":"small","gaps":[]},"verification":{"verdict":"good","gaps":[]},"rollback_cost":{"verdict":"low","gaps":[]},"error_detection":{"verdict":"good","gaps":[]}}"#;
+        std::fs::write(wt.join(".tmp/rounds/2/review.verified.json"), format!(r#"{{"event":"APPROVE","verdict":"Looks right.","findings":[],{risk}}}"#)).unwrap();
+        // A stand-in gh: the PR's head on "GitHub" is whatever `head` says,
+        // and its reviews are whatever `reviews` holds.
+        let gh = wt.join("gh");
+        let head_file = wt.join("head");
+        let reviews = wt.join("reviews");
+        let stub = r#"#!/bin/sh
+d=$(dirname "$0")
+h=$(cat "$d/head")
+case "$*" in
+  'api user'*) echo you ;;
+  *'/reviews --jq'*) cat "$d/reviews" 2>/dev/null ;;
+  *'--jq .headRefOid') echo "$h" ;;
+  'pr view'*) printf '{"headRefOid":"%s","state":"OPEN"}' "$h" ;;
+  'pr diff'*) ;;
+  *) exit 1 ;;
+esac
+"#;
+        std::fs::write(&gh, stub).unwrap();
+        std::fs::set_permissions(&gh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        // SAFETY: only this test's helpers run gh.
+        unsafe { std::env::set_var("WH_GH", &gh) };
+        let shared = Shared::new(crate::hub::test_core());
+        let cfg = super::super::config::from_value(super::super::config::path(), json!({ "repos": { "acme/web": { "checkout": wt, "post": "ask" } } })).unwrap();
+        let mtime = std::fs::metadata(super::super::config::path()).and_then(|m| m.modified()).ok().max(crate::settings::mtime());
+        shared.lock().review.config = Some((std::sync::Arc::new(cfg), mtime));
+        let key = "acme/web#790";
+        let mut e = Pr {
+            repo: "acme/web".into(),
+            pr: 790,
+            state: "reviewing".into(),
+            phase: Some("awaiting".into()),
+            round: 2,
+            round_head: Some("532aff7".into()),
+            head: Some("532aff7".into()),
+            worktree: Some(wt.display().to_string()),
+            ..Default::default()
+        };
+        let d = super::super::save(&mut shared.lock(), &mut e).unwrap();
+        let now = |s: &Shared| super::super::get(&s.lock(), key).unwrap().unwrap();
+
+        // The author pushed after the last scan. Trusting the scan, the
+        // round still covers its head; read live, it doesn't.
+        std::fs::write(&head_file, "fa3f931").unwrap();
+        assert_eq!(moved_head(&shared, &e, false).await.unwrap(), None, "the scan's head is only read again when it disagrees");
+        assert_eq!(moved_head(&shared, &e, true).await.unwrap(), Some("fa3f931".into()));
+        assert_eq!(now(&shared).head.as_deref(), Some("fa3f931"), "kept for the watcher");
+
+        // Your approval of the stale review: nothing posts, the hub knows
+        // the new head, and the message says what happens next.
+        let mut e = now(&shared);
+        e.head = Some("532aff7".into());
+        super::super::save(&mut shared.lock(), &mut e).unwrap();
+        let err = format!("{:#}", post(&shared, key, false, Asker::Owner, None).await.unwrap_err());
+        assert!(err.contains("moved to fa3f931 after this review was checked at 532aff7") && err.contains("following it now"), "{err}");
+        assert_eq!(now(&shared).head.as_deref(), Some("fa3f931"));
+        let kinds: Vec<String> = shared.lock().store.entries(&d).unwrap().iter().filter_map(|s| s.entry().unwrap().body).collect();
+        assert!(kinds.iter().any(|b| b == "The head moved to fa3f931 mid-round."), "{kinds:?}");
+
+        // A scan from before the round started is behind it, not ahead:
+        // no delta, and the stale head is corrected.
+        let mut e = now(&shared);
+        e.round_head = Some("fa3f931".into());
+        e.head = Some("ee9a359".into());
+        super::super::save(&mut shared.lock(), &mut e).unwrap();
+        assert_eq!(moved_head(&shared, &e, false).await.unwrap(), None);
+        assert_eq!(now(&shared).head.as_deref(), Some("fa3f931"));
+
+        // Your post reached GitHub, but the request was cut off before the
+        // record heard. Dismissing it records the post, not "nothing was
+        // posted", and adds no second approval.
+        std::fs::write(&head_file, "fa3f931").unwrap();
+        std::fs::write(&reviews, r#"{"id":5996470580,"state":"CHANGES_REQUESTED","html_url":"https://github.com/acme/web/pull/790#pullrequestreview-5996470580","body":"Two blocking.\n<!-- pr-review round=2 head=fa3f931 -->","user":"you"}"#).unwrap();
+        let approvals = |s: &Shared| s.lock().store.entries(&d).unwrap().iter().filter(|x| x.entry().unwrap().kind == "approval").count();
+        let before = approvals(&shared);
+        let res = dismiss(&shared, key).await.unwrap();
+        assert_eq!(res["review_id"], json!(5996470580_i64), "{res}");
+        assert_eq!(res["already"], json!(true));
+        let e = now(&shared);
+        assert_eq!(e.state, "posted");
+        assert_eq!(e.history.last().map(|h| h["verdict"].clone()), Some(json!("CHANGES_REQUESTED")));
+        assert_eq!(approvals(&shared), before);
+        let bodies: Vec<String> = shared.lock().store.entries(&d).unwrap().iter().filter_map(|x| x.entry().unwrap().body).collect();
+        assert!(!bodies.iter().any(|b| b.contains("dismissed")), "{bodies:?}");
         assert!(shared.lock().verify(&d).unwrap().ok);
         let _ = std::fs::remove_dir_all(&wt);
     }

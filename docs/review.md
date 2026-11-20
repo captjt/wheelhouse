@@ -61,7 +61,11 @@ A PR is `OWNER/NAME N` or `OWNER/NAME#N`, such as `acme/api 341`.
 5. **Later rounds.** A re-request starts the next round: the same sessions
    resume with what changed (`delta.diff`). A push mid-round sends the
    reviewers the new commits in the same round, or, if the PR's own diff
-   didn't change (the base was merged in), only re-runs the checker.
+   didn't change (the base was merged in), only re-runs the checker. The
+   hub reads the head live before a checked review waits for you, so it
+   never asks about a head that's gone; a push it sees while the checker
+   checks stops that check and follows at once; and a post refused because
+   the head moved makes it follow right away, not at the next scan.
 6. **End.** Merge or close: tokens counted one last time, panes closed,
    worktrees and refs removed.
 
@@ -190,7 +194,8 @@ The rules are in `src/review/post.rs`. Nothing posts when:
 - a merge-risk verdict isn't one of the rubric's words, its gaps aren't a
   list, or (with the merge-risk guide on) there's no merge risk;
 - any prose speaks in the first person, outside code;
-- the PR isn't open, or its head moved past the round's.
+- the PR isn't open, or its head moved past the round's (the hub then
+  follows the new head on its own: see step 5).
 
 Only you, the PR's own checker in `auto` mode, or the hub when your rule
 holds, can post; only you can dismiss. Any other agent is refused.

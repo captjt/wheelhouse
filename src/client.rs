@@ -57,7 +57,13 @@ fn dechunk(mut b: &[u8]) -> Result<Vec<u8>> {
 
 /// A JSON request; an error response becomes an error.
 pub fn json(method: &str, path: &str, body: Option<&Value>) -> Result<Value> {
-    let (status, bytes) = call(method, path, body, Duration::from_secs(15))?;
+    json_within(method, path, body, Duration::from_secs(15))
+}
+
+/// `json`, for a write that takes as long as GitHub does (posting a review
+/// and its replies).
+pub fn json_within(method: &str, path: &str, body: Option<&Value>, timeout: Duration) -> Result<Value> {
+    let (status, bytes) = call(method, path, body, timeout)?;
     let v: Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
     if !(200..300).contains(&status) {
         let msg = v["error"].as_str().map(str::to_string).unwrap_or_else(|| v.to_string());

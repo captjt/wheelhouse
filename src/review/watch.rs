@@ -284,16 +284,21 @@ async fn step(shared: &Shared, cfg: &Config, mut e: Pr, paused: bool, active: &m
                         return Ok(att("blocked", why.trim_start_matches(':').trim().to_string(), round));
                     }
                     if st == "AWAITING_APPROVAL" {
-                        if phase != "awaiting" {
-                            e.phase = Some("awaiting".into());
+                        // Never ask you about (or post) a review of a head
+                        // that's gone: the first time, read the PR's head
+                        // live, not from the last scan, which can be minutes
+                        // behind a push.
+                        let first = phase != "awaiting";
+                        if let Some(live) = rounds::moved_head(shared, &e, first).await? {
+                            rounds::follow_head(shared, &key, &live).await?;
+                            return Ok(None);
+                        }
+                        if first {
                             let mut core = shared.lock();
+                            let Some(mut e) = super::get(&core, &key)? else { return Ok(None) };
+                            e.phase = Some("awaiting".into());
                             super::save(&mut core, &mut e)?;
                             super::event(&mut core, &e, "awaiting", json!({ "round": round, "head": e.round_head }), &Who::Hub)?;
-                        }
-                        if e.head.is_some() && e.head != e.round_head {
-                            let head = e.head.clone().unwrap_or_default();
-                            rounds::follow_head(shared, &key, &head).await?;
-                            return Ok(None);
                         }
                         return match rounds::decide(shared, &key).await? {
                             rounds::Decided::Posted => Ok(None),
@@ -303,6 +308,14 @@ async fn step(shared: &Shared, cfg: &Config, mut e: Pr, paused: bool, active: &m
                     }
                     if phase == "checking" && st == "HEAD_MOVED" {
                         let live = github::live_head(&e.repo, e.pr).await?;
+                        rounds::follow_head(shared, &key, &live).await?;
+                        return Ok(None);
+                    }
+                    // A push while the checker checks: what it's checking is
+                    // already stale, so follow now rather than when it ends.
+                    if phase == "checking"
+                        && let Some(live) = rounds::moved_head(shared, &e, false).await?
+                    {
                         rounds::follow_head(shared, &key, &live).await?;
                         return Ok(None);
                     }

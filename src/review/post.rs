@@ -16,8 +16,9 @@ use super::github;
 pub enum Refusal {
     /// The draft breaks a rule (post-review's exit 4).
     Rule(String),
-    /// The PR's head moved past the one the review covers (exit 3).
-    HeadMoved(String),
+    /// The PR's head moved past the one the review covers (exit 3): the
+    /// head it's at now, and what to say.
+    HeadMoved { live: String, why: String },
     /// GitHub, or reading the PR (exit 1).
     Other(String),
 }
@@ -25,7 +26,7 @@ pub enum Refusal {
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Refusal::Rule(s) | Refusal::HeadMoved(s) | Refusal::Other(s) => f.write_str(s),
+            Refusal::Rule(s) | Refusal::HeadMoved { why: s, .. } | Refusal::Other(s) => f.write_str(s),
         }
     }
 }
@@ -405,6 +406,19 @@ pub fn preview_text(r: &Rendered) -> String {
     out
 }
 
+/// The review this account posted with `marker` (`round=R head=SHA`), if
+/// GitHub has one: `{id, state, html_url}`.
+pub async fn find_posted(repo: &str, pr: i64, marker: &str) -> Option<Value> {
+    if marker.is_empty() {
+        return None;
+    }
+    let me = github::login().await.ok()?;
+    let tag = format!("<!-- pr-review {marker} -->");
+    let path = format!("repos/{repo}/pulls/{pr}/reviews");
+    let out = github::gh(&["api", "--paginate", &path, "--jq", ".[] | {id, state, html_url, body, user: .user.login}"], None).await.ok()?;
+    out.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find(|v| v["user"].as_str() == Some(me.as_str()) && v["body"].as_str().is_some_and(|b| b.contains(&tag)))
+}
+
 pub struct Args<'a> {
     pub repo: &'a str,
     pub pr: i64,
@@ -425,6 +439,22 @@ pub async fn run(a: &Args<'_>, draft: &Value) -> Result<Value, Refusal> {
     let live: Value = serde_json::from_str(&live).map_err(|e| Refusal::Other(format!("can't read #{pr}: {e}")))?;
     let state = text(&live["state"]);
     let live_head = text(&live["headRefOid"]);
+    // Posted already (a retry after a cut-off request, or a crash before it
+    // was recorded): the review GitHub has is the post, not a second one,
+    // even if the PR moved or closed since.
+    if !a.dry
+        && let Some(m) = a.marker
+        && let Some(v) = find_posted(a.repo, a.pr, m).await
+    {
+        let me = github::login().await.unwrap_or_default();
+        let diff = github::gh(&["pr", "diff", &pr, "-R", a.repo], None).await.unwrap_or_default();
+        let byline = Byline { by: a.by, checked_by: a.checked_by, marker: a.marker, me: &me };
+        let r = render(draft, &byline, a.head.unwrap_or(&live_head), &right_lines(&diff), risk.as_deref());
+        let inline = r.payload["comments"].as_array().map_or(0, Vec::len);
+        return Ok(
+            json!({ "review_id": v["id"], "state": v["state"], "url": v["html_url"], "inline": inline, "replies": 0, "merge_risk": risk, "preview": preview_text(&r), "already": true }),
+        );
+    }
     let mut warning = None;
     if state != "OPEN" {
         if !a.dry {
@@ -436,7 +466,8 @@ pub async fn run(a: &Args<'_>, draft: &Value) -> Result<Value, Refusal> {
         && h != live_head
     {
         let short = |s: &str| s.chars().take(7).collect::<String>();
-        return Err(Refusal::HeadMoved(format!("#{pr} moved to {}; this review covers {}. Review the new commits first.", short(&live_head), short(h))));
+        let why = format!("#{pr} moved to {}; this review covers {}. Review the new commits first.", short(&live_head), short(h));
+        return Err(Refusal::HeadMoved { live: live_head, why });
     }
     let head = a.head.map(str::to_string).unwrap_or(live_head);
     let me = github::login().await.map_err(|e| Refusal::Other(format!("can't read the signed-in GitHub account: {e:#}")))?;
@@ -446,23 +477,6 @@ pub async fn run(a: &Args<'_>, draft: &Value) -> Result<Value, Refusal> {
     let r = render(draft, &byline, &head, &lines, risk.as_deref());
     if a.dry {
         return Ok(json!({ "dry_run": true, "preview": preview_text(&r), "warning": warning }));
-    }
-    // Posted already (a retry after a timeout, or a crash before it was
-    // recorded): the review GitHub has is the post, not a second one.
-    if let Some(m) = a.marker.filter(|m| !m.is_empty()) {
-        let tag = format!("<!-- pr-review {m} -->");
-        let path = format!("repos/{}/pulls/{pr}/reviews", a.repo);
-        if let Ok(out) = github::gh(&["api", "--paginate", &path, "--jq", ".[] | {id, state, html_url, body, user: .user.login}"], None).await {
-            for line in out.lines() {
-                let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-                if v["user"].as_str() == Some(me.as_str()) && v["body"].as_str().is_some_and(|b| b.contains(&tag)) {
-                    let inline = r.payload["comments"].as_array().map_or(0, Vec::len);
-                    return Ok(
-                        json!({ "review_id": v["id"], "state": v["state"], "url": v["html_url"], "inline": inline, "replies": 0, "merge_risk": risk, "preview": preview_text(&r), "already": true }),
-                    );
-                }
-            }
-        }
     }
     // The review first: if it fails, nothing went out, and a retry doesn't
     // post the replies twice.

@@ -670,7 +670,7 @@ fn review_cmd(action: &str, args: &[String], force: bool, as_json: bool) -> Resu
         }
         "preview" | "post" | "dismiss" => {
             let key = pr_key(args)?;
-            let v = client::json("POST", &format!("/api/review/{action}"), Some(&json!({ "key": key, "block": block })))?;
+            let v = client::json_within("POST", &format!("/api/review/{action}"), Some(&json!({ "key": key, "block": block })), std::time::Duration::from_secs(300))?;
             if !as_json {
                 match action {
                     "preview" => {
@@ -680,7 +680,8 @@ fn review_cmd(action: &str, args: &[String], force: bool, as_json: bool) -> Resu
                         println!("{}", v["preview"].as_str().unwrap_or_default());
                     }
                     "post" => println!("posted {} ({} inline, {} replies): {}", v["state"].as_str().unwrap_or("?"), v["inline"], v["replies"], v["url"].as_str().unwrap_or("?")),
-                    _ => println!("dismissed round {}; nothing was posted", v["round"]),
+                    _ if v["dismissed"] == true => println!("dismissed round {}; nothing was posted", v["round"]),
+                    _ => println!("this round was on GitHub already, so it's recorded as posted, not dismissed: {}", v["url"].as_str().unwrap_or("?")),
                 }
                 return Ok(());
             }

@@ -271,9 +271,9 @@ final class Store {
 
     /// Run a write; on failure, say why. True if it went through.
     @discardableResult
-    func act(_ path: String, _ body: [String: Any] = [:], done: String? = nil) async -> JSON? {
+    func act(_ path: String, _ body: [String: Any] = [:], done: String? = nil, slow: Bool = false) async -> JSON? {
         do {
-            let r = try await hub.post(path, body)
+            let r = try await hub.post(path, body, slow: slow)
             if let done { toast(done) }
             reload()
             return r
@@ -496,16 +496,19 @@ final class Store {
     func post(_ p: ReviewPr, digest: String?) async -> Bool {
         var b: [String: Any] = ["key": p.fullKey]
         if let d = digest ?? p.draft?.digest { b["digest"] = d }
-        return await act("/api/review/post", b, done: "Posted the review of \(p.key)") != nil
+        return await act("/api/review/post", b, done: "Posted the review of \(p.key)", slow: true) != nil
     }
 
     func dismissReview(_ p: ReviewPr) async -> Bool {
-        await act("/api/review/dismiss", ["key": p.fullKey], done: "Dismissed round \(p.round) of \(p.key); nothing was posted") != nil
+        // A round already on GitHub is recorded as posted, not dismissed.
+        guard let r = await act("/api/review/dismiss", ["key": p.fullKey], slow: true) else { return false }
+        toast(r["dismissed"].bool ? "Dismissed round \(p.round) of \(p.key); nothing was posted" : "Round \(p.round) of \(p.key) was on GitHub already; it's recorded as posted")
+        return true
     }
 
     func preview(_ p: ReviewPr) async -> (text: String, digest: String?)? {
         do {
-            let r = try await hub.post("/api/review/preview", ["key": p.fullKey])
+            let r = try await hub.post("/api/review/preview", ["key": p.fullKey], slow: true)
             return (r["preview"].str ?? "", r["digest"].text)
         } catch {
             toast(Self.words(error), error: true)

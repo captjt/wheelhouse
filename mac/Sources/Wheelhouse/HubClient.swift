@@ -25,6 +25,16 @@ final class HubClient: @unchecked Sendable {
         return URLSession(configuration: c)
     }()
 
+    /// Writes that take as long as GitHub does (posting a review and its
+    /// replies is a call every couple of seconds): the hub finishes them
+    /// either way, but the app shouldn't call one failed that isn't.
+    private let patient: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.timeoutIntervalForRequest = 300
+        c.httpAdditionalHeaders = ["Accept": "application/json"]
+        return URLSession(configuration: c)
+    }()
+
     /// The event stream waits on the hub's keep-alives; it gets its own session.
     private let streaming: URLSession = {
         let c = URLSessionConfiguration.ephemeral
@@ -48,14 +58,14 @@ final class HubClient: @unchecked Sendable {
     }
 
     @discardableResult
-    func post(_ path: String, _ body: [String: Any] = [:]) async throws -> JSON {
+    func post(_ path: String, _ body: [String: Any] = [:], slow: Bool = false) async throws -> JSON {
         var req = URLRequest(url: url(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // Writes must carry this header; it's how the hub refuses other sites.
         req.setValue("mac", forHTTPHeaderField: "X-Wheelhouse")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, res) = try await session.data(for: req)
+        let (data, res) = try await (slow ? patient : session).data(for: req)
         try check(res, data)
         return (try? JSON.parse(data)) ?? .null
     }
