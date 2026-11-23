@@ -7,6 +7,9 @@ import AppKit
 let out = URL(fileURLWithPath: CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.iconset")
 /// `swift Icon.swift DIR dev`: Wheelhouse Dev's, a blue wheel marked DEV.
 let dev = CommandLine.arguments.count > 2 && CommandLine.arguments[2] == "dev"
+/// `swift Icon.swift DIR web`: the web app's Home Screen icons (apple-touch-icon.png, icon-192/512.png),
+/// full bleed with no shadow, since iOS and Android cut their own corners.
+let web = CommandLine.arguments.count > 2 && CommandLine.arguments[2] == "web"
 try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
 
 func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> NSColor {
@@ -21,8 +24,8 @@ func draw(_ px: Int) -> Data {
     let s = CGFloat(px) / 1024
 
     // Apple's grid: an 824-point body on a 1024 canvas, with a soft shadow.
-    let body = CGRect(x: 100 * s, y: 100 * s, width: 824 * s, height: 824 * s)
-    let shape = NSBezierPath(roundedRect: body, xRadius: 185 * s, yRadius: 185 * s)
+    let body = web ? CGRect(x: 0, y: 0, width: 1024 * s, height: 1024 * s) : CGRect(x: 100 * s, y: 100 * s, width: 824 * s, height: 824 * s)
+    let shape = web ? NSBezierPath(rect: body) : NSBezierPath(roundedRect: body, xRadius: 185 * s, yRadius: 185 * s)
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -10 * s), blur: 24 * s, color: NSColor.black.withAlphaComponent(0.35).cgColor)
     rgb(0x111214).setFill()
@@ -34,16 +37,19 @@ func draw(_ px: Int) -> Data {
     shape.addClip()
     NSGradient(colors: [rgb(0x26272b), rgb(0x0c0c0e)])!.draw(in: body, angle: -90)
     let glow = dev ? NSGradient(colors: [rgb(0x2f7dff, 0.3), rgb(0x2f7dff, 0)])! : NSGradient(colors: [rgb(0xf6821f, 0.28), rgb(0xf6821f, 0)])!
-    glow.draw(fromCenter: NSPoint(x: body.midX, y: body.midY), radius: 0, toCenter: NSPoint(x: body.midX, y: body.midY), radius: 430 * s, options: [])
-    // A hairline on the top edge, as glass catches light.
-    let rim = NSBezierPath(roundedRect: body.insetBy(dx: 1.5 * s, dy: 1.5 * s), xRadius: 184 * s, yRadius: 184 * s)
-    rim.lineWidth = 3 * s
-    rgb(0xffffff, 0.08).setStroke()
-    rim.stroke()
+    glow.draw(fromCenter: NSPoint(x: body.midX, y: body.midY), radius: 0, toCenter: NSPoint(x: body.midX, y: body.midY), radius: (web ? 520 : 430) * s, options: [])
+    // A hairline on the top edge, as glass catches light (the phone draws its own).
+    if !web {
+        let rim = NSBezierPath(roundedRect: body.insetBy(dx: 1.5 * s, dy: 1.5 * s), xRadius: 184 * s, yRadius: 184 * s)
+        rim.lineWidth = 3 * s
+        rgb(0xffffff, 0.08).setStroke()
+        rim.stroke()
+    }
     ctx.restoreGState()
 
     // The wheel, on the web logo's 32-unit grid.
-    let u = 824 * s * 0.66 / 32
+    // On the phone the wheel fills 60% of the square: inside a maskable icon's safe circle.
+    let u = web ? 1024 * s * 0.6 / 32 : 824 * s * 0.66 / 32
     let c = CGPoint(x: body.midX, y: body.midY)
     let orange = dev ? NSGradient(colors: [rgb(0x8fb8ff), rgb(0x2f7dff), rgb(0x1652c8)])! : NSGradient(colors: [rgb(0xfbad41), rgb(0xf6821f), rgb(0xe8650c)])!
     let mark = NSBezierPath()
@@ -95,6 +101,13 @@ func strokedPath(_ p: NSBezierPath) -> NSBezierPath {
     return NSBezierPath(cgPath: cg)
 }
 
+if web {
+    // 180 is the iOS Home Screen icon, at the path Safari also probes on its own.
+    try! draw(180).write(to: out.appendingPathComponent("apple-touch-icon.png"))
+    for px in [192, 512] { try! draw(px).write(to: out.appendingPathComponent("icon-\(px).png")) }
+    print(out.path)
+    exit(0)
+}
 for (name, px) in [("16x16", 16), ("16x16@2x", 32), ("32x32", 32), ("32x32@2x", 64), ("128x128", 128), ("128x128@2x", 256), ("256x256", 256), ("256x256@2x", 512), ("512x512", 512), ("512x512@2x", 1024)] {
     try! draw(px).write(to: out.appendingPathComponent("icon_\(name).png"))
 }
