@@ -413,7 +413,7 @@ struct Properties: View {
                 if d.agent == nil, task == nil, d.canStartAgent {
                     prop("Agent") {
                         Button("Start an agent…") { nav.starting = d.id }.buttonStyle(.link)
-                            .help("Start Claude Code or Codex on this docket, in a new Rex pane")
+                            .help("Start Claude Code, Codex or Antigravity on this docket, in a new Rex pane")
                     }
                 }
                 if let a = d.agent, d.proto != "review", task == nil {

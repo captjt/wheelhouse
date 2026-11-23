@@ -48,13 +48,14 @@ pub fn urgency(state: &str) -> u8 {
 
 /// Agents Wheelhouse tracks.
 pub fn is_agent_app(app: &str) -> bool {
-    matches!(app, "claude-code" | "codex")
+    matches!(app, "claude-code" | "codex" | "agy")
 }
 
 pub fn app_name(app: &str) -> &str {
     match app {
         "claude-code" => "Claude Code",
         "codex" => "Codex",
+        "agy" | "antigravity" => "Antigravity",
         other => other,
     }
 }
@@ -110,6 +111,7 @@ impl Pane {
             .or(match self.process.as_deref() {
                 Some("claude") => Some("claude-code"),
                 Some("codex") => Some("codex"),
+                Some("agy") => Some("agy"),
                 _ => None,
             })
     }
@@ -388,5 +390,9 @@ mod tests {
         let r = Record { state: "idle".into(), app: Some("claude-code".into()), ..Default::default() };
         m.apply_pane_status("s", "a", vec![r], Some(&fg("codex")), None);
         assert_eq!(m.panes["a"].app(), Some("claude-code"));
+        m.apply_pane_status("s", "c", vec![], Some(&fg("agy")), None);
+        assert_eq!(m.panes["c"].app(), Some("agy"));
+        assert!(m.panes["c"].is_agent());
+        assert_eq!(app_name("agy"), "Antigravity");
     }
 }

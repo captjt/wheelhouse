@@ -315,7 +315,11 @@ fn closes(t: &Task) -> Option<String> {
 }
 
 fn app_of(agent: &str) -> &'static str {
-    if agent == "claude" { "claude-code" } else { "codex" }
+    match agent {
+        "claude" => "claude-code",
+        "agy" => "agy",
+        _ => "codex",
+    }
 }
 
 /// Open a role's pane behind the wall and hand it `prompt`.
@@ -375,7 +379,11 @@ pub(super) async fn open_role(shared: &Shared, cfg: &Config, t: &mut Task, role:
         panes::close(&created.session_id, &created.block_id).await;
         bail!("the {role} ({}) didn't start: {why}\n{}", r.agent, tail.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"));
     }
-    let session = if r.agent == "codex" { agentcli::codex_thread(&w, since).or(l.session) } else { l.session };
+    let session = if r.agent == "codex" {
+        agentcli::codex_thread(&w, since).or(l.session)
+    } else {
+        l.session.or_else(|| shared.lock().agents.by_block.get(&created.block_id).and_then(|t| t.session.clone()))
+    };
     let a = super::Agent { agent: r.agent.clone(), session, pane: Some(label), block: Some(created.block_id.clone()), effort };
     match &reviewer {
         Some((_, name)) => {

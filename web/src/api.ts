@@ -444,4 +444,4 @@ export async function post<T>(path: string, body: unknown = {}): Promise<T> {
 }
 
 export const appName = (app?: string | null) =>
-  app === "claude-code" ? "Claude Code" : app === "codex" ? "Codex" : app || "Agent";
+  app === "claude-code" ? "Claude Code" : app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : app || "Agent";

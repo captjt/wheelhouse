@@ -40,6 +40,7 @@ func appName(_ app: String?) -> String {
     switch app {
     case "claude-code", "claude": "Claude Code"
     case "codex": "Codex"
+    case "agy", "antigravity": "Antigravity"
     case let a? where !a.isEmpty: a
     default: "Agent"
     }

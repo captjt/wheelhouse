@@ -438,7 +438,11 @@ fn last_lines(s: &str, n: usize) -> String {
 }
 
 fn app_of(agent: &str) -> &'static str {
-    if agent == "claude" { "claude-code" } else { "codex" }
+    match agent {
+        "claude" => "claude-code",
+        "agy" => "agy",
+        _ => "codex",
+    }
 }
 
 /// Tell the tracker a pane is this PR's, before it can be seen as a stray.
@@ -550,7 +554,11 @@ async fn open_reviewer(
         }
         bail!("the {} reviewer ({program}) didn't start: {why}\n{}", r.name, last_lines(&tail, 6));
     }
-    r.session = if r.agent == "codex" { wait_codex_thread(&wt, since).await.or(l.session) } else { l.session };
+    r.session = if r.agent == "codex" {
+        wait_codex_thread(&wt, since).await.or(l.session)
+    } else {
+        l.session.or_else(|| shared.lock().agents.by_block.get(&block).and_then(|t| t.session.clone()))
+    };
     r.block = Some(block.clone());
     r.pane = Some(label.clone());
     if let Err(why) = panes::deliver(shared, &session, &block, prompt).await {
@@ -820,7 +828,11 @@ pub async fn start_checker(shared: &Shared, key: &str) -> Result<()> {
         panes::close(&created.session_id, &created.block_id).await;
         bail!("the checker ({}) didn't start: {why:#}\n{}", program(&cfg.checker), last_lines(&tail, 6));
     }
-    let session = if cfg.checker == "codex" { wait_codex_thread(&primary, since).await } else { l.session };
+    let session = if cfg.checker == "codex" {
+        wait_codex_thread(&primary, since).await
+    } else {
+        l.session.or_else(|| shared.lock().agents.by_block.get(&created.block_id).and_then(|t| t.session.clone()))
+    };
     if cfg.checker == "codex"
         && let Some(t) = &session
     {
