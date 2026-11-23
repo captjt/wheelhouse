@@ -77,7 +77,7 @@ struct PaletteOverlay: View {
             }
             out.append(Command(id: "checks", group: d.id, label: "Run checks", symbol: "checklist", hint: "⇧⌘U", keywords: "verify test lint witnessed") { Task { await store.runChecks(d.id) } })
             if d.canStartAgent {
-                out.append(Command(id: "start-agent", group: d.id, label: "Start an agent…", symbol: "terminal", hint: "⇧⌘A", keywords: "agent claude codex start pane work") { reveal(); nav.starting = d.id })
+                out.append(Command(id: "start-agent", group: d.id, label: "Start an agent…", symbol: "terminal", hint: "⇧⌘A", keywords: "agent claude codex agy antigravity start pane work") { reveal(); nav.starting = d.id })
             }
             for s in Status.allCases where s != d.status {
                 out.append(Command(id: "st-\(s.rawValue)", group: d.id, label: "Move to \(s.label)", status: s, keywords: "status") { store.setStatus(d.id, s, undo: d.status) })
@@ -87,7 +87,7 @@ struct PaletteOverlay: View {
         }
         out += [
             Command(id: "new", group: "Create", label: "New docket", symbol: "square.and.pencil", hint: "⌘N") { reveal(); nav.creating = .blank },
-            Command(id: "new-agent", group: "Create", label: "Start an agent on a new docket", symbol: "terminal", hint: "⇧⌘N", keywords: "claude codex start run") { reveal(); nav.creating = .agent },
+            Command(id: "new-agent", group: "Create", label: "Start an agent on a new docket", symbol: "terminal", hint: "⇧⌘N", keywords: "claude codex agy antigravity start run") { reveal(); nav.creating = .agent },
             Command(id: "new-linear", group: "Create", label: "New docket from a Linear issue", symbol: "circle.hexagongrid", keywords: "linear issue import") { reveal(); nav.creating = .linear },
         ]
         for (i, (p, key)) in Place.order.enumerated() {
@@ -96,7 +96,7 @@ struct PaletteOverlay: View {
         out += [
             Command(id: "verify", group: "Record", label: "Verify every docket's record", symbol: "checkmark.shield", keywords: "check chain signatures") { store.verifyAll() },
             Command(id: "settings", group: "Settings", label: "Standing orders and gates", symbol: "list.bullet.clipboard", hint: "⌘,", keywords: "settings preferences gates ask auto pause post") { openSettingsTab("orders") },
-            Command(id: "settings-agents", group: "Settings", label: "Agents: builder, checker, reviewers", symbol: "person.2", keywords: "settings claude codex fix rounds pre-review") { openSettingsTab("agents") },
+            Command(id: "settings-agents", group: "Settings", label: "Agents: builder, checker, reviewers", symbol: "person.2", keywords: "settings claude codex agy antigravity fix rounds pre-review") { openSettingsTab("agents") },
             Command(id: "settings-repos", group: "Settings", label: "Repos: notes, checks, review guide", symbol: "folder", keywords: "settings checks base branch plan notes rules") { openSettingsTab("repos") },
             Command(id: "settings-guides", group: "Settings", label: "Guides and briefs", symbol: "text.book.closed", keywords: "settings guide brief prompt markdown pr style plan format") { openSettingsTab("guides") },
             Command(id: "th-system", group: "Theme", label: "Theme: System", symbol: "circle.lefthalf.filled", keywords: "appearance mode auto") { UserDefaults.standard.set("system", forKey: "theme") },
@@ -320,6 +320,7 @@ struct NewDocketSheet: View {
                     Picker("", selection: $app) {
                         Text("Claude Code").tag("claude-code")
                         Text("Codex").tag("codex")
+                        Text("Antigravity").tag("agy")
                     }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                 }
@@ -415,6 +416,7 @@ struct StartAgentSheet: View {
                     Picker("", selection: $app) {
                         Text("Claude Code").tag("claude-code")
                         Text("Codex").tag("codex")
+                        Text("Antigravity").tag("agy")
                     }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                 }
@@ -435,7 +437,7 @@ struct StartAgentSheet: View {
         .task {
             if note.isEmpty { note = "Read wh brief \(id), then work on its intent." }
             if let a = d?.agent {
-                app = a.app == "codex" ? "codex" : "claude-code"
+                app = a.app == "codex" ? "codex" : a.app == "agy" ? "agy" : "claude-code"
                 if cwd.isEmpty, let c = a.cwd { cwd = shortPath(c) }
             }
             let f = await store.folders(for: id)

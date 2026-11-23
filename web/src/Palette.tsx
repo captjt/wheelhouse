@@ -79,7 +79,7 @@ export function Palette({
       if (d.hold) out.push({ id: "resume", group: d.id, label: `Resume: it's on hold (${d.hold})`, icon: <IconPlay size={15} />, keywords: "hold unhold resume", run: () => void hub.resume(d.id).catch(() => {}) });
       else out.push({ id: "hold", group: d.id, label: "Hold…", icon: <IconPause size={15} />, keywords: "hold pause stop wait", run: () => hub.setDialog({ kind: "hold", id: d.id }) });
       out.push({ id: "checks", group: d.id, label: "Run checks", icon: <IconShield size={15} />, keywords: "verify test lint witnessed", run: () => void hub.runChecks(d.id).catch(() => {}) });
-      if (canStartAgent(d)) out.push({ id: "start-agent", group: d.id, label: "Start an agent…", icon: <IconAgents size={15} />, keywords: "agent claude codex start pane work", run: () => hub.setDialog({ kind: "agent", id: d.id }) });
+      if (canStartAgent(d)) out.push({ id: "start-agent", group: d.id, label: "Start an agent…", icon: <IconAgents size={15} />, keywords: "agent claude codex agy antigravity start pane work", run: () => hub.setDialog({ kind: "agent", id: d.id }) });
     }
     // What else needs a look: held, failing, quiet, closed on your word.
     for (const a of attentionShown(hub.state?.attention, asks.map((i) => ({ docket: i.d.id, kind: i.kind }))))
@@ -87,7 +87,7 @@ export function Palette({
         out.push({ id: `at-${a.docket}-${a.kind}`, group: "Attention", label: `${a.docket} · ${a.text}`, icon: <AttentionIcon kind={a.kind} size={15} />, keywords: `${a.title} ${a.kind}`, run: () => go(`/d/${a.docket}`) });
     out.push(
       { id: "new", group: "Create", label: "New docket", icon: <IconPlus size={15} />, hint: <Kbd>C</Kbd>, run: onNew },
-      { id: "new-agent", group: "Create", label: "Start an agent on a new docket", icon: <IconAgents size={15} />, keywords: "claude codex start run", run: () => onNewAgent() },
+      { id: "new-agent", group: "Create", label: "Start an agent on a new docket", icon: <IconAgents size={15} />, keywords: "claude codex agy antigravity start run", run: () => onNewAgent() },
       { id: "new-linear", group: "Create", label: "New docket from a Linear issue", icon: <IconIssue size={15} />, keywords: "linear issue import", run: () => onNewLinear() },
       { id: "inbox", group: "Go to", label: "Inbox", icon: <IconInbox size={15} />, hint: <><Kbd>G</Kbd><Kbd>I</Kbd></>, run: () => go("/inbox") },
       { id: "active", group: "Go to", label: "Active dockets", icon: <IconActive size={15} />, hint: <><Kbd>G</Kbd><Kbd>A</Kbd></>, run: () => go("/view/active") },
@@ -97,7 +97,7 @@ export function Palette({
       { id: "settings", group: "Go to", label: "Settings", icon: <IconSettings size={15} />, hint: <Kbd>⌘,</Kbd>, keywords: "preferences config options", run: () => go("/settings") },
       { id: "set-orders", group: "Settings", label: "Standing orders", icon: <IconSettings size={15} />, keywords: "settings pause resume post auto", run: () => go("/settings/orders") },
       { id: "set-gates", group: "Settings", label: "Gates: where a Build asks you", icon: <IconSettings size={15} />, keywords: "settings ask auto plan open push", run: () => go("/settings/gates") },
-      { id: "set-agents", group: "Settings", label: "Agents: builder, checker, reviewers", icon: <IconSettings size={15} />, keywords: "settings claude codex fix rounds", run: () => go("/settings/agents") },
+      { id: "set-agents", group: "Settings", label: "Agents: builder, checker, reviewers", icon: <IconSettings size={15} />, keywords: "settings claude codex agy antigravity fix rounds", run: () => go("/settings/agents") },
       { id: "set-repos", group: "Settings", label: "Repos: notes, checks, review guide", icon: <IconSettings size={15} />, keywords: "settings rules notes checks base branch plan", run: () => go("/settings/repos") },
       { id: "set-guides", group: "Settings", label: "Guides & briefs", icon: <IconSettings size={15} />, keywords: "settings guide brief prompt style", run: () => go("/settings/guides") },
       {
@@ -200,7 +200,7 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
   const d = hub.byId.get(id);
   const [folders, setFolders] = useState<string[]>([]);
   const [cwd, setCwd] = useState(d?.agent?.cwd ?? "");
-  const [app, setApp] = useState<"claude-code" | "codex">(d?.agent?.app === "codex" ? "codex" : "claude-code");
+  const [app, setApp] = useState<"claude-code" | "codex" | "agy">(d?.agent?.app === "codex" ? "codex" : d?.agent?.app === "agy" ? "agy" : "claude-code");
   const [note, setNote] = useState(`Read wh brief ${id}, then work on its intent.`);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -217,7 +217,7 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
     setBusy(true);
     post<{ docket: string }>("/api/agents/start", { app, cwd: cwd.trim(), prompt: note.trim() || undefined, docket: id }).then(
       () => {
-        toast(`${app === "codex" ? "Codex" : "Claude Code"} is on ${id}, in wheelhouse/${id}`);
+        toast(`${app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : "Claude Code"} is on ${id}, in wheelhouse/${id}`);
         hub.reload();
         onClose();
       },
@@ -265,6 +265,9 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
           <button className={app === "codex" ? "on" : ""} onClick={() => setApp("codex")}>
             Codex
           </button>
+          <button className={app === "agy" ? "on" : ""} onClick={() => setApp("agy")}>
+            Antigravity
+          </button>
         </div>
       </div>
       <div className="nd-foot">
@@ -283,7 +286,7 @@ export function NewDocket({ onClose, linear, agent }: { onClose: () => void; lin
   const toast = useToast();
   const [mode, setMode] = useState<"blank" | "linear" | "agent">(agent ? "agent" : linear ? "linear" : "blank");
   const [cwd, setCwd] = useState("");
-  const [app, setApp] = useState<"claude-code" | "codex">("claude-code");
+  const [app, setApp] = useState<"claude-code" | "codex" | "agy">("claude-code");
   const folders = Array.from(new Set((hub.state?.dockets ?? []).map((d) => d.agent?.cwd).filter((c): c is string => !!c && !c.includes("/.local/share/")))).sort();
   const [opening, setOpening] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -328,7 +331,7 @@ export function NewDocket({ onClose, linear, agent }: { onClose: () => void; lin
       setBusy(true);
       post<{ docket: string }>("/api/agents/start", { app, cwd: cwd.trim(), prompt: note, title: title || undefined }).then(
         (r) => {
-          toast(`${r.docket}: ${app === "codex" ? "Codex" : "Claude Code"} started in wheelhouse/${r.docket}`);
+          toast(`${r.docket}: ${app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : "Claude Code"} started in wheelhouse/${r.docket}`);
           hub.reload();
           onClose();
           go(`/d/${r.docket}`);
@@ -368,6 +371,9 @@ export function NewDocket({ onClose, linear, agent }: { onClose: () => void; lin
             </button>
             <button className={app === "codex" ? "on" : ""} onClick={() => setApp("codex")}>
               Codex
+            </button>
+            <button className={app === "agy" ? "on" : ""} onClick={() => setApp("agy")}>
+              Antigravity
             </button>
           </div>
         </div>

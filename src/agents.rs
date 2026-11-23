@@ -45,6 +45,9 @@ pub struct Tracked {
     /// A prompt Wheelhouse already recorded (one it started the agent with):
     /// the agent's own hook reports it again, once.
     pending_prompt: Option<String>,
+    /// The last user prompt recorded for this pane, so hooks that fire on
+    /// every model invocation (Antigravity's `PreInvocation`) don't duplicate it.
+    last_prompt: Option<String>,
 }
 
 struct PendingTurn {
@@ -88,6 +91,7 @@ pub fn load(core: &mut Core) -> Result<()> {
                 blocked_seen: None,
                 missing_since: None,
                 pending_prompt: None,
+                last_prompt: None,
             },
         );
     }
@@ -199,6 +203,7 @@ fn open_for(core: &mut Core, a: AgentRef, session: Option<&str>, source: Option<
             blocked_seen: None,
             missing_since: None,
             pending_prompt: None,
+            last_prompt: None,
         },
     );
     Ok(id)
@@ -217,6 +222,7 @@ pub fn adopt(core: &mut Core, docket: &str, a: &AgentRef, prompt: Option<&str>) 
             blocked_seen: None,
             missing_since: None,
             pending_prompt: prompt.map(str::to_string),
+            last_prompt: None,
         },
     );
 }
@@ -357,9 +363,9 @@ fn claim_in(core: &mut Core, block: &str, session: &str, source: &str, here: Opt
     Ok(())
 }
 
-/// One call from an agent's hook: `event` is Claude Code's name for it.
+/// One call from an agent's hook: `event` is the agent's name for it.
 pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> Result<Value> {
-    let session = p["session_id"].as_str().filter(|s| !s.is_empty());
+    let session = p["session_id"].as_str().or_else(|| p["conversationId"].as_str()).filter(|s| !s.is_empty());
     let source = p["source"].as_str().unwrap_or("startup");
     let cwd = p["cwd"].as_str();
     // A resumed session goes back to the docket it was on, in whichever
@@ -415,8 +421,8 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
                 }
             }
         }
-        "UserPromptSubmit" => {
-            let prompt = p["prompt"].as_str().unwrap_or_default().trim();
+        "UserPromptSubmit" | "PreInvocation" => {
+            let prompt = p["prompt"].as_str().or_else(|| p["lastUserInput"].as_str()).unwrap_or_default().trim();
             if prompt.is_empty() || from_the_harness(prompt) {
                 return Ok(json!({}));
             }
@@ -426,11 +432,15 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
                 claim(core, block, s, "startup")?;
             }
             let docket = core.agents.by_block[block].docket.clone();
-            if let Some(t) = core.agents.by_block.get_mut(block)
-                && t.pending_prompt.as_deref() == Some(prompt)
-            {
-                t.pending_prompt = None;
+            if event == "PreInvocation" && core.agents.by_block.get(block).is_some_and(|t| t.last_prompt.as_deref() == Some(prompt)) {
                 return Ok(json!({ "docket": docket }));
+            }
+            if let Some(t) = core.agents.by_block.get_mut(block) {
+                t.last_prompt = Some(prompt.to_string());
+                if t.pending_prompt.as_deref() == Some(prompt) {
+                    t.pending_prompt = None;
+                    return Ok(json!({ "docket": docket }));
+                }
             }
             if prompt.starts_with("[rex-inbox]") || prompt.starts_with("[wheelhouse]") {
                 core.append(&docket, "note", &Who::Hub, Some(prompt.to_string()), json!({ "via": "message" }))?;
@@ -439,18 +449,38 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
             }
         }
         "Stop" => {
-            if p["stop_hook_active"].as_bool() == Some(true) {
+            if p["stop_hook_active"].as_bool() == Some(true) || p["continuationActive"].as_bool() == Some(true) {
                 return Ok(json!({}));
             }
-            let msg = p["last_assistant_message"].as_str().unwrap_or_default();
-            if !msg.trim().is_empty() {
-                turn_message(core, block, msg)?;
+            let msg = p["last_assistant_message"].as_str().map(str::to_string).filter(|s| !s.trim().is_empty()).or_else(|| p["transcriptPath"].as_str().and_then(agy_last_message));
+            if let Some(msg) = msg {
+                turn_message(core, block, &msg)?;
             }
         }
         _ => {}
     }
     core.live_changed();
     Ok(json!({ "docket": core.agents.by_block.get(block).map(|t| t.docket.clone()) }))
+}
+
+/// The last assistant response text in an Antigravity CLI `transcript.jsonl`.
+fn agy_last_message(path: &str) -> Option<String> {
+    use std::io::BufRead;
+    let f = std::fs::File::open(path).ok()?;
+    let mut last = None;
+    for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
+        if !line.contains("\"PLANNER_RESPONSE\"") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        if v["type"] != "PLANNER_RESPONSE" {
+            continue;
+        }
+        if let Some(text) = v["response"].as_str().or_else(|| v["content"].as_str()).filter(|s| !s.trim().is_empty()) {
+            last = Some(text.to_string());
+        }
+    }
+    last
 }
 
 /// Text Claude Code hands its agent as a prompt that nobody typed: a
@@ -906,5 +936,39 @@ mod tests {
         let long = "word ".repeat(40);
         let t = title_from(&long).unwrap();
         assert!(t.ends_with('…') && t.chars().count() <= 81, "{t}");
+    }
+
+    #[test]
+    fn agy_hooks_track_session_dedupe_prompts_and_read_transcript_on_stop() {
+        let mut core = test_core();
+        let fg = json!({ "foreground": { "name": "agy", "cwd": "/Users/you/git/api" } });
+        core.mirror.apply_pane_status("s1", "a1", vec![Record { state: "idle".into(), app: Some("agy".into()), ..Default::default() }], Some(&fg), None);
+        reconcile(&mut core, ["a1".to_string()]);
+        let d = docket_of(&core, "a1").unwrap();
+        assert_eq!(core.store.state(&d).unwrap().unwrap().title, "Antigravity in git/api");
+
+        hook(&mut core, "SessionStart", "agy", "a1", &json!({ "conversationId": "conv-1", "cwd": "/Users/you/git/api" })).unwrap();
+        hook(&mut core, "PreInvocation", "agy", "a1", &json!({ "conversationId": "conv-1", "invocationNum": 1, "lastUserInput": "Add agy support" })).unwrap();
+        // Second model invocation in the same turn repeats lastUserInput: don't record twice.
+        hook(&mut core, "PreInvocation", "agy", "a1", &json!({ "conversationId": "conv-1", "invocationNum": 2, "lastUserInput": "Add agy support" })).unwrap();
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert_eq!(st.title, "Add agy support");
+        assert_eq!(st.session.as_deref(), Some("conv-1"));
+        assert_eq!(st.prompts, 1);
+
+        let dir = std::env::temp_dir().join(format!("wh-agy-hook-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let transcript = dir.join("transcript.jsonl");
+        std::fs::write(&transcript, json!({ "type": "PLANNER_RESPONSE", "response": "Implemented **agy** support." }).to_string()).unwrap();
+
+        core.mirror.apply_pane_status("s1", "a1", vec![Record { state: "working".into(), app: Some("agy".into()), ..Default::default() }], Some(&fg), None);
+        reconcile(&mut core, ["a1".to_string()]);
+        hook(&mut core, "Stop", "agy", "a1", &json!({ "conversationId": "conv-1", "transcriptPath": transcript.to_string_lossy(), "continuationActive": false })).unwrap();
+        core.mirror.apply_pane_status("s1", "a1", vec![Record { state: "done".into(), app: Some("agy".into()), ..Default::default() }], Some(&fg), None);
+        reconcile(&mut core, ["a1".to_string()]);
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert_eq!(st.turns, 1);
+        assert_eq!(st.last_turn.as_deref(), Some("Implemented **agy** support."));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

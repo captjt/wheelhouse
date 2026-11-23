@@ -384,7 +384,7 @@ export function AgentsView() {
           <IconTerminal size={15} /> Agents <span className="view-count">{total}</span>
         </span>
         <span className="spacer" />
-        <span className="muted small m-hide">Every Claude Code and Codex pane in Rex, live</span>
+        <span className="muted small m-hide">Every Claude Code, Codex and Antigravity pane in Rex, live</span>
       </header>
       <LargeTitle title="Agents" count={total} />
       {total === 0 ? (

@@ -44,6 +44,7 @@ enum K {
     static let dangerTint = dyn(0xffe2e2, 0x990003, 0.7, 0.2)
     static let claude = Color(nsColor: rgb(0xd97757))
     static let codex = Color(nsColor: rgb(0x3b3d44))
+    static let agy = Color(nsColor: rgb(0x4f6ef7))
 
     static func live(_ s: LiveState?) -> Color {
         switch s {
@@ -173,13 +174,13 @@ private struct Pulse: View {
     }
 }
 
-/// An agent's app: Claude Code's coral C, Codex's slate X.
+/// An agent's app: Claude Code's coral C, Codex's slate X, Antigravity's blue A.
 struct AppAvatar: View {
     let app: String?
     var size: CGFloat = 18
     var body: some View {
         let letter = app == "codex" ? "X" : app == "claude-code" || app == "claude" ? "C" : "A"
-        let fill = app == "codex" ? K.codex : app == "claude-code" || app == "claude" ? K.claude : K.faint
+        let fill = app == "codex" ? K.codex : app == "claude-code" || app == "claude" ? K.claude : app == "agy" ? K.agy : K.faint
         RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
             .fill(fill)
             .overlay(Text(letter).font(.system(size: size * 0.55, weight: .semibold)).foregroundStyle(.white))

@@ -108,14 +108,14 @@ points the hub at another file.
 | Key | What | Default |
 | --- | --- | --- |
 | `repos["owner/name"]` | `checkout` (required), `notes` for the briefs, `guides`, `effort`, `post` | |
-| `reviewers` | one to four: `"claude"`, `"codex"`, or `{ name, agent, extra_args, guides, effort }` | `{ "codex" }` |
-| `checker` | `"claude"`, `"codex"`, or `{ agent, extra_args, effort }` | `"claude"` |
+| `reviewers` | one to four: `"claude"`, `"codex"`, `"agy"`, or `{ name, agent, extra_args, guides, effort }` | `{ "codex" }` |
+| `checker` | `"claude"`, `"codex"`, `"agy"`, or `{ agent, extra_args, effort }` | `"claude"` |
 | `post` | `"ask"` (you post), `"auto"` (the checker posts), a rule `{ auto = { … } }`, or a function ([Who posts](#who-posts)) | `"ask"` |
 | `max_rounds` | rounds at once (waiting on you doesn't count) | 3 |
 | `poll_seconds` | how often to check GitHub (at least 30) | 180 |
 | `effort` | `{ review = …, check = … }`: a level, or `function(pr)` returning one | the agent's own |
 | `guides` | `review`, `style`, `merge_risk`, `check`: instructions, a file, `"bundled"`, `false`, or a function | style and merge risk bundled |
-| `agents` | `claude`/`codex`: `program`, `args`, `extra_args` | |
+| `agents` | `claude`/`codex`/`agy`: `program`, `args`, `extra_args` | |
 | `path` | folders put first on the agents' PATH | |
 | `caches`, `extra_caches` | folders the agents may write (package caches) | Go, npm, pnpm, uv, Playwright, Cargo |
 

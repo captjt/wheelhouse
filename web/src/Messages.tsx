@@ -19,7 +19,7 @@ export function MessageCard({ m, compact }: { m: Msg; compact?: boolean }) {
   return (
     <div className="msg-card">
       <div className="msg-head">
-        {m.from === "wheelhouse" ? <HubAvatar size={18} /> : <AppAvatar app={m.from_app === "Codex" ? "codex" : "claude-code"} size={18} />}
+        {m.from === "wheelhouse" ? <HubAvatar size={18} /> : <AppAvatar app={m.from_app === "Codex" ? "codex" : m.from_app === "Antigravity" ? "agy" : "claude-code"} size={18} />}
         <strong>{m.from === "wheelhouse" ? "Wheelhouse" : m.from_app || m.from}</strong>
         <span className="muted">{m.options.length ? "asks you" : "wrote to you"}</span>
         {m.subject && <span className="msg-subject">· {m.subject}</span>}

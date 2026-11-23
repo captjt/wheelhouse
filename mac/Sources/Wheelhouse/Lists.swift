@@ -448,7 +448,7 @@ struct AgentsScreen: View {
         let bySession = Dictionary(grouping: agents) { $0.rexSession.isEmpty ? "—" : $0.rexSession }
         Group {
             if store.state != nil && agents.isEmpty {
-                ContentUnavailableView("No agents running in Rex", systemImage: "terminal", description: Text("Every Claude Code and Codex pane in Rex shows up here, live."))
+                ContentUnavailableView("No agents running in Rex", systemImage: "terminal", description: Text("Every Claude Code, Codex and Antigravity pane in Rex shows up here, live."))
             } else {
                 SplitPane {
                     List(selection: Binding<String?>(get: { nav.selected(.agents) }, set: { nav.select($0, in: .agents) })) {

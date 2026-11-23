@@ -298,7 +298,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         "messages": messages,
         "owner": core.owner,
         "flavor": flavor(),
-        "hooks": crate::hooks::claude_installed(),
+        "hooks": crate::hooks::any_installed(),
         "linear": core.linear_ready,
         "rex": { "connected": core.mirror.connected, "error": core.mirror.error },
         "dockets": dockets,
@@ -330,7 +330,7 @@ async fn status(State(shared): State<Shared>) -> ApiResult {
         "rex": { "connected": core.mirror.connected, "error": core.mirror.error },
         "agents": core.mirror.panes.values().filter(|p| p.is_agent()).count(),
         "dockets": { "open": dockets.iter().filter(|d| d.is_open()).count(), "all": dockets.len() },
-        "hooks": crate::hooks::claude_installed(),
+        "hooks": crate::hooks::any_installed(),
         "tailnet": { "owner": core.tailnet_owner, "url": core.tailnet_host.as_ref().map(|h| format!("https://{h}:{}", crate::tailnet::TAILNET_PORT)) },
         "state_dir": crate::paths::tilde(&crate::paths::state_dir().to_string_lossy()),
     })))
@@ -646,8 +646,8 @@ async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
     rex.paste(&session, &block, &text).await.map_err(internal)?;
     tokio::time::sleep(Duration::from_millis(150)).await;
     rex.send_keys(&session, &block, &["enter"]).await.map_err(internal)?;
-    // Claude Code's prompt hook records it when installed; otherwise the hub does.
-    if !(app == "claude-code" && crate::hooks::claude_installed()) {
+    // The agent's prompt hook records it when installed; otherwise the hub does.
+    if !crate::hooks::installed_for(&app) {
         let mut core = shared.lock();
         agents::note_prompt(&mut core, &id, &text, agent_session.as_deref(), Some("wheelhouse")).map_err(internal)?;
     }

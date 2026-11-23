@@ -136,11 +136,13 @@ enum Cmd {
     Name { name: String },
     /// This pane's address and docket.
     Whoami,
-    /// Start Claude Code (or Codex) on a new docket, in a folder, with a
-    /// prompt; --docket D-12 works on that docket instead.
+    /// Start Claude Code, Codex or Antigravity on a new docket, in a folder,
+    /// with a prompt; --docket D-12 works on that docket instead.
     Start {
         #[arg(long)]
         codex: bool,
+        #[arg(long, conflicts_with = "codex")]
+        agy: bool,
         #[arg(long)]
         docket: Option<String>,
         #[arg(short = 'C', long, default_value = ".", value_hint = clap::ValueHint::DirPath)]
@@ -342,20 +344,21 @@ fn main() {
         Some(Cmd::Intent { docket, text }) => intent(&normalize(&docket), text),
         Some(Cmd::Brief { docket }) => brief(docket.as_deref().map(normalize)),
         Some(Cmd::SetupLinear) => linear::setup(),
-        Some(Cmd::Start { codex, docket, dir, title, prompt }) => {
+        Some(Cmd::Start { codex, agy, docket, dir, title, prompt }) => {
             let cwd = std::fs::canonicalize(&dir).map(|p| p.to_string_lossy().into_owned()).unwrap_or(dir);
             let prompt = match prompt.as_deref() {
                 Some("-") => text_or_stdin(prompt.clone()).ok(),
                 _ => prompt,
             };
-            client::json(
-                "POST",
-                "/api/agents/start",
-                Some(&json!({ "app": if codex { "codex" } else { "claude-code" }, "cwd": cwd, "prompt": prompt, "title": title, "docket": docket.as_deref().map(normalize) })),
-            )
-            .map(|v| {
-                println!("{} started in {}: wheelhouse/{}", if codex { "Codex" } else { "Claude Code" }, v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?"))
-            })
+            let (app, label) = if codex {
+                ("codex", "Codex")
+            } else if agy {
+                ("agy", "Antigravity")
+            } else {
+                ("claude-code", "Claude Code")
+            };
+            client::json("POST", "/api/agents/start", Some(&json!({ "app": app, "cwd": cwd, "prompt": prompt, "title": title, "docket": docket.as_deref().map(normalize) })))
+                .map(|v| println!("{label} started in {}: wheelhouse/{}", v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?")))
         }
         Some(Cmd::Skill { action }) => skill(action.as_deref()),
         Some(Cmd::Import { from, force }) => match from.as_str() {
@@ -766,7 +769,7 @@ fn print_review_status(v: &Value) {
 fn skill(action: Option<&str>) -> Result<()> {
     let home = paths::home();
     let shared = home.join(".agents/skills");
-    let homes: Vec<std::path::PathBuf> = [".claude/skills", ".codex/skills"].iter().map(|d| home.join(d)).filter(|d| d.is_dir()).collect();
+    let homes: Vec<std::path::PathBuf> = [".claude/skills", ".codex/skills", ".gemini/config/skills"].iter().map(|d| home.join(d)).filter(|d| d.is_dir()).collect();
     let source = if shared.is_dir() { shared.join("wheelhouse") } else { home.join(".claude/skills/wheelhouse") };
     match action.unwrap_or("show") {
         "show" => print!("{SKILL}"),

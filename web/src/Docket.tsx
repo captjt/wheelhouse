@@ -157,7 +157,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
           </Prop>
           {!d.agent && !building && canStartAgent(d) && (
             <Prop label="Agent">
-              <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title="Start Claude Code or Codex on this docket, in a new Rex pane">
+              <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title="Start Claude Code, Codex or Antigravity on this docket, in a new Rex pane">
                 <IconAgents size={14} /> Start an agent…
               </button>
             </Prop>

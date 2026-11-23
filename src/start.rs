@@ -16,7 +16,8 @@ pub fn program(app: &str) -> Result<(&'static str, &'static str)> {
     match app {
         "" | "claude" | "claude-code" => Ok(("claude", "claude-code")),
         "codex" => Ok(("codex", "codex")),
-        other => bail!("Wheelhouse starts Claude Code or Codex, not {other}"),
+        "agy" | "antigravity" => Ok(("agy", "agy")),
+        other => bail!("Wheelhouse starts Claude Code, Codex or Antigravity, not {other}"),
     }
 }
 
@@ -68,9 +69,14 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
     let path = tokio::task::spawn_blocking(|| crate::review::agentcli::agent_path(&[])).await.context("reading your shell's PATH")?;
     let mut argv = vec!["env".to_string(), format!("PATH={path}"), bin.to_string()];
     if let Some(p) = prompt {
-        // After `--`, a prompt that starts with `-` is a prompt, never a flag.
-        argv.push("--".into());
-        argv.push(p.to_string());
+        if app == "agy" {
+            argv.push("-i".into());
+            argv.push(p.to_string());
+        } else {
+            // After `--`, a prompt that starts with `-` is a prompt, never a flag.
+            argv.push("--".into());
+            argv.push(p.to_string());
+        }
     }
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     let created = crate::rex::Rex.start(session.as_deref(), SESSION, &docket, &cwd, &argv).await.with_context(|| format!("starting {bin} in Rex"))?;

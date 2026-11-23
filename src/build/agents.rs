@@ -28,6 +28,7 @@ pub fn argv(cfg: &Config, s: &Spec) -> Launch {
     let mut args: Vec<String> = match (&a.args, s.agent) {
         (Some(x), _) => x.clone(),
         (None, "claude") => vec!["--permission-mode".into(), "auto".into()],
+        (None, "agy") => vec!["--mode".into(), "auto".into()],
         (None, _) => [
             "--approve-for-me",
             "--no-alt-screen",
@@ -65,6 +66,20 @@ pub fn argv(cfg: &Config, s: &Spec) -> Launch {
         }
         argv.extend(["-n".to_string(), s.title.to_string()]);
         Launch { argv, session: Some(session) }
+    } else if s.agent == "agy" {
+        if let Some(id) = s.resume {
+            argv.extend(["--conversation".to_string(), id.to_string()]);
+        }
+        argv.extend(args);
+        for d in std::iter::once(gitdir.display().to_string()).chain(caches) {
+            argv.extend(["--add-dir".to_string(), d]);
+        }
+        let mut deny = vec!["command(git push*)", "command(gh *)", "command(wh send*)", "command(wh share*)", "command(wh reply*)"];
+        if !cfg.mcp {
+            deny.push("mcp(*)");
+        }
+        argv.extend(["--settings".to_string(), serde_json::json!({ "permissions": { "deny": deny } }).to_string()]);
+        Launch { argv, session: s.resume.map(str::to_string) }
     } else {
         if let Some(t) = s.resume {
             argv.extend(["resume".to_string(), t.to_string()]);
@@ -105,5 +120,21 @@ mod tests {
         assert!(a.contains("GIT_CONFIG_KEY_2=url.wheelhouse-agents-never-push:///.pushInsteadOf GIT_CONFIG_VALUE_2=https://"), "{a}");
         assert!(a.contains("--effort high --add-dir /src/api/.git --settings"), "{a}");
         assert!(a.contains("--disallowedTools Bash(git push:*) Bash(gh:*) Bash(wh send:*) Bash(wh share:*) Bash(wh reply:*) --strict-mcp-config -n"), "{a}");
+
+        let agy = argv(
+            &cfg,
+            &Spec {
+                agent: "agy",
+                extra_args: &[],
+                resume: Some("conv-42"),
+                worktree: Path::new("/w/D-1"),
+                checkout: Path::new("/src/api"),
+                effort: Some("high"),
+                title: "wheelhouse build D-1 builder",
+            },
+        );
+        let a = agy.argv.join(" ");
+        assert!(a.contains("agy --conversation conv-42 --mode auto --effort high --add-dir /src/api/.git"), "{a}");
+        assert!(a.contains("command(git push*)") && a.contains("command(gh *)") && a.contains("mcp(*)"), "{a}");
     }
 }

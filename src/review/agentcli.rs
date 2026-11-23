@@ -30,8 +30,8 @@ pub fn with_effort(agent: &str, args: &[String], level: Option<&str>) -> Vec<Str
         let a = &args[i];
         let next = args.get(i + 1).map(String::as_str).unwrap_or("");
         let skip = match agent {
-            "claude" if a == "--effort" => 2,
-            "claude" if a.starts_with("--effort=") => 1,
+            "claude" | "agy" if a == "--effort" => 2,
+            "claude" | "agy" if a.starts_with("--effort=") => 1,
             "codex" if (a == "-c" || a == "--config") && next.starts_with("model_reasoning_effort=") => 2,
             "codex" if a.starts_with("--config=model_reasoning_effort=") => 1,
             _ => 0,
@@ -44,7 +44,7 @@ pub fn with_effort(agent: &str, args: &[String], level: Option<&str>) -> Vec<Str
         }
     }
     match agent {
-        "claude" => out.extend(["--effort".to_string(), level.to_string()]),
+        "claude" | "agy" => out.extend(["--effort".to_string(), level.to_string()]),
         _ => out.extend(["-c".to_string(), format!("model_reasoning_effort=\"{level}\"")]),
     }
     out
@@ -61,6 +61,7 @@ fn base_args(cfg: &Config, agent: &str, extra: &[String]) -> Vec<String> {
     let mut args: Vec<String> = match (a.args, agent) {
         (Some(x), _) => x,
         (None, "claude") => vec!["--permission-mode".into(), "auto".into()],
+        (None, "agy") => vec!["--mode".into(), "auto".into()],
         (None, _) => CODEX_DEFAULTS.iter().map(|s| s.to_string()).collect(),
     };
     args.extend(a.extra_args);
@@ -218,6 +219,15 @@ pub fn reviewer(cfg: &Config, l: &ReviewerLaunch) -> Launch {
         }
         argv.extend(["-n".to_string(), l.title.to_string()]);
         Launch { argv, session: Some(session) }
+    } else if l.agent == "agy" {
+        if let Some(id) = l.resume {
+            argv.extend(["--conversation".to_string(), id.to_string()]);
+        }
+        argv.extend(args);
+        for d in l.dirs.iter().chain(l.caches) {
+            argv.extend(["--add-dir".to_string(), d.display().to_string()]);
+        }
+        Launch { argv, session: l.resume.map(str::to_string) }
     } else {
         if let Some(t) = l.resume {
             argv.extend(["resume".to_string(), t.to_string()]);
@@ -263,6 +273,20 @@ pub fn checker(cfg: &Config, worktree: &Path, others: &[PathBuf], effort: Option
         }
         argv.extend(["-n".to_string(), title.to_string()]);
         Launch { argv, session: Some(session) }
+    } else if agent == "agy" {
+        argv.extend(args);
+        for d in others {
+            argv.extend(["--add-dir".to_string(), d.display().to_string()]);
+        }
+        let mut allow = vec!["command(wh review preview*)"];
+        let mut deny = vec!["command(wh review dismiss*)"];
+        if auto {
+            allow.push("command(wh review post*)");
+        } else {
+            deny.push("command(wh review post*)");
+        }
+        argv.extend(["--settings".to_string(), json!({ "permissions": { "allow": allow, "deny": deny } }).to_string()]);
+        Launch { argv, session: None }
     } else {
         argv.extend(args);
         for d in others {
@@ -351,12 +375,65 @@ fn codex_model(thread: &str) -> Option<String> {
     c.query_row("select model from threads where id = ?1", [thread], |r| r.get::<_, Option<String>>(0)).ok().flatten()
 }
 
+/// Antigravity CLI's transcript for a conversation.
+pub fn agy_transcript(session: &str) -> PathBuf {
+    crate::paths::home().join(".gemini/antigravity-cli/brain").join(session).join(".system_generated/logs/transcript.jsonl")
+}
+
+/// `gemini-4-neon-medium` → `("Gemini 4 Neon", Some("medium"))`.
+pub fn agy_model_name(id: &str) -> (String, Option<String>) {
+    let mut parts: Vec<&str> = id.split('-').filter(|p| !p.is_empty()).collect();
+    let effort = parts.last().copied().filter(|e| super::config::LEVELS.contains(e)).map(str::to_string);
+    if effort.is_some() {
+        parts.pop();
+    }
+    let name = parts
+        .into_iter()
+        .map(|p| {
+            let mut c = p.chars();
+            match c.next() {
+                Some(first) => first.to_uppercase().chain(c).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    (if name.is_empty() { id.to_string() } else { name }, effort)
+}
+
+/// The last model and effort an Antigravity CLI conversation ran with.
+fn agy_last(session: &str) -> (Option<String>, Option<String>) {
+    let Ok(f) = std::fs::File::open(agy_transcript(session)) else { return (None, None) };
+    let (mut model, mut effort) = (None, None);
+    for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
+        if !line.contains("\"PLANNER_RESPONSE\"") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        if v["type"] != "PLANNER_RESPONSE" {
+            continue;
+        }
+        if let Some(m) = v["model"].as_str().filter(|m| !m.is_empty()) {
+            let (pretty, eff) = agy_model_name(m);
+            model = Some(pretty);
+            if eff.is_some() {
+                effort = eff;
+            }
+        }
+    }
+    (model, effort)
+}
+
 /// How a harness and model sign a review: `Claude Code (Opus 5.5)`.
 pub fn display_name(agent: &str, cwd: &Path, session: Option<&str>) -> String {
     match agent {
         "claude" => match session.and_then(|s| claude_last(cwd, s).0).and_then(|m| claude_model_name(&m)) {
             Some(m) => format!("Claude Code ({m})"),
             None => "Claude Code".into(),
+        },
+        "agy" => match session.and_then(|s| agy_last(s).0) {
+            Some(m) => format!("Antigravity ({m})"),
+            None => "Antigravity".into(),
         },
         _ => {
             let model = session.and_then(codex_model);
@@ -379,6 +456,7 @@ pub fn session_effort(agent: &str, cwd: &Path, session: Option<&str>) -> Option<
     let s = session?;
     match agent {
         "claude" => claude_last(cwd, s).1,
+        "agy" => agy_last(s).1,
         _ => {
             let c = codex_conn()?;
             c.query_row("select reasoning_effort from threads where id = ?1", [s], |r| r.get::<_, Option<String>>(0)).ok().flatten()
@@ -509,7 +587,7 @@ fn codex_usage(rollout: &str) -> Option<[i64; 4]> {
 pub fn add_tokens(a: &Value, b: &Value) -> Value {
     let mut out = serde_json::Map::new();
     let mut total = 0;
-    for agent in ["codex", "claude"] {
+    for agent in ["codex", "claude", "agy"] {
         if a[agent].is_null() && b[agent].is_null() {
             continue;
         }
@@ -585,6 +663,37 @@ mod tests {
         assert!(a.contains("--allowedTools Bash(wh review preview:*) --disallowedTools Bash(wh review dismiss:*) Bash(wh review post:*) -n t"), "{a}");
         let c = checker(&cfg, &wt, &[], None, true, "t");
         assert!(c.argv.join(" ").contains("--allowedTools Bash(wh review preview:*) Bash(wh review post:*) --disallowedTools Bash(wh review dismiss:*) -n"));
+    }
+
+    #[test]
+    fn agy_reviewers_and_checkers_start_with_mode_effort_and_permissions() {
+        assert_eq!(with_effort("agy", &s(&["--model", "m", "--effort", "high"]), Some("xhigh")), s(&["--model", "m", "--effort", "xhigh"]));
+        assert_eq!(agy_model_name("gemini-4-neon-medium"), ("Gemini 4 Neon".into(), Some("medium".into())));
+        let raw = json!({
+            "repos": { "o/api": { "checkout": "/r" } }, "reviewers": ["agy"], "checker": "agy",
+            "agents": { "agy": { "program": "/bin/agy", "extra_args": ["--model", "gemini-4-neon"] } }
+        });
+        let cfg = super::super::config::from_value("/x".into(), raw).unwrap();
+        let wt = PathBuf::from("/w/pr-7");
+        let l = reviewer(
+            &cfg,
+            &ReviewerLaunch {
+                agent: "agy",
+                extra_args: &[],
+                resume: Some("conv-123"),
+                worktree: &wt,
+                dirs: &[PathBuf::from("/r/.git/worktrees")],
+                caches: &[PathBuf::from("/c/npm")],
+                effort: Some("high"),
+                title: "wheelhouse review o/api#7",
+            },
+        );
+        let a = l.argv.join(" ");
+        assert!(a.contains("/bin/agy --conversation conv-123 --mode auto --model gemini-4-neon --effort high --add-dir /r/.git/worktrees --add-dir /c/npm"), "{a}");
+        let c = checker(&cfg, &wt, &[], Some("high"), false, "t");
+        let a = c.argv.join(" ");
+        assert!(a.contains("--mode auto --model gemini-4-neon --effort high --settings"), "{a}");
+        assert!(a.contains("command(wh review preview*)") && a.contains("command(wh review dismiss*)") && a.contains("command(wh review post*)"), "{a}");
     }
 }
 

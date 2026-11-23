@@ -805,6 +805,9 @@ code {
 .avatar-codex {
   background: #3b3d44;
 }
+.avatar-agy {
+  background: #4f6ef7;
+}
 .avatar-agent {
   background: var(--faint);
 }

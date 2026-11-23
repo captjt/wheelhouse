@@ -53,7 +53,7 @@ return {
     -- linear = { teams = { ENG = "acme/api" }, label = "agent", cycle = true, skip_label = "no-agent" },
   },
 
-  -- Who builds and who checks: "claude" or "codex", or a table:
+  -- Who builds and who checks: "claude", "codex" or "agy", or a table:
   -- checker = { agent = "codex", effort = "high" },
   builder = "claude",
   checker = "claude",

@@ -488,7 +488,11 @@ pub fn reset_doc(id: &str) -> Result<()> {
 // ---- What Settings shows ----
 
 fn app(agent: &str) -> &'static str {
-    if agent == "codex" { "Codex" } else { "Claude Code" }
+    match agent {
+        "codex" => "Codex",
+        "agy" => "Antigravity",
+        _ => "Claude Code",
+    }
 }
 
 fn and(items: &[String]) -> String {

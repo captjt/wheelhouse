@@ -174,8 +174,8 @@ pub fn from_value(path: PathBuf, raw: Value) -> Result<Config> {
             }
             _ => bail!("reviewers[{}] must be an agent name or a table", i + 1),
         };
-        if !matches!(agent.as_str(), "codex" | "claude") {
-            bail!("reviewers[{}]: agent must be codex or claude, not {agent}", i + 1);
+        if !matches!(agent.as_str(), "codex" | "claude" | "agy") {
+            bail!("reviewers[{}]: agent must be codex, claude or agy, not {agent}", i + 1);
         }
         let ok_name = name.len() <= 12 && name.starts_with(|c: char| c.is_ascii_lowercase()) && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
         if !ok_name || name == "check" {
@@ -192,14 +192,14 @@ pub fn from_value(path: PathBuf, raw: Value) -> Result<Config> {
         Value::Object(_) => (raw["checker"]["agent"].as_str().unwrap_or("claude").to_string(), strings(&raw["checker"]["extra_args"])),
         _ => ("claude".to_string(), Vec::new()),
     };
-    if !matches!(checker.as_str(), "codex" | "claude") {
-        bail!("checker must be codex or claude, not {checker}");
+    if !matches!(checker.as_str(), "codex" | "claude" | "agy") {
+        bail!("checker must be codex, claude or agy, not {checker}");
     }
     let post = posting::parse(&raw["post"], "post")?.unwrap_or(Post::Ask);
     let mut caches: Vec<String> = if raw["caches"].is_array() { strings(&raw["caches"]) } else { DEFAULT_CACHES.iter().map(|s| s.to_string()).collect() };
     caches.extend(strings(&raw["extra_caches"]));
     let mut agents = BTreeMap::new();
-    for name in ["codex", "claude"] {
+    for name in ["codex", "claude", "agy"] {
         let a = &raw["agents"][name];
         agents.insert(
             name.to_string(),
