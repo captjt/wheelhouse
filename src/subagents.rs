@@ -70,6 +70,7 @@ pub fn claims(entries: &[Entry]) -> Vec<Claim> {
                 let app = match a["app"].as_str() {
                     Some("claude-code" | "claude") => "claude",
                     Some("codex") => "codex",
+                    Some("agy") => "agy",
                     _ => continue,
                 };
                 let Some(cwd) = a["cwd"].as_str().filter(|c| !c.is_empty()) else { continue };
@@ -358,13 +359,14 @@ pub fn of(claims: &[Claim]) -> Value {
     for ((app, session), (label, round, cwd, began)) in sessions {
         let subs = match app.as_str() {
             "claude" => claude_subagent_dir(&cwd, &session).map(|d| claude_subagents(&d, now)).unwrap_or_default(),
-            _ => {
+            "codex" => {
                 let mut v = Vec::new();
                 if let Some(conn) = &conn {
                     codex_subagents(conn, &session, now, 1, &mut v);
                 }
                 v
             }
+            _ => Vec::new(),
         };
         let mut subs = subs;
         subs.sort_by(|a, b| a["started_at"].as_str().cmp(&b["started_at"].as_str()));

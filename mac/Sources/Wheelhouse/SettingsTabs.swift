@@ -311,6 +311,7 @@ struct AgentsSettings: View {
             })) {
                 Text("Claude Code").tag("claude")
                 Text("Codex").tag("codex")
+                Text("Antigravity").tag("agy")
             } label: {
                 Described(title: title, text: text)
             }
@@ -323,23 +324,23 @@ struct AgentsSettings: View {
 
     private func prereview(_ b: JSON) -> some View {
         let now = b["prereview"].strings
-        let sorted = now.sorted()
-        let tag = sorted.isEmpty ? "none" : sorted == ["claude"] ? "claude" : sorted == ["codex"] ? "codex" : sorted == ["claude", "codex"] ? "both" : "other"
+        let all = ["claude", "codex", "agy"]
         return VStack(alignment: .leading, spacing: 4) {
-            Picker(selection: Binding(get: { tag }, set: { v in
-                let list: [String] = v == "claude" ? ["claude"] : v == "codex" ? ["codex"] : v == "both" ? ["claude", "codex"] : []
-                Task { await model.change("prereview", SettingsPatch.make("build", ["prereview", "reviewers"], list)) }
-            })) {
-                Text("None").tag("none")
-                Text("Claude Code").tag("claude")
-                Text("Codex").tag("codex")
-                Text("Claude Code and Codex").tag("both")
-                if tag == "other" { Text(now.map { appName($0) }.joined(separator: ", ")).tag("other") }
+            LabeledContent {
+                HStack(spacing: 6) {
+                    ForEach(all, id: \.self) { a in
+                        let on = now.contains(a)
+                        Toggle(appName(a), isOn: Binding(get: { on }, set: { active in
+                            let next = all.filter { $0 == a ? active : now.contains($0) }
+                            Task { await model.change("prereview", SettingsPatch.make("build", ["prereview", "reviewers"], next)) }
+                        }))
+                        .toggleStyle(.button)
+                        .disabled(model.isBusy("prereview"))
+                    }
+                }
             } label: {
                 Described(title: "Pre-review", text: "Blind reviewers read the branch before the PR opens, and the builder fixes what they find.")
             }
-            .fixedSize()
-            .disabled(model.isBusy("prereview"))
             SetHere(part: "build", path: ["prereview"], key: "prereview")
             ErrorLine(key: "prereview")
         }

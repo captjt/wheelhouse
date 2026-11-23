@@ -158,7 +158,7 @@ struct InboxRow: View {
                 } else if it.msg?.from == "wheelhouse" {
                     HubAvatar(size: 24)
                 } else {
-                    AppAvatar(app: it.docket?.agent?.app ?? (it.msg?.fromApp == "Codex" ? "codex" : "claude-code"), size: 24)
+                    AppAvatar(app: it.docket?.agent?.app ?? (it.msg?.fromApp == "Codex" ? "codex" : it.msg?.fromApp == "Antigravity" ? "agy" : "claude-code"), size: 24)
                 }
                 LiveIcon(state: it.kind == .error ? .error : it.kind == .done ? .done : .blocked, size: 12)
                     .background(Circle().fill(K.main).padding(-1.5))

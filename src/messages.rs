@@ -454,7 +454,7 @@ async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<S
                 let _ = core.store.set_prompt_status(id, &docket, "sent");
                 let app = core.mirror.panes.get(&block).and_then(|p| p.app()).unwrap_or("agent").to_string();
                 let session_id = core.agents.by_block.get(&block).and_then(|t| t.session.clone());
-                if !(app == "claude-code" && crate::hooks::claude_installed()) {
+                if !crate::hooks::installed_for(&app) {
                     let _ = agents::note_prompt(&mut core, &docket, &body, session_id.as_deref(), Some("wheelhouse"));
                 }
                 core.agents.remote.insert(docket.clone());

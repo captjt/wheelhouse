@@ -32,7 +32,7 @@ Migrations live in db/migrations/ and must be reversible.
   },
 
   -- One to four reviewers, each blind to the others. Give an agent name
-  -- ("claude" or "codex"), or a table to name a reviewer, pass it flags, or
+  -- ("claude", "codex" or "agy"), or a table to name a reviewer, pass it flags, or
   -- give it its own review guide and effort. The first is the primary: the
   -- checker works in its worktree. A name is a-z, 0-9 and -, starts with a
   -- letter, is at most 12 long, and isn't "check".
@@ -40,13 +40,14 @@ Migrations live in db/migrations/ and must be reversible.
   -- Leaving `reviewers` out means { "codex" }, so set it.
   reviewers = {
     "claude",
-    -- A second, different view. Codex needs the codex CLI on your PATH.
+    -- A second, different view. Codex needs `codex`, Antigravity needs `agy` on your PATH.
     -- { name = "codex", agent = "codex" },
+    -- { name = "agy", agent = "agy" },
     -- { name = "claude-2", agent = "claude", guides = { review = "Read the tests first." } },
   },
 
   -- The checker merges the reviewers' drafts, checks every finding, and
-  -- rates the merge risk. "claude" or "codex", or a table:
+  -- rates the merge risk. "claude", "codex" or "agy", or a table:
   -- checker = { agent = "claude", extra_args = { "--model", "opus" }, effort = "high" },
   checker = "claude",
 
@@ -126,5 +127,6 @@ Migrations live in db/migrations/ and must be reversible.
   -- agents = {
   --   claude = { extra_args = { "--model", "opus" } },
   --   codex = { program = "/opt/homebrew/bin/codex" },
+  --   agy = { extra_args = { "--model", "gemini-4-neon" } },
   -- },
 }
