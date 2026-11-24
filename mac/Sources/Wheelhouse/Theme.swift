@@ -45,6 +45,8 @@ enum K {
     static let claude = Color(nsColor: rgb(0xd97757))
     static let codex = Color(nsColor: rgb(0x3b3d44))
     static let agy = Color(nsColor: rgb(0x4f6ef7))
+    /// Codex's, readable on a dark background too (for OpenAI in charts).
+    static let codexInk = dyn(0x52545c, 0xcdced3)
 
     static func live(_ s: LiveState?) -> Color {
         switch s {

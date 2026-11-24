@@ -2999,7 +2999,7 @@ code {
 }
 .rc-tiles {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 10px;
 }
 .rc-tile {
@@ -3031,6 +3031,111 @@ code {
 }
 .rc-delta.up {
   color: var(--working);
+}
+.rc {
+  /* Providers, as their agents' avatars have them. */
+  --p-anthropic: #d97757;
+  --p-openai: light-dark(oklch(38% 0.01 270), oklch(82% 0.01 270));
+  --p-google: #4f6ef7;
+}
+.rc-bar {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  margin: 12px 2px 0;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--recessed);
+}
+.rc-bar span {
+  flex-basis: 0;
+  min-width: 3px;
+}
+.rc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 8px 2px 0;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.rc-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rc-swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.rc-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 0 28px;
+  margin-top: 6px;
+}
+.rc-row,
+.rc-work {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.rc-row:last-child,
+.rc-work:last-child {
+  border-bottom: 0;
+}
+.rc-row-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.rc-row-name .muted {
+  margin-left: 4px;
+  font-size: 12px;
+}
+.rc-row-meta {
+  flex: none;
+  font-size: 12px;
+}
+.rc-row-num {
+  flex: none;
+  min-width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.rc-row-pct {
+  flex: none;
+  width: 36px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.rc-work-label {
+  flex: none;
+  width: 64px;
+  color: var(--text);
+}
+.rc-work-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--recessed);
+  overflow: hidden;
+}
+.rc-work-track span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
 }
 .rc-spark {
   position: relative;
@@ -3208,6 +3313,12 @@ code {
 @media (max-width: 760px) {
   .rc {
     padding: 14px 16px 40px;
+  }
+  .rc-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rc-row-meta {
+    display: none;
   }
   .rc-tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
