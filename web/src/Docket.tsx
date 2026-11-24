@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
+import { Person } from "./Team";
 import { agentLabel, agentOfEntry, agentsOn, appName, entryBlock, liveAgents, paneRuntime, runtimeOf, runtimeTitle, spawnRuntime, type CheckRun, type Docket, type DocketAgent, type DocketPage, type EntryView } from "./api";
 import { AppAvatar, HubAvatar, IconChevron, IconDown, IconDownload, IconShield, IconUp, LiveIcon, PersonAvatar, SessionIcon, StatusIcon, TitleText, liveWord, shortPath } from "./icons";
 import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
@@ -244,6 +245,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               {agoLong(d.updated_at)}
             </span>
           </Prop>
+          <SharedProps d={d} />
 
           <div className="props-section">Record</div>
           {ev && !verifying && ev.configured.length > 0 && open && (
@@ -902,3 +904,73 @@ const Composer = forwardRef<HTMLTextAreaElement, { onSend: (t: string) => Promis
     </div>
   );
 });
+
+/** A shared docket's people and teammates' agents, or where a local docket went when it was shared (docs/teams.md). */
+function SharedProps({ d }: { d: Docket }) {
+  const hub = useHub();
+  const toast = useToast();
+  const me = hub.state?.team?.workspace?.you;
+  if (d.shared_as)
+    return (
+      <Prop label="Shared as">
+        <a className="prop-btn" href={`#/d/${d.shared_as}`} title="This docket went on the workspace; it continues there">
+          <span className="prop-text">{d.shared_as}</span>
+        </a>
+      </Prop>
+    );
+  if (!d.owners?.length || !me) return null;
+  const on = d.owners.includes(me) || (d.members ?? []).includes(me);
+  const theirs = (d.agents ?? []).filter((a) => a.on && a.member && a.member !== me);
+  const join = () =>
+    post(`/api/team/dockets/${encodeURIComponent(d.id)}/people`, { handle: me, role: "member" }).then(
+      () => (toast(`You're on ${d.id}`), hub.reload()),
+      (e: Error) => toast(e.message, "error"),
+    );
+  return (
+    <>
+      <div className="props-section">Team</div>
+      <Prop label="Owners">
+        <span className="prop-val tm-people">
+          {d.owners.map((o) => (
+            <Person key={o} handle={o} you={o === me} />
+          ))}
+        </span>
+      </Prop>
+      <Prop label="Members">
+        {(d.members ?? []).length > 0 ? (
+          <span className="prop-val tm-people">
+            {(d.members ?? []).map((m) => (
+              <Person key={m} handle={m} you={m === me} />
+            ))}
+          </span>
+        ) : (
+          <span className="prop-val muted">None yet</span>
+        )}
+      </Prop>
+      {!on && (
+        <Prop label="">
+          <button className="prop-btn muted" onClick={join} title="Put yourself on this docket as a member">
+            <span className="prop-text">Join as a member</span>
+          </button>
+        </Prop>
+      )}
+      {theirs.length > 0 && (
+        <Prop label="Teammates">
+          <span className="prop-val">
+            {theirs.map((a) => (
+              <span key={`${a.member}/${a.block}`} className="prop-text" title={`On ${a.member}'s Mac. Reach them with wh send --to @${d.id}`}>
+                {a.member}'s {appName(a.app)}
+                {a.role ? ` · ${a.role}` : ""}
+              </span>
+            ))}
+          </span>
+        </Prop>
+      )}
+      {d.shared_from && (
+        <Prop label="From">
+          <span className="prop-val muted mono-s">{d.shared_from}</span>
+        </Prop>
+      )}
+    </>
+  );
+}

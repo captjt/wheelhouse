@@ -494,6 +494,41 @@ struct Properties: View {
                 }
                 prop("Created") { Text(stamp(d.createdAt)) }
                 prop("Updated") { Text(agoLong(d.updatedAt)) }
+                if let to = d.sharedAs {
+                    prop("Shared as") {
+                        Button(to) { nav.show(to, store: store) }.buttonStyle(.link)
+                            .help("This docket went on the workspace; it continues there")
+                    }
+                }
+                if !d.owners.isEmpty {
+                    let me = store.state?.team?.you ?? ""
+                    Text("Team").sectionLabel().padding(.top, 18).padding(.bottom, 6)
+                    prop("Owners") { HStack(spacing: 8) { ForEach(d.owners, id: \.self) { PersonChip(handle: $0, you: $0 == me) } } }
+                    prop("Members") {
+                        if d.members.isEmpty {
+                            Text("None yet").foregroundStyle(.secondary)
+                        } else {
+                            HStack(spacing: 8) { ForEach(d.members, id: \.self) { PersonChip(handle: $0, you: $0 == me) } }
+                        }
+                    }
+                    if !me.isEmpty, !d.owners.contains(me), !d.members.contains(me) {
+                        prop("") {
+                            Button("Join as a member") { Task { await store.act("/api/team/dockets/\(d.id)/people", ["handle": me, "role": "member"], done: "You're on \(d.id)") } }.buttonStyle(.link)
+                        }
+                    }
+                    let theirs = d.agents.filter { $0.on && $0.member != nil && $0.member != me }
+                    if !theirs.isEmpty {
+                        prop("Teammates") {
+                            VStack(alignment: .leading, spacing: 3) {
+                                ForEach(theirs) { a in
+                                    Text("\(a.member ?? "")'s \(appName(a.app))\(a.role.map { " · \($0)" } ?? "")")
+                                        .help("On \(a.member ?? "")'s Mac. Reach them with wh send --to @\(d.id)")
+                                }
+                            }
+                        }
+                    }
+                    if let from = d.sharedFrom { prop("From") { Text(from).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary) } }
+                }
 
                 Text("Record").sectionLabel().padding(.top, 18).padding(.bottom, 6)
                 prop("Check") {

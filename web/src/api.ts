@@ -101,6 +101,8 @@ export type DocketAgent = AgentRef & {
   live?: Live | null;
   /** Its message address, when live. */
   addr?: string | null;
+  /** On a shared docket, the workspace member whose agent it is; none for this hub's own dockets. */
+  member?: string | null;
 };
 
 export type Docket = {
@@ -141,6 +143,13 @@ export type Docket = {
   closed_on?: string | null;
   /** Its witnessed checks, the latest of each. */
   checks?: Record<string, { ok: boolean; head: string; at: string; required: boolean }> | null;
+  /** A local docket that was shared: the shared docket it went on as (`ACME-31`). */
+  shared_as?: string | null;
+  /** A shared docket: who shared it, and from which of their dockets (`jordan/D-12`). */
+  shared_from?: string | null;
+  /** A shared docket's owners and members, by handle. */
+  owners?: string[];
+  members?: string[];
 };
 
 /** One witnessed check: the hub ran it itself, at a commit (src/checks.rs). */
@@ -420,10 +429,33 @@ export type HubState = {
   rex: { connected: boolean; error?: string | null };
   /** Every runtime, followed or not (older hubs leave it out). */
   runtimes?: RuntimeLink[];
+  /** The workspace this hub is a member of (docs/teams.md); `workspace` is null when it's in none. */
+  team?: TeamStatus;
   dockets: Docket[];
   asks: Ask[];
   agents: (Live & { docket?: string | null; role?: string | null })[];
   attention?: Attention[];
+};
+
+/** This hub's workspace, as `/api/team` and `/api/state` serve it (src/team/member.rs `status`). */
+export type TeamStatus = {
+  workspace: { name: string; prefix: string; url: string; id: string; you: string } | null;
+  online?: boolean;
+  error?: string | null;
+  members?: { handle: string; name: string; role: "admin" | "member"; login?: string | null; active: boolean; joined_at: string; you: boolean }[];
+  dockets?: {
+    id: string;
+    title?: string | null;
+    status?: Docket["status"] | null;
+    owners: string[];
+    members: string[];
+    agents?: { member?: string | null; app: string; pane: string; role?: string | null }[] | null;
+    halted?: string | null;
+  }[];
+  aliases?: Record<string, string>;
+  outbox?: { n: number; docket: string; status: "queued" | "held" | "refused"; why?: string | null; at: string }[];
+  halted?: Record<string, string>;
+  log?: { entries: number; head: string };
 };
 
 export type Mark = "said" | "witnessed" | "checkable";

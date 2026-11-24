@@ -5,7 +5,8 @@ import { connLine, type Docket, type Flavor } from "./api";
 import { DocketScreen } from "./Docket";
 import { InboxView, inboxItems } from "./Inbox";
 import { keepOnScreen } from "./viewport";
-import { IconActive, IconAgents, IconBuild, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSettings, IconSun, Logo, SessionIcon } from "./icons";
+import { IconActive, IconAgents, IconBuild, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSettings, IconSun, IconTeam, Logo, SessionIcon } from "./icons";
+import { TeamView } from "./Team";
 import { ReviewsView } from "./Reviews";
 import { RecapView } from "./Recap";
 import { BuildsView } from "./Builds";
@@ -95,6 +96,7 @@ function RouteView({ route }: { route: string[] }) {
   if (page === "reviews") return <ReviewsView />;
   if (page === "recap") return <RecapView />;
   if (page === "builds") return <BuildsView />;
+  if (page === "team") return <TeamView />;
   if (page === "settings") return <SettingsView section={route[1]} />;
   if (page === "session" && route[1]) {
     const s = route[1];
@@ -178,7 +180,7 @@ function App() {
   useEffect(() => {
     if (page === "d") return;
     const path = `/${route.map(encodeURIComponent).join("/")}` || "/view/active";
-    const titles: Record<string, string> = { inbox: "Inbox", reviews: "Reviews", builds: "Builds", recap: "Recap", agents: "Agents", settings: "Settings" };
+    const titles: Record<string, string> = { inbox: "Inbox", reviews: "Reviews", builds: "Builds", recap: "Recap", agents: "Agents", team: "Team", settings: "Settings" };
     const views: Record<string, string> = { active: "Active", all: "All dockets", done: "Done" };
     const title = page === "session" ? route[1] : page === "view" ? views[route[1] || "active"] : titles[page];
     if (!title) return;
@@ -327,6 +329,7 @@ function App() {
           {item("/view/all", "All dockets", <IconLayers size={15} />)}
           {item("/view/done", "Done", <IconDone size={15} />)}
           {item("/agents", "Agents", <IconAgents size={15} />, counts.agents)}
+          {hub.state?.team?.workspace && item("/team", hub.state.team.workspace.name, <IconTeam size={15} />, hub.state.team.dockets?.length, !hub.state.team.online || (hub.state.team.outbox ?? []).some((o) => o.status !== "queued"))}
           {item("/recap", "Recap", <IconChart size={15} />)}
         </nav>
         {sessions.length > 0 && (
@@ -407,6 +410,7 @@ function PhoneApp({
   // The app stays on what's visible of the screen (viewport.ts).
   useEffect(() => keepOnScreen(), []);
   const page = route[0] || "view";
+  const workspace = useHub().state?.team?.workspace;
   usePullToRefresh(base, ptr, !docket, () => {
     window.dispatchEvent(new Event("wh:refresh"));
     return page === "reviews" ? post("/api/review/check", {}).catch(() => {}) : Promise.resolve();
@@ -444,6 +448,7 @@ function PhoneApp({
             { path: "/view/all", label: "All dockets", icon: <IconLayers size={18} /> },
             { path: "/view/done", label: "Done", icon: <IconDone size={18} /> },
             { path: "/agents", label: "Agents", icon: <IconAgents size={18} />, count: agents },
+            ...(workspace ? [{ path: "/team", label: workspace.name, icon: <IconTeam size={18} /> }] : []),
             { path: "/recap", label: "Recap", icon: <IconChart size={18} /> },
             { path: "/settings", label: "Settings", icon: <IconSettings size={18} /> },
           ]}
