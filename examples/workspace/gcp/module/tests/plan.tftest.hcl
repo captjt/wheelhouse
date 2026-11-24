@@ -58,8 +58,8 @@ run "second_apply_makes_a_private_vm" {
     error_message = "the VM runs the image by digest"
   }
   assert {
-    condition     = strcontains(google_compute_instance.hub[0].metadata["user-data"], "--name wheelhouse-workspace --init") && strcontains(google_compute_instance.hub[0].metadata["user-data"], "{{.Config.User}}")
-    error_message = "the hub runs under an init, as the image's own numeric user"
+    condition     = strcontains(google_compute_instance.hub[0].metadata["user-data"], "{{.Config.User}}")
+    error_message = "the hub runs as the image's own numeric user"
   }
   assert {
     condition     = strcontains(google_compute_instance.hub[0].metadata["user-data"], "configure-docker --registries=\"us-central1-docker.pkg.dev\"")

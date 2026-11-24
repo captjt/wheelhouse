@@ -117,10 +117,11 @@ Two things to know when choosing operators:
   [tailscale-policy.hujson](../examples/workspace/gcp/tailscale-policy.hujson)
   into the policy file: `group:wheelhouse` with each member's login, the
   tag owned by admins, one grant to `tcp:443` on the tag, and tests
-  that fail if anything opens more. If your policy still has the default
-  rule that lets everyone reach everything, the hub is still safe (the
-  127.0.0.2 binding), but take that rule out or narrow it: the tests
-  catch it.
+  that fail if anything opens more. **Take out or narrow the default rule
+  that lets everyone reach everything.** The hub itself stays safe without
+  that (the 127.0.0.2 binding), but Tailscale forwards every other port
+  to the VM's loopback, so the whole tailnet could reach COS's SSH
+  server, past IAP and its audit log. The tests fail until it's gone.
 - **Organization policies:** it already satisfies the usual ones (no
   external IPs, OS Login required, Shielded VM required, restricted
   regions if `region` is allowed).
@@ -179,7 +180,7 @@ From the repo's root, at the commit the team's Macs run:
 
 ```sh
 REPO=$(terraform -chdir="$HOME/wheelhouse-gcp" output -raw image_repository)
-TAG=$(git rev-parse --short HEAD)
+TAG=$(git rev-parse --short HEAD)-amd64     # tags can't move: one per commit and platform
 gcloud auth configure-docker "${REPO%%/*}"
 docker buildx build --platform linux/amd64 -f examples/workspace/Dockerfile -t "$REPO:$TAG" --push .
 gcloud artifacts docker images describe "$REPO:$TAG" --format 'value(image_summary.fully_qualified_digest)'
@@ -189,7 +190,7 @@ The last line prints the image by digest. On an Apple silicon Mac,
 building for `linux/amd64` runs under emulation and takes a while; an Arm
 `machine_type` (`c4a-standard-1`, or `t2a-standard-1` where it's offered)
 boots COS for arm64 instead, and you build with `--platform linux/arm64`,
-natively. The module picks Hyperdisk for C4A and N4A, which take nothing
+natively (tag it `…-arm64`). The module picks Hyperdisk for C4A and N4A, which take nothing
 else.
 
 ### 5. Second apply: the VM
