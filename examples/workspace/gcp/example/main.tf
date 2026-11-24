@@ -76,6 +76,10 @@ output "image_repository" {
   value = module.workspace.image_repository
 }
 
+output "tailscale_auth_key_secret" {
+  value = module.workspace.tailscale_auth_key_secret
+}
+
 output "add_tailscale_auth_key" {
   value = module.workspace.add_tailscale_auth_key
 }

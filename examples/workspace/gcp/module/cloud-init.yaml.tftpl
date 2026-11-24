@@ -46,6 +46,8 @@ write_files:
       [ "$rc" -lt 4 ] || { echo "fsck couldn't repair the data disk (exit $rc): not mounting it" >&2; exit 1; }
       mkdir -p "$mnt"
       mount -t ext4 -o nosuid,nodev,noexec,discard "$dev" "$mnt"
+      # A disk made bigger (data_disk_size_gb) grows its filesystem, online.
+      resize2fs "$dev" || echo "couldn't grow the data disk's filesystem: going on at its old size" >&2
       install -d -m 0700 -o root -g root "$mnt/tailscale"
       install -d -m 0700 "$mnt/workspace"
 
@@ -179,7 +181,7 @@ write_files:
       ExecStartPre=/bin/systemctl start wh-data.service
       ExecStartPre=/bin/bash /etc/wheelhouse/workspace-pre.sh
       ExecStartPre=-/usr/bin/docker rm -f wheelhouse-workspace
-      ExecStart=/usr/bin/docker run --rm --name wheelhouse-workspace --init \
+      ExecStart=/usr/bin/docker run --rm --name wheelhouse-workspace \
         --read-only --cap-drop ALL --security-opt no-new-privileges:true \
         --pids-limit 256 --memory 1g --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
         -p 127.0.0.2:7700:7700 -e WH_WORKSPACE_HTTP=0.0.0.0:7700 \

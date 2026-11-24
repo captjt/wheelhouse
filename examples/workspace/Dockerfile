@@ -4,8 +4,9 @@
 # VM on your tailnet (docs/teams.md). From the repo's root:
 #
 #   docker build -f examples/workspace/Dockerfile -t wheelhouse-workspace .
-#   docker run -d --name wheelhouse-workspace --restart unless-stopped --init \
-#     --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+#   docker run -d --name wheelhouse-workspace --restart unless-stopped \
+#     --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+#     --cap-drop ALL --security-opt no-new-privileges:true \
 #     -p 127.0.0.1:7700:7700 -v wheelhouse-workspace:/var/lib/wheelhouse-workspace \
 #     wheelhouse-workspace
 #   tailscale serve --bg 7700
@@ -27,12 +28,12 @@
 #   2 MB of CA certificates, tzdata and a passwd entry. No libc, no shell,
 #   no package manager: nothing to exploit or patch but wh itself. The
 #   build fails if the binary links anything dynamically. It runs as
-#   uid 65532 (nonroot), never root, and needs no writable path but its
-#   state, so it runs with --read-only and every capability dropped.
+#   uid 65532 (nonroot), never root. It writes only its state and
+#   SQLite's temporary files (a small tmpfs at /tmp), so it runs with
+#   --read-only and every capability dropped.
 #   RUNTIME_IMAGE=cgr.dev/chainguard/static@sha256:… (same uid) or
 #   scratch (no CA certificates, no /tmp) work too.
-# - --init, because wh doesn't handle SIGTERM itself, and as PID 1 it
-#   would wait out docker stop's 10 seconds.
+# - wh handles SIGTERM itself, so docker stop is prompt with no --init.
 #
 # Before this image, the hub ran as uid 999. An existing state volume
 # needs its owner changed once:
@@ -64,6 +65,10 @@ COPY guides/ guides/
 COPY skills/ skills/
 COPY --from=web /src/web/dist web/dist
 ENV CARGO_PROFILE_RELEASE_STRIP=symbols
+# COPY keeps each file's mtime, and cargo trusts mtimes against the cached
+# target folder: touch the sources so a checkout older than the cache's
+# last build is still built, never served from it.
+RUN find src briefs guides skills web/dist build.rs Cargo.toml Cargo.lock -exec touch {} +
 RUN --mount=type=cache,id=wh-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
   --mount=type=cache,id=wh-target-musl,target=/src/target,sharing=locked \
   cargo build --release --locked \
