@@ -169,6 +169,7 @@ impl Roster {
                 ensure!(wid.len() == 32 && hex::decode(wid).is_some(), "a workspace id is 16 bytes of hex");
                 ensure!(!s(d, "name")?.trim().is_empty() && s(d, "name")?.len() <= 64, "a workspace needs a name of at most 64 characters");
                 ensure!(prefix_ok(s(d, "prefix")?), "a prefix is 2 to 10 capital letters and digits, starting with a letter");
+                ensure!(e.docket == format!("{}-0", s(d, "prefix")?), "the member log is {}-0", s(d, "prefix")?);
                 let h = s(d, "handle")?;
                 ensure!(handle_ok(h), "{h} isn't a handle: lowercase letters, digits, - and _, starting with a letter");
                 ensure!(e.actor.id == h, "the creator writes as {h}");
@@ -248,7 +249,7 @@ impl Roster {
                     h.clone(),
                     Member {
                         handle: h.clone(),
-                        name: st("display"),
+                        name: st("name_shown"),
                         login: d["login"].as_str().map(str::to_string),
                         key: keyid.into(),
                         role: "admin".into(),

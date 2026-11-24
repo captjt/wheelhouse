@@ -60,7 +60,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Run the hub: follow Rex, keep the record, serve the app.
-    Serve,
+    /// --workspace runs a workspace hub instead (docs/teams.md).
+    Serve {
+        #[arg(long)]
+        workspace: bool,
+    },
     /// Open dockets, newest first (all of them with --all).
     Ls {
         #[arg(long)]
@@ -71,11 +75,20 @@ enum Cmd {
         #[arg(add = complete::dockets())]
         docket: String,
     },
-    /// Open a docket by hand, or from a Linear issue (--linear ENG-142).
+    /// Open a docket by hand, or from a Linear issue (--linear ENG-142);
+    /// --team opens it on your workspace, shared.
     New {
         title: Option<String>,
         #[arg(long)]
         linear: Option<String>,
+        #[arg(long, conflicts_with = "linear")]
+        team: bool,
+    },
+    /// Teams: your workspace, its members and shared dockets (docs/teams.md).
+    /// Alone, how it is: connected, members, shared dockets, the outbox.
+    Team {
+        #[command(subcommand)]
+        cmd: Option<TeamCmd>,
     },
     /// Link a Linear issue to a docket.
     Link {
@@ -335,11 +348,101 @@ enum Cmd {
     },
 }
 
+#[derive(Subcommand)]
+enum TeamCmd {
+    /// Make a workspace on a workspace hub (wh serve --workspace printed
+    /// its setup code), with you as its first admin.
+    Create {
+        name: String,
+        /// What its shared dockets are numbered with: ACME for ACME-12.
+        #[arg(long)]
+        prefix: String,
+        /// The workspace hub's address: https://ws.tail1234.ts.net
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        setup: String,
+        /// Your handle in it (lowercase). Defaults to your user name.
+        #[arg(long)]
+        handle: Option<String>,
+        /// Your Tailscale login, when this Mac's Tailscale isn't up to say.
+        #[arg(long)]
+        login: Option<String>,
+    },
+    /// Invite someone: prints a code to hand them for `wh team join`.
+    Invite {
+        handle: String,
+        #[arg(long)]
+        admin: bool,
+        /// How long the code works (default 24).
+        #[arg(long)]
+        hours: Option<i64>,
+    },
+    /// Join a workspace with an invite code.
+    Join {
+        code: String,
+        #[arg(long)]
+        login: Option<String>,
+        /// Your name, as teammates see it.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Who's in the workspace.
+    Members,
+    /// Share a docket of yours with the workspace: it goes on as ACME-n,
+    /// with its history, and you as its first owner.
+    Share {
+        #[arg(add = complete::dockets())]
+        docket: String,
+    },
+    /// Add someone to a shared docket (or yourself), make them an owner,
+    /// take them off it, or say who answers its agents' questions.
+    People {
+        docket: String,
+        handle: Option<String>,
+        #[arg(long)]
+        owner: bool,
+        #[arg(long)]
+        remove: bool,
+        /// owners (the agent's own person and the owners) or members.
+        #[arg(long)]
+        answer: Option<String>,
+    },
+    /// Let a teammate's agents' messages into your panes on a shared docket
+    /// without asking you (--off to ask again); --private-prompts on|off
+    /// keeps your prompts on it to yourself.
+    Trust {
+        docket: String,
+        teammate: Option<String>,
+        #[arg(long)]
+        off: bool,
+        #[arg(long)]
+        private_prompts: Option<String>,
+    },
+    /// Make a member an admin, or an admin a member.
+    Role { handle: String, role: String },
+    /// Take a member out of the workspace (admins), from now on.
+    Remove {
+        handle: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Leave the workspace yourself.
+    Leave,
+    /// Send an entry the outbox held back (it looked like a secret).
+    Send { n: i64 },
+    /// Drop an entry from the outbox, held or refused.
+    Drop { n: i64 },
+    /// Send the outbox and take in what's new, now.
+    Sync,
+}
+
 fn main() {
     complete::answer(Cli::command);
     let cli = Cli::parse();
     let result = match cli.cmd {
-        Some(Cmd::Serve) => serve(),
+        Some(Cmd::Serve { workspace: false }) => serve(),
+        Some(Cmd::Serve { workspace: true }) => team::workspace::serve(),
         Some(Cmd::Hook { agent, event }) => hooks::run(&agent, &event),
         Some(Cmd::Hooks { action }) => hooks::cli(action.as_deref()),
         Some(Cmd::Up) => service::up(),
@@ -353,7 +456,12 @@ fn main() {
         Some(Cmd::Ls { all }) => ls(all),
         None => ls(false),
         Some(Cmd::Show { docket }) => show(&normalize(&docket)),
-        Some(Cmd::New { title, linear }) => new_docket(title, linear),
+        Some(Cmd::New { title, linear, team: false }) => new_docket(title, linear),
+        Some(Cmd::New { title, team: true, .. }) => {
+            let t = title.ok_or_else(|| anyhow::anyhow!("a title: wh new --team \"Rate limits\""));
+            t.and_then(|t| client::json("POST", "/api/team/new", Some(&json!({ "title": t })))).map(|v| println!("{}", v["docket"].as_str().unwrap_or("?")))
+        }
+        Some(Cmd::Team { cmd }) => team_cmd(cmd),
         Some(Cmd::Link { docket, issue }) => {
             let d = normalize(&docket);
             client::json("POST", &format!("/api/dockets/{d}/linear"), Some(&json!({ "key": issue }))).map(|_| println!("{d} linked to {issue}"))
@@ -453,16 +561,13 @@ fn main() {
         Some(Cmd::Note { docket, text }) => {
             let block = crate::runtime::pane_from_env();
             let d = normalize(&docket);
-            client::json("POST", &format!("/api/dockets/{d}/note"), Some(&json!({ "body": text, "block": block }))).map(|v| {
-                println!("{d} #{}", v["seq"]);
-            })
+            client::json("POST", &format!("/api/dockets/{d}/note"), Some(&json!({ "body": text, "block": block }))).map(|v| println!("{}", placed(&d, &v)))
         }
         Some(Cmd::Attach { what, title, docket }) => attach(&what, title, docket),
         Some(Cmd::Set { docket, title, status, anyway, reason }) => {
             let d = normalize(&docket);
-            client::json("POST", &format!("/api/dockets/{d}/set"), Some(&json!({ "title": title, "status": status, "anyway": anyway, "reason": reason }))).map(|v| {
-                println!("{d} #{}", v["seq"]);
-            })
+            client::json("POST", &format!("/api/dockets/{d}/set"), Some(&json!({ "title": title, "status": status, "anyway": anyway, "reason": reason })))
+                .map(|v| println!("{}", placed(&d, &v)))
         }
         Some(Cmd::Check { docket, wait }) => check(&normalize(&docket), wait),
         Some(Cmd::Hold { docket, reason, off }) => {
@@ -486,6 +591,150 @@ fn main() {
     if let Err(e) = result {
         eprintln!("wh: {e:#}");
         std::process::exit(1);
+    }
+}
+
+/// Where an entry went: its place, or the outbox for a shared docket.
+fn placed(d: &str, v: &Value) -> String {
+    match v["seq"].as_i64() {
+        Some(0) => format!("{d}: sent to the workspace"),
+        Some(n) => format!("{d} #{n}"),
+        None => d.to_string(),
+    }
+}
+
+fn team_cmd(cmd: Option<TeamCmd>) -> Result<()> {
+    let call = |path: &str, body: Value| client::json_within("POST", path, Some(&body), std::time::Duration::from_secs(60));
+    match cmd {
+        None => {
+            let v = client::json("GET", "/api/team", None)?;
+            print_team(&v);
+        }
+        Some(TeamCmd::Create { name, prefix, url, setup, handle, login }) => {
+            let handle = handle.unwrap_or_else(|| std::env::var("USER").unwrap_or_default().to_ascii_lowercase());
+            let v = call("/api/team/create", json!({ "name": name, "prefix": prefix, "url": url, "setup": setup, "handle": handle, "login": login }))?;
+            println!("Made {name} ({}), with you as {handle}, its first admin. Invite someone: wh team invite HANDLE", v["prefix"].as_str().unwrap_or(&prefix));
+        }
+        Some(TeamCmd::Invite { handle, admin, hours }) => {
+            let v = call("/api/team/invite", json!({ "handle": handle, "admin": admin, "hours": hours }))?;
+            println!("An invite for {handle}, good for {} hours. Hand them this, and they run wh team join with it:\n", v["hours"]);
+            println!("{}", v["code"].as_str().unwrap_or("?"));
+            println!("\nIt's a secret: whoever has it can join as {handle} until it's used.");
+        }
+        Some(TeamCmd::Join { code, login, name }) => {
+            let v = call("/api/team/join", json!({ "code": code, "login": login, "name": name }))?;
+            println!(
+                "You're in {} as {}. Its shared dockets are ACME-style: {}-n. wh team shows them",
+                v["workspace"].as_str().unwrap_or("?"),
+                v["handle"].as_str().unwrap_or("?"),
+                v["prefix"].as_str().unwrap_or("?")
+            );
+        }
+        Some(TeamCmd::Members) => {
+            let v = client::json("GET", "/api/team", None)?;
+            for m in v["members"].as_array().into_iter().flatten() {
+                println!(
+                    "  {:<12} {:<7} {}{}{}",
+                    m["handle"].as_str().unwrap_or(""),
+                    m["role"].as_str().unwrap_or(""),
+                    m["login"].as_str().unwrap_or(""),
+                    if m["active"] == false { "  (removed)" } else { "" },
+                    if m["you"] == true { "  (you)" } else { "" }
+                );
+            }
+        }
+        Some(TeamCmd::Share { docket }) => {
+            let v = call("/api/team/share", json!({ "docket": normalize(&docket) }))?;
+            println!(
+                "{} is shared as {}, with its history. You're its owner: wh team people {} HANDLE adds someone",
+                v["from"].as_str().unwrap_or("?"),
+                v["docket"].as_str().unwrap_or("?"),
+                v["docket"].as_str().unwrap_or("?")
+            );
+        }
+        Some(TeamCmd::People { docket, handle, owner, remove, answer }) => {
+            let d = enc(docket.trim());
+            call(&format!("/api/team/dockets/{d}/people"), json!({ "handle": handle, "role": if owner { "owner" } else { "member" }, "remove": remove, "answer": answer }))?;
+            println!("{d}: sent to the workspace");
+        }
+        Some(TeamCmd::Trust { docket, teammate, off, private_prompts }) => {
+            let d = enc(docket.trim());
+            let pp = match private_prompts.as_deref() {
+                None => None,
+                Some("on") => Some(true),
+                Some("off") => Some(false),
+                Some(o) => bail!("--private-prompts on or off, not {o}"),
+            };
+            call(&format!("/api/team/dockets/{d}/trust"), json!({ "teammate": teammate, "on": !off, "private_prompts": pp }))?;
+            println!("{d}: sent to the workspace");
+        }
+        Some(TeamCmd::Role { handle, role }) => {
+            call("/api/team/role", json!({ "handle": handle, "role": role }))?;
+            println!("{handle} is {role} now");
+        }
+        Some(TeamCmd::Remove { handle, reason }) => {
+            call("/api/team/remove", json!({ "handle": handle, "reason": reason }))?;
+            println!("{handle} is out of the workspace from now on; what they wrote before still checks");
+        }
+        Some(TeamCmd::Leave) => {
+            let v = client::json("GET", "/api/team", None)?;
+            let me = v["workspace"]["you"].as_str().ok_or_else(|| anyhow::anyhow!("this hub isn't in a workspace"))?.to_string();
+            call("/api/team/remove", json!({ "handle": me, "reason": "left" }))?;
+            println!("You left {}", v["workspace"]["name"].as_str().unwrap_or("the workspace"));
+        }
+        Some(TeamCmd::Send { n }) => {
+            call(&format!("/api/team/outbox/{n}"), json!({ "action": "send" }))?;
+            println!("#{n} goes to the workspace");
+        }
+        Some(TeamCmd::Drop { n }) => {
+            call(&format!("/api/team/outbox/{n}"), json!({ "action": "drop" }))?;
+            println!("#{n} dropped");
+        }
+        Some(TeamCmd::Sync) => {
+            let v = call("/api/team/sync", json!({}))?;
+            print_team(&v);
+        }
+    }
+    Ok(())
+}
+
+fn print_team(v: &Value) {
+    let w = &v["workspace"];
+    if w.is_null() {
+        println!("This hub isn't in a workspace. Join one with an invite: wh team join CODE (docs/teams.md)");
+        return;
+    }
+    println!(
+        "{} ({}) at {} · you're {} · {}",
+        w["name"].as_str().unwrap_or("?"),
+        w["prefix"].as_str().unwrap_or("?"),
+        w["url"].as_str().unwrap_or("?"),
+        w["you"].as_str().unwrap_or("?"),
+        if v["online"] == true { "connected".to_string() } else { format!("not connected: {}", v["error"].as_str().unwrap_or("not yet")) }
+    );
+    let members: Vec<&str> = v["members"].as_array().into_iter().flatten().filter(|m| m["active"] != false).filter_map(|m| m["handle"].as_str()).collect();
+    println!("members  {}", members.join(", "));
+    for d in v["dockets"].as_array().into_iter().flatten() {
+        let owners: Vec<&str> = d["owners"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        let agents = d["agents"].as_array().map_or(0, Vec::len);
+        println!(
+            "  {:<9} {:<11} {}  · owners {}{}{}",
+            d["id"].as_str().unwrap_or(""),
+            d["status"].as_str().unwrap_or("").replace('_', " "),
+            truncate(d["title"].as_str().unwrap_or(""), 44),
+            owners.join(", "),
+            if agents > 0 { format!(" · {agents} agent{}", if agents == 1 { "" } else { "s" }) } else { String::new() },
+            d["halted"].as_str().map(|h| format!("  ✗ not followed: {h}")).unwrap_or_default()
+        );
+    }
+    for o in v["outbox"].as_array().into_iter().flatten() {
+        println!(
+            "  outbox #{} {} {}{}",
+            o["n"],
+            o["docket"].as_str().unwrap_or(""),
+            o["status"].as_str().unwrap_or(""),
+            o["why"].as_str().map(|w| format!(": {w}")).unwrap_or_default()
+        );
     }
 }
 
@@ -646,6 +895,7 @@ fn serve() -> Result<()> {
         supervise("Review", shared.clone(), review::watch::run);
         supervise("Build", shared.clone(), build::watch::run);
         supervise("logs", shared.clone(), service::trim_logs);
+        supervise("the workspace", shared.clone(), team::member::follow);
         server::serve(shared).await
     })
 }
@@ -1024,7 +1274,7 @@ fn intent(d: &str, text: Option<String>) -> Result<()> {
             if v["unchanged"].as_bool() == Some(true) {
                 println!("{d}: the intent is already that")
             } else {
-                println!("{d} #{}", v["seq"])
+                println!("{}", placed(d, &v))
             }
             Ok(())
         }

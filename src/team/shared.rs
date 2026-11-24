@@ -66,6 +66,12 @@ impl People {
                     }
                     return;
                 };
+                // Joining a docket you're already on changes nothing: a
+                // self-join that lands after you were made an owner keeps you one.
+                let self_join = e.actor.id == h && d["action"] != "remove" && d["role"] != "owner";
+                if self_join && self.on(&h) {
+                    return;
+                }
                 match (d["action"].as_str(), d["role"].as_str()) {
                     (Some("remove"), _) => {
                         self.owners.remove(&h);
@@ -85,12 +91,14 @@ impl People {
                 }
             }
             "trust" => {
-                let (Some(t), who) = (d["teammate"].as_str(), e.actor.id.clone()) else { return };
-                let pair = (who.clone(), t.to_string());
-                if d["on"] == false {
-                    self.trust.remove(&pair);
-                } else {
-                    self.trust.insert(pair);
+                let who = e.actor.id.clone();
+                if let Some(t) = d["teammate"].as_str() {
+                    let pair = (who.clone(), t.to_string());
+                    if d["on"] == false {
+                        self.trust.remove(&pair);
+                    } else {
+                        self.trust.insert(pair);
+                    }
                 }
                 if let Some(p) = d["private_prompts"].as_bool() {
                     if p {
