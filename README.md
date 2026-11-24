@@ -194,7 +194,8 @@ every engineer's hub keeps a copy it checks entry by entry.
 </table>
 
 [docs/teams-guide.md](docs/teams-guide.md) is how it works day to day,
-[docs/teams-start.md](docs/teams-start.md) gets a workspace running, and
+[docs/teams-start.md](docs/teams-start.md) gets a workspace running,
+[docs/teams-gcp.md](docs/teams-gcp.md) runs its hub on GCP with Terraform, and
 [docs/teams.md](docs/teams.md) is the design and the protocol.
 
 ## Requirements
