@@ -43,12 +43,6 @@ pub fn http_addr() -> Result<std::net::SocketAddr> {
     v.parse().with_context(|| format!("WH_WORKSPACE_HTTP={v} isn't an address"))
 }
 
-/// Whether requests must carry a Tailscale login. Only the end-to-end tests
-/// turn it off, on loopback.
-fn logins_required() -> bool {
-    std::env::var("WH_WORKSPACE_LOGIN").map(|v| v != "off").unwrap_or(true)
-}
-
 pub struct Ws {
     store: Store,
     /// The roster, once the workspace exists.
@@ -212,10 +206,8 @@ impl Ws {
         let req = Req { method: method.as_str(), path, body, key: h("x-wh-key"), time: h("x-wh-time"), sig: h("x-wh-sig") };
         let keyid = self.replay.check(&roster.id, &req, now_ms())?;
         let m = roster.member_by_key(&keyid).ok_or_else(|| anyhow!("{} isn't an active member's key", roster::short(&keyid)))?;
-        if logins_required() {
-            let login = h("tailscale-user-login").ok_or_else(|| anyhow!("no Tailscale login: reach the workspace through tailscale serve"))?;
-            ensure!(m.login.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(login)), "the Tailscale login {login} isn't {}'s", m.handle);
-        }
+        let login = h("tailscale-user-login").ok_or_else(|| anyhow!("no Tailscale login: reach the workspace through tailscale serve"))?;
+        ensure!(m.login.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(login)), "the Tailscale login {login} isn't {}'s", m.handle);
         Ok(m.handle.clone())
     }
 }
@@ -240,7 +232,7 @@ pub fn router(s: WsShared) -> Router {
 }
 
 async fn hello(State(s): State<WsShared>, headers: HeaderMap) -> ApiResult {
-    if logins_required() && headers.get("tailscale-user-login").is_none() {
+    if headers.get("tailscale-user-login").is_none() {
         return Err(refuse(StatusCode::FORBIDDEN, "reach the workspace through tailscale serve"));
     }
     let ws = s.lock();
@@ -271,10 +263,8 @@ async fn create(State(s): State<WsShared>, headers: HeaderMap, Json(b): Json<Cre
             }
             ensure!(!b.entries.is_empty() && b.entries.len() <= 16, "a workspace, then at most 15 keys");
             let (first, _) = open_envelope(&b.entries[0])?;
-            if logins_required() {
-                let l = login.as_deref().ok_or_else(|| anyhow!("no Tailscale login"))?;
-                ensure!(first.data["login"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(l)), "the creator's login must be the one Tailscale sees: {l}");
-            }
+            let l = login.as_deref().ok_or_else(|| anyhow!("no Tailscale login: reach the workspace through tailscale serve"))?;
+            ensure!(first.data["login"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(l)), "the creator's login must be the one Tailscale sees: {l}");
             let mut n = 0;
             for env in &b.entries {
                 ws.order_log(env)?;
@@ -313,10 +303,8 @@ async fn join(State(s): State<WsShared>, headers: HeaderMap, Json(b): Json<JoinB
             ensure!(!b.entries.is_empty() && b.entries.len() <= 16, "a join, then at most 15 keys");
             let (first, _) = open_envelope(&b.entries[0])?;
             ensure!(first.kind == "join", "a join starts with `join`");
-            if logins_required() {
-                let l = login.as_deref().ok_or_else(|| anyhow!("no Tailscale login"))?;
-                ensure!(first.data["login"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(l)), "the login you join with must be the one Tailscale sees: {l}");
-            }
+            let l = login.as_deref().ok_or_else(|| anyhow!("no Tailscale login: reach the workspace through tailscale serve"))?;
+            ensure!(first.data["login"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(l)), "the login you join with must be the one Tailscale sees: {l}");
             if let Err(e) = ws.order_log(&b.entries[0]) {
                 ws.failed();
                 return Err(e);
@@ -495,10 +483,6 @@ pub fn serve() -> Result<()> {
             say!("  wh team create NAME --prefix ACME --url https://THIS-MACHINE.ts.net --setup {code}");
         }
         _ => {}
-    }
-    if !logins_required() {
-        ensure!(addr.ip().is_loopback(), "WH_WORKSPACE_LOGIN=off only on loopback");
-        say!("Tailscale logins aren't checked (WH_WORKSPACE_LOGIN=off): for tests only");
     }
     let (tx, _) = tokio::sync::watch::channel(0u64);
     let shared = WsShared { ws: Arc::new(Mutex::new(ws)), changes: Arc::new(tx) };

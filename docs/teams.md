@@ -238,15 +238,30 @@ signature is accepted once.
 
 ## Running a workspace hub
 
-- **Linux:** `wh serve --workspace` under systemd (`examples/wheelhouse-workspace.service`),
+- **Linux, in a container:** `examples/workspace/Dockerfile` builds an
+  image with nothing but `wh`; run it with its state on a volume and its
+  port on the host's loopback, then `tailscale serve --bg 7700`. The
+  Dockerfile's head has the commands.
+- **Linux, under systemd:** `examples/workspace/wheelhouse-workspace.service`,
   with `WH_STATE=/var/lib/wheelhouse-workspace`, then
   `tailscale serve --bg 7700`.
 - **A Mac:** `wh up --workspace`, a LaunchAgent beside (never instead of)
-  the daily hub, then `tailscale serve --bg 7700`.
+  the daily hub, with its own state in `~/.local/state/wheelhouse-workspace`,
+  then `tailscale serve --bg 7700`.
 - The workspace hub listens on `127.0.0.1:7700` (`WH_WORKSPACE_HTTP`). It
   answers only requests that came through `tailscale serve`, carrying a
-  member's login, unless `WH_WORKSPACE_LOGIN=off`, which only the
-  end-to-end tests set.
+  member's login. Its first start prints the setup code, and keeps it in
+  `setup-code` in its state folder until a workspace is made.
+- Members' hubs must run on user-owned devices: Tailscale gives a tagged
+  device no login.
+
+### Testing it
+
+`scripts/team-e2e.sh` (in `just e2e`) runs a workspace hub and two
+members' hubs on one Mac, each member reaching the workspace hub through
+`scripts/fake-tailscale-serve`, a stand-in that sets their login the way
+Serve does. `WS_IMAGE=wheelhouse-workspace:dev scripts/team-e2e.sh` runs
+the same steps against the workspace hub in its Linux container.
 
 ## Threat model
 
