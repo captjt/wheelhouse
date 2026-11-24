@@ -134,16 +134,18 @@ function PaneSheet({ id, block, onClose }: { id: string; block?: string; onClose
   const rt = agent?.block ? runtimeTitle(runtimeOf(agent.block)) : paneRuntime(d);
   const why = gone ? `${app} isn't on ${id} any more.` : state === "error" ? `${app} stopped with an error.` : !state ? `The pane isn't open in ${rt}.` : null;
   const queues = state === "working" || state === "starting" || state === "blocked";
-  const send = () => {
+  // While it works: Queue for the turn's end, or Send now to steer it.
+  const canSteer = (state === "working" || state === "starting") && !!(screen?.live ?? dLive)?.steer;
+  const send = (steer = false) => {
     const t = text.trim();
-    if (!t || busy || why) return;
+    if (!t || busy || why || (steer && !canSteer)) return;
     setBusy(true);
-    post<{ queued?: number }>(`/api/dockets/${id}/send`, { text: t, queue: true, block: agent?.block }).then(
+    post<{ queued?: number; steered?: boolean }>(`/api/dockets/${id}/send`, { text: t, queue: true, steer, block: agent?.block }).then(
       (r) => {
         setText("");
         setBusy(false);
         stick.current = true;
-        toast(r.queued ? `Queued: it goes in when ${app}'s turn ends` : `Sent to ${app}`);
+        toast(r.steered ? `Sent: ${app} reads it at its next step` : r.queued ? `Queued: it goes in when ${app}'s turn ends` : `Sent to ${app}`);
         hub.reload();
       },
       (e: Error) => {
@@ -209,10 +211,16 @@ function PaneSheet({ id, block, onClose }: { id: string; block?: string; onClose
           rows={text.split("\n").length > 1 ? 3 : 1}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), send());
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && e.shiftKey) (e.preventDefault(), send(true));
+            else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), send());
           }}
         />
-        <button className="btn btn-primary" disabled={!text.trim() || busy || !!why} onClick={send}>
+        {canSteer && (
+          <button className="btn" disabled={!text.trim() || busy || !!why} onClick={() => send(true)} title={`${app} reads it at its next step, without waiting for the turn to end (⌘⇧↩)`}>
+            Send now
+          </button>
+        )}
+        <button className="btn btn-primary" disabled={!text.trim() || busy || !!why} onClick={() => send()}>
           {queues ? "Queue" : "Send"} <Kbd>⌘↩</Kbd>
         </button>
       </div>

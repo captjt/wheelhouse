@@ -69,6 +69,8 @@ struct Live: Hashable {
     var block: String { j["block"].str ?? "" }
     var record: String? { j["record"].str }
     var answerable: Bool { j["answerable"].bool }
+    /// It takes a message mid-turn (steering): Claude Code, Codex.
+    var steer: Bool { j["steer"].bool }
     /// Answerable where it's shown cut short (a banner, a menu, a row): its
     /// text is short and on one line. An older hub doesn't say: answerable.
     var short: Bool { j["short"].exists ? j["short"].bool : answerable }

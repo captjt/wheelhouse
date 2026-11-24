@@ -583,31 +583,54 @@ fn take_back_moved(core: &mut Core) -> usize {
 }
 
 async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<String, (Option<String>, Instant)>, tries: &mut std::collections::HashMap<String, u32>) {
-    let due: Vec<(i64, String, String, String, String, Option<String>)> = {
+    // Every prompt queued for a pane, in order: they go in together, as one
+    // prompt, when its turn ends.
+    let due: Vec<Batch> = {
         let mut core = shared.lock();
         take_back_moved(&mut core);
-        let mut seen = std::collections::HashSet::new();
-        core.store
-            .queued_prompts(None)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(_, _, block, _, _)| seen.insert(block.clone()))
-            .filter_map(|(id, docket, block, body, _)| ready(&core, &block, last).map(|(session, root)| (id, docket, block, body, session, root)))
+        let mut by: Vec<Queued> = Vec::new();
+        for (id, docket, block, body, _) in core.store.queued_prompts(None).unwrap_or_default() {
+            match by.iter_mut().find(|q| q.block == block && q.docket == docket) {
+                Some(q) => q.prompts.push((id, body)),
+                None => by.push(Queued { block, docket, prompts: vec![(id, body)] }),
+            }
+        }
+        by.into_iter()
+            .filter_map(|q| {
+                let (session, root) = ready(&core, &q.block, last)?;
+                let body = together(q.prompts.iter().map(|(_, b)| b.as_str()));
+                Some(Batch { ids: q.prompts.iter().map(|(id, _)| *id).collect(), docket: q.docket, block: q.block, body, session, root })
+            })
             .collect()
     };
-    for (id, docket, block, body, session, root) in due {
+    for Batch { ids, docket, block, body, session, root } in due {
         // Claimed before it's typed: a Take back from now on is refused,
-        // never reported done while it goes in anyway.
-        if !shared.lock().store.move_prompt(id, &docket, "queued", "sending").unwrap_or(false) {
+        // never reported done while it goes in anyway. One taken back in
+        // the meantime is left out.
+        let claimed: Vec<i64> = {
+            let mut core = shared.lock();
+            ids.iter().copied().filter(|id| core.store.move_prompt(*id, &docket, "queued", "sending").unwrap_or(false)).collect()
+        };
+        if claimed.is_empty() {
             continue;
         }
+        let body = if claimed.len() == ids.len() {
+            body
+        } else {
+            let core = shared.lock();
+            let left: Vec<String> = core.store.prompts_sending(&docket, &claimed).unwrap_or_default();
+            together(left.iter().map(String::as_str))
+        };
         let ok = crate::runtime::for_id(&block).submit(&session, &block, &body).await;
         let mut core = shared.lock();
         last.insert(block.clone(), (root, Instant::now()));
+        let key = format!("p{}", claimed[0]);
         match ok {
             Ok(()) => {
-                tries.remove(&format!("p{id}"));
-                let _ = core.store.move_prompt(id, &docket, "sending", "sent");
+                tries.remove(&key);
+                for id in &claimed {
+                    let _ = core.store.move_prompt(*id, &docket, "sending", "sent");
+                }
                 let app = core.mirror.panes.get(&block).and_then(|p| p.app()).unwrap_or("agent").to_string();
                 let session_id = core.agents.by_block.get(&block).and_then(|t| t.session.clone());
                 if !crate::hooks::installed_for(&app) {
@@ -616,16 +639,41 @@ async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<S
                 core.agents.remote.insert(block.clone());
             }
             Err(e) => {
-                let n = tries.entry(format!("p{id}")).or_default();
+                let n = tries.entry(key).or_default();
                 *n += 1;
-                say!("{docket}: typing a queued prompt (try {n}): {e:#}");
+                say!("{docket}: typing {} queued prompt(s) (try {n}): {e:#}", claimed.len());
                 // Pasted without its Enter: it's in the agent's box; never twice.
                 let give_up = *n >= MAX_TRIES || crate::runtime::pasted(&e);
-                let _ = core.store.move_prompt(id, &docket, "sending", if give_up { "cancelled" } else { "queued" });
+                for id in &claimed {
+                    let _ = core.store.move_prompt(*id, &docket, "sending", if give_up { "cancelled" } else { "queued" });
+                }
             }
         }
         core.live_changed();
     }
+}
+
+/// The prompts queued for one pane, on one docket, in order.
+struct Queued {
+    block: String,
+    docket: String,
+    prompts: Vec<(i64, String)>,
+}
+
+/// A pane's queued prompts, ready to go in as one.
+struct Batch {
+    ids: Vec<i64>,
+    docket: String,
+    block: String,
+    body: String,
+    session: String,
+    root: Option<String>,
+}
+
+/// Several queued prompts as one: in the order you sent them, a blank line
+/// between each.
+fn together<'a>(bodies: impl Iterator<Item = &'a str>) -> String {
+    bodies.map(str::trim_end).filter(|b| !b.trim().is_empty()).collect::<Vec<_>>().join("\n\n")
 }
 
 /// A message as the apps show it.
@@ -834,6 +882,12 @@ mod tests {
         // Someone else can still reach it.
         let me = caller(&core, None);
         assert!(send(&mut core, &me, "builder", None, "from you", vec![]).is_ok());
+    }
+
+    #[test]
+    fn queued_prompts_go_in_together_in_order() {
+        assert_eq!(together(["Also run lint", "  ", "Then push it\n"].into_iter()), "Also run lint\n\nThen push it");
+        assert_eq!(together(std::iter::empty()), "");
     }
 
     #[test]

@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { connLine, type Docket, type Flavor } from "./api";
 import { DocketScreen } from "./Docket";
 import { InboxView, inboxItems } from "./Inbox";
+import { keepOnScreen } from "./viewport";
 import { IconActive, IconAgents, IconBuild, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSettings, IconSun, Logo, SessionIcon } from "./icons";
 import { ReviewsView } from "./Reviews";
 import { RecapView } from "./Recap";
@@ -403,53 +404,8 @@ function PhoneApp({
   }, [back]);
   useSwipeBack(top, base, shade, docket ?? false, back);
   useScrolledViews(true);
-  // The app fills what's visible of the screen, and nothing else: its bar at
-  // the top, its tab bar or a conversation's box at the bottom, above the
-  // keyboard. Safari scrolls the page when a box takes focus, and doesn't
-  // always scroll it back when the keyboard goes, which left the bar above
-  // the screen, out of reach. The page never scrolls (only the views in it
-  // do): it goes back to the top on every change, and the app follows the
-  // visible part of the screen (`--vv-top`, `--vv-h`).
-  useEffect(() => {
-    const vv = window.visualViewport;
-    const root = document.documentElement.style;
-    const home = () => {
-      if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
-    };
-    if (!vv) {
-      window.addEventListener("scroll", home);
-      return () => window.removeEventListener("scroll", home);
-    }
-    const on = () => {
-      home();
-      // Zoomed in with two fingers: the page is bigger than the screen on purpose.
-      if (Math.abs(vv.scale - 1) > 0.01) {
-        root.removeProperty("--vv-top");
-        root.removeProperty("--vv-h");
-        return;
-      }
-      const kb = Math.max(0, Math.round(window.innerHeight - vv.height));
-      root.setProperty("--kb", kb > 80 ? `${kb}px` : "0px");
-      root.setProperty("--vv-top", `${Math.max(0, Math.round(vv.offsetTop))}px`);
-      root.setProperty("--vv-h", `${Math.round(vv.height)}px`);
-    };
-    // A box losing focus is the keyboard going: Safari settles a moment later.
-    const blur = () => window.setTimeout(on, 60);
-    on();
-    vv.addEventListener("resize", on);
-    vv.addEventListener("scroll", on);
-    window.addEventListener("scroll", on);
-    window.addEventListener("focusout", blur);
-    window.addEventListener("orientationchange", blur);
-    return () => {
-      vv.removeEventListener("resize", on);
-      vv.removeEventListener("scroll", on);
-      window.removeEventListener("scroll", on);
-      window.removeEventListener("focusout", blur);
-      window.removeEventListener("orientationchange", blur);
-      for (const k of ["--kb", "--vv-top", "--vv-h"]) root.removeProperty(k);
-    };
-  }, []);
+  // The app stays on what's visible of the screen (viewport.ts).
+  useEffect(() => keepOnScreen(), []);
   const page = route[0] || "view";
   usePullToRefresh(base, ptr, !docket, () => {
     window.dispatchEvent(new Event("wh:refresh"));
