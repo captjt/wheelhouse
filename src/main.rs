@@ -41,6 +41,7 @@ mod start;
 mod store;
 mod subagents;
 mod tailnet;
+mod team;
 mod time;
 mod usage;
 
