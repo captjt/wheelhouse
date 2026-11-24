@@ -229,6 +229,43 @@ struct GateRow: View {
     }
 }
 
+// ---- runtimes ----
+
+/// Where new agents open (Rex or Herdr), and whether each runtime is
+/// followed. The hub follows every one that's installed, whatever this says.
+struct RuntimeSection: View {
+    @Environment(SettingsModel.self) private var model
+
+    var body: some View {
+        let rt = model.view?["runtime"] ?? .null
+        let all = rt["runtimes"].array.map(RuntimeLink.init)
+        if !all.isEmpty {
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker(selection: Binding(get: { rt["value"].str ?? "rex" }, set: { v in
+                        Task { await model.change("runtime", ["runtime": v]) }
+                    })) {
+                        ForEach(all, id: \.name) { r in Text(r.title).tag(r.name) }
+                    } label: {
+                        Described(title: "New agents open in", text: rt["env"].text.map { "WH_RUNTIME=\($0) decides this for now." } ?? "wh start, Build and Review open their panes here. Agents already running stay where they are.")
+                    }
+                    .pickerStyle(.segmented).fixedSize()
+                    .disabled(rt["env"].text != nil || model.busy.contains("runtime"))
+                    ErrorLine(key: "runtime")
+                }
+                ForEach(all, id: \.name) { r in
+                    LabeledContent(r.title) {
+                        Text(r.connected ? "Following, \(r.agents) agent\(r.agents == 1 ? "" : "s")" : !r.installed ? "Not installed" : "Not connected: \(r.error ?? "connecting")")
+                            .foregroundStyle(r.connected || !r.installed ? .secondary : K.blocked)
+                    }
+                }
+            } header: {
+                Text("Runtimes")
+            }
+        }
+    }
+}
+
 // ---- agents ----
 
 struct AgentsSettings: View {
@@ -239,6 +276,7 @@ struct AgentsSettings: View {
         let r = model.review
         Form {
             ConfigProblems()
+            RuntimeSection()
             if b.exists {
                 Section {
                     agent("Builder", "builder", "Writes the plan, then builds it.")

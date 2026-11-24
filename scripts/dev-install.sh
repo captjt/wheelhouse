@@ -135,6 +135,8 @@ export WH_TAILNET=off
 export WH_NOTIFY=off
 export WH_LINEAR_OFF=1
 export WH_REX=/usr/bin/false
+export WH_HC=/usr/bin/false
+export WH_HERDR_APP=/usr/bin/false
 export WH_GH=/usr/bin/false
 export WH_TAILSCALE=/usr/bin/false
 case "\$1 \${2:-}" in

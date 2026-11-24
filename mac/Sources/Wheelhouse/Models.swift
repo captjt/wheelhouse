@@ -20,7 +20,7 @@ enum Status: String, CaseIterable, Identifiable {
     var isOpen: Bool { self == .todo || self == .in_progress }
 }
 
-/// What an agent is doing, from its program status in Rex.
+/// What an agent is doing, from its program status in its runtime.
 enum LiveState: String {
     case working, blocked, error, done, idle, starting
 
@@ -34,6 +34,24 @@ enum LiveState: String {
         case .starting: "Starting"
         }
     }
+}
+
+/// The runtime a pane id is in, for people: Herdr's ids start `herdr:`,
+/// Rex's are its own (docs/runtimes.md).
+func runtimeTitle(block: String?) -> String {
+    block?.hasPrefix("herdr:") == true ? "Herdr" : "Rex"
+}
+
+/// A runtime as the hub follows it: `runtimes` in /api/state.
+struct RuntimeLink: Hashable {
+    let j: JSON
+    var name: String { j["name"].str ?? "" }
+    var title: String { j["title"].str ?? name }
+    var connected: Bool { j["connected"].bool }
+    var installed: Bool { j["installed"].bool }
+    var error: String? { j["error"].text }
+    var agents: Int { j["agents"].int ?? 0 }
+    var spawn: Bool { j["spawn"].bool }
 }
 
 func appName(_ app: String?) -> String {
@@ -56,6 +74,8 @@ struct Live: Hashable {
     var kind: String? { j["kind"].text }
     var msg: String? { j["msg"].text }
     var since: String? { j["since"].str }
+    /// Where it runs, for people: "Rex", "Herdr".
+    var runtime: String { j["runtime"].str == "herdr" ? "Herdr" : runtimeTitle(block: block) }
     var rexSession: String { j["rex_session"].str ?? "" }
     var pane: String { j["pane"].str ?? "" }
     var cwd: String? { j["cwd"].text }
@@ -66,6 +86,7 @@ struct AgentRef: Hashable {
     let j: JSON
     var app: String { j["app"].str ?? "" }
     var block: String { j["block"].str ?? "" }
+    var runtime: String { runtimeTitle(block: block) }
     var rexSession: String { j["rex_session"].str ?? "" }
     var pane: String { j["pane"].str ?? "" }
     var cwd: String? { j["cwd"].text }
@@ -111,6 +132,8 @@ struct Docket: Hashable, Identifiable {
     var status: Status { Status(rawValue: j["status"].str ?? "") ?? .todo }
     var proto: String { j["protocol"].str ?? "none" }
     var agent: AgentRef? { j["agent"].object == nil ? nil : AgentRef(j: j["agent"]) }
+    /// Where its agent runs, for people: "Rex", "Herdr".
+    var runtime: String { live?.runtime ?? agent?.runtime ?? "Rex" }
     var session: String? { j["session"].text }
     var prompts: Int { j["prompts"].int ?? 0 }
     var turns: Int { j["turns"].int ?? 0 }
@@ -324,6 +347,30 @@ struct HubState: Hashable {
     var linear: Bool { j["linear"].bool }
     var rexConnected: Bool { j["rex"]["connected"].bool }
     var rexError: String? { j["rex"]["error"].text }
+    /// Every runtime; an older hub says only Rex's.
+    var runtimes: [RuntimeLink] {
+        let a = j["runtimes"].array.map(RuntimeLink.init)
+        return a.isEmpty ? [RuntimeLink(j: .object(["name": .string("rex"), "title": .string("Rex"), "connected": .bool(rexConnected), "error": j["rex"]["error"], "installed": .bool(true), "spawn": .bool(true)]))] : a
+    }
+    /// Where new agents open, for people.
+    var spawnRuntime: String { runtimes.first { $0.spawn }?.title ?? "Rex" }
+    /// The runtimes followed now: "Rex and Herdr".
+    var followed: String {
+        let on = runtimes.filter(\.connected).map(\.title)
+        return on.isEmpty ? "Rex or Herdr" : on.joined(separator: " and ")
+    }
+    /// The status line: the runtimes followed, or the one that's down. One
+    /// that isn't installed is no trouble; one that is and isn't followed is
+    /// when new agents open there, or when nothing is followed.
+    var connection: (ok: Bool, text: String) {
+        let rs = runtimes
+        if let down = rs.first(where: { $0.installed && !$0.connected && ($0.spawn || rs.allSatisfy { !$0.connected }) }) {
+            return (false, "\(down.title): \(down.error ?? "connecting")")
+        }
+        let on = rs.filter(\.connected).map(\.title)
+        // Two fit the sidebar's footer as "Rex · Herdr".
+        return on.isEmpty ? (false, "\(spawnRuntime) isn't installed") : (true, on.count > 1 ? on.joined(separator: " · ") : "Following \(on[0])")
+    }
     var agents: [Live] { j["agents"].array.map(Live.init) }
     var prs: [ReviewPr] { review?.prs ?? [] }
     var tasks: [BuildTask] { build?.tasks ?? [] }

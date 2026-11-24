@@ -130,7 +130,7 @@ struct Sidebar: View {
                 row(.recap)
             }
             if !sessions.isEmpty {
-                Section("Rex sessions") {
+                Section("Sessions") {
                     ForEach(sessions, id: \.0) { name, n in
                         Label { Text(name) } icon: { SessionIcon(name: name, size: 16) }
                             .badge(n)
@@ -175,7 +175,7 @@ struct SidebarFoot: View {
                     Text(Flavor.build ?? "Wheelhouse Dev").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
             }
-            // Dev has Rex, Linear and the hooks off on purpose: no hints to turn them on.
+            // Dev has the runtimes, Linear and the hooks off on purpose: no hints to turn them on.
             if let s = store.state, !Flavor.isDev {
                 if !s.hooks { hint("Hooks off", "wh hooks install", "Claude Code's hooks are off, so dockets are named after their panes and turns carry no message.", symbol: "link") }
                 if !s.linear { hint("Linear off", "wh setup-linear", "Connect Linear to start dockets from issues and link issues to dockets.", symbol: "circle.hexagongrid") }
@@ -202,14 +202,14 @@ struct SidebarFoot: View {
     private var dotColor: Color {
         if Flavor.isDev, store.state != nil { return K.brand }
         guard let s = store.state else { return store.error == nil ? K.faint : K.error }
-        return s.rexConnected && store.live ? K.working : K.blocked
+        return s.connection.ok && store.live ? K.working : K.blocked
     }
 
     private var connection: String {
         if Flavor.isDev, store.state != nil { return "Nothing live" }
         guard let s = store.state else { return store.error == nil ? "Connecting…" : "Hub unreachable" }
         if !store.live { return store.wasLive ? "Reconnecting to the hub…" : "Connecting…" }
-        return s.rexConnected ? "Following Rex" : "Rex: \(s.rexError ?? "connecting")"
+        return s.connection.text
     }
 
     private func hint(_ title: String, _ command: String, _ why: String, symbol: String) -> some View {
@@ -293,8 +293,8 @@ struct ShortcutsSheet: View {
         ("Anywhere", [(Flavor.chord, "\(Flavor.name) over any app: approve, answer, find a docket, start one")]),
         ("Go", [("⌘K  or  /", "Search dockets and commands"), ("⌘1 … ⌘8", "Inbox, Reviews, Builds, Active, All, Done, Agents, Recap"), ("G, then I R B A D X N P", "The same, as in the web app"), ("⌘R", "Refresh"), ("⌘,", "Settings: standing orders, agents, repos, guides")]),
         ("Create", [("⌘N  or  C", "New docket"), ("⇧⌘N", "Start an agent on a new docket")]),
-        ("A list", [("J K  or  ↑ ↓", "Move"), ("↩  or  double-click", "Open the docket in its own window"), ("O", "Show the agent's pane in Rex"), ("S, then 1–4", "Change status"), ("E", "In the Inbox: done"), ("Swipe", "Done, Drop, Status; Approve, Deny, File in the Inbox")]),
-        ("A docket", [("⇧⌘O", "Open in Rex"), ("⇧⌘P", "Peek at the pane"), ("⇧⌘R", "Read the record"), ("⌥⌘1 … ⌥⌘4", "To do, In progress, Done, Dropped"), ("⇧⌘U", "Run its checks"), ("⇧⌘H", "Hold, or resume"), ("⇧⌘A", "Start an agent on it"), ("Double-click the title", "Rename"), ("Drop a file", "Keep it with the docket, pinned by its hash")]),
+        ("A list", [("J K  or  ↑ ↓", "Move"), ("↩  or  double-click", "Open the docket in its own window"), ("O", "Show the agent's pane in Rex or Herdr"), ("S, then 1–4", "Change status"), ("E", "In the Inbox: done"), ("Swipe", "Done, Drop, Status; Approve, Deny, File in the Inbox")]),
+        ("A docket", [("⇧⌘O", "Open the pane in Rex or Herdr"), ("⇧⌘P", "Peek at the pane"), ("⇧⌘R", "Read the record"), ("⌥⌘1 … ⌥⌘4", "To do, In progress, Done, Dropped"), ("⇧⌘U", "Run its checks"), ("⇧⌘H", "Hold, or resume"), ("⇧⌘A", "Start an agent on it"), ("Double-click the title", "Rename"), ("Drop a file", "Keep it with the docket, pinned by its hash")]),
         ("Writing", [("⌘↩", "Send, save, or note"), ("↩  /  ⇧↩", "In Chat: send / a new line"), ("Esc", "Cancel"), ("⌘B  ⌘I", "Bold, italic (Markdown)")]),
     ]
 

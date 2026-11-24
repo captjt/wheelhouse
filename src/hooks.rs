@@ -23,8 +23,8 @@ const HOOK_TIMEOUT: u64 = 5;
 pub fn run(agent: &str, event: &str) -> Result<()> {
     let mut input = String::new();
     let _ = std::io::stdin().take(4 << 20).read_to_string(&mut input);
-    // Outside Rex there's no pane, so nothing to put it on.
-    if let Some(block) = std::env::var_os("REX_BLOCK").and_then(|b| b.into_string().ok()) {
+    // Outside a runtime's pane (Rex, Herdr) there's nothing to put it on.
+    if let Some(block) = crate::runtime::pane_from_env() {
         let payload: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
         let body = json!({ "event": event, "agent": agent, "block": block, "payload": payload });
         if let Err(e) = crate::client::call("POST", "/api/hook", Some(&body), Duration::from_secs(2)) {

@@ -1,13 +1,19 @@
-//! A live picture of the local Rex server: its sessions, windows, panes, and
-//! every pane's program status records (OSC 7501). Ported from rex-inbox.
+//! A live picture of every runtime the hub follows (Rex, Herdr): their
+//! sessions, windows (tabs), panes, and every pane's program status records
+//! (OSC 7501). Each runtime's follower keeps its own part current
+//! (src/runtime/). Ported from rex-inbox.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::runtime::Kind;
+
+/// The creator Rex gives terminal blocks. Other runtimes' panes are all terminals.
 pub const TERMINAL: &str = "com.superlogical.terminal";
 
-/// One program status record, as Rex reports it.
+/// One program status record, as Rex reports it (other runtimes' status is
+/// made into one).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     /// Empty for the root record.
@@ -71,6 +77,7 @@ pub fn app_name(app: &str) -> &str {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Pane {
+    pub runtime: Kind,
     pub session_id: String,
     pub block_id: String,
     pub window_id: Option<String>,
@@ -88,8 +95,9 @@ pub struct Pane {
 }
 
 impl Pane {
-    fn new(session_id: &str, block_id: &str) -> Self {
+    pub fn new(session_id: &str, block_id: &str) -> Self {
         Pane {
+            runtime: crate::runtime::of(block_id),
             session_id: session_id.to_string(),
             block_id: block_id.to_string(),
             window_id: None,
@@ -105,6 +113,17 @@ impl Pane {
 
     fn refresh_cwd(&mut self) {
         self.cwd = self.reported_cwd.clone().or_else(|| self.process_cwd.clone());
+    }
+
+    /// The folder the program reported (OSC 7), as a `file://` URL or a path.
+    pub fn set_reported_cwd(&mut self, pwd: Option<&str>) {
+        self.reported_cwd = pwd.filter(|s| !s.is_empty()).map(path_of);
+        self.refresh_cwd();
+    }
+
+    /// The foreground process, from a `{name, cwd}` object; null leaves it.
+    pub fn set_foreground(&mut self, fg: &Value) {
+        set_process(self, fg);
     }
 
     pub fn root(&self) -> Option<&Record> {
@@ -144,6 +163,7 @@ pub struct Window {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Session {
+    pub runtime: Kind,
     pub session_id: String,
     pub label: String,
     pub windows: Vec<Window>,
@@ -168,10 +188,19 @@ pub struct Changes {
     pub resync_all: bool,
 }
 
-#[derive(Debug, Default, Serialize)]
-pub struct Mirror {
+/// Whether the hub is following a runtime now, and why not.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Link {
     pub connected: bool,
     pub error: Option<String>,
+    /// Whether the runtime is on this Mac at all. One that isn't is no
+    /// error: it just isn't followed.
+    pub installed: bool,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Mirror {
+    pub links: BTreeMap<Kind, Link>,
     pub sessions: BTreeMap<String, Session>,
     pub panes: BTreeMap<String, Pane>,
 }
@@ -181,6 +210,41 @@ fn s(v: &Value) -> Option<String> {
 }
 
 impl Mirror {
+    pub fn link(&self, k: Kind) -> Link {
+        self.links.get(&k).cloned().unwrap_or_default()
+    }
+
+    pub fn set_link(&mut self, k: Kind, connected: bool, error: Option<String>, installed: bool) {
+        self.links.insert(k, Link { connected, error, installed });
+    }
+
+    /// Whether the runtime of the pane or session `id` is followed now. A
+    /// mirror that lost its runtime may be stale.
+    pub fn connected_for(&self, id: &str) -> bool {
+        self.links.get(&crate::runtime::of(id)).is_some_and(|l| l.connected)
+    }
+
+    /// Put `fresh` in place of everything this mirror holds for runtime
+    /// `k`, keeping the other runtimes' parts. The panes that came, went or
+    /// changed.
+    pub fn replace(&mut self, k: Kind, fresh: Mirror) -> BTreeSet<String> {
+        let as_json = |p: &Pane| serde_json::to_value(p).ok();
+        let old: BTreeMap<String, Pane> = {
+            let ids: Vec<String> = self.panes.values().filter(|p| p.runtime == k).map(|p| p.block_id.clone()).collect();
+            ids.into_iter().filter_map(|b| self.panes.remove(&b).map(|p| (b, p))).collect()
+        };
+        let mut changed: BTreeSet<String> = old.keys().filter(|b| !fresh.panes.contains_key(*b)).cloned().collect();
+        for (b, p) in fresh.panes {
+            if old.get(&b).map(as_json) != Some(as_json(&p)) {
+                changed.insert(b.clone());
+            }
+            self.panes.insert(b, p);
+        }
+        self.sessions.retain(|_, s| s.runtime != k);
+        self.sessions.extend(fresh.sessions);
+        changed
+    }
+
     pub fn session_label(&self, session_id: &str) -> &str {
         self.sessions.get(session_id).map_or("", |s| s.label.as_str())
     }
@@ -209,11 +273,11 @@ impl Mirror {
         changes
     }
 
-    /// Drop sessions that no longer exist.
-    pub fn retain_sessions(&mut self, live: &BTreeSet<String>) -> Changes {
+    /// Drop runtime `k`'s sessions that no longer exist.
+    pub fn retain_sessions(&mut self, k: Kind, live: &BTreeSet<String>) -> Changes {
         let mut changes = Changes::default();
-        self.sessions.retain(|id, _| live.contains(id));
-        let gone: Vec<String> = self.panes.values().filter(|p| !live.contains(&p.session_id)).map(|p| p.block_id.clone()).collect();
+        self.sessions.retain(|id, s| s.runtime != k || live.contains(id));
+        let gone: Vec<String> = self.panes.values().filter(|p| p.runtime == k && !live.contains(&p.session_id)).map(|p| p.block_id.clone()).collect();
         for b in gone {
             self.panes.remove(&b);
             changes.panes.insert(b);
@@ -233,97 +297,6 @@ impl Mirror {
             p.refresh_cwd();
         }
     }
-
-    /// Apply one line of `rex events --all --json`.
-    pub fn apply_event(&mut self, ev: &Value) -> Changes {
-        let mut changes = Changes::default();
-        let typ = ev["type"].as_str().unwrap_or_default();
-        let payload = &ev["payload"];
-        match typ {
-            "session_event" => {
-                let Some(sid) = s(&payload["session_id"]) else { return changes };
-                let inner = &payload["event"];
-                let p = &inner["payload"];
-                match inner["type"].as_str().unwrap_or_default() {
-                    "block_event" => self.apply_block_event(&sid, p, &mut changes),
-                    "block_closed" => {
-                        if let Some(b) = s(&p["block_id"]) {
-                            self.panes.remove(&b);
-                            changes.panes.insert(b);
-                        }
-                    }
-                    "block_created" | "session_view_changed" | "session_label_changed" | "window_created" | "window_closed" | "window_label_changed" | "active_window_changed" => {
-                        changes.resync.insert(sid);
-                    }
-                    "session_destroyed" => changes.resync_all = true,
-                    _ => {}
-                }
-            }
-            t if t.starts_with("session_") => changes.resync_all = true,
-            _ => {}
-        }
-        changes
-    }
-
-    fn apply_block_event(&mut self, sid: &str, p: &Value, changes: &mut Changes) {
-        let Some(block) = s(&p["block_id"]) else { return };
-        if p["creator_name"].as_str() != Some(TERMINAL) {
-            return;
-        }
-        let name = p["name"].as_str().unwrap_or_default();
-        let body = &p["payload"];
-        let known = self.panes.contains_key(&block);
-        let pane = self.panes.entry(block.clone()).or_insert_with(|| Pane::new(sid, &block));
-        if !known {
-            changes.resync.insert(sid.to_string());
-        }
-        match name {
-            "program_status_changed" => {
-                let Ok(mut rec) = serde_json::from_value::<Record>(body["record"].clone()) else { return };
-                rec.id = body["id"].as_str().unwrap_or_default().to_string();
-                // Events queued while a snapshot was taken can be older than it.
-                if let Some(old) = pane.records.get(&rec.id) {
-                    let t = |r: &Record| r.updated_at.as_deref().and_then(crate::time::parse);
-                    if matches!((t(old), t(&rec)), (Some(a), Some(b)) if b < a) {
-                        return;
-                    }
-                }
-                if pane.records.get(&rec.id) != Some(&rec) {
-                    pane.records.insert(rec.id.clone(), rec);
-                    changes.panes.insert(block);
-                }
-            }
-            "program_status_removed" => {
-                match body["ids"].as_array() {
-                    Some(ids) => {
-                        for id in ids.iter().filter_map(Value::as_str) {
-                            pane.records.remove(id);
-                        }
-                    }
-                    None => pane.records.clear(),
-                }
-                changes.panes.insert(block);
-            }
-            "child_exited" => {
-                pane.reported_cwd = None;
-                pane.refresh_cwd();
-                changes.panes.insert(block);
-            }
-            "process_changed" => {
-                if let Some(fg) = body.get("foreground") {
-                    set_process(pane, fg);
-                }
-                changes.panes.insert(block);
-            }
-            "pwd_changed" => {
-                if let Some(pwd) = s(&body["pwd"]) {
-                    pane.reported_cwd = Some(path_of(&pwd));
-                    pane.refresh_cwd();
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 fn set_process(p: &mut Pane, fg: &Value) {
@@ -338,7 +311,7 @@ fn set_process(p: &mut Pane, fg: &Value) {
 }
 
 /// Shells report their folder (OSC 7) as `file://host/path`, percent-encoded.
-fn path_of(pwd: &str) -> String {
+pub fn path_of(pwd: &str) -> String {
     let Some(rest) = pwd.strip_prefix("file://") else { return pwd.to_string() };
     let path = match rest.find('/') {
         Some(i) => &rest[i..],

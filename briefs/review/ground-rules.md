@@ -20,7 +20,7 @@ names you and your model. You draft the review. You never post it.
 - Don't contact GitHub, issue trackers, or any deployed environment. `gh` is
   signed out here on purpose. Everything you need from GitHub is in
   `.tmp/context/`.
-- Don't rename the Rex session or its tabs. Wheelhouse finds them by name.
+- Don't rename the session (a Rex session or a Herdr space) or its tabs. Wheelhouse finds them by name.
 - If you can't go on without something you don't have, write
   `BLOCKED: <what you need>` to `.tmp/status.txt` and stop.
 

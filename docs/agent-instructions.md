@@ -21,16 +21,17 @@ details.
    `~/.agents/skills` first to give Codex and Antigravity the skill too. `wh skill show`
    prints the skill, and `wh skill remove` takes it out.
 
-The lines apply only inside a Rex pane (`REX_SESSION` is set), so an agent
-started anywhere else ignores them.
+The lines apply only inside a Rex pane or a Herdr terminal (`REX_SESSION`
+or `HC_TERMINAL_ID` is set), so an agent started anywhere else ignores them.
 
 ## The block
 
 ```markdown
 ## Wheelhouse
 
-In a Rex pane (REX_SESSION is set), you're on a Wheelhouse docket, and `wh`
-reaches the user and other agents. Load the wheelhouse skill for how.
+In a Rex pane or a Herdr terminal (REX_SESSION or HC_TERMINAL_ID is set),
+you're on a Wheelhouse docket, and `wh` reaches the user and other agents.
+Load the wheelhouse skill for how.
 
 - Start with `wh brief`: your docket's intent, its Linear issue, and what
   was said lately. Follow the intent; when the goal or scope really

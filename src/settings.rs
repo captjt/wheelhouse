@@ -168,6 +168,7 @@ fn lua_raw() -> Result<(Value, Value)> {
 
 /// Whether `s` (all of settings.json) loads with the Lua under it.
 pub fn check(s: &Value) -> Result<()> {
+    check_runtime(&s["runtime"])?;
     let (rraw, braw) = lua_raw()?;
     let review = if rraw.is_null() {
         if s["review"].as_object().is_some_and(|o| !o.is_empty()) {
@@ -184,6 +185,18 @@ pub fn check(s: &Value) -> Result<()> {
     let bp = crate::build::config::path();
     crate::build::config::from_value(bp.exists().then_some(bp), b, review.as_ref()).context("Build's settings")?;
     Ok(())
+}
+
+/// `runtime`: where new agents open, `rex` or `herdr` (docs/runtimes.md).
+fn check_runtime(v: &Value) -> Result<()> {
+    match v {
+        Value::Null => Ok(()),
+        Value::String(s) if crate::runtime::Kind::parse(s).is_some() => Ok(()),
+        other => {
+            let names: Vec<&str> = crate::runtime::ALL.iter().map(|k| k.name()).collect();
+            bail!("runtime is one of {}, not {other}", names.join(", "))
+        }
+    }
 }
 
 /// Review's posting rules in a patch, checked as sent: pruning empty tables
@@ -204,8 +217,12 @@ pub fn change(patch: &Value) -> Result<Value> {
     let Some(p) = patch.as_object() else { bail!("a change is an object: {{ \"build\": {{…}}, \"review\": {{…}} }}") };
     let mut bad = Vec::new();
     for (part, v) in p {
+        if part == "runtime" {
+            check_runtime(v)?;
+            continue;
+        }
         if !matches!(part.as_str(), "build" | "review") {
-            bail!("settings are build or review, not {part}");
+            bail!("settings are build, review or runtime, not {part}");
         }
         refused(part, v, &mut Vec::new(), &mut bad);
     }
@@ -667,6 +684,8 @@ pub fn view(
         "build": { "lua": tilde(crate::build::config::path()), "lua_exists": crate::build::config::path().exists(), "error": b.as_ref().err(), "config": build },
         "review": { "lua": tilde(crate::review::config::path()), "lua_exists": crate::review::config::path().exists(), "error": r.as_ref().err(), "config": review },
         "orders": orders(core, b.as_deref().ok(), r.as_deref().ok()),
+        // Where new agents open, and every runtime with whether it's followed.
+        "runtime": { "value": crate::runtime::spawn_kind(), "env": std::env::var("WH_RUNTIME").ok(), "runtimes": crate::runtime::status(&core.mirror) },
         "docs": doc_list,
         "history": tilde(dir().join(".history")),
     })
@@ -691,6 +710,15 @@ mod tests {
         let mut t = json!({ "build": { "repos": { "o/a": {} } } });
         prune(&mut t);
         assert_eq!(t, json!({}));
+    }
+
+    #[test]
+    fn the_runtime_is_rex_or_herdr() {
+        assert!(check_runtime(&json!("herdr")).is_ok());
+        assert!(check_runtime(&json!("rex")).is_ok());
+        assert!(check_runtime(&Value::Null).is_ok());
+        assert_eq!(check_runtime(&json!("tmux")).unwrap_err().to_string(), "runtime is one of rex, herdr, not \"tmux\"");
+        assert!(check_runtime(&json!(1)).is_err());
     }
 
     #[test]

@@ -4,14 +4,15 @@
 #
 # - Rex sessions "acme-api" and "storefront" with agents: one at work on
 #   webhook retries, one asking to run the checkout tests, one failed, some
-#   finished;
+#   finished; and a Herdr space "acme-web" beside them, with a Codex at work
+#   on the landing page and a Claude Code asking to run the a11y tests;
 # - their prompts and replies, played through the same hooks Claude Code
 #   calls; an intent with acceptance; files kept with a docket; a message
 #   to you with options;
 # - Review history for acme/storefront, imported from a made-up
 #   rex-reviewer ledger.
 #
-# The hub follows that world through scripts/fake-rex, with its own HOME,
+# The hub follows that world through scripts/fake-rex and scripts/fake-hc, with its own HOME,
 # state, socket and port; GitHub and Linear are stand-ins and nothing
 # notifies. Your own Rex, hub and config are left alone. Needs jq, Node 22
 # or later, and Google Chrome. Run it again after changing a layout; then
@@ -41,7 +42,10 @@ trap cleanup EXIT
 (cd "$root/web" && npm run build --silent >/dev/null)
 cargo build --release --quiet --manifest-path "$root/Cargo.toml"
 wh="$root/target/release/wh"
-mkdir -p "$images" "$demo/home/code/acme-api" "$demo/home/code/storefront" "$demo/state"
+mkdir -p "$images" "$demo/home/code/acme-api" "$demo/home/code/storefront" "$demo/home/code/acme-web" "$demo/state"
+# Herdr has nothing open until the Rex agents have their dockets, so their
+# numbers stay the same (the Mac app's shots pick dockets by number).
+echo '{"terminals": [], "sent": [], "keys": [], "focused": [], "restarts": 0, "n": 0}' >"$demo/hc.json"
 # acme/api is a real checkout, with checks the hub can run (Verify).
 (
   cd "$demo/home/code/acme-api"
@@ -137,11 +141,12 @@ jq -n --arg at "$(ago 12)" \
 export HOME="$demo/home" WH_STATE="$demo/state" WH_SOCKET="$demo/wh.sock" WH_HTTP="127.0.0.1:$port" \
   WH_TAILNET=off WH_NOTIFY=off WH_LINEAR_KEY=demo WH_LINEAR_ENDPOINT=http://127.0.0.1:9 \
   WH_REX="$here/fake-rex" WH_WORLD="$demo/world.json" \
+  WH_HC="$here/fake-hc" WH_HC_WORLD="$demo/hc.json" WH_HERDR_APP=/usr/bin/true \
   WH_GH="$demo/gh" WH_REVIEW_CONFIG="$demo/review.lua" WH_BUILD_CONFIG="$demo/build.lua" \
   REX_REVIEWER_STATE_DIR="$demo/reviewer" USER=you
 # Claude Code's hooks, in the made-up HOME, so the app shows them on. Never
 # your own config, even when this runs inside Claude Code.
-unset CLAUDE_CONFIG_DIR CODEX_HOME
+unset CLAUDE_CONFIG_DIR CODEX_HOME HC_TERMINAL_ID HC_SCOPE HC_TERMINAL_SOCKET
 mkdir -p "$demo/home/.claude"
 "$wh" hooks install >/dev/null
 "$wh" serve >"$demo/hub.log" 2>&1 &
@@ -154,10 +159,12 @@ for _ in $(seq 60); do
 done
 [ "$n" -ge 6 ] || { echo "the demo hub didn't pick up its agents:" >&2; cat "$demo/hub.log" >&2; exit 1; }
 docket() { api "$base/api/state" | jq -r --arg p "$1" '.dockets[] | select(.agent.pane == $p) | .id'; }
-hook() { # block event payload
-  api -X POST "$base/api/hook" -d "$(jq -n --arg b "block:$1" --arg e "$2" --argjson p "$3" '{event: $e, agent: "claude-code", block: $b, payload: $p}')" >/dev/null
+hook() { # pane (a Rex block's label, or herdr:tN) event payload
+  local b=$1
+  case $b in herdr:*) ;; *) b="block:$b" ;; esac
+  api -X POST "$base/api/hook" -d "$(jq -n --arg b "$b" --arg e "$2" --argjson p "$3" '{event: $e, agent: "claude-code", block: $b, payload: $p}')" >/dev/null
 }
-prompt() { hook "$1" UserPromptSubmit "$(jq -n --arg t "$2" --arg s "s-$1" '{session_id: $s, prompt: $t}')"; }
+prompt() { hook "$1" UserPromptSubmit "$(jq -n --arg t "$2" --arg s "s-${1#herdr:}" '{session_id: $s, prompt: $t}')"; }
 reply() { hook "$1" Stop "$(jq -n --arg t "$2" '{last_assistant_message: $t}')"; sleep 4; }
 
 for b in webhooks checkout pricing docs; do
@@ -244,6 +251,32 @@ api -X POST "$base/api/build/settings" -d '{"paused": true}' >/dev/null || true
 # Verify: the hero docket's checks, run by the hub; a docket on hold.
 "$wh" check "$W" --wait >/dev/null || true
 "$wh" hold "$M" "Waiting on the DBA's review of the migration" >/dev/null
+
+# Herdr: the acme-web space, beside Rex's sessions, last, so its dockets
+# come after the others (D-8, D-9).
+ms() { echo $(( ($(date +%s) - $1 * 60) * 1000 )); }
+herdr_term() { # address pane app status-json minutes-ago
+  jq -nc --arg a "$1" --arg p "$2" --arg app "$3" --argjson st "$4" --argjson ms "$(ms "$5")" --arg c "$demo/home/code/acme-web" --rawfile screen "$here/screens/$2.txt" \
+    '{address: $a, state: "live", cwd: $c, name: null, labels: {"herdr.space": "acme-web", "herdr.tab": ("acme-web." + $p), "wh.session": "acme-web", "wh.tab": $p, "wh.pane": $p},
+      status: ($st + {app: $app}), status_ms: $ms, foreground: {name: (if $app == "codex" then "codex" else "claude" end), cwd: $c}, screen: $screen}'
+}
+jq -n --argjson a "$(herdr_term t1 landing codex '{"state": "working", "msg": "Rebuilding the hero with the new pricing"}' 1)" \
+  --argjson b "$(herdr_term t2 a11y claude-code '{"state": "blocked", "kind": "permission", "msg": "Bash: npx playwright test a11y"}' 0)" \
+  '{terminals: [$a, $b], sent: [], keys: [], focused: [], restarts: 0, n: 2}' >"$demo/hc.json.new" && mv "$demo/hc.json.new" "$demo/hc.json"
+for _ in $(seq 60); do
+  n=$(api "$base/api/state" | jq '[.agents[] | select(.runtime == "herdr" and .docket)] | length')
+  [ "$n" -ge 2 ] && break
+  sleep 0.5
+done
+[ "$n" -ge 2 ] || { echo "the demo hub didn't pick up Herdr's agents:" >&2; tail "$demo/hub.log" >&2; exit 1; }
+for b in herdr:t1 herdr:t2; do hook "$b" SessionStart "$(jq -n --arg s "s-${b#herdr:}" '{session_id: $s, source: "startup"}')"; done
+prompt herdr:t1 "The landing page's hero still shows last year's prices. Rebuild it from the pricing API, and keep the layout."
+prompt herdr:t2 "Run the accessibility checks on the new checkout and fix what they find."
+L=$(api "$base/api/state" | jq -r '.agents[] | select(.block == "herdr:t1") | .docket')
+"$wh" set "$L" --title "Rebuild the landing hero from the pricing API" >/dev/null
+"$wh" set "$(api "$base/api/state" | jq -r '.agents[] | select(.block == "herdr:t2") | .docket')" --title "Fix the checkout's a11y findings" >/dev/null
+# An agent in Herdr asks one in Rex: they talk across runtimes.
+api -X POST "$base/api/messages" -d "$(jq -n '{to: "acme-api/webhooks", block: "herdr:t1", body: "Does the pricing API retry on a 5xx now? The hero reads it on every deploy."}')" >/dev/null
 sleep 2
 
 if [ -n "$serve" ]; then
@@ -258,6 +291,7 @@ shot() { node "$here/shot.mjs" "$@" >/dev/null && echo "wrote ${2#"$root"/}"; }
 # Scroll the docket to its intent, past the title, for the hero shot.
 intent_js='document.querySelector(".docket-main")?.scrollTo(0, 0)'
 record_js='document.querySelector(".verify-chip")?.click(); new Promise(r => setTimeout(r, 900))'
+runtimes_js='document.getElementById("set-runtimes")?.scrollIntoView(); new Promise(r => setTimeout(r, 300))'
 artifact_js='[...document.querySelectorAll(".art-card")].find(c => c.textContent.includes("Retry design"))?.click(); new Promise(r => setTimeout(r, 900))'
 for look in light dark; do
   shot "$base/#/d/$W" "$images/docket-$look.png" "$look" desktop "$intent_js"
@@ -266,6 +300,9 @@ for look in light dark; do
   shot "$base/#/d/$W" "$images/record-$look.png" "$look" desktop "$record_js"
   shot "$base/#/recap" "$images/recap-$look.png" "$look" desktop
   shot "$base/#/settings" "$images/settings-$look.png" "$look" desktop
+  shot "$base/#/settings" "$images/runtimes-$look.png" "$look" desktop "$runtimes_js"
+  shot "$base/#/agents" "$images/agents-$look.png" "$look" desktop
+  shot "$base/#/d/$L" "$images/docket-herdr-$look.png" "$look" desktop "$intent_js"
   shot "$base/#/d/$W" "$images/phone-chat-$look.png" "$look" phone
   shot "$base/#/inbox" "$images/phone-inbox-$look.png" "$look" phone
   shot "$base/#/view/active" "$images/phone-active-$look.png" "$look" phone
@@ -278,8 +315,8 @@ done
 # screen recording for your terminal, as screencapture does.
 if swift --version 2>/dev/null | grep -qE "Swift version (6\.[2-9]|[7-9])"; then
   (cd "$root/mac" && swift build -c release --product Wheelhouse >/dev/null)
-  WH_APP_HUB="$base" "$root/mac/.build/release/Wheelhouse" --snapshot "$images" \
-    --only "${MAC_SHOTS:-docket,inbox,chat,reviews,board,record,quick,shortcuts,window,menubar,verify,settings-orders,settings-guides}" | sed "s|$root/||"
+  WH_APP_HUB="$base" WH_SNAP_HERDR="$L" "$root/mac/.build/release/Wheelhouse" --snapshot "$images" \
+    --only "${MAC_SHOTS:-docket,inbox,chat,reviews,board,record,quick,shortcuts,window,menubar,verify,settings-orders,settings-agents,settings-guides,agents,docket-herdr}" | sed "s|$root/||"
 else
   echo "skipped Wheelhouse.app's shots: they need Xcode 26 (Swift 6.2)"
 fi

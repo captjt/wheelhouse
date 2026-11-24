@@ -20,7 +20,7 @@ mod complete;
 mod decisions;
 mod doctor;
 mod evidence;
-mod follow;
+
 mod hooks;
 mod hub;
 mod linear;
@@ -33,7 +33,7 @@ mod push;
 mod recap;
 mod record;
 mod review;
-mod rex;
+mod runtime;
 mod server;
 mod service;
 mod settings;
@@ -377,7 +377,7 @@ fn main() {
         }
         Some(Cmd::Review { action, args, force, json }) => review_cmd(action.as_deref().unwrap_or("status"), &args, force, json),
         Some(Cmd::Share { port, title, ask, options, stop }) => {
-            let block = std::env::var("REX_BLOCK").ok();
+            let block = crate::runtime::pane_from_env();
             if stop {
                 client::json("POST", "/api/share/stop", Some(&json!({ "port": port, "block": block }))).map(|v| println!("stopped {} preview(s)", v["stopped"]))
             } else {
@@ -394,7 +394,7 @@ fn main() {
         Some(Cmd::Read { n, json }) => msg_read(n, json),
         Some(Cmd::Wait { thread, timeout, json }) => msg_wait(thread, timeout, json),
         Some(Cmd::Name { name }) => {
-            let block = std::env::var("REX_BLOCK").map_err(|_| anyhow::anyhow!("run this in a Rex pane"));
+            let block = crate::runtime::pane_from_env().ok_or_else(|| anyhow::anyhow!("run this in a Rex pane or a Herdr terminal"));
             block.and_then(|b| client::json("POST", "/api/panes/name", Some(&json!({ "block": b, "name": name })))).map(|v| {
                 println!("this pane is {}", v["addr"].as_str().unwrap_or("?"));
             })
@@ -403,7 +403,7 @@ fn main() {
             println!("{}{}", v["addr"].as_str().unwrap_or("?"), v["docket"].as_str().map(|d| format!(" on {d}")).unwrap_or_default());
         }),
         Some(Cmd::Note { docket, text }) => {
-            let block = std::env::var("REX_BLOCK").ok();
+            let block = crate::runtime::pane_from_env();
             let d = normalize(&docket);
             client::json("POST", &format!("/api/dockets/{d}/note"), Some(&json!({ "body": text, "block": block }))).map(|v| {
                 println!("{d} #{}", v["seq"]);
@@ -568,7 +568,9 @@ fn serve() -> Result<()> {
         let shared = hub::Shared::new(core);
         say!("state in {} ({tracked} agent dockets open)", paths::tilde(&dir.to_string_lossy()));
         supervise("live events", shared.clone(), hub::run_live);
-        supervise("the Rex mirror", shared.clone(), follow::run);
+        supervise("the Rex mirror", shared.clone(), runtime::rex::follow);
+        supervise("the Herdr mirror", shared.clone(), runtime::herdr::follow);
+        supervise("agents", shared.clone(), agents::tick_loop);
         supervise("the tailnet", shared.clone(), tailnet::watch);
         supervise("Linear", shared.clone(), linear::follow);
         supervise("message delivery", shared.clone(), messages::deliver_loop);
@@ -657,7 +659,7 @@ fn pr_key(args: &[String]) -> Result<String> {
 }
 
 fn review_cmd(action: &str, args: &[String], force: bool, as_json: bool) -> Result<()> {
-    let block = std::env::var("REX_BLOCK").ok();
+    let block = crate::runtime::pane_from_env();
     let settings = |body: Value| client::json("POST", "/api/review/settings", Some(&body));
     let out = match action {
         "status" => client::json("GET", "/api/review", None)?,
@@ -805,7 +807,7 @@ fn skill(action: Option<&str>) -> Result<()> {
 }
 
 fn block_q(sep: &str) -> String {
-    std::env::var("REX_BLOCK").map(|b| format!("{sep}block={b}")).unwrap_or_default()
+    crate::runtime::pane_from_env().map(|b| format!("{sep}block={b}")).unwrap_or_default()
 }
 
 fn text_or_stdin(t: Option<String>) -> Result<String> {
@@ -835,7 +837,7 @@ fn msg_line(v: &Value) -> String {
 
 fn msg_send(to: &str, subject: Option<String>, options: Vec<String>, text: Option<String>) -> Result<()> {
     let body = text_or_stdin(text)?;
-    let block = std::env::var("REX_BLOCK").ok();
+    let block = crate::runtime::pane_from_env();
     let v = client::json("POST", "/api/messages", Some(&json!({ "to": to, "subject": subject, "options": options, "body": body, "block": block })))?;
     let state = if v["status"] == "open" { "in your inbox" } else { "queued: it goes in when that agent is between turns" };
     println!("#{} to {}: {state}", v["id"], v["to"].as_str().unwrap_or(to));
@@ -844,7 +846,7 @@ fn msg_send(to: &str, subject: Option<String>, options: Vec<String>, text: Optio
 
 fn msg_reply(n: i64, choice: Option<String>, text: Option<String>) -> Result<()> {
     let body = text_or_stdin(text)?;
-    let block = std::env::var("REX_BLOCK").ok();
+    let block = crate::runtime::pane_from_env();
     let v = client::json("POST", &format!("/api/messages/{n}/reply"), Some(&json!({ "body": body, "choice": choice, "block": block })))?;
     println!("#{} to {}{}", v["id"], v["to"].as_str().unwrap_or("?"), v["choice"].as_str().map(|c| format!(" (chose {c})")).unwrap_or_default());
     Ok(())
@@ -951,7 +953,7 @@ fn intent(d: &str, text: Option<String>) -> Result<()> {
             } else {
                 t
             };
-            let block = std::env::var("REX_BLOCK").ok();
+            let block = crate::runtime::pane_from_env();
             let v = client::json("POST", &format!("/api/dockets/{d}/intent"), Some(&json!({ "body": body, "block": block })))?;
             if v["unchanged"].as_bool() == Some(true) {
                 println!("{d}: the intent is already that")
@@ -965,7 +967,7 @@ fn intent(d: &str, text: Option<String>) -> Result<()> {
 
 fn attach(what: &str, title: Option<String>, docket: Option<String>) -> Result<()> {
     use base64::Engine;
-    let block = std::env::var("REX_BLOCK").ok();
+    let block = crate::runtime::pane_from_env();
     let d = match docket {
         Some(d) => normalize(&d),
         None => {
@@ -1000,7 +1002,7 @@ fn brief(d: Option<String>) -> Result<()> {
     let path = match d {
         Some(d) => format!("/api/dockets/{d}/brief"),
         None => {
-            let block = std::env::var("REX_BLOCK").map_err(|_| anyhow::anyhow!("name a docket (wh brief D-12), or run this from an agent's pane"))?;
+            let block = crate::runtime::pane_from_env().ok_or_else(|| anyhow::anyhow!("name a docket (wh brief D-12), or run this from an agent's pane"))?;
             format!("/api/brief?block={block}")
         }
     };
@@ -1012,11 +1014,10 @@ fn status() -> Result<()> {
     let v = client::json("GET", "/api/status", None)?;
     let up = v["uptime_secs"].as_u64().unwrap_or(0);
     println!("Wheelhouse {} running for {}m (pid {})", v["version"].as_str().unwrap_or("?"), up / 60, v["pid"]);
-    println!(
-        "  Rex      {}",
-        if v["rex"]["connected"].as_bool() == Some(true) { "following".to_string() } else { format!("not connected: {}", v["rex"]["error"].as_str().unwrap_or("connecting")) }
-    );
-    println!("  agents   {} in Rex · dockets {} open, {} in all", v["agents"], v["dockets"]["open"], v["dockets"]["all"]);
+    for r in v["runtimes"].as_array().into_iter().flatten() {
+        println!("  {:<8} {}", r["title"].as_str().unwrap_or("?"), runtime_line(r));
+    }
+    println!("  agents   {} · dockets {} open, {} in all", v["agents"], v["dockets"]["open"], v["dockets"]["all"]);
     let on: Vec<&str> = [("claude-code", "Claude Code"), ("agy", "Antigravity")].into_iter().filter(|(app, _)| hooks::installed_for(app)).map(|(_, name)| name).collect();
     println!("  hooks    {}", if on.is_empty() { "off: wh hooks install".to_string() } else { format!("{} on", on.join(", ")) });
     match v["tailnet"]["url"].as_str() {
@@ -1057,10 +1058,27 @@ fn ls(all: bool) -> Result<()> {
             live
         );
     }
-    if !v["rex"]["connected"].as_bool().unwrap_or(false) {
-        println!("\nNot following Rex: {}", v["rex"]["error"].as_str().unwrap_or("connecting"));
+    for r in v["runtimes"].as_array().into_iter().flatten() {
+        if r["installed"] == true && r["connected"] != true {
+            println!("\nNot following {}: {}", r["title"].as_str().unwrap_or("?"), r["error"].as_str().unwrap_or("connecting"));
+        }
     }
     Ok(())
+}
+
+/// A runtime as `wh status` shows it: `following · 3 agents · new agents open here`.
+fn runtime_line(r: &Value) -> String {
+    let mut s = if r["connected"] == true {
+        format!("following · {} agent{}", r["agents"], if r["agents"] == 1 { "" } else { "s" })
+    } else if r["installed"] != true {
+        "not installed".to_string()
+    } else {
+        format!("not connected: {}", r["error"].as_str().unwrap_or("connecting"))
+    };
+    if r["spawn"] == true {
+        s.push_str(" · new agents open here");
+    }
+    s
 }
 
 fn truncate(s: &str, n: usize) -> String {

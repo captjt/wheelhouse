@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { appName, type Docket } from "./api";
+import { appName, followedRuntimes, paneRuntime, runtimeOf, runtimeTitle, type Docket } from "./api";
 import { AppAvatar, IconBoard, IconChevronDown, IconEye, SessionChip, SessionIcon, TitleText, shortPath, IconCopy, IconDisplay, IconList, IconTerminal, LiveIcon, StatusIcon, liveWord } from "./icons";
 import { ago, go, lastList, store, useHub } from "./live";
 import { useKeys, useMenu, usePhone, type MenuItem } from "./ui";
@@ -30,7 +30,7 @@ export function rowMenu(d: Docket, hub: ReturnType<typeof useHub>, pane: ReturnT
     { key: "open", label: "Open", hint: "↩", onPick: () => go(`/d/${d.id}`) },
   ];
   if (d.live) {
-    if (onThisMac()) items.push({ key: "rex", label: "Show pane in Rex", icon: <IconTerminal size={14} />, hint: "O", onPick: () => hub.openInRex(d.id) });
+    if (onThisMac()) items.push({ key: "rex", label: `Show pane in ${paneRuntime(d)}`, icon: <IconTerminal size={14} />, hint: "O", onPick: () => hub.openInRex(d.id) });
     items.push({ key: "peek", label: onThisMac() ? "Peek at pane" : "View pane", icon: <IconEye size={14} />, hint: onThisMac() ? undefined : "O", onPick: () => pane.view(d.id) });
     if (d.live.answerable) {
       items.push({ key: "approve", label: <>Approve <span className="menu-sub">{d.live.msg}</span></>, onPick: () => hub.answer(d, true) });
@@ -165,7 +165,7 @@ export function DocketListView({
       [
         { key: "attention", label: "Group by attention", checked: group === "attention", onPick: () => (setGroup("attention"), saveGroup("attention")) },
         { key: "status", label: "Group by status", checked: group === "status", onPick: () => (setGroup("status"), saveGroup("status")) },
-        { key: "session", label: "Group by Rex session", checked: group === "session", onPick: () => (setGroup("session"), saveGroup("session")) },
+        { key: "session", label: "Group by session", checked: group === "session", onPick: () => (setGroup("session"), saveGroup("session")) },
       ],
       "Display",
     );
@@ -384,11 +384,11 @@ export function AgentsView() {
           <IconTerminal size={15} /> Agents <span className="view-count">{total}</span>
         </span>
         <span className="spacer" />
-        <span className="muted small m-hide">Every Claude Code, Codex and Antigravity pane in Rex, live</span>
+        <span className="muted small m-hide">Every Claude Code, Codex and Antigravity pane in {followedRuntimes(hub.state)}, live</span>
       </header>
       <LargeTitle title="Agents" count={total} />
       {total === 0 ? (
-        <div className="view-empty">No agents running in Rex.</div>
+        <div className="view-empty">No agents running in {followedRuntimes(hub.state)}.</div>
       ) : (
         <div className="list" style={{ ["--idch" as string]: Math.max(3, ...(hub.state?.agents ?? []).map((a) => (a.docket || "").length)) }}>
           {groups.map(([session, list]) => (
@@ -397,6 +397,11 @@ export function AgentsView() {
                 <SessionIcon name={session} size={14} />
                 <span className="group-label">{session}</span>
                 <span className="view-count">{list.length}</span>
+                {[...new Set(list.map((a) => runtimeTitle(a.runtime ?? runtimeOf(a.block))))].sort().map((r) => (
+                  <span key={r} className="runtime-tag" title={`In ${r}`}>
+                    {r}
+                  </span>
+                ))}
               </div>
               {list.map((a) => {
                 const d = a.docket ? hub.byId.get(a.docket) : undefined;
@@ -428,7 +433,7 @@ export function AgentsView() {
                     </span>
                     <button
                       className="icon-btn"
-                      title={onThisMac() ? "Show pane in Rex" : "View pane"}
+                      title={onThisMac() ? `Show pane in ${runtimeTitle(a.runtime ?? runtimeOf(a.block))}` : "View pane"}
                       onClick={(e) => {
                         e.preventDefault();
                         if (a.docket) pane.act(a.docket);

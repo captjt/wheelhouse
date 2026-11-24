@@ -1,7 +1,8 @@
 # Contributing to Wheelhouse
 
 Thanks for looking. Wheelhouse is macOS only for now, and needs
-[Rex](https://www.superlogical.com/rex), which is in private beta. Read the
+[Rex](https://www.superlogical.com/rex) (in private beta) or [Herdr](https://herdr.dev), or
+both: [docs/runtimes.md](docs/runtimes.md). Read the
 [README](README.md) for what it does and [DESIGN.md](DESIGN.md) for why
 it's built the way it is. This page covers how to work on it.
 
@@ -11,7 +12,7 @@ fixes can go straight to a pull request.
 ## Setting up
 
 You need what the README's [Requirements](README.md#requirements) list:
-Rust 1.88 or later, Node 22.18 or later, Xcode 26, `just`, LuaJIT, and Rex. Each
+Rust 1.88 or later, Node 22.18 or later, Xcode 26, `just`, LuaJIT, and Rex or Herdr. Each
 recipe in the `justfile` is a line or two, so you can run its commands by
 hand instead.
 
@@ -34,7 +35,7 @@ runs the hub at login, and installs the agents' hooks and skill.
 | `src/complete.rs`, `tests/completions.rs` | Tab completion: the zsh and bash hooks, and what the hub fills in. The test runs both shells against a stand-in hub |
 | `src/hub.rs`, `src/store.rs` | The hub's state, and SQLite: entries, dockets, messages, blobs. A new column goes in `migrate` |
 | `src/record/` | The record: entries, DSSE envelopes, the chain, keys, verify, and the fold to a docket's state. [docs/record.md](docs/record.md) is the contract |
-| `src/mirror.rs`, `src/follow.rs`, `src/rex.rs` | Rex: following its events, and calling its CLI |
+| `src/runtime/`, `src/mirror.rs` | The runtimes (Rex, Herdr): each one's CLI and follower behind one interface, and the mirror they fill. [docs/runtimes.md](docs/runtimes.md) |
 | `src/agents.rs`, `src/hooks.rs` | Agent dockets: adopting panes, prompts and turns, Claude Code's hooks |
 | `src/messages.rs`, `src/approve.rs`, `src/preview.rs`, `src/start.rs` | Messages and delivery, guarded approvals, `wh share`, `wh start` |
 | `src/server.rs` | The HTTP API, its guard, and the app's files |
@@ -57,7 +58,7 @@ socket and LaunchAgent (`dev.wheelhouse.hub.dev`), and Wheelhouse Dev.app
 nightly: a blue brand where the daily one is orange, a DEV icon, and DEV
 badges with the branch and commit it was built from, in the menu bar, the
 window, the quick panel and the web app it serves (the hub's `flavor`, from
-`WH_FLAVOR`). It shows a copy of your dockets with nothing live: Rex, gh,
+`WH_FLAVOR`). It shows a copy of your dockets with nothing live: Rex, Herdr, gh,
 Linear, Tailscale and notifications are off, Review and Build are paused on
 stand-in configs, and the agents' hooks stay with your everyday hub. Run it
 again after a change to update it; `just dev-sync` copies your dockets in
@@ -65,12 +66,13 @@ again, and `just dev-remove` takes it away. See `scripts/dev-install.sh`.
 
 **A hub of your own.** Your everyday hub keeps running. A second one, in
 the foreground, needs its own state, socket and port. It still follows
-your real Rex, so leave `WH_REX` pointing at a stand-in if your change
-could type into panes:
+your real Rex and Herdr, so leave `WH_REX` and `WH_HC` pointing at
+stand-ins if your change could type into panes:
 
 ```sh
 WH_STATE=/tmp/wh-try WH_HTTP=127.0.0.1:7610 WH_TAILNET=off WH_NOTIFY=off \
   WH_REX=$PWD/scripts/fake-rex WH_WORLD=/path/to/world.json \
+  WH_HC=$PWD/scripts/fake-hc WH_HC_WORLD=/path/to/hc.json WH_HERDR_APP=/usr/bin/true \
   cargo run -- serve
 ```
 
@@ -78,7 +80,7 @@ WH_STATE=/tmp/wh-try WH_HTTP=127.0.0.1:7610 WH_TAILNET=off WH_NOTIFY=off \
 same socket or port.
 
 **The made-up world.** `just screenshots` (`scripts/screenshots.sh`) builds
-the binary, makes a world of agents in Rex (through `scripts/fake-rex`),
+the binary, makes a world of agents in Rex and Herdr (through `scripts/fake-rex` and `scripts/fake-hc`),
 plays their prompts and replies through the same hooks Claude Code calls,
 adds review history and kept files, and renders the README's images and
 the social preview card. Nothing of yours shows up in them.
@@ -98,7 +100,7 @@ so a rebuilt app shows on reload.
 
 **Tests.** `cargo test` runs the hub's tests: the record, the protocols'
 rules, the post's refusals, links to Linear, the wall. They use an
-in-memory store and stand-ins, never your Rex, GitHub or Linear. `npm test`
+in-memory store and stand-ins, never your Rex, Herdr, GitHub or Linear. `npm test`
 in `web/` runs the renderer's checks. Tests that touch the outside world
 use made-up data (`acme/api`, team `ENG`, `@dana`), never real repos or
 people.

@@ -133,3 +133,26 @@ private func boxes(_ text: String) -> [(Int, Bool)] {
     #expect(Flavor.chord == "⌥⌘K")
     #expect(HubClient.defaultAddress == "http://127.0.0.1:7500")
 }
+
+@Test func namesEachPanesRuntime() throws {
+    let herdr = Docket(j: try JSON.parse(Data(#"{"id":"D-2","agent":{"block":"herdr:t2h","rex_session":"wheelhouse","pane":"D-2"}}"#.utf8)))
+    #expect(herdr.runtime == "Herdr")
+    let rex = Docket(j: try JSON.parse(Data(#"{"id":"D-3","agent":{"block":"block:01a2"},"live":{"block":"block:01a2","runtime":"rex"}}"#.utf8)))
+    #expect(rex.runtime == "Rex")
+    #expect(Docket(j: .null).runtime == "Rex")
+}
+
+@Test func followsEveryRuntimeCalmlyAboutOneNotInstalled() throws {
+    let s = { (json: String) throws in HubState(try JSON.parse(Data(json.utf8))) }
+    let both = try s(#"{"rex":{"connected":true},"runtimes":[{"name":"rex","title":"Rex","connected":true,"installed":true,"spawn":true},{"name":"herdr","title":"Herdr","connected":true,"installed":true}]}"#)
+    #expect(both.connection.ok && both.connection.text == "Rex · Herdr")
+    #expect(both.spawnRuntime == "Rex")
+    let noHerdr = try s(#"{"runtimes":[{"name":"rex","title":"Rex","connected":true,"installed":true,"spawn":true},{"name":"herdr","title":"Herdr","connected":false,"installed":false}]}"#)
+    #expect(noHerdr.connection.ok && noHerdr.connection.text == "Following Rex")
+    let down = try s(#"{"runtimes":[{"name":"rex","title":"Rex","connected":true,"installed":true},{"name":"herdr","title":"Herdr","connected":false,"installed":true,"error":"no core","spawn":true}]}"#)
+    #expect(!down.connection.ok && down.connection.text == "Herdr: no core")
+    #expect(down.spawnRuntime == "Herdr")
+    // An older hub says only Rex's.
+    let old = try s(#"{"rex":{"connected":true}}"#)
+    #expect(old.connection.text == "Following Rex")
+}

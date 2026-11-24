@@ -28,7 +28,7 @@ Decide what you can, and record why.
   `intent.md` (what the docket is for, as {{LOGIN}} has it now) and, when
   the work came from an issue, `issue.md`.
 - If you start a server, use port {{PORT}}.
-- Don't rename the Rex session or its tabs.
+- Don't rename the session (a Rex session or a Herdr space) or its tabs.
 
 ## Your status
 

@@ -1,0 +1,121 @@
+#!/bin/bash
+# A made-up herdr-core, for screenshots, demos and tests: it answers the hc
+# calls the hub makes from a world file ($WH_HC_WORLD), so the hub follows
+# that world, never your own Herdr. Point the hub at it with WH_HC (and
+# WH_HERDR_APP=/usr/bin/true, so nothing reaches the Herdr app).
+# scripts/build-e2e.sh herdr runs a Build on it.
+#
+# The world is JSON: {"terminals": [{"address", "state", "cwd", "labels",
+# "status": {state, app, kind, msg}, "status_ms", "foreground": {name, cwd},
+# "screen"}], "sent": [{terminal, text}], "keys": [{terminal, keys}],
+# "focused": [address], "restarts": 0, "n": 0}. Starting a terminal adds one
+# running an idle Claude Code; removing it takes it out; what's sent to one
+# is kept in "sent" (and the agent takes a quick turn: its status is
+# reported again), and the keys pressed in "keys". Pressing 1 or esc
+# answers a blocked agent, which goes idle. Adding to "restarts" ends the
+# event stream, as a core restart does. Run as herdr-app (WH_HERDR_APP
+# pointing at scripts/fake-herdr-app), `do agent.focus` is kept in "focused".
+set -euo pipefail
+world=${WH_HC_WORLD:?set WH_HC_WORLD to a world file}
+[ -f "$world" ] || echo '{"terminals": [], "sent": [], "n": 0}' >"$world"
+
+edit() { # filter [jq args...]
+  local f=$1
+  shift
+  until mkdir "$world.lock" 2>/dev/null; do sleep 0.05; done
+  if jq "$@" "$f" "$world" >"$world.tmp"; then mv "$world.tmp" "$world"; fi
+  rmdir "$world.lock"
+}
+
+term() { # address filter
+  jq -c --arg t "$1" "[.terminals[] | select(.address == \$t)][0] | if . == null then error(\"no terminal \" + \$t) else $2 end" "$world"
+}
+
+now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+
+cmd=${1:-}
+shift || true
+case $cmd in
+  events)
+    # A snapshot now, and again each time the world changes: the hub takes
+    # each as the whole picture. Stay until the hub goes.
+    last=""
+    restarts=$(jq '.restarts // 0' "$world")
+    while kill -0 "$PPID" 2>/dev/null; do
+      [ "$(jq '.restarts // 0' "$world")" = "$restarts" ] || exit 0
+      now=$(md5 -q "$world" 2>/dev/null || true)
+      if [ "$now" != "$last" ]; then
+        last=$now
+        jq -c '{channel: null, seq: 0, terminals: [.terminals[] | select(.state == "live")]}' "$world"
+      fi
+      sleep 0.4
+    done
+    ;;
+  run)
+    # run --bg --json --no-parent --no-notify --cwd DIR --label K=V... -- ARGV
+    cwd=/ labels='{}'
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do
+      case $1 in
+        --cwd) cwd=$2; shift ;;
+        --label) labels=$(jq -c --arg kv "$2" '. + {($kv | split("=")[0]): ($kv | split("=")[1:] | join("="))}' <<<"$labels"); shift ;;
+      esac
+      shift
+    done
+    until mkdir "$world.lock" 2>/dev/null; do sleep 0.05; done
+    n=$(( $(jq '.n // 0' "$world") + 1 ))
+    addr="t$n"
+    jq --arg a "$addr" --arg c "$cwd" --argjson l "$labels" --argjson n "$n" --argjson ms "$(now_ms)" \
+      '.n = $n | .terminals += [{address: $a, state: "live", cwd: $c, labels: $l, name: null,
+         status: {state: "idle", app: "claude-code"}, status_ms: $ms, foreground: {name: "claude", cwd: $c}}]' \
+      "$world" >"$world.tmp" && mv "$world.tmp" "$world"
+    rmdir "$world.lock"
+    jq -nc --arg a "$addr" --arg c "$cwd" '{address: $a, cwd: $c, state: "live", turn: 0}'
+    ;;
+  get)
+    term "$1" '.'
+    ;;
+  send)
+    # send TERMINAL TEXT --json
+    term "$1" '.address' >/dev/null
+    # The agent takes a quick turn: its status is reported again, now.
+    edit '.sent += [{terminal: $t, text: $x}] | (.terminals[] | select(.address == $t) | .status_ms) = $ms' --arg t "$1" --arg x "$2" --argjson ms "$(now_ms)"
+    echo '{"sent": true}'
+    ;;
+  keys)
+    # keys TERMINAL KEY... --json
+    t=$1
+    shift
+    keys=$(printf '%s\n' "$@" | grep -v '^--json$' | jq -R . | jq -sc .)
+    term "$t" '.address' >/dev/null
+    edit '.keys += [{terminal: $t, keys: $k}]
+      | if ($k == ["1"] or $k == ["esc"]) then
+          (.terminals[] | select(.address == $t and .status.state == "blocked")) |= (.status = {state: "idle", app: .status.app} | .status_ms = $ms)
+        else . end' --arg t "$t" --argjson k "$keys" --argjson ms "$(now_ms)"
+    echo '{}'
+    ;;
+  label)
+    # label TERMINAL K=V... [--json]
+    t=$1
+    shift
+    for kv in "$@"; do
+      [ "$kv" = --json ] && continue
+      edit '(.terminals[] | select(.address == $t) | .labels) += {($kv | split("=")[0]): ($kv | split("=")[1:] | join("="))}' --arg t "$t" --arg kv "$kv"
+    done
+    echo '{}'
+    ;;
+  read)
+    term "$1" '.screen // "(a made-up terminal)"' | jq -r .
+    ;;
+  kill)
+    edit '(.terminals[] | select(.address == $t) | .state) = "finished"' --arg t "$1"
+    echo '{}'
+    ;;
+  rm)
+    edit '.terminals |= [.[] | select(.address != $t)]' --arg t "$1"
+    echo '{}'
+    ;;
+  ls)
+    jq -c '{terminals: [.terminals[] | select(.state == "live") | {address, state, cwd}]}' "$world"
+    ;;
+  *) echo '{}' ;;
+esac

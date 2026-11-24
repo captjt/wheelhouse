@@ -45,6 +45,7 @@ import { InlineMd, Kbd, Modal, useToast } from "./ui";
 const SECTIONS: [string, string][] = [
   ["orders", "Standing orders"],
   ["gates", "Gates"],
+  ["runtimes", "Runtimes"],
   ["agents", "Agents"],
   ["repos", "Repos"],
   ["guides", "Guides & briefs"],
@@ -186,6 +187,7 @@ export function SettingsView({ section }: { section?: string }) {
                 ))}
               <Orders c={ctl!} />
               <Gates c={ctl!} />
+              <Runtimes c={ctl!} />
               <Agents c={ctl!} />
               <Repos c={ctl!} />
               <Guides c={ctl!} />
@@ -394,6 +396,40 @@ function Gates({ c }: { c: Ctl }) {
   );
 }
 
+// ---- runtimes ----
+
+/** Where new agents open (Rex or Herdr), and whether each is followed. The
+ * hub follows every runtime that's installed, whatever this says. */
+function Runtimes({ c }: { c: Ctl }) {
+  const rt = c.s.runtime;
+  if (!rt) return null;
+  const options = rt.runtimes.map((r) => ({ key: r.name, label: r.title, title: r.installed ? undefined : `${r.title} isn't installed on this Mac` }));
+  const state = (r: (typeof rt.runtimes)[number]) =>
+    r.connected ? `Following, ${r.agents} agent${r.agents === 1 ? "" : "s"}` : !r.installed ? "Not installed" : `Not connected: ${r.error || "connecting"}`;
+  return (
+    <Section id="runtimes" title="Runtimes" lead="The terminals agents run in. Wheelhouse follows each one that's installed, and opens the agents it starts in one.">
+      <div className="set-rows">
+        <Row label="New agents" note={rt.env ? <span className="set-sentence muted">WH_RUNTIME={rt.env} decides this for now.</span> : undefined}>
+          <Seg
+            label="New agents open in"
+            value={rt.value}
+            options={options}
+            disabled={c.busy === "runtime" || !!rt.env}
+            onPick={(v) => c.change("runtime", { runtime: v }, `New agents open in ${options.find((o) => o.key === v)?.label ?? v} from now on`)}
+          />
+          <span className="set-sentence">wh start, Build and Review open their panes here. Agents already running stay where they are.</span>
+          <Err c={c} where="runtime" />
+        </Row>
+        {rt.runtimes.map((r) => (
+          <Row key={r.name} label={r.title}>
+            <span className="set-sentence">{state(r)}</span>
+          </Row>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
 // ---- agents ----
 
 function Agents({ c }: { c: Ctl }) {
@@ -406,7 +442,7 @@ function Agents({ c }: { c: Ctl }) {
     c.change("agents.prereview", patchAt(["build", "prereview", "reviewers"], next), next.length ? `Pre-review: ${next.map(agentLabel).join(" and ")}` : "No pre-review: the PR opens without a blind review first");
   };
   return (
-    <Section id="agents" title="Agents" lead="Who does the work, and who checks it. Each runs in its own Rex pane.">
+    <Section id="agents" title="Agents" lead="Who does the work, and who checks it. Each runs in its own pane, in the runtime above.">
       {b && (
         <div className="set-group">
           <div className="set-sub">

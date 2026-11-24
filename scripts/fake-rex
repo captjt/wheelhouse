@@ -5,7 +5,10 @@
 # scripts/screenshots.sh and scripts/build-e2e.sh run the hub this way.
 # Opening a session or a pane adds one to the world, running an idle agent;
 # closing a pane takes it out. A test plays the agents by changing the world
-# and the worktree's files. (From rex-inbox's.)
+# and the worktree's files. What's pasted into a pane goes in "pasted", the
+# keys pressed in "keys", and the panes shown in "focused"; pressing 1 or
+# escape answers a blocked agent, which goes idle, and Enter is a quick turn
+# (its status is reported again, now). (From rex-inbox's.)
 #
 # The world is JSON: {"sessions": [{"session_id", "label", "windows": [{"window_id",
 # "label", "blocks": [{"block_id", "label", "cwd", "process", "records": [...]}]}]}],
@@ -64,12 +67,18 @@ case "${1:-}" in
     # Something happens only when the world file changes (a pane opened, an
     # agent's status changed): then the hub reads it all again. Stay until
     # the hub goes.
+    # Each pane's records go out as status events too, as Rex sends them,
+    # since the hub reads a pane it knows only from its events.
     last=$(md5 -q "$world" 2>/dev/null || true)
     while kill -0 "$PPID" 2>/dev/null; do
       now=$(md5 -q "$world" 2>/dev/null || true)
       if [ "$now" != "$last" ]; then
         last=$now
         echo '{"type":"session_world_changed"}'
+        q '$w.sessions[] as $s | $s.windows[].blocks[] as $b | $b.records[]? |
+          {type: "session_event", payload: {session_id: $s.session_id, event: {type: "block_event", payload: {
+            block_id: $b.block_id, creator_name: "com.superlogical.terminal", name: "program_status_changed",
+            payload: {id: (.id // ""), record: .}}}}}'
       fi
       sleep 0.4
     done
@@ -126,8 +135,14 @@ case "${1:-}" in
       shift 2
     fi
     method=$1
-    [ "${2:-}" = - ] && cat >/dev/null
+    params='{}'
+    [ "${2:-}" = - ] && params=$(cat)
     case $method in
+      block.event)
+        # A paste: kept, as the pane would show it.
+        edit '.pasted += [{block: $p.block_id, text: $p.event.payload.text}]' --argjson p "$params"
+        echo '{}'
+        ;;
       session.list) q '{sessions: [$w.sessions[] | {session_id, label}]}' ;;
       session.view)
         q '$w.sessions[] | select(.session_id == $s)
@@ -169,8 +184,27 @@ case "${1:-}" in
     # capture -s SESSION -b BLOCK --trim
     block "$3" "$5" '.screen // "(a made-up pane)"' | jq -r .
     ;;
-  do | focus | paste | send-keys | keys | input)
-    # Nothing to show or type into in a made-up world.
+  send-key)
+    # send-key -s SESSION -b BLOCK KEY...: kept; 1 or escape answers a
+    # blocked agent, which goes idle.
+    b=$5
+    shift 5
+    keys=$(printf '%s\n' "$@" | jq -R . | jq -sc .)
+    edit '.keys += [{block: $b, keys: $k}]
+      | if ($k == ["1"] or $k == ["escape"]) then
+          (.sessions[].windows[].blocks[] | select(.block_id == $b) | .records) |= map(if .state == "blocked" then {state: "idle", app, updated_at: $at} else . end)
+        elif $k == ["enter"] then
+          (.sessions[].windows[].blocks[] | select(.block_id == $b) | .records) |= map(.updated_at = $at)
+        else . end' --arg b "$b" --argjson k "$keys" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo '{}'
+    ;;
+  focus)
+    # focus -s SESSION BLOCK
+    edit '.focused += [$b]' --arg b "$4"
+    echo '{}'
+    ;;
+  do | paste | keys | input)
+    # Nothing to show in a made-up world.
     echo '{}'
     ;;
   *) ;;

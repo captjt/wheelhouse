@@ -57,7 +57,7 @@ enum GroupBy: String, CaseIterable {
         switch self {
         case .attention: "Attention"
         case .status: "Status"
-        case .session: "Rex session"
+        case .session: "Session"
         }
     }
 }
