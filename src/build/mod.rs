@@ -351,6 +351,22 @@ pub fn pane_docket(core: &Core, pane: &crate::mirror::Pane) -> Option<(String, S
     core.build.panes.get(&pane.label).cloned()
 }
 
+/// A branch name from outside (a Linear issue's) that's safe to hand git as
+/// a ref: not an option (`-x`), and nothing `git check-ref-format` refuses.
+/// Any other is left out, and the Build names its own branch.
+pub fn safe_branch(b: &str) -> bool {
+    !b.is_empty()
+        && b.len() <= 200
+        && !b.starts_with(['-', '/', '.'])
+        && !b.ends_with(['/', '.'])
+        && !b.ends_with(".lock")
+        && !b.contains("..")
+        && !b.contains("//")
+        && !b.contains("@{")
+        && !b.contains("/.")
+        && b.chars().all(|c| !c.is_control() && !c.is_whitespace() && !matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
+}
+
 /// What happened, in words, on the docket.
 pub fn event(core: &mut Core, docket: &str, what: &str, body: String, data: Value) -> Result<()> {
     let mut data = data;
@@ -363,6 +379,16 @@ pub fn event(core: &mut Core, docket: &str, what: &str, body: String, data: Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_safe_branch_name_from_outside_is_used() {
+        for ok in ["jordan/eng-142-retry-webhooks", "feature/a.b_c-1"] {
+            assert!(safe_branch(ok), "{ok}");
+        }
+        for bad in ["", "-x", "--upload-pack=evil", "a..b", "a b", "a:b", "x.lock", "a/", "a//b", "a/.b", "a@{1}", "a\nb", "~x", "a*"] {
+            assert!(!safe_branch(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn a_builds_pre_reviewers_stay_in_its_pane_map() {

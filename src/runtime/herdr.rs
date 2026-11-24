@@ -132,7 +132,8 @@ impl Herdr {
     /// Paste and press Enter: `hc send`, which waits out a person's
     /// unfinished draft and won't type into a program that's blocked.
     pub async fn submit(&self, block: &str, text: &str) -> Result<()> {
-        self.hc(&["send", address(block), text, "--json"]).await.map(|_| ())
+        // After `--`, text that starts with `-` is text, never a flag.
+        self.hc(&["send", address(block), "--json", "--", text]).await.map(|_| ())
     }
 
     pub async fn keys(&self, block: &str, keys: &[&str]) -> Result<()> {

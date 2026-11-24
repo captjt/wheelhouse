@@ -54,7 +54,7 @@ pub fn urgency(state: &str) -> u8 {
 
 /// Wheelhouse's one name for an app Rex may report under another: Rex's
 /// own status for the Antigravity CLI says `antigravity`, its binary is `agy`.
-fn canonical_app(app: &str) -> &str {
+pub fn canonical_app(app: &str) -> &str {
     match app {
         "antigravity" => "agy",
         other => other,

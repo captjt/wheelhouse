@@ -147,9 +147,12 @@ Applying entries in order, from nothing:
   last to be active. A record with one agent folds as it always did.
 - Every entry moves `updated_at` and the head.
 
-The hub keeps each docket's folded state as a copy, for speed. When the
-fold changes (a release of the hub that reads more from the same
-entries), the hub folds every docket again once, at start.
+The hub keeps each docket's folded state as a copy, for speed. Each copy
+says which fold made it. When the fold changes (a release of the hub that
+reads more from the same entries), the hub folds those dockets again at
+start, and so it does for any copy an older build saved. A docket whose
+entries don't read keeps its copy, is named in the log, and doesn't stop
+the hub: `wh verify` says what's wrong.
 
 ## Checking a docket
 

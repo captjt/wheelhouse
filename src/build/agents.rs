@@ -50,7 +50,7 @@ pub fn argv(cfg: &Config, s: &Spec) -> Launch {
     let gitdir = s.checkout.join(".git");
     let caches: Vec<String> = std::iter::once(crate::review::cache_dir()).chain(cfg.caches.iter().filter(|c| c.exists()).cloned()).map(|c| c.display().to_string()).collect();
     let mut argv = env_wall(cfg, s.worktree);
-    argv.push(program);
+    argv.push(program.clone());
     if s.agent == "claude" {
         let session = s.resume.map(str::to_string).unwrap_or_else(agentcli::uuid_v4);
         argv.extend([if s.resume.is_some() { "--resume" } else { "--session-id" }.to_string(), session.clone()]);
@@ -87,6 +87,9 @@ pub fn argv(cfg: &Config, s: &Spec) -> Launch {
             argv.extend(["resume".to_string(), t.to_string()]);
         }
         argv.extend(args);
+        if !cfg.mcp {
+            argv.extend(agentcli::codex_mcp_off(&program));
+        }
         for d in std::iter::once(gitdir.display().to_string()).chain(caches) {
             argv.extend(["--add-dir".to_string(), d]);
         }
@@ -117,7 +120,7 @@ mod tests {
             },
         );
         let a = l.argv.join(" ");
-        assert!(a.starts_with("env -u GH_TOKEN -u GITHUB_TOKEN -u LINEAR_API_KEY -u WH_LINEAR_KEY -u SSH_AUTH_SOCK PATH="), "{a}");
+        assert!(a.starts_with("env -u LINEAR_API_KEY -u WH_LINEAR_KEY -u SSH_AUTH_SOCK GH_TOKEN=wheelhouse-wall-no-token GITHUB_TOKEN=wheelhouse-wall-no-token PATH="), "{a}");
         assert!(a.contains("GIT_SSH_COMMAND=false GIT_CONFIG_COUNT=6 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=wheelhouse-agents-never-push:///"), "{a}");
         assert!(a.contains("GIT_CONFIG_KEY_2=url.wheelhouse-agents-never-push:///.pushInsteadOf GIT_CONFIG_VALUE_2=https://"), "{a}");
         assert!(a.contains("--effort high --add-dir /src/api/.git --settings"), "{a}");

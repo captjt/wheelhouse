@@ -152,13 +152,25 @@ impl Runtime {
     }
 
     /// Type `text` into the pane the way a person pastes it (no keys in it,
-    /// newlines that don't submit early), then press Enter.
-    pub async fn submit(&self, session: &str, block: &str, text: &str) -> Result<()> {
+    /// newlines that don't submit early), then press Enter. Only one text
+    /// goes into a pane at a time, from anywhere in the hub, so two never
+    /// land in one prompt. `check`: read the pane from its runtime first,
+    /// and type only if an agent there is between turns now (not a shell
+    /// left behind by one that died, whatever the mirror last saw).
+    pub async fn submit_checked(&self, session: &str, block: &str, text: &str, check: bool) -> Result<()> {
+        let _typing = Typing::wait(block).await?;
+        if check {
+            between_turns(&self.records(session, block).await?)?;
+        }
         let text = plain(text);
         match self {
             Runtime::Rex(r) => r.submit(session, block, &text).await,
             Runtime::Herdr(h) => h.submit(block, &text).await,
         }
+    }
+
+    pub async fn submit(&self, session: &str, block: &str, text: &str) -> Result<()> {
+        self.submit_checked(session, block, text, true).await
     }
 
     pub async fn keys(&self, session: &str, block: &str, keys: &[Key<'_>]) -> Result<()> {
@@ -248,9 +260,89 @@ pub fn plain(text: &str) -> String {
         .collect()
 }
 
+/// Whether a pane's records, read now, are an agent between turns: its root
+/// record idle or done, from an agent (by the same names the mirror knows:
+/// Rex calls Antigravity `antigravity`).
+pub fn between_turns(records: &[Record]) -> Result<()> {
+    let root = records.iter().find(|r| r.is_root());
+    let agent = |r: &Record| r.effective_app.as_deref().or(r.app.as_deref()).map(crate::mirror::canonical_app).is_none_or(crate::mirror::is_agent_app);
+    if root.is_some_and(|r| matches!(r.state.as_str(), "idle" | "done") && agent(r)) {
+        return Ok(());
+    }
+    anyhow::bail!("the pane isn't an agent between turns now ({})", root.map_or("no status", |r| r.state.as_str()))
+}
+
+/// The panes being typed into now: one text at a time per pane.
+static TYPING: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+pub struct Typing(String);
+
+impl Typing {
+    pub fn take(block: &str) -> Option<Self> {
+        TYPING.lock().unwrap_or_else(|e| e.into_inner()).insert(block.to_string()).then(|| Typing(block.to_string()))
+    }
+
+    /// Wait (a few seconds at most) for the pane to be free.
+    pub async fn wait(block: &str) -> Result<Self> {
+        for _ in 0..50 {
+            if let Some(t) = Self::take(block) {
+                return Ok(t);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        anyhow::bail!("something else is being typed into that pane")
+    }
+}
+
+impl Drop for Typing {
+    fn drop(&mut self) {
+        TYPING.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
+}
+
+/// The text went in, but Enter didn't: it's waiting in the agent's box.
+/// Typing it again would put it there twice, so it isn't tried again.
+#[derive(Debug)]
+pub struct PastedNoEnter(pub String);
+
+impl std::fmt::Display for PastedNoEnter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "it was pasted, but Enter didn't go in ({}): press Enter in the pane", self.0)
+    }
+}
+
+impl std::error::Error for PastedNoEnter {}
+
+/// Whether an error from typing means don't type it again.
+pub fn pasted(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<PastedNoEnter>().is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_agent_between_turns_is_typed_into() {
+        let rec = |state: &str, app: Option<&str>| Record { state: state.into(), app: app.map(str::to_string), ..Default::default() };
+        for app in ["claude-code", "codex", "agy", "antigravity"] {
+            assert!(between_turns(&[rec("idle", Some(app))]).is_ok(), "{app}");
+        }
+        assert!(between_turns(&[rec("done", None)]).is_ok());
+        assert!(between_turns(&[rec("working", Some("claude-code"))]).is_err());
+        assert!(between_turns(&[rec("blocked", Some("claude-code"))]).is_err());
+        assert!(between_turns(&[rec("idle", Some("zsh"))]).is_err(), "not an agent");
+        assert!(between_turns(&[]).is_err(), "no status: a shell");
+    }
+
+    #[test]
+    fn one_text_at_a_time_per_pane() {
+        let a = Typing::take("b1").expect("free");
+        assert!(Typing::take("b1").is_none());
+        assert!(Typing::take("b2").is_some());
+        drop(a);
+        assert!(Typing::take("b1").is_some());
+    }
 
     #[test]
     fn a_paste_carries_no_keys() {

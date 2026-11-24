@@ -104,21 +104,40 @@ impl Core {
 
     /// Fold every docket again when the fold has changed since its states
     /// were saved: they're a copy of what the entries say, kept for speed.
+    ///
+    /// Each state says which fold made it, so one saved by an older build (a
+    /// branch run against the same store) is folded again too. A docket
+    /// whose entries don't read keeps its saved state and is named in the
+    /// log: it doesn't stop the hub (`wh verify` shows what's wrong).
     fn refold(&mut self) -> Result<()> {
-        if self.store.meta_get("fold")?.as_deref() == Some(crate::record::fold::VERSION) {
-            return Ok(());
+        use crate::record::fold::{VERSION, fold};
+        // Stale states, and dockets with entries but no state at all.
+        let fresh: std::collections::HashSet<String> = self.store.states()?.into_iter().filter(|s| s.fold == VERSION).map(|s| s.id).collect();
+        let stale: Vec<String> = self.store.docket_ids()?.into_iter().filter(|id| !fresh.contains(id)).collect();
+        let (mut done, mut bad) = (0, Vec::new());
+        for id in &stale {
+            let folded = self.store.entries(id).and_then(|entries| {
+                let parsed: Vec<Entry> = entries.iter().map(|s| s.entry()).collect::<Result<_>>()?;
+                Ok(fold(id, entries.iter().zip(&parsed).map(|(s, e)| (s.seq, s.chain.as_str(), e))))
+            });
+            match folded {
+                Ok(st) => {
+                    self.store.put_state(&st)?;
+                    done += 1;
+                }
+                Err(e) => {
+                    say!("{id}: not folded again: {e:#}");
+                    bad.push(id.clone());
+                }
+            }
         }
-        let ids = self.store.docket_ids()?;
-        for id in &ids {
-            let entries = self.store.entries(id)?;
-            let parsed: Vec<Entry> = entries.iter().map(|s| s.entry()).collect::<Result<_>>()?;
-            let st = crate::record::fold::fold(id, entries.iter().zip(&parsed).map(|(s, e)| (s.seq, s.chain.as_str(), e)));
-            self.store.put_state(&st)?;
+        if done > 0 {
+            say!("folded {done} dockets again for fold v{VERSION}");
         }
-        if !ids.is_empty() {
-            say!("folded {} dockets again for fold v{}", ids.len(), crate::record::fold::VERSION);
+        if !bad.is_empty() {
+            say!("{} dockets kept their saved state ({}): run wh verify", bad.len(), bad.join(", "));
         }
-        self.store.meta_set("fold", crate::record::fold::VERSION)
+        Ok(())
     }
 
     fn actor(&self, who: &Who) -> (Actor, String) {
@@ -262,6 +281,45 @@ pub fn test_core() -> Core {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_state_an_older_build_saved_is_folded_again_and_a_bad_docket_doesnt_stop_the_hub() {
+        let mut core = test_core();
+        let a = core.open(&Who::Hub, "An agent's", json!({ "protocol": "agent", "agent": { "app": "claude-code", "host": "local", "block": "b1" } })).unwrap();
+        let b = core.open(&Who::Owner, "Broken", json!({})).unwrap();
+        // An older build saved a's state without what this fold adds.
+        let mut old = core.store.state(&a).unwrap().unwrap();
+        old.agents.clear();
+        old.fold = 0;
+        core.store.put_state(&old).unwrap();
+        // b's entry no longer reads (and its state is stale too).
+        let mut stale = core.store.state(&b).unwrap().unwrap();
+        stale.fold = 0;
+        core.store.put_state(&stale).unwrap();
+        core.store.conn_for_tests().execute("UPDATE entries SET envelope = 'not an envelope' WHERE docket = ?1", [&b]).unwrap();
+
+        core.refold().expect("a docket that doesn't read doesn't stop the hub");
+        let st = core.store.state(&a).unwrap().unwrap();
+        assert_eq!(st.agents.len(), 1, "folded again");
+        assert_eq!(st.fold, crate::record::fold::VERSION);
+        assert_eq!(core.store.state(&b).unwrap().unwrap().fold, 0, "kept its saved state");
+        // Nothing stale left but the broken one: a second start folds only it.
+        core.refold().unwrap();
+        assert_eq!(core.store.state(&a).unwrap().unwrap(), st);
+
+        // A stale state that gets another entry stays stale, so it's folded
+        // at the next start; a docket with entries but no state gets one.
+        let mut old = core.store.state(&a).unwrap().unwrap();
+        old.agents.clear();
+        old.fold = 0;
+        core.store.put_state(&old).unwrap();
+        core.append(&a, "note", &Who::Owner, Some("later".into()), json!({})).unwrap();
+        assert_eq!(core.store.state(&a).unwrap().unwrap().fold, 0);
+        core.store.conn_for_tests().execute("DELETE FROM dockets WHERE id = ?1", [&a]).unwrap();
+        core.refold().unwrap();
+        let st = core.store.state(&a).unwrap().expect("a state again");
+        assert_eq!((st.fold, st.agents.len(), st.notes), (crate::record::fold::VERSION, 1, 1));
+    }
 
     #[test]
     fn appended_entries_verify_and_fold() {

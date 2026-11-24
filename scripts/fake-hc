@@ -75,10 +75,16 @@ case $cmd in
     term "$1" '.'
     ;;
   send)
-    # send TERMINAL TEXT --json
-    term "$1" '.address' >/dev/null
+    # send TERMINAL [--json] [--] TEXT: after `--`, the text is text even
+    # when it starts with `-`, as in the real hc.
+    t=$1
+    shift
+    while [ $# -gt 1 ] && [ "$1" = --json ]; do shift; done
+    [ "${1:-}" = -- ] && shift
+    x=${1:-}
+    term "$t" '.address' >/dev/null
     # The agent takes a quick turn: its status is reported again, now.
-    edit '.sent += [{terminal: $t, text: $x}] | (.terminals[] | select(.address == $t) | .status_ms) = $ms' --arg t "$1" --arg x "$2" --argjson ms "$(now_ms)"
+    edit '.sent += [{terminal: $t, text: $x}] | (.terminals[] | select(.address == $t) | .status_ms) = $ms' --arg t "$t" --arg x "$x" --argjson ms "$(now_ms)"
     echo '{"sent": true}'
     ;;
   keys)

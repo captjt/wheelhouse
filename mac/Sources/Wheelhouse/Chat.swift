@@ -438,13 +438,16 @@ struct PaneSheet: View {
     var body: some View {
         let d = store.docket(id)
         let shownBlock = picked ?? block
-        let a = d?.member(block: shownBlock) ?? d?.onAgents.first
-        let live = d?.hasAgents == true ? a?.live : d?.live
+        // Asked for one agent: that one, even after it leaves (then the sheet
+        // says so and sends nothing), never another that's on the docket.
+        let gone = shownBlock != nil && d?.hasAgents == true && d?.onAgents.contains { $0.block == shownBlock } != true
+        let a = shownBlock != nil ? d?.member(block: shownBlock) : d?.onAgents.first
+        let live = gone ? nil : d?.hasAgents == true ? a?.live : d?.live
         let state = live?.state
         let several = d?.several == true
         let app = a.map { several ? $0.label : appName($0.app) } ?? appName(d?.agent?.app)
         let runtime = a?.runtime ?? d?.runtime ?? "Rex"
-        let why: String? = state == .error ? "\(app) stopped with an error." : state == nil ? "The pane isn't open in \(runtime)." : nil
+        let why: String? = gone ? "\(a.map { several ? $0.label : appName($0.app) } ?? "That agent") left \(id)." : state == .error ? "\(app) stopped with an error." : state == nil ? "The pane isn't open in \(runtime)." : nil
         let queues = state == .working || state == .starting || state == .blocked
         let act = d?.blockFor(a)
         VStack(spacing: 0) {

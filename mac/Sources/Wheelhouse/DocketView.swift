@@ -697,7 +697,7 @@ struct AgentLine: View {
                 }
             }
             Spacer(minLength: 8)
-            if let l, a.on {
+            if l != nil, a.on {
                 HStack(spacing: 6) {
                     Button("Open in \(a.runtime)", systemImage: "terminal") { store.openInRex(d.id, block: block) }
                         .labelStyle(.iconOnly)

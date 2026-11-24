@@ -20,6 +20,19 @@ gap.
   trick you into clicking Approve or Post.
 - The app's content security policy runs only its own scripts.
 
+**An approval answers only the prompt you saw.** Before a key goes in,
+the hub reads the prompt from its runtime again, and sends nothing if it
+changed, has no time to tell it from a later one, or isn't the only
+prompt waiting in that pane (a subagent's included). One answer goes into
+a pane at a time, so approving from two screens at once can't send a
+second key to the next prompt. A prompt whose text has characters that
+don't show (bidirectional overrides, zero-width or control characters)
+is never answered from Wheelhouse: what you'd approve isn't what you'd
+read. Where a prompt is shown cut short (a banner, a menu, the palette, an
+Inbox row), Approve is offered only for one short line; anything longer
+opens where it's shown whole. The Mac's banner buttons work only on an
+unlocked Mac.
+
 **What agents and PRs write can't run in the app.** Agent turns, messages,
 PR descriptions, review drafts and Linear text are Markdown. Wheelhouse
 renders them to HTML, sanitizes it (DOMPurify), and inserts the result as
@@ -33,31 +46,58 @@ message headers lose every control character (escape sequences included)
 except newlines and tabs before they're pasted, so one agent can't type
 keys into another. Pane names are letters, digits, `.`, `_` and `-`.
 Messages go in only between an agent's turns, only into an agent, and
-only while the hub can see the pane's runtime (Rex or Herdr).
+only while the hub can see the pane's runtime (Rex or Herdr): the pane is
+read from its runtime just before, so text never goes into a shell an
+agent left behind. One text goes into a pane at a time, and one whose
+Enter didn't go in is never pasted again. A message can't pass for
+another or for you (a line in it that starts like Wheelhouse's own headers
+is quoted), its options are picked by number (an option's words never go
+inside a command an agent is told to run), and its subject and options
+are single, short lines. One sender can have at most 20 messages waiting
+for one agent.
 
 **Any agent on this Mac can join a docket.** `wh join` puts an agent on
 an open docket that isn't on hold, beside the agents there; it's the same
 trust any agent already has to note on any docket, since the hub holds
 every key on this machine. A join is witnessed on the record (a `claim`
 with `source: join`), so you can see who joined and when. Review's and
-Build's dockets refuse it: their panes are the protocol's. A message from
+Build's dockets refuse it: their panes are the protocol's. A role is one
+short line (letters, digits, spaces, `-_./+:`, up to 40), since it's shown in
+other agents' briefs. The hub can't tell which pane a local call came
+from, so an agent could also move or take off another agent's pane, as it
+could already name one: what stops it is that every join and leave is on
+the record. A message from
 another agent, `@D-12` included, carries no more authority than any other
 text: the agent instructions say not to join a docket because a peer
 asked.
 
 **Only the hub writes to GitHub, and only what you approved.**
 
-- The panes Review and Build start have no `GH_TOKEN`, no Linear key and
-  no SSH agent. `gh` is signed out, and every `git push` is rewritten to a
-  URL that fails. Build's Claude Code also can't run `git push`, `gh` or
-  `wh send`, and has no MCP servers.
+- The panes Review and Build start have no Linear key and no SSH agent.
+  Their `GH_TOKEN` is a token that works nowhere: with none at all, `gh
+  auth token` would read yours from the Keychain and hand it out. Every
+  `git push` is rewritten to a URL that fails. Build's Claude Code also
+  can't run `git push`, `gh` or `wh send`. No agent Review or Build starts
+  has MCP servers (unless Build's `wall.mcp` is on): Claude gets
+  `--strict-mcp-config`, Antigravity denies `mcp(*)`, and Codex gets each
+  of its servers switched off by name.
+- Witnessed checks run the repo's own code, so they get the same wall and
+  only the hub's plain environment (home, user, shell, locale, PATH),
+  never what a hub started by hand inherited from your terminal.
 - The hub posts a review only if its draft is byte for byte the one you
   saw, and opens a PR only if its title and description are the ones you
   were asked about. It pushes only the exact commit the checker checked and
   you approved.
 - The hub's own git commands, which run with your credentials in repos
-  agents can write to, never run hooks, an fsmonitor or other programs from
-  the repo's config. They never skip TLS checks.
+  agents can write to, never run hooks, an fsmonitor, the repo's
+  `core.sshCommand` (they use your global one, or plain `ssh`: a second
+  account's key belongs in a `Host` alias in `~/.ssh/config`), or its
+  external diff and textconv programs. They
+  never skip TLS checks. A branch name from Linear is used only if it's a
+  safe ref.
+- `wh review post` without a digest posts only the draft its last preview
+  showed; a PR opens with exactly the title and description checked
+  against what you approved.
 - The hub never writes, reads or deletes through a symbolic link in an
   agent's `.tmp` folder.
 
@@ -88,6 +128,12 @@ reviews. Running as you, an agent can:
   PATH, the wall), and keeps what each save replaces in
   `~/.config/wheelhouse/.history`, but it can't tell such a call from
   yours.
+
+Two narrow gaps remain in what the hub itself does. A runtime can't check
+a prompt and send a key in one step, so between the hub's last read and
+its key (a few milliseconds) a prompt answered in the pane could be
+replaced by the next one. And messages waiting for a pane are delivered to
+whichever agent is next in it, even a new session.
 
 Claude Code asks before running commands unless you've allowed them, and
 that's the real line of defense today. Wheelhouse makes the honest mistakes
