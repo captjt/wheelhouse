@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { getText, post, type ApiError, type Docket, type HubState } from "./api";
+import { getText, paneRuntime, post, type ApiError, type Docket, type HubState } from "./api";
 import { useToast } from "./ui";
 
 // One stream of the hub's events for the whole app. Each event bumps a
@@ -212,7 +212,7 @@ export function HubProvider({ children }: { children: ReactNode }) {
     note: (id, body) => post(`/api/dockets/${id}/note`, { body }).then(reload, fail),
     openInRex: (id) =>
       post(`/api/dockets/${id}/open`).then(
-        () => toast(`Showing ${id}'s pane in Rex`),
+        () => toast(`Showing ${id}'s pane in ${paneRuntime(byId.get(id))}`),
         (e: Error) => toast(e.message, "error"),
       ),
     answer: (d, approve) => {

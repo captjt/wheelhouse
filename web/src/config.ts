@@ -64,6 +64,8 @@ export type Settings = {
   orders: Order[];
   docs: SettingsDoc[];
   history: string;
+  /** Where new agents open, and every runtime. Older hubs leave it out. */
+  runtime?: { value: import("./api").RuntimeName; env?: string | null; runtimes: import("./api").RuntimeLink[] };
 };
 
 /** A path into the configs: `["build", "repos", "acme/api", "notes"]` (a slug has a slash, so not dots). */

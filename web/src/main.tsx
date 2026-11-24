@@ -1,7 +1,7 @@
 import "@fontsource-variable/inter";
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Docket, Flavor } from "./api";
+import { connLine, type Docket, type Flavor } from "./api";
 import { DocketScreen } from "./Docket";
 import { InboxView, inboxItems } from "./Inbox";
 import { IconActive, IconAgents, IconBuild, IconDone, IconHook, IconInbox, IconIssue, IconLayers, IconMenu, IconMonitor, IconMoon, IconChart, IconPlus, IconPR, IconSearch, IconSettings, IconSun, Logo, SessionIcon } from "./icons";
@@ -105,13 +105,13 @@ function RouteView({ route }: { route: string[] }) {
         icon={<SessionIcon name={s} />}
         filter={(d) => isOpen(d) && d.agent?.rex_session === s}
         defaultGroup="attention"
-        empty="No open dockets in this Rex session."
+        empty="No open dockets in this session."
       />
     );
   }
   const v = (route[1] as keyof typeof FILTERS) || "active";
   const meta = {
-    active: { title: "Active", icon: <IconActive size={15} />, group: "attention" as const, empty: "No open dockets. Start an agent in Rex, or press C." },
+    active: { title: "Active", icon: <IconActive size={15} />, group: "attention" as const, empty: "No open dockets. Start an agent in Rex or Herdr, or press C." },
     all: { title: "All dockets", icon: <IconLayers size={15} />, group: "status" as const, empty: "No dockets yet." },
     done: { title: "Done", icon: <IconDone size={15} />, group: "status" as const, empty: "Nothing done yet." },
   }[v] ?? { title: "Active", icon: <IconActive size={15} />, group: "attention" as const, empty: "" };
@@ -247,22 +247,22 @@ function App() {
 
   const docket = page === "d" && route[1] ? route[1] : null;
   const main = docket ? <DocketScreen key={docket} id={docket} /> : <RouteView route={route} />;
-  // A flavored hub (Wheelhouse Dev) has Rex, Linear, hooks and push off on
-  // purpose: no hints to turn them on, and a calm line instead of Rex's error.
+  // A flavored hub (Wheelhouse Dev) has the runtimes, Linear, hooks and push
+  // off on purpose: no hints to turn them on, and a calm line instead of an error.
   const foot = (
     <>
       {hub.state && !hub.state.hooks && !flavor && <HooksHint />}
       {hub.state && !hub.state.linear && !flavor && <LinearHint />}
       {!flavor && <PushHint />}
       <div className="conn">
-        <span className={`conn-dot ${flavor ? "flavor" : hub.state ? (hub.state.rex.connected ? "on" : "off") : ""}`} />
+        <span className={`conn-dot ${flavor ? "flavor" : hub.state ? (connLine(hub.state).ok ? "on" : "off") : ""}`} />
         {flavor ? (
           <span className="conn-text" title={`${name}: a copy of your dockets, built from ${flavor.branch} at ${flavor.commit.slice(0, 7)}. Rex, GitHub, Linear and notifications are off.`}>
             Nothing live
           </span>
         ) : (
           <span className="conn-text">
-            {hub.state ? (hub.state.rex.connected ? "Following Rex" : `Rex: ${hub.state.rex.error || "connecting"}`) : hub.error ? "Hub unreachable" : "Connecting…"}
+            {hub.state ? connLine(hub.state).text : hub.error ? "Hub unreachable" : "Connecting…"}
           </span>
         )}
         <span className="spacer" />
@@ -330,7 +330,7 @@ function App() {
         </nav>
         {sessions.length > 0 && (
           <>
-            <div className="nav-section">Rex sessions</div>
+            <div className="nav-section">Sessions</div>
             <nav className="nav">
               {sessions.map(([s, n]) => (
                 <a key={s} className={`nav-item${here === `session/${s}` ? " on" : ""}`} href={`#/session/${encodeURIComponent(s)}`}>

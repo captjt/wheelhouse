@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { get, post, type Docket } from "./api";
+import { get, paneRuntime, post, spawnRuntime, type Docket } from "./api";
 import { LinearPicker } from "./Linear";
 import { IconActive, IconAgents, IconDone, IconEye, IconIssue, IconInbox, IconLayers, IconMonitor, IconMoon, IconPause, IconPlay, IconPlus, IconSettings, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
 import { AttentionIcon } from "./Verify";
@@ -67,7 +67,7 @@ export function Palette({
     }
     if (context) {
       const d = context;
-      if (d.live && onThisMac()) out.push({ id: "rex", group: d.id, label: "Show pane in Rex", icon: <IconTerminal size={15} />, hint: <Kbd>O</Kbd>, run: () => hub.openInRex(d.id) });
+      if (d.live && onThisMac()) out.push({ id: "rex", group: d.id, label: `Show pane in ${paneRuntime(d)}`, icon: <IconTerminal size={15} />, hint: <Kbd>O</Kbd>, run: () => hub.openInRex(d.id) });
       if (d.live?.answerable) {
         out.push({ id: "approve", group: d.id, label: `Approve: ${d.live.msg ?? "the prompt"}`, keywords: "permission yes allow", run: () => hub.answer(d, true) });
         out.push({ id: "deny", group: d.id, label: "Deny the prompt", keywords: "permission no reject", run: () => hub.answer(d, false) });
@@ -271,7 +271,7 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
         </div>
       </div>
       <div className="nd-foot">
-        <span className="muted small">A new tab in Rex's wheelhouse session, named {id}. The agent works on this docket and reads its intent.</span>
+        <span className="muted small">A new tab in {spawnRuntime(hub.state)}'s wheelhouse session, named {id}. The agent works on this docket and reads its intent.</span>
         <span className="spacer" />
         <button className="btn btn-primary" disabled={!cwd.trim() || busy} onClick={startIt}>
           {busy ? "Starting…" : "Start agent"} <Kbd>⌘↩</Kbd>
@@ -378,7 +378,7 @@ export function NewDocket({ onClose, linear, agent }: { onClose: () => void; lin
           </div>
         </div>
         <div className="nd-foot">
-          <span className="muted small">A new tab in Rex's wheelhouse session, named after the docket.</span>
+          <span className="muted small">A new tab in {spawnRuntime(hub.state)}'s wheelhouse session, named after the docket.</span>
           <span className="spacer" />
           <button className="btn btn-primary" disabled={!cwd.trim() || busy} onClick={startIt}>
             {busy ? "Starting…" : "Start agent"} <Kbd>⌘↩</Kbd>
