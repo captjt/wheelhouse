@@ -674,6 +674,8 @@ struct AgentLine: View {
                         LiveIcon(state: l?.state ?? .idle, size: 11)
                         Text(l.map { "\($0.state.word)\($0.since.map { " · \(ago($0))" } ?? "")" } ?? "Not running")
                             .foregroundStyle(l?.state == .blocked ? K.blocked : l?.state == .error ? K.error : K.text2)
+                            .lineLimit(1)
+                            .fixedSize()
                     } else {
                         Text("Left\(a.leftAt.map { " \(agoLong($0))" } ?? "")\(a.left.map { " · \($0)" } ?? "")")
                     }
@@ -689,11 +691,14 @@ struct AgentLine: View {
                 if let l, l.state == .blocked, let m = l.msg {
                     Text(m).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(K.text2).lineLimit(2).textSelection(.enabled)
                 }
+                // Under what it asks, so a narrow column keeps the line above whole.
+                if let l, a.on, l.state == .blocked, l.answerable {
+                    AnswerButtons(d: d, block: block, live: l, small: true).padding(.top, 3)
+                }
             }
             Spacer(minLength: 8)
             if let l, a.on {
                 HStack(spacing: 6) {
-                    if l.state == .blocked, l.answerable { AnswerButtons(d: d, block: block, live: l, small: true) }
                     Button("Open in \(a.runtime)", systemImage: "terminal") { store.openInRex(d.id, block: block) }
                         .labelStyle(.iconOnly)
                         .help("Bring \(a.label)'s pane to the front in \(a.runtime)")

@@ -546,7 +546,9 @@ struct Entry: Hashable, Identifiable {
     var actorApp: String { String(actorId.split(separator: "@").first ?? "") }
     /// The agent that wrote it (`actor.block`), or that the hub wrote it
     /// about (`data.block`). Older entries have neither.
-    var block: String? { j["actor"]["block"].text ?? j["data"]["block"].text }
+    /// The agent's pane: an agent's own entries name it in the actor, the
+    /// hub's in `data.block`, and a claim in its `data.agent`.
+    var block: String? { j["actor"]["block"].text ?? j["data"]["block"].text ?? j["data"]["agent"]["block"].text }
     /// An agent actor's id names its block too (`claude-code@block`).
     var actorBlock: String? {
         guard actorType == "agent", let at = actorId.firstIndex(of: "@") else { return nil }

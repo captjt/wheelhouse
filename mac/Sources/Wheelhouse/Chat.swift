@@ -48,6 +48,9 @@ struct ChatView: View {
             case "claim":
                 let s = x["session"].str ?? ""
                 let k = by ?? ""
+                if x["source"].str == "join" {
+                    put(.pause(e.seq, "\(appName(app))\(who.map { " (\($0))" } ?? "") joined"), by)
+                }
                 if !s.isEmpty, s != session[k] {
                     if session[k] != nil {
                         let what = x["source"].str == "resume" ? "Resumed an earlier session" : x["source"].str == "clear" ? "A new session (/clear)" : "A new session"
