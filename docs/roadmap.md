@@ -143,6 +143,12 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [x] Recap: today, this week or 30 days. Reviews and their verdicts, PRs
       merged, waiting or closed, the agents' work, and your decisions; Copy
       as Markdown, and `wh recap`.
+- [x] Recap's tokens: across all the work (agents, Builds, reviews), by
+      provider and model, per day, and the dockets that took the most, from
+      the agents' own Claude Code, Codex and Antigravity transcripts
+- [ ] Keep tokens after the tools prune their transcripts (Claude Code's
+      go after 30 days): snapshot each day's usage into the hub's store
+- [ ] Cost: tokens at each model's price
 - [x] The phone app, from the Home Screen: a tab bar, swipe back, rows that
       swipe, sheets, and pull to refresh
 - [x] Chat: an agent's docket as a conversation, with a box to send the

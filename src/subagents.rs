@@ -182,8 +182,15 @@ fn claude_subagent_dir(cwd: &Path, session: &str) -> Option<PathBuf> {
     std::fs::read_dir(projects).ok()?.filter_map(Result::ok).map(|e| e.path().join(session).join("subagents")).find(|p| p.is_dir())
 }
 
-/// Claude Code sessions that began in `cwd` from `from` (seconds) on.
-fn claude_sessions(cwd: &Path, from: i64) -> Vec<(String, i64)> {
+/// Claude Code sessions that began in `cwd` from `from` (seconds) on; a
+/// folder's listing is read once into `listings`.
+fn claude_sessions(listings: &mut HashMap<PathBuf, Vec<(String, i64)>>, cwd: &Path, from: i64) -> Vec<(String, i64)> {
+    let all = listings.entry(cwd.to_path_buf()).or_insert_with(|| claude_listing(cwd));
+    all.iter().filter(|(_, t)| *t >= from).cloned().collect()
+}
+
+/// Every Claude Code session in `cwd`'s project, with when it began.
+fn claude_listing(cwd: &Path) -> Vec<(String, i64)> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(agentcli::claude_project(cwd)).into_iter().flatten().flatten() {
         let p = e.path();
@@ -193,9 +200,7 @@ fn claude_sessions(cwd: &Path, from: i64) -> Vec<(String, i64)> {
         let Some(id) = p.file_stem().and_then(|s| s.to_str()).map(str::to_string) else { continue };
         let born = e.metadata().ok().and_then(|m| m.created().or_else(|_| m.modified()).ok());
         let Some(t) = born.and_then(|b| b.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64) else { continue };
-        if t >= from {
-            out.push((id, t));
-        }
+        out.push((id, t));
     }
     out
 }
@@ -381,10 +386,17 @@ fn clip(s: &str) -> String {
 /// (label, round, cwd, began) of an (app, session).
 type Session = (String, Option<i64>, PathBuf, i64);
 
-/// Each of the docket's agents (one per session) with its subagents, newest
-/// agent first; `running`, `total` and `tokens` sum them.
-pub fn of(claims: &[Claim]) -> Value {
-    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+/// Antigravity's conversations, by folder.
+type AgyByFolder = HashMap<PathBuf, Vec<agentcli::AgyConversation>>;
+
+/// The docket's agents' sessions, each (app, session) once with the claim
+/// it's under, and Antigravity's conversations by folder (for subagents).
+fn collect(
+    claims: &[Claim],
+    conn: Option<&rusqlite::Connection>,
+    agy_root: &Path,
+    listings: &mut HashMap<PathBuf, Vec<(String, i64)>>,
+) -> (BTreeMap<(String, String), Session>, AgyByFolder) {
     let mut sessions: BTreeMap<(String, String), Session> = BTreeMap::new();
     let mut put = |app: &str, s: String, c: &Claim, t: i64| {
         sessions.entry((app.to_string(), s)).or_insert_with(|| (c.label.clone(), c.round, c.cwd.clone(), t));
@@ -393,7 +405,7 @@ pub fn of(claims: &[Claim]) -> Value {
         match &c.session {
             Some(s) => put("claude", s.clone(), c, c.from),
             None => {
-                for (s, t) in claude_sessions(&c.cwd, c.from - SLACK) {
+                for (s, t) in claude_sessions(listings, &c.cwd, c.from - SLACK) {
                     if owner(claims, "claude", &c.cwd, t).is_some_and(|o| std::ptr::eq(o, c)) {
                         put("claude", s, c, t);
                     }
@@ -401,8 +413,7 @@ pub fn of(claims: &[Claim]) -> Value {
             }
         }
     }
-    let conn = agentcli::codex_conn();
-    if let Some(conn) = &conn {
+    if let Some(conn) = conn {
         for c in claims.iter().filter(|c| c.app == "codex") {
             for (s, t) in codex_threads(conn, &c.cwd, c.from - SLACK) {
                 if owner(claims, "codex", &c.cwd, t).is_some_and(|o| std::ptr::eq(o, c)) {
@@ -411,12 +422,10 @@ pub fn of(claims: &[Claim]) -> Value {
             }
         }
     }
-    // Antigravity's conversations, by folder: its agents' and their subagents'.
-    let agy_root = agentcli::agy_home();
-    let mut agy: HashMap<PathBuf, Vec<agentcli::AgyConversation>> = HashMap::new();
+    let mut agy: AgyByFolder = HashMap::new();
     for c in claims.iter().filter(|c| c.app == "agy") {
         let first = claims.iter().filter(|x| x.app == "agy" && x.cwd == c.cwd).map(|x| x.from).min().unwrap_or(c.from);
-        let all = agy.entry(c.cwd.clone()).or_insert_with(|| agentcli::agy_conversations(&agy_root, &c.cwd, first - SLACK)).clone();
+        let all = agy.entry(c.cwd.clone()).or_insert_with(|| agentcli::agy_conversations(agy_root, &c.cwd, first - SLACK)).clone();
         match &c.session {
             Some(s) => put("agy", s.clone(), c, c.from),
             None => {
@@ -428,6 +437,109 @@ pub fn of(claims: &[Claim]) -> Value {
             }
         }
     }
+    (sessions, agy)
+}
+
+/// What finding many dockets' sessions shares: Codex's database, and each
+/// Claude Code project's listing.
+pub struct Finder {
+    conn: Option<rusqlite::Connection>,
+    agy_root: PathBuf,
+    claude: HashMap<PathBuf, Vec<(String, i64)>>,
+    codex: Option<CodexTree>,
+}
+
+/// Every Codex thread's rollout, and which threads each one spawned.
+#[derive(Default)]
+struct CodexTree {
+    rollout: HashMap<String, String>,
+    children: HashMap<String, Vec<String>>,
+}
+
+fn codex_tree(conn: &rusqlite::Connection) -> CodexTree {
+    let mut t = CodexTree::default();
+    let sql = "select id, rollout_path, case when source like '{\"subagent\"%' and json_valid(source) then json_extract(source, '$.subagent.thread_spawn.parent_thread_id') end from threads";
+    let rows: Vec<(String, String, Option<String>)> =
+        conn.prepare(sql).and_then(|mut st| st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect()).unwrap_or_default();
+    for (id, rollout, parent) in rows {
+        if let Some(p) = parent {
+            t.children.entry(p).or_default().push(id.clone());
+        }
+        t.rollout.insert(id, rollout);
+    }
+    t
+}
+
+impl Finder {
+    pub fn new() -> Self {
+        Finder { conn: agentcli::codex_conn(), agy_root: agentcli::agy_home(), claude: HashMap::new(), codex: None }
+    }
+
+    /// Every file a docket's agents wrote their model calls to: each
+    /// agent's own transcript and its subagents', as (app, path). For the
+    /// recap's usage; a path is the same file however it's reached.
+    pub fn transcripts(&mut self, claims: &[Claim]) -> Vec<(String, PathBuf)> {
+        let (sessions, agy) = collect(claims, self.conn.as_ref(), &self.agy_root, &mut self.claude);
+        let mut out = Vec::new();
+        for ((app, session), (_, _, cwd, _)) in sessions {
+            match app.as_str() {
+                "claude" => {
+                    let own = agentcli::claude_project(&cwd).join(format!("{session}.jsonl"));
+                    let Some(own) = (if own.is_file() { Some(own) } else { claude_find(&session) }) else { continue };
+                    // Its subagents are beside it.
+                    let subs = own.with_extension("").join("subagents");
+                    out.push(("claude".to_string(), own));
+                    for e in std::fs::read_dir(subs).into_iter().flatten().flatten() {
+                        let p = e.path();
+                        if p.extension().is_some_and(|x| x == "jsonl") {
+                            out.push(("claude".into(), p));
+                        }
+                    }
+                }
+                "codex" => {
+                    let tree = self.codex.get_or_insert_with(|| self.conn.as_ref().map(codex_tree).unwrap_or_default());
+                    let mut ids = vec![session.clone()];
+                    let mut i = 0;
+                    // Its subagents, and theirs.
+                    while i < ids.len() && i < 256 {
+                        ids.extend(tree.children.get(&ids[i]).into_iter().flatten().cloned());
+                        i += 1;
+                    }
+                    out.extend(ids.iter().filter_map(|id| tree.rollout.get(id)).map(|p| ("codex".to_string(), PathBuf::from(p))));
+                }
+                "agy" => {
+                    let mut ids = vec![session.clone()];
+                    let all = agy.get(&cwd).map(Vec::as_slice).unwrap_or_default();
+                    let mut i = 0;
+                    // Its subagents, and theirs, by caller.
+                    while i < ids.len() && i < 256 {
+                        let id = ids[i].clone();
+                        ids.extend(all.iter().filter(|c| c.parent.as_deref() == Some(&id)).map(|c| c.id.clone()));
+                        i += 1;
+                    }
+                    out.extend(ids.iter().map(|id| ("agy".to_string(), agentcli::agy_transcript(&self.agy_root, id))));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// A Claude Code session's transcript in whichever project has it (one
+/// resumed in another folder).
+fn claude_find(session: &str) -> Option<PathBuf> {
+    let projects = crate::paths::home().join(".claude/projects");
+    std::fs::read_dir(projects).ok()?.filter_map(Result::ok).map(|e| e.path().join(format!("{session}.jsonl"))).find(|p| p.is_file())
+}
+
+/// Each of the docket's agents (one per session) with its subagents, newest
+/// agent first; `running`, `total` and `tokens` sum them.
+pub fn of(claims: &[Claim]) -> Value {
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let conn = agentcli::codex_conn();
+    let agy_root = agentcli::agy_home();
+    let (sessions, agy) = collect(claims, conn.as_ref(), &agy_root, &mut HashMap::new());
     let (mut running, mut total, mut tokens) = (0, 0, 0i64);
     let mut agents = Vec::new();
     for ((app, session), (label, round, cwd, began)) in sessions {

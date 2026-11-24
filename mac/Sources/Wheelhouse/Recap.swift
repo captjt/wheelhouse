@@ -2,8 +2,9 @@ import Charts
 import SwiftUI
 
 /// What happened: today, this week, or 30 days, in your time zone. Reviews
-/// and their verdicts, PRs merged, agents' turns, and your decisions; and
-/// the same as Markdown, for a standup.
+/// and their verdicts, PRs merged, agents' turns, your decisions, and the
+/// tokens all the work took, by provider and model; and the same as
+/// Markdown, for a standup.
 struct RecapScreen: View {
     @Environment(Store.self) private var store
     @Environment(Nav.self) private var nav
@@ -74,16 +75,23 @@ struct RecapScreen: View {
         let r = d["reviews"], ag = d["agents"], you = d["you"]
         let posted = r["posted"].int ?? 0
         VStack(alignment: .leading, spacing: 28) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12, alignment: .top)], spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 12, alignment: .top)], spacing: 12) {
                 Tile(label: "Reviews posted", value: posted, delta: (posted, r["prev_posted"].int ?? 0, words.before), spark: r["per_day"].array.compactMap(\.int), since: d["since"].str)
                 Tile(label: "Approved", value: r["approved"].int ?? 0, sub: "\(pct(r["approved"].int ?? 0, posted)) of reviews")
                 Tile(label: "Changes requested", value: r["changes"].int ?? 0, sub: "\(pct(r["changes"].int ?? 0, posted)) of reviews")
                 Tile(label: "PRs merged", value: r["merged"].int ?? 0, delta: (r["merged"].int ?? 0, r["prev_merged"].int ?? 0, words.before))
                 Tile(label: "Agent turns", value: ag["turns"].int ?? 0, sub: "\(plural(ag["done"].array.count, "docket")) done · \(plural(ag["prompts"].int ?? 0, "prompt"))", spark: ag["per_day"].array.compactMap(\.int), since: d["since"].str)
+                if d["usage"]["tokens"].int != nil {
+                    let u = d["usage"]
+                    Tile(label: "Tokens", value: u["tokens"].int ?? 0, delta: (u["tokens"].int ?? 0, u["prev_tokens"].int ?? 0, words.before), spark: u["per_day"].array.compactMap(\.int), since: d["since"].str, format: compact, neutral: true)
+                }
             }
             let extras = [r["median_to_review"].double.map { "Median time from request to review: \(dur($0))" }, (r["tokens"].int ?? 0) > 0 ? "\(compact(r["tokens"].int ?? 0)) review tokens\(r["cached"].double.map { ", \(Int($0 * 100))% cached" } ?? "")" : nil, (r["dismissed"].int ?? 0) > 0 ? "\(r["dismissed"].int!) dismissed" : nil].compactMap { $0 }
             if !extras.isEmpty { Text(extras.joined(separator: " · ")).font(.system(size: 12.5)).foregroundStyle(K.muted) }
 
+            if d["usage"]["tokens"].int != nil {
+                section("Tokens") { UsageView(u: d["usage"], words: words.now) { id in nav.show(id, store: store) } }
+            }
             section("Reviews") {
                 let merged = r["prs"]["merged"].array, open = r["prs"]["open"].array, closed = r["prs"]["closed"].array
                 if merged.isEmpty && open.isEmpty && closed.isEmpty {
@@ -164,6 +172,138 @@ private func compact(_ n: Int) -> String {
     n >= 1_000_000_000 ? String(format: "%.1fB", Double(n) / 1e9) : n >= 1_000_000 ? String(format: n >= 10_000_000 ? "%.0fM" : "%.1fM", Double(n) / 1e6) : n >= 10000 ? "\(n / 1000)k" : n.formatted()
 }
 
+/// A provider's color: its agent's avatar's.
+private func providerColor(_ p: String?) -> Color {
+    switch p {
+    case "anthropic": K.claude
+    case "openai": K.codexInk
+    case "google": K.agy
+    default: K.progress
+    }
+}
+
+private func share(_ n: Int, _ of: Int) -> String {
+    guard of > 0 else { return "–" }
+    let p = Double(n) / Double(of) * 100
+    return p >= 99.5 ? "100%" : p >= 1 ? "\(Int(p.rounded()))%" : "<1%"
+}
+
+/// Tokens across all the work: by provider and model, by kind of work, and
+/// the dockets that took the most.
+private struct UsageView: View {
+    let u: JSON
+    let words: String
+    let open: (String) -> Void
+
+    var body: some View {
+        let total = u["tokens"].int ?? 0
+        let models = u["models"].array, providers = u["providers"].array
+        if total == 0 {
+            Text("No model calls \(words).").foregroundStyle(K.muted)
+        } else {
+            let line = [
+                "\(compact(total)) tokens \(words)",
+                u["cached"].double.map { "\(Int(($0 * 100).rounded()))% of input from the cache" },
+                "\(compact(u["split"]["output"].int ?? 0)) output",
+                "\(plural(models.count, "model")) from \(plural(providers.count, "provider"))",
+            ].compactMap { $0 }.joined(separator: " · ")
+            Text(line).font(.system(size: 12.5)).foregroundStyle(K.muted)
+            GeometryReader { g in
+                let gaps = CGFloat(max(0, models.count - 1)) * 2
+                HStack(spacing: 2) {
+                    ForEach(Array(models.enumerated()), id: \.offset) { i, m in
+                        Rectangle()
+                            .fill(providerColor(m["provider"].str).opacity(1 - Double(min(i, 3)) * 0.18))
+                            .frame(width: max(3, (g.size.width - gaps) * CGFloat(m["tokens"].int ?? 0) / CGFloat(total)))
+                            .help("\(m["model"].str ?? "") (\(m["provider_name"].str ?? "")): \(compact(m["tokens"].int ?? 0)), \(share(m["tokens"].int ?? 0, total))")
+                    }
+                }
+            }
+            .frame(height: 10)
+            .background(K.recessed)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            HStack(spacing: 16) {
+                ForEach(Array(providers.enumerated()), id: \.offset) { _, p in
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 2).fill(providerColor(p["provider"].str)).frame(width: 8, height: 8)
+                        Text(p["name"].str ?? "").foregroundStyle(K.text)
+                        Text("\(compact(p["tokens"].int ?? 0)) · \(share(p["tokens"].int ?? 0, total))").foregroundStyle(K.muted)
+                    }
+                    .font(.system(size: 12.5))
+                }
+            }
+            HStack(alignment: .top, spacing: 28) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Models").sectionLabel().padding(.bottom, 4)
+                    ForEach(Array(models.enumerated()), id: \.offset) { i, m in
+                        let sp = m["split"]
+                        let input = (sp["input"].int ?? 0) + (sp["cache_read"].int ?? 0) + (sp["cache_write"].int ?? 0)
+                        let meta = [input > 0 ? "\(Int((Double(sp["cache_read"].int ?? 0) / Double(input) * 100).rounded()))% cached" : nil, "\(compact(sp["output"].int ?? 0)) out", plural(m["dockets"].int ?? 0, "docket")].compactMap { $0 }.joined(separator: " · ")
+                        row(swatch: providerColor(m["provider"].str), name: m["model"].str ?? "", sub: m["provider_name"].str, meta: meta, n: m["tokens"].int ?? 0, total: total, last: i == models.count - 1)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("By kind of work").sectionLabel().padding(.bottom, 4)
+                    let kinds = [("agents", "Agents"), ("builds", "Builds"), ("reviews", "Reviews")]
+                    let top = max(1, kinds.map { u["work"][$0.0].int ?? 0 }.max() ?? 1)
+                    ForEach(Array(kinds.enumerated()), id: \.offset) { i, k in
+                        let n = u["work"][k.0].int ?? 0
+                        HStack(spacing: 8) {
+                            Text(k.1).foregroundStyle(K.text).frame(width: 64, alignment: .leading)
+                            GeometryReader { g in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(K.recessed)
+                                    Capsule().fill(K.accent).frame(width: g.size.width * CGFloat(n) / CGFloat(top))
+                                }
+                            }
+                            .frame(height: 6)
+                            Text(compact(n)).monospacedDigit().foregroundStyle(K.text).frame(minWidth: 48, alignment: .trailing)
+                            Text(share(n, total)).font(.system(size: 12)).monospacedDigit().foregroundStyle(K.muted).frame(width: 36, alignment: .trailing)
+                        }
+                        .font(.system(size: 13))
+                        .padding(.vertical, 6)
+                        .overlay(alignment: .bottom) { if i < kinds.count - 1 { Rectangle().fill(K.line).frame(height: 1) } }
+                    }
+                }
+                .frame(width: 280)
+            }
+            .padding(.top, 4)
+            let dockets = u["dockets"].array
+            if !dockets.isEmpty {
+                Text("Most tokens · \(dockets.count)").sectionLabel().padding(.top, 4)
+                ForEach(Array(dockets.enumerated()), id: \.offset) { _, x in
+                    let kind = x["kind"].str == "builds" ? "Build" : x["kind"].str == "reviews" ? "Review" : "Agent"
+                    RecapRow(icon: AnyView(Image(systemName: x["kind"].str == "builds" ? "hammer" : x["kind"].str == "reviews" ? "arrow.triangle.pull" : "sparkles").foregroundStyle(K.accent)),
+                             key: x["id"].str ?? "", title: x["title"].str ?? "",
+                             meta: [kind, x["models"].strings.joined(separator: ", "), "\(share(x["tokens"].int ?? 0, total)) of the tokens"].filter { !$0.isEmpty }.joined(separator: " · "),
+                             detail: nil, at: nil, trailing: compact(x["tokens"].int ?? 0)) {
+                        if let id = x["id"].str { open(id) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func row(swatch: Color, name: String, sub: String?, meta: String, n: Int, total: Int, last: Bool) -> some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2).fill(swatch).frame(width: 8, height: 8)
+            HStack(spacing: 4) {
+                Text(name).foregroundStyle(K.text)
+                if let sub { Text(sub).font(.system(size: 12)).foregroundStyle(K.muted) }
+            }
+            .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(meta).font(.system(size: 12)).foregroundStyle(K.muted).lineLimit(1)
+            Text(compact(n)).monospacedDigit().foregroundStyle(K.text).frame(minWidth: 48, alignment: .trailing)
+            Text(share(n, total)).font(.system(size: 12)).monospacedDigit().foregroundStyle(K.muted).frame(width: 36, alignment: .trailing)
+        }
+        .font(.system(size: 13))
+        .padding(.vertical, 6)
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(K.line).frame(height: 1) } }
+    }
+}
+
 /// A number, what it's of, and how it moved.
 private struct Tile: View {
     let label: String
@@ -172,14 +312,17 @@ private struct Tile: View {
     var delta: (Int, Int, String)?
     var spark: [Int] = []
     var since: String?
+    var format: (Int) -> String = { "\($0)" }
+    /// More isn't better (tokens): the change in the muted ink.
+    var neutral = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.system(size: 12)).foregroundStyle(K.muted)
-            Text("\(value)").font(.system(size: 28, weight: .semibold).monospacedDigit()).foregroundStyle(K.text)
+            Text(format(value)).font(.system(size: 28, weight: .semibold).monospacedDigit()).foregroundStyle(K.text)
             if let (now, before, words) = delta {
                 let d = now - before
-                Text("\(d > 0 ? "+" : d < 0 ? "−" : "±")\(abs(d)) vs \(words)").font(.system(size: 11.5)).foregroundStyle(d > 0 ? K.working : d < 0 ? K.error : K.faint)
+                Text("\(d > 0 ? "+" : d < 0 ? "−" : "±")\(format(abs(d))) vs \(words)").font(.system(size: 11.5)).foregroundStyle(neutral ? K.muted : d > 0 ? K.working : d < 0 ? K.error : K.faint)
             }
             if let sub { Text(sub).font(.system(size: 11.5)).foregroundStyle(K.muted) }
             Spacer(minLength: 0)
@@ -214,6 +357,7 @@ private struct RecapRow: View {
     let meta: String
     let detail: String?
     let at: String?
+    var trailing: String?
     let open: () -> Void
     @State private var hover = false
 
@@ -226,7 +370,11 @@ private struct RecapRow: View {
                         Text(key).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(K.muted)
                         Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(K.text).lineLimit(1)
                         Spacer()
-                        Text(ago(at)).font(.system(size: 11.5)).foregroundStyle(K.faint)
+                        if let trailing {
+                            Text(trailing).font(.system(size: 12.5).monospacedDigit()).foregroundStyle(K.text)
+                        } else {
+                            Text(ago(at)).font(.system(size: 11.5)).foregroundStyle(K.faint)
+                        }
                     }
                     Text(meta).font(.system(size: 12)).foregroundStyle(K.muted)
                     if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(K.text2).lineLimit(2) }
