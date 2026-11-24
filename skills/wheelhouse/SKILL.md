@@ -1,11 +1,11 @@
 ---
 name: wheelhouse
-description: Work on a Wheelhouse docket from a Rex pane with the wh CLI. Read your docket's brief and intent, keep the intent current, leave notes on the record, message the user (with options as buttons) or other agents by pane name, answer "[wheelhouse] Message #N", and wait for replies. Use when WH is set up (wh status answers) and you're working in a Rex pane, when a "[wheelhouse] Message #N" arrives, or when you need a decision only the user can make.
+description: Work on a Wheelhouse docket from a Rex pane or a Herdr terminal with the wh CLI. Read your docket's brief and intent, keep the intent current, leave notes on the record, message the user (with options as buttons) or other agents by pane name, answer "[wheelhouse] Message #N", and wait for replies. Use when WH is set up (wh status answers) and you're working in a Rex pane or a Herdr terminal, when a "[wheelhouse] Message #N" arrives, or when you need a decision only the user can make.
 ---
 
 # Wheelhouse
 
-Every agent in Rex is on a **docket**: one piece of work, with a record you
+Every agent in Rex or Herdr is on a **docket**: one piece of work, with a record you
 and the user both write to. `wh` is how you read and write it.
 
 ## Start with the brief

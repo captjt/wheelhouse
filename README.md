@@ -4,8 +4,9 @@
 
 Every piece of agent work as a docket, on a record you can check.
 
-Wheelhouse follows [Rex](https://www.superlogical.com/rex). Every Claude
-Code, Codex or Antigravity agent running in a Rex pane gets a **docket**: what you asked,
+Wheelhouse follows [Rex](https://www.superlogical.com/rex) and Herdr, side
+by side. Every Claude Code, Codex or Antigravity agent running in a Rex pane
+or a Herdr terminal gets a **docket**: what you asked,
 what the agent answered, when it waited on you, the files it made, and how
 it ended. Each entry is signed and chained, so `wh verify` shows that
 nothing in a docket's record was changed, removed or reordered.
@@ -110,7 +111,9 @@ phone over Tailscale.
 
 ## Requirements
 
-- macOS and [Rex](https://www.superlogical.com/rex), with the `rex` CLI
+- macOS and [Rex](https://www.superlogical.com/rex), with the `rex` CLI, or
+  Herdr (herdr-core 0.1.20 or later, `hc`), or both: see
+  [docs/runtimes.md](docs/runtimes.md)
 - [Rust](https://rustup.rs) 1.88 or later, [Node](https://nodejs.org) 22.18
   or later, and [just](https://github.com/casey/just) (`brew install just`)
 - Xcode 26 (Swift 6.2), for Wheelhouse.app
@@ -201,7 +204,7 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh intent D-4 [TEXT\|-]` | Print a docket's intent, or set it |
 | `wh link D-4 ENG-142` | Link a Linear issue |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or a link with a docket |
-| `wh start [--codex\|--agy] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have, in Rex |
+| `wh start [--codex\|--agy] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have, in Rex (or Herdr, with `runtime` set) |
 | `wh open [D-4]` | Open a docket (or the Inbox) in Wheelhouse.app, or the web app without it |
 | `wh verify [D-4]`, `wh export D-4 > D-4.jsonl`, `wh verify --file D-4.jsonl` | Check a record, every kept file included; one that checks without the hub |
 | `wh review`, `on`, `off`, `pause`, `resume`, `check` | The Review protocol, and its switches |
@@ -265,8 +268,9 @@ odd setups.
 
 ## How it works
 
-- **The hub** (`wh serve`) follows Rex's events and mirrors its sessions,
-  panes and each agent's program status. An agent pane gets a docket;
+- **The hub** (`wh serve`) follows Rex's and Herdr's events and mirrors
+  their sessions, panes and each agent's program status
+  ([docs/runtimes.md](docs/runtimes.md)). An agent pane gets a docket;
   Claude Code's and Antigravity's hooks add your prompts and their turns.
 - **The record** is SQLite: one signed, chained entry per thing that
   happened, and each docket's state folded from its entries. Files are kept
@@ -276,7 +280,7 @@ odd setups.
   and, through Tailscale, on your phone. Both follow the hub's API and its
   server-sent events. While Wheelhouse.app listens, it posts the Mac's
   notifications, with their actions; the hub posts none of its own.
-- **Review and Build** run agents in Rex panes of their own, with a wall
+- **Review and Build** run agents in panes of their own, in Rex or Herdr, with a wall
   around them, and keep their working state per PR or docket.
 
 [DESIGN.md](DESIGN.md) has the why. [docs/roadmap.md](docs/roadmap.md) has
@@ -293,7 +297,7 @@ doesn't.
 
 ```sh
 just check          # what a pull request needs to pass (there's no CI: run it)
-just e2e            # a Build end to end, with stand-ins for Rex, gh, GitHub and Linear
+just e2e            # a Build end to end, in Rex and in Herdr, with stand-ins for both, gh, GitHub and Linear
 just app            # build Wheelhouse.app into ~/Applications
 just dev-install    # Wheelhouse Dev: this checkout beside your everyday one, never meeting it
 just dev            # the web app with hot reload on :5180, against a running hub

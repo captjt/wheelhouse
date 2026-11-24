@@ -28,10 +28,12 @@ check: deps
 check-app:
     cd ./mac && swift test && swift build -c release
 
-# A Build end to end on a scratch hub, with stand-ins for Rex, gh and
-# GitHub: the plan, the PR, two address rounds, and the merge.
+# A Build end to end on a scratch hub, with stand-ins for Rex, Herdr, gh
+# and GitHub: the plan, the PR, two address rounds, and the merge. Once
+# with the agents' panes in Rex, once in Herdr.
 e2e:
-    scripts/build-e2e.sh
+    scripts/build-e2e.sh rex
+    PORT=7624 scripts/build-e2e.sh herdr
 
 # Build Wheelhouse.app and put it in ~/Applications.
 app:

@@ -137,11 +137,12 @@ jq -n --arg at "$(ago 12)" \
 export HOME="$demo/home" WH_STATE="$demo/state" WH_SOCKET="$demo/wh.sock" WH_HTTP="127.0.0.1:$port" \
   WH_TAILNET=off WH_NOTIFY=off WH_LINEAR_KEY=demo WH_LINEAR_ENDPOINT=http://127.0.0.1:9 \
   WH_REX="$here/fake-rex" WH_WORLD="$demo/world.json" \
+  WH_HC="$here/fake-hc" WH_HC_WORLD="$demo/hc.json" WH_HERDR_APP=/usr/bin/true \
   WH_GH="$demo/gh" WH_REVIEW_CONFIG="$demo/review.lua" WH_BUILD_CONFIG="$demo/build.lua" \
   REX_REVIEWER_STATE_DIR="$demo/reviewer" USER=you
 # Claude Code's hooks, in the made-up HOME, so the app shows them on. Never
 # your own config, even when this runs inside Claude Code.
-unset CLAUDE_CONFIG_DIR CODEX_HOME
+unset CLAUDE_CONFIG_DIR CODEX_HOME HC_TERMINAL_ID HC_SCOPE HC_TERMINAL_SOCKET
 mkdir -p "$demo/home/.claude"
 "$wh" hooks install >/dev/null
 "$wh" serve >"$demo/hub.log" 2>&1 &

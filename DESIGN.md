@@ -49,7 +49,8 @@ on the Mac or on their phone, without watching panes.
    a standing order you wrote. Nothing ever merges.
 4. **Every claim says how it's known.** An entry is marked *said*,
    *witnessed*, or *checkable*. A docket can't be closed on what was said.
-5. **Rex is the runtime.** Panes live in Rex. Wheelhouse never draws a
+5. **The runtime holds the panes.** Panes live in Rex or Herdr
+   ([docs/runtimes.md](docs/runtimes.md)). Wheelhouse never draws a
    terminal: **Open** takes you to the pane.
 6. **Answer from anywhere.** The window, the menu bar, a notification,
    the phone, the keyboard, or a terminal.
@@ -262,8 +263,8 @@ Needs you: D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
 ## Architecture
 
 ```
- Rex: panes, program status, hosts
-   │ rex CLI: events, send, capture, do
+ Rex, Herdr: panes, program status
+   │ src/runtime/: rex and hc CLIs (events, send, capture, open, focus)
    ▼
  wheelhouse daemon (Rust, one binary, a LaunchAgent)
    ├── runtime    mirror, hosts, program status → asks, delivery,
@@ -285,8 +286,9 @@ Needs you: D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
   docket's state is the fold of its entries, so replay comes free:
   `wh replay D-41` (planned) runs the rules over the record.
 - **The runtime is behind four verbs.** `identify`, `observe`, `deliver`,
-  and `brief`, as the concept defines them. Rex is the only runtime in
-  v1. Herdr could come later without touching the protocols.
+  and `brief`, as the concept defines them. Rex and Herdr are runtimes
+  (`src/runtime/`, [docs/runtimes.md](docs/runtimes.md)), followed side by
+  side; the protocols don't know which one a pane is in.
 - **Rex layout.** Each host has one `wheelhouse` session. A docket a
   protocol staffs gets a tab, and each task gets a pane in it, named
   `D-41 · builder`. Agents you start yourself stay where you started
@@ -514,13 +516,13 @@ Build also gains pre-review by landing second.
 | Order | Review before Build | proposed |
 | Names | The app is Wheelhouse.app, the CLI is `wh`, and Rex actions start with `wh_` | proposed |
 | Rex layout | One `wheelhouse` session per host, with a tab per staffed docket and a pane per task | proposed |
-| Runtime | Rex only in v1, behind the four verbs | proposed |
+| Runtime | Rex and Herdr, behind the four verbs, followed at once; new agents open on one (`runtime`, Rex by default) | built |
 
 ## Not in v1
 
 - Teams, shared dockets, and channels.
 - Merging, resolving threads, and writing to Linear or GitHub Issues.
-- Herdr, or any runtime other than Rex.
+- Runtimes on other machines (`rex -S`, `hc --on`).
 - Platforms other than macOS, and a native iOS app.
 - Drawing terminals, or storing transcripts. It keeps your prompts and
   each turn's summary.

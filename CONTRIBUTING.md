@@ -34,7 +34,7 @@ runs the hub at login, and installs the agents' hooks and skill.
 | `src/complete.rs`, `tests/completions.rs` | Tab completion: the zsh and bash hooks, and what the hub fills in. The test runs both shells against a stand-in hub |
 | `src/hub.rs`, `src/store.rs` | The hub's state, and SQLite: entries, dockets, messages, blobs. A new column goes in `migrate` |
 | `src/record/` | The record: entries, DSSE envelopes, the chain, keys, verify, and the fold to a docket's state. [docs/record.md](docs/record.md) is the contract |
-| `src/mirror.rs`, `src/follow.rs`, `src/rex.rs` | Rex: following its events, and calling its CLI |
+| `src/runtime/`, `src/mirror.rs` | The runtimes (Rex, Herdr): each one's CLI and follower behind one interface, and the mirror they fill. [docs/runtimes.md](docs/runtimes.md) |
 | `src/agents.rs`, `src/hooks.rs` | Agent dockets: adopting panes, prompts and turns, Claude Code's hooks |
 | `src/messages.rs`, `src/approve.rs`, `src/preview.rs`, `src/start.rs` | Messages and delivery, guarded approvals, `wh share`, `wh start` |
 | `src/server.rs` | The HTTP API, its guard, and the app's files |
@@ -57,7 +57,7 @@ socket and LaunchAgent (`dev.wheelhouse.hub.dev`), and Wheelhouse Dev.app
 nightly: a blue brand where the daily one is orange, a DEV icon, and DEV
 badges with the branch and commit it was built from, in the menu bar, the
 window, the quick panel and the web app it serves (the hub's `flavor`, from
-`WH_FLAVOR`). It shows a copy of your dockets with nothing live: Rex, gh,
+`WH_FLAVOR`). It shows a copy of your dockets with nothing live: Rex, Herdr, gh,
 Linear, Tailscale and notifications are off, Review and Build are paused on
 stand-in configs, and the agents' hooks stay with your everyday hub. Run it
 again after a change to update it; `just dev-sync` copies your dockets in
@@ -65,12 +65,13 @@ again, and `just dev-remove` takes it away. See `scripts/dev-install.sh`.
 
 **A hub of your own.** Your everyday hub keeps running. A second one, in
 the foreground, needs its own state, socket and port. It still follows
-your real Rex, so leave `WH_REX` pointing at a stand-in if your change
-could type into panes:
+your real Rex and Herdr, so leave `WH_REX` and `WH_HC` pointing at
+stand-ins if your change could type into panes:
 
 ```sh
 WH_STATE=/tmp/wh-try WH_HTTP=127.0.0.1:7610 WH_TAILNET=off WH_NOTIFY=off \
   WH_REX=$PWD/scripts/fake-rex WH_WORLD=/path/to/world.json \
+  WH_HC=$PWD/scripts/fake-hc WH_HC_WORLD=/path/to/hc.json WH_HERDR_APP=/usr/bin/true \
   cargo run -- serve
 ```
 
