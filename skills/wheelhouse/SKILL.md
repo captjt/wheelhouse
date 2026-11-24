@@ -96,6 +96,7 @@ Live reload over websockets doesn't pass through yet: reload by hand.
 ```sh
 wh name planner                         # so others can reach you as "planner"
 wh send --to reviewer "Does /v2/items need pagination?"
+wh send --to herdr:wheelhouse/D-12 "…"  # rex: or herdr: when both runtimes have that session
 wh wait --thread 42 --timeout 600       # the reply to #42, without waiting forever
 wh inbox                                # messages to you not yet delivered or read
 ```

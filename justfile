@@ -30,10 +30,12 @@ check-app:
 
 # A Build end to end on a scratch hub, with stand-ins for Rex, Herdr, gh
 # and GitHub: the plan, the PR, two address rounds, and the merge. Once
-# with the agents' panes in Rex, once in Herdr.
+# with the agents' panes in Rex, once in Herdr. Then Rex and Herdr
+# together: agents in each messaging, approved and started across both.
 e2e:
     scripts/build-e2e.sh rex
     PORT=7624 scripts/build-e2e.sh herdr
+    scripts/runtimes-e2e.sh
 
 # Build Wheelhouse.app and put it in ~/Applications.
 app:

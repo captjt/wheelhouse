@@ -7,9 +7,14 @@
 #
 # The world is JSON: {"terminals": [{"address", "state", "cwd", "labels",
 # "status": {state, app, kind, msg}, "status_ms", "foreground": {name, cwd},
-# "screen"}], "sent": [{terminal, text}], "n": 0}. Starting a terminal adds
-# one running an idle Claude Code; removing it takes it out; what's sent to
-# one is kept in "sent".
+# "screen"}], "sent": [{terminal, text}], "keys": [{terminal, keys}],
+# "focused": [address], "restarts": 0, "n": 0}. Starting a terminal adds one
+# running an idle Claude Code; removing it takes it out; what's sent to one
+# is kept in "sent" (and the agent takes a quick turn: its status is
+# reported again), and the keys pressed in "keys". Pressing 1 or esc
+# answers a blocked agent, which goes idle. Adding to "restarts" ends the
+# event stream, as a core restart does. Run as herdr-app (WH_HERDR_APP
+# pointing at scripts/fake-herdr-app), `do agent.focus` is kept in "focused".
 set -euo pipefail
 world=${WH_HC_WORLD:?set WH_HC_WORLD to a world file}
 [ -f "$world" ] || echo '{"terminals": [], "sent": [], "n": 0}' >"$world"
@@ -35,7 +40,9 @@ case $cmd in
     # A snapshot now, and again each time the world changes: the hub takes
     # each as the whole picture. Stay until the hub goes.
     last=""
+    restarts=$(jq '.restarts // 0' "$world")
     while kill -0 "$PPID" 2>/dev/null; do
+      [ "$(jq '.restarts // 0' "$world")" = "$restarts" ] || exit 0
       now=$(md5 -q "$world" 2>/dev/null || true)
       if [ "$now" != "$last" ]; then
         last=$now
@@ -70,11 +77,20 @@ case $cmd in
   send)
     # send TERMINAL TEXT --json
     term "$1" '.address' >/dev/null
-    edit '.sent += [{terminal: $t, text: $x}]' --arg t "$1" --arg x "$2"
+    # The agent takes a quick turn: its status is reported again, now.
+    edit '.sent += [{terminal: $t, text: $x}] | (.terminals[] | select(.address == $t) | .status_ms) = $ms' --arg t "$1" --arg x "$2" --argjson ms "$(now_ms)"
     echo '{"sent": true}'
     ;;
   keys)
-    term "$1" '.address' >/dev/null
+    # keys TERMINAL KEY... --json
+    t=$1
+    shift
+    keys=$(printf '%s\n' "$@" | grep -v '^--json$' | jq -R . | jq -sc .)
+    term "$t" '.address' >/dev/null
+    edit '.keys += [{terminal: $t, keys: $k}]
+      | if ($k == ["1"] or $k == ["esc"]) then
+          (.terminals[] | select(.address == $t and .status.state == "blocked")) |= (.status = {state: "idle", app: .status.app} | .status_ms = $ms)
+        else . end' --arg t "$t" --argjson k "$keys" --argjson ms "$(now_ms)"
     echo '{}'
     ;;
   label)

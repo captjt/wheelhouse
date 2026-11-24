@@ -30,14 +30,34 @@ const SETTLE: Duration = Duration::from_secs(2);
 const MAX_PASTE: usize = 4000;
 
 /// A pane's address: `session/pane`, or the end of its block id unlabeled.
+/// When another runtime has a session of the same name (a `wheelhouse` in
+/// Rex and in Herdr), the address names its runtime: `herdr:wheelhouse/D-12`.
 pub fn addr_of(core: &Core, p: &Pane) -> String {
-    let session = core.mirror.session_label(&p.session_id);
-    let session = if session.is_empty() { short(&p.session_id) } else { session.to_string() };
+    let label = core.mirror.session_label(&p.session_id);
+    let session = if label.is_empty() { short(&p.session_id) } else { label.to_string() };
     let pane = if p.label.is_empty() { short(&p.block_id) } else { p.label.clone() };
-    format!("{session}/{pane}")
+    let shared = !label.is_empty() && core.mirror.sessions.values().any(|s| s.runtime != p.runtime && s.label == label);
+    if shared { format!("{}:{session}/{pane}", p.runtime.name()) } else { format!("{session}/{pane}") }
 }
 
+/// An address that names its runtime (`herdr:wheelhouse/D-12`, `rex:D-12`):
+/// the runtime, and the address in it. A pane id (`herdr:t2h`) isn't one.
+fn qualified<'a>(core: &Core, addr: &'a str) -> (Option<crate::runtime::Kind>, &'a str) {
+    match addr.split_once(':') {
+        Some((k, rest)) if !rest.is_empty() && !core.mirror.panes.contains_key(addr) => match crate::runtime::Kind::parse(k) {
+            Some(kind) => (Some(kind), rest),
+            None => (None, addr),
+        },
+        _ => (None, addr),
+    }
+}
+
+/// The end of an id, to tell unnamed panes apart: a Herdr terminal's own
+/// address (`herdr:t5` → `t5`), else an id's last six characters.
 pub(crate) fn short(id: &str) -> String {
+    if let Some(rest) = id.strip_prefix(crate::runtime::herdr::PREFIX) {
+        return rest.rsplit(':').next().unwrap_or(rest).to_string();
+    }
     let tail: String = id.chars().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
     tail
 }
@@ -49,22 +69,29 @@ pub fn resolve<'a>(core: &'a Core, addr: &str, near: Option<&str>) -> Result<&'a
     if addr.is_empty() {
         bail!("an address is required");
     }
-    let all: Vec<&Pane> = core.mirror.panes.values().collect();
+    // A pane id names its pane, in any runtime.
+    if let Some(p) = core.mirror.panes.get(addr) {
+        return Ok(p);
+    }
+    if addr.starts_with("block:") {
+        bail!("no pane is called {addr}: it closed, or its runtime isn't followed now");
+    }
+    let (kind, addr) = qualified(core, addr);
+    let all: Vec<&Pane> = core.mirror.panes.values().filter(|p| kind.is_none_or(|k| p.runtime == k)).collect();
     let matches = |p: &&Pane| -> bool {
-        if addr.starts_with("block:") {
-            return p.block_id == addr;
-        }
         let (session, pane) = match addr.rsplit_once('/') {
             Some((s, n)) => (Some(s), n),
             None => (None, addr),
         };
         let session_ok = session.is_none_or(|s| core.mirror.session_label(&p.session_id) == s || p.session_id.ends_with(s));
-        let pane_ok = p.label == pane || (pane.len() >= 4 && p.block_id.ends_with(pane));
+        let pane_ok = p.label == pane || (pane.len() >= 4 && p.block_id.ends_with(pane)) || (p.runtime == crate::runtime::Kind::Herdr && short(&p.block_id) == pane);
         session_ok && pane_ok
     };
     let mut found: Vec<&Pane> = all.into_iter().filter(matches).collect();
+    // Among several, the sender's own session first: for a bare name, and
+    // for a session both runtimes have. Across runtimes it's never a guess:
+    // otherwise the sender is asked to say which.
     if found.len() > 1
-        && !addr.contains('/')
         && let Some(s) = near
     {
         let here: Vec<&Pane> = found.iter().copied().filter(|p| p.session_id == s).collect();
@@ -81,7 +108,14 @@ pub fn resolve<'a>(core: &'a Core, addr: &str, near: Option<&str>) -> Result<&'a
     match found.len() {
         0 => bail!("no pane is called {addr}. Name one with `wh name NAME`, or list them in the app's Agents view"),
         1 => Ok(found[0]),
-        _ => bail!("{addr} could be {}: say which, as session/pane", found.iter().map(|p| addr_of(core, p)).collect::<Vec<_>>().join(", ")),
+        _ => {
+            // Two panes of one name in one session: only their ids differ.
+            let mut say: Vec<String> = found.iter().map(|p| addr_of(core, p)).collect();
+            if say.iter().collect::<std::collections::BTreeSet<_>>().len() < say.len() {
+                say = found.iter().map(|p| p.block_id.clone()).collect();
+            }
+            bail!("{addr} could be {}: say which", say.join(", "))
+        }
     }
 }
 
@@ -481,6 +515,75 @@ mod tests {
         core.mirror.apply_pane_status("s1", block, vec![Record { state: state.into(), app: Some("claude-code".into()), ..Default::default() }], Some(&fg), None);
         core.mirror.panes.get_mut(block).unwrap().label = label.into();
         agents::reconcile(core, [block.to_string()]);
+    }
+
+    /// An agent in `session` (a label) of runtime `kind`, settled long enough to take a message.
+    fn agent_in(core: &mut Core, kind: crate::runtime::Kind, session: &str, block: &str, label: &str) {
+        let sid = match kind {
+            crate::runtime::Kind::Rex => format!("session:{session}"),
+            crate::runtime::Kind::Herdr => format!("herdr:space:{session}"),
+        };
+        core.mirror.sessions.insert(sid.clone(), crate::mirror::Session { runtime: kind, session_id: sid.clone(), label: session.into(), windows: vec![] });
+        let fg = json!({ "foreground": { "name": "claude", "cwd": "/w" } });
+        let rec = Record { state: "idle".into(), app: Some("claude-code".into()), updated_at: Some("2026-01-01T00:00:00Z".into()), ..Default::default() };
+        core.mirror.apply_pane_status(&sid, block, vec![rec], Some(&fg), None);
+        core.mirror.panes.get_mut(block).unwrap().label = label.into();
+        core.mirror.set_link(kind, true, None, true);
+        agents::reconcile(core, [block.to_string()]);
+    }
+
+    #[test]
+    fn agents_in_rex_and_herdr_message_each_other() {
+        use crate::runtime::Kind::{Herdr, Rex};
+        let mut core = test_core();
+        agent_in(&mut core, Rex, "wheelhouse", "block:r1", "D-1");
+        agent_in(&mut core, Rex, "api", "block:r2", "builder");
+        agent_in(&mut core, Herdr, "wheelhouse", "herdr:t5", "D-1");
+        agent_in(&mut core, Herdr, "web", "herdr:t6", "reviewer");
+
+        // A session name both runtimes have: its addresses name the runtime.
+        assert_eq!(addr_of(&core, &core.mirror.panes["block:r1"]), "rex:wheelhouse/D-1");
+        assert_eq!(addr_of(&core, &core.mirror.panes["herdr:t5"]), "herdr:wheelhouse/D-1");
+        // A name only one has doesn't.
+        assert_eq!(addr_of(&core, &core.mirror.panes["herdr:t6"]), "web/reviewer");
+        assert_eq!(addr_of(&core, &core.mirror.panes["block:r2"]), "api/builder");
+
+        let to = |addr: &str, near: Option<&str>| resolve(&core, addr, near).map(|p| p.block_id.clone()).map_err(|e| e.to_string());
+        assert_eq!(to("herdr:wheelhouse/D-1", None).unwrap(), "herdr:t5");
+        assert_eq!(to("rex:wheelhouse/D-1", None).unwrap(), "block:r1");
+        assert_eq!(to("herdr:D-1", None).unwrap(), "herdr:t5");
+        assert_eq!(to("herdr:t5", None).unwrap(), "herdr:t5", "a pane id");
+        assert_eq!(to("block:r1", None).unwrap(), "block:r1");
+        assert_eq!(to("reviewer", None).unwrap(), "herdr:t6", "a name only Herdr has, from Rex");
+        assert_eq!(to("builder", Some("herdr:space:web")).unwrap(), "block:r2", "a name only Rex has, from Herdr");
+        // The same name in both: the sender's own session wins, else say which.
+        assert_eq!(to("wheelhouse/D-1", Some("herdr:space:wheelhouse")).unwrap(), "herdr:t5");
+        assert_eq!(to("D-1", Some("session:wheelhouse")).unwrap(), "block:r1");
+        let e = to("wheelhouse/D-1", None).unwrap_err();
+        assert!(e.contains("rex:wheelhouse/D-1") && e.contains("herdr:wheelhouse/D-1"), "{e}");
+        // From a third session, D-1 is in both runtimes: say which.
+        assert!(to("D-1", Some("session:api")).unwrap_err().contains("herdr:wheelhouse/D-1"));
+        assert!(to("rex:reviewer", None).is_err(), "reviewer isn't in Rex");
+        assert!(to("herdr:t99", None).is_err());
+        assert_eq!(to("web/t6", None).unwrap(), "herdr:t6", "an unnamed terminal by its address");
+        assert_eq!(short("herdr:t6"), "t6");
+        assert_eq!(short("block:01a20af7-41b2-7806"), "2-7806");
+
+        // Rex to Herdr and back, each delivered to its pane in its own runtime.
+        let from_rex = caller(&core, Some("block:r2"));
+        let m = send(&mut core, &from_rex, "reviewer", None, "Can you look at #12?", vec![]).unwrap();
+        assert_eq!((m.to_addr.as_str(), m.to_block.as_deref()), ("web/reviewer", Some("herdr:t6")));
+        assert_eq!(m.from_addr, "api/builder");
+        let from_herdr = caller(&core, Some("herdr:t6"));
+        let r = send(&mut core, &from_herdr, &m.from_addr, None, "On it.", vec![]).unwrap();
+        assert_eq!(r.to_block.as_deref(), Some("block:r2"));
+        let due: Vec<String> = plan(&core, &Default::default()).into_iter().map(|d| d.2).collect();
+        assert!(due.contains(&"herdr:t6".to_string()) && due.contains(&"block:r2".to_string()), "{due:?}");
+
+        // A runtime that's lost: nothing goes into its panes, the other's still do.
+        core.mirror.set_link(Herdr, false, Some("gone".into()), true);
+        let due: Vec<String> = plan(&core, &Default::default()).into_iter().map(|d| d.2).collect();
+        assert_eq!(due, ["block:r2"]);
     }
 
     #[test]

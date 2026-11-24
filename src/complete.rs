@@ -305,7 +305,10 @@ fn address_candidates(state: &Value, own: Option<&str>) -> Vec<CompletionCandida
         .map(|a| {
             let (session, pane) = label(a);
             let block = a["block"].as_str().unwrap_or_default();
-            let shared = agents.iter().filter(|b| label(b) == (session, pane)).count() > 1;
+            let rt = a["runtime"].as_str().unwrap_or("rex");
+            // A session name both runtimes have: the address names its runtime, as the hub's do.
+            let both = !session.is_empty() && agents.iter().any(|b| b["rex_session"].as_str() == Some(session) && b["runtime"].as_str().unwrap_or("rex") != rt);
+            let shared = agents.iter().filter(|b| label(b) == (session, pane) && b["runtime"].as_str().unwrap_or("rex") == rt).count() > 1;
             let addr = if session.is_empty() {
                 block.to_string()
             } else if pane.is_empty() || shared {
@@ -313,6 +316,7 @@ fn address_candidates(state: &Value, own: Option<&str>) -> Vec<CompletionCandida
             } else {
                 format!("{session}/{pane}")
             };
+            let addr = if both && !session.is_empty() { format!("{rt}:{addr}") } else { addr };
             let on = a["docket"].as_str().map(|d| format!(" on {d}")).unwrap_or_default();
             cand(addr, format!("{}{on} · {}", crate::mirror::app_name(a["app"].as_str().unwrap_or("agent")), a["state"].as_str().unwrap_or("?")))
         })
@@ -432,6 +436,17 @@ mod tests {
         assert_eq!(helps(&c)[0], "Codex on D-12 · done");
         assert_eq!(helps(&c)[1], "Claude Code · blocked");
         assert_eq!(values(&address_candidates(&world(), None))[0], "api/planner");
+    }
+
+    #[test]
+    fn addresses_in_rex_and_herdr_name_their_runtime_when_both_have_the_session() {
+        let w = json!({ "agents": [
+            { "block": "block:aaaa-111111", "runtime": "rex", "rex_session": "wheelhouse", "pane": "D-1", "app": "claude-code", "state": "idle" },
+            { "block": "herdr:t5", "runtime": "herdr", "rex_session": "wheelhouse", "pane": "D-1", "app": "codex", "state": "idle" },
+            { "block": "herdr:t6", "runtime": "herdr", "rex_session": "web", "pane": "reviewer", "app": "claude-code", "state": "working" },
+            { "block": "herdr:t7", "runtime": "herdr", "rex_session": "web", "pane": "", "app": "claude-code", "state": "idle" },
+        ]});
+        assert_eq!(values(&address_candidates(&w, None)), ["rex:wheelhouse/D-1", "herdr:wheelhouse/D-1", "web/reviewer", "web/t7"]);
     }
 
     #[test]

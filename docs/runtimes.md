@@ -46,6 +46,29 @@ running keeps its panes where they are: every pane is driven by its own
 runtime, whatever the setting says now. A pane opened beside one in the
 other runtime gets a tab of its own.
 
+## Agents across runtimes
+
+Agents in Rex and in Herdr work together as if they shared one
+multiplexer: they message each other, reply, and are messaged by you, and
+a message always goes in through the receiving pane's own runtime (a
+paste in Rex, `hc send` in Herdr), between its turns.
+
+An address is `session/pane`, a bare pane name, or a pane id:
+
+| Address | Names |
+| --- | --- |
+| `api/builder` | the pane `builder` in the session `api`, in whichever runtime has it |
+| `reviewer` | the pane `reviewer`, in your own session first |
+| `herdr:wheelhouse/D-12`, `rex:D-12` | the same, in that runtime only |
+| `block:01a2…`, `herdr:t2h` | that pane, by its id |
+| `web/t7` | an unnamed Herdr terminal, by its address |
+
+When a session's name is in both runtimes (each has a `wheelhouse`), its
+panes' addresses name their runtime (`rex:wheelhouse/D-12`,
+`herdr:wheelhouse/D-12`), in `wh whoami`, in a message's "from", and in
+tab completion. A name that's in both and not in your own session is
+never a guess: the hub refuses it and names each one.
+
 ## Agents in Herdr
 
 An agent you start yourself in a Herdr terminal gets a docket, as in Rex,
