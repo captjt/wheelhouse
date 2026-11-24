@@ -2583,8 +2583,12 @@ code {
   }
   .modal.pane-sheet {
     width: 100vw;
-    height: 100dvh;
+    height: 100%;
     border-radius: 0;
+  }
+  /* Its head clears the clock; its box clears the home bar, or sits on the keyboard. */
+  .pane-sheet .ps-head {
+    padding-top: calc(env(safe-area-inset-top) + 8px);
   }
   .ps-screen {
     flex: 1;
@@ -6373,4 +6377,29 @@ code {
 .inbox-who {
   color: var(--text-2);
   font-weight: 500;
+}
+
+/* On a phone, every overlay (the terminal, sheets, dialogs) follows the
+   visible part of the screen, as the app does (viewport.ts): with the
+   keyboard up it sits above it, never pushed up and off the top. */
+@media (max-width: 760px) {
+  .modal-backdrop,
+  .sheet-backdrop {
+    inset: auto;
+    left: 0;
+    right: 0;
+    top: var(--vv-top, 0px);
+    height: var(--vv-h, 100%);
+  }
+  .sheet {
+    max-height: calc(var(--vv-h, 100dvh) - env(safe-area-inset-top) - 24px);
+    padding-bottom: max(0px, calc(env(safe-area-inset-bottom) - var(--kb, 0px)));
+  }
+  .sheet.tall {
+    height: calc(var(--vv-h, 100dvh) - env(safe-area-inset-top) - 12px);
+  }
+  .ps-compose,
+  .ps-answer {
+    padding-bottom: max(10px, calc(env(safe-area-inset-bottom) - var(--kb, 0px)));
+  }
 }

@@ -34,10 +34,22 @@ function insets(): { top: number; bottom: number } {
   return { top: parseFloat(cs.paddingTop) || 0, bottom: parseFloat(cs.paddingBottom) || 0 };
 }
 
-/** The top bar on screen now: the pushed docket's, else the list's. */
+/** The top bar on screen now: an open sheet's (the terminal's), else the
+ * pushed docket's, else the list's. */
 function bar(): DOMRect | null {
-  const el = document.querySelector(".m-top .view-head") ?? document.querySelector(".m-base .view-head");
+  const el = document.querySelector(".ps-head") ?? document.querySelector(".sheet-head") ?? document.querySelector(".m-top .view-head") ?? document.querySelector(".m-base .view-head");
   return el ? el.getBoundingClientRect() : null;
+}
+
+/** The whole screen's height, when the app has the whole screen (a Home
+ * Screen app, not split): iOS 26 says the page is the screen less the
+ * clock's safe area, which left that much empty at the bottom. */
+function fullHeight(): number {
+  if (!standalone()) return 0;
+  const [short, long] = [Math.min(screen.width, screen.height), Math.max(screen.width, screen.height)];
+  const landscape = window.matchMedia("(orientation: landscape)").matches;
+  const [w, h] = landscape ? [long, short] : [short, long];
+  return Math.abs(window.innerWidth - w) <= 2 ? h : 0;
 }
 
 function measure(why: string) {
@@ -57,6 +69,12 @@ function measure(why: string) {
     safe: insets(),
     css: { vvTop: css.getPropertyValue("--vv-top"), vvH: css.getPropertyValue("--vv-h"), kb: css.getPropertyValue("--kb") },
     bar: b ? { top: b.top, bottom: b.bottom, height: b.height } : null,
+    sheet: (() => {
+      const m = document.querySelector(".modal, .sheet")?.getBoundingClientRect();
+      return m ? { top: m.top, bottom: m.bottom, height: m.height } : null;
+    })(),
+    full: fullHeight(),
+    bottomAt: document.elementFromPoint(innerWidth / 2, innerHeight - 2)?.className?.toString().slice(0, 40) ?? null,
     app: app ? { top: app.top, height: app.height } : null,
     focused: document.activeElement?.tagName ?? null,
     visible: document.visibilityState,
@@ -99,9 +117,11 @@ export function keepOnScreen(): () => void {
         root().removeProperty("--vv-h");
       } else {
         const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+        // With the keyboard down, a Home Screen app has the whole screen.
+        const h = kb > 80 ? vv.height : Math.max(vv.height, fullHeight());
         root().setProperty("--kb", kb > 80 ? `${kb}px` : "0px");
         root().setProperty("--vv-top", `${Math.max(0, Math.round(vv.offsetTop))}px`);
-        root().setProperty("--vv-h", `${Math.round(vv.height)}px`);
+        root().setProperty("--vv-h", `${Math.round(h)}px`);
       }
     }
     // Out of place: say so once when it happens (and again if it stays).
