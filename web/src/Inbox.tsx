@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { agentLabel, appName, liveAgents, type Attention, type Docket, type Live, type Msg, type ReviewPr } from "./api";
+import { agentLabel, appName, liveAgents, quick, type Attention, type Docket, type Live, type Msg, type ReviewPr } from "./api";
 import { AttentionIcon } from "./Verify";
 import { attentionShown } from "./evidence";
 import { ReviewActions, draftLine, waitsWhy } from "./Reviews";
@@ -107,7 +107,7 @@ export function InboxView() {
     }
     if (it.kind === "review") return { leading: [], trailing: [], full: false };
     const leading: SwipeAction[] =
-      it.kind === "blocked" && (it.live ?? it.d.live)?.answerable
+      it.kind === "blocked" && quick(it.live ?? it.d.live)
         ? [
             { key: "approve", label: "Approve", icon: <IconCheck size={18} />, tone: "approve", run: () => void hub.answer(it.d, true, it.live) },
             { key: "deny", label: "Deny", icon: <IconX size={18} />, tone: "deny", run: () => void hub.answer(it.d, false, it.live) },
@@ -221,7 +221,7 @@ export function InboxView() {
                       <MessageCard m={it.m} compact />
                     </span>
                   )}
-                  {it.kind !== "message" && (it.live ?? it.d.live)?.answerable && (
+                  {it.kind !== "message" && quick(it.live ?? it.d.live) && (
                     <span className="inbox-actions">
                       <AnswerButtons d={it.d} live={it.live} small />
                     </span>

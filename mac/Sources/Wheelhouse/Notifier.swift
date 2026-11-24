@@ -23,8 +23,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let reply = UNTextInputNotificationAction(identifier: "reply", title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Message the agent…")
         categories = [
             UNNotificationCategory(identifier: "prompt", actions: [
-                UNNotificationAction(identifier: "approve", title: "Approve", options: []),
-                UNNotificationAction(identifier: "deny", title: "Deny", options: [.destructive]),
+                // Only on an unlocked Mac: whoever's at a locked screen can't answer.
+                UNNotificationAction(identifier: "approve", title: "Approve", options: [.authenticationRequired]),
+                UNNotificationAction(identifier: "deny", title: "Deny", options: [.destructive, .authenticationRequired]),
             ], intentIdentifiers: []),
             UNNotificationCategory(identifier: "turn", actions: [reply], intentIdentifiers: []),
             UNNotificationCategory(identifier: "message", actions: [UNTextInputNotificationAction(identifier: "reply", title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Your answer…")], intentIdentifiers: []),
@@ -76,7 +77,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case "needs":
             // The prompt of the agent it's about, else the lead's.
             let b = ev["block"].text ?? ev["seen"]["block"].text
-            if let d = state?.byId[docket ?? ""], ((d.member(block: b)?.live ?? d.live)?.answerable == true), ev["seen"]["record"].str != nil { c.categoryIdentifier = "prompt" }
+            if let d = state?.byId[docket ?? ""], ((d.member(block: b)?.live ?? d.live)?.short == true), ev["seen"]["record"].str != nil { c.categoryIdentifier = "prompt" }
         case "turn":
             c.categoryIdentifier = "turn"
         case "message":

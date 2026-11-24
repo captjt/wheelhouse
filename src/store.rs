@@ -129,6 +129,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     if !has("messages", "preview")? {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN preview TEXT")?;
     }
+    // A prompt the hub was typing when it stopped may or may not have gone
+    // in: it's never typed again.
+    conn.execute_batch("UPDATE prompt_queue SET status = 'cancelled' WHERE status = 'sending'")?;
     Ok(())
 }
 
@@ -172,6 +175,17 @@ impl Store {
     }
 
     /// Mark a queued prompt `sent` or `cancelled`; false if it wasn't queued.
+    /// Move a queued prompt from one status to another, only if it's in
+    /// `from`: `queued` → `sending` claims it for typing (so Take back can't
+    /// win a race with it), `sending` → `sent` or back to `queued`.
+    pub fn move_prompt(&mut self, id: i64, docket: &str, from: &str, to: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE prompt_queue SET status = ?4, sent_at = CASE WHEN ?4 = 'sent' THEN ?5 ELSE sent_at END WHERE id = ?1 AND docket = ?2 AND status = ?3",
+            params![id, docket, from, to, crate::time::now_ms()],
+        )?;
+        Ok(n > 0)
+    }
+
     pub fn set_prompt_status(&mut self, id: i64, docket: &str, status: &str) -> Result<bool> {
         let n = self.conn.execute(
             "UPDATE prompt_queue SET status = ?3, sent_at = CASE WHEN ?3 = 'sent' THEN ?4 ELSE sent_at END WHERE id = ?1 AND docket = ?2 AND status = 'queued'",

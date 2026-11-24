@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { appName, followedRuntimes, liveAgents, paneRuntime, runtimeOf, runtimeTitle, type Docket } from "./api";
+import { appName, followedRuntimes, liveAgents, quick, paneRuntime, runtimeOf, runtimeTitle, type Docket } from "./api";
 import { AppAvatar, IconBoard, IconChevronDown, IconEye, SessionChip, SessionIcon, TitleText, shortPath, IconCopy, IconDisplay, IconList, IconTerminal, LiveIcon, StatusIcon, liveWord } from "./icons";
 import { ago, go, lastList, store, useHub } from "./live";
 import { useKeys, useMenu, usePhone, type MenuItem } from "./ui";
@@ -32,7 +32,7 @@ export function rowMenu(d: Docket, hub: ReturnType<typeof useHub>, pane: ReturnT
   if (d.live) {
     if (onThisMac()) items.push({ key: "rex", label: `Show pane in ${paneRuntime(d)}`, icon: <IconTerminal size={14} />, hint: "O", onPick: () => hub.openInRex(d.id) });
     items.push({ key: "peek", label: onThisMac() ? "Peek at pane" : "View pane", icon: <IconEye size={14} />, hint: onThisMac() ? undefined : "O", onPick: () => pane.view(d.id) });
-    if (d.live.answerable) {
+    if (quick(d.live)) {
       items.push({ key: "approve", label: <>Approve <span className="menu-sub">{d.live.msg}</span></>, onPick: () => hub.answer(d, true) });
       items.push({ key: "deny", label: "Deny", onPick: () => hub.answer(d, false) });
     }

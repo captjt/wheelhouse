@@ -76,7 +76,7 @@ struct InboxScreen: View {
                         case "e": if let d, d.isOpen { store.setStatus(d.id, .done, undo: d.status) }
                         // A prompt: approve or deny it.
                         case "a", "d":
-                            guard let it = item, it.kind == .blocked, it.docket != nil, (it.live ?? it.docket?.live)?.answerable == true else { return .ignored }
+                            guard let it = item, it.kind == .blocked, it.docket != nil, (it.live ?? it.docket?.live)?.short == true else { return .ignored }
                             let yes = press.characters == "a"
                             Task { await store.answer(it, approve: yes) }
                         // A message with options: 1 to 6 picks one.
@@ -130,7 +130,7 @@ struct InboxScreen: View {
 
     @ViewBuilder
     private func leading(_ it: InboxItem) -> some View {
-        if it.kind == .blocked, it.docket != nil, (it.live ?? it.docket?.live)?.answerable == true {
+        if it.kind == .blocked, it.docket != nil, (it.live ?? it.docket?.live)?.short == true {
             Button { Task { await store.answer(it, approve: true) } } label: { Label("Approve", systemImage: "checkmark") }.tint(K.working)
             Button { Task { await store.answer(it, approve: false) } } label: { Label("Deny", systemImage: "xmark") }.tint(K.error)
         }
@@ -179,7 +179,7 @@ struct InboxRow: View {
                     ReviewActions(p: p, small: true)
                 } else if let m = it.msg, !m.options.isEmpty {
                     OptionButtons(m: m)
-                } else if it.kind == .blocked, let d = it.docket, (it.live ?? d.live)?.answerable == true {
+                } else if it.kind == .blocked, let d = it.docket, (it.live ?? d.live)?.short == true {
                     AnswerButtons(d: d, block: d.blockFor(it.agent), live: it.live, small: true)
                 }
             }

@@ -297,7 +297,7 @@ struct DocketMenu: View {
                     Menu("\(a.label) · \(l.state.word)") {
                         Button("Show Pane in \(a.runtime)") { store.openInRex(d.id, block: b) }
                         Button("Peek at Pane") { nav.peek(d.id, block: b) }
-                        if l.state == .blocked, l.answerable {
+                        if l.state == .blocked, l.short {
                             Divider()
                             Button("Approve\(l.msg.map { ": \($0.prefix(40))" } ?? "")") { Task { await store.answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: true, block: b) } }
                             Button("Deny") { Task { await store.answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: false, block: b) } }
@@ -309,7 +309,7 @@ struct DocketMenu: View {
             Divider()
             Button("Show Pane in \(d.runtime)") { store.openInRex(d.id) }
             Button("Peek at Pane") { nav.peek(d.id) }
-            if d.live?.answerable == true {
+            if d.live?.short == true {
                 Button("Approve\(d.live?.msg.map { ": \($0.prefix(40))" } ?? "")") { Task { await store.answer(d, approve: true) } }
                 Button("Deny") { Task { await store.answer(d, approve: false) } }
             }

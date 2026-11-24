@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { agentLabel, appName, get, liveAgents, paneRuntime, post, spawnRuntime, type Docket } from "./api";
+import { agentLabel, appName, get, liveAgents, quick, paneRuntime, post, spawnRuntime, type Docket } from "./api";
 import { LinearPicker } from "./Linear";
 import { IconActive, IconAgents, IconDone, IconEye, IconIssue, IconInbox, IconLayers, IconMonitor, IconMoon, IconPause, IconPlay, IconPlus, IconSettings, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
 import { AttentionIcon } from "./Verify";
@@ -57,7 +57,7 @@ export function Palette({
     for (const it of asks) {
       const d = it.d;
       const l = it.live ?? d.live;
-      if (it.kind === "blocked" && l?.answerable) {
+      if (it.kind === "blocked" && l && quick(l)) {
         const who = it.who ? ` (${it.who})` : "";
         out.push({ id: `ap-${it.key}`, group: "Needs you", label: `Approve ${d.id}${who}: ${l.msg ?? "the prompt"}`, keywords: `approve permission yes ${d.title}`, run: () => hub.answer(d, true, l) });
         out.push({ id: `dn-${it.key}`, group: "Needs you", label: `Deny ${d.id}${who}: ${l.msg ?? "the prompt"}`, keywords: `deny permission no ${d.title}`, run: () => hub.answer(d, false, l) });
@@ -70,7 +70,7 @@ export function Palette({
     if (context) {
       const d = context;
       if (d.live && onThisMac()) out.push({ id: "rex", group: d.id, label: `Show pane in ${paneRuntime(d)}`, icon: <IconTerminal size={15} />, hint: <Kbd>O</Kbd>, run: () => hub.openInRex(d.id) });
-      if (d.live?.answerable) {
+      if (d.live && quick(d.live)) {
         out.push({ id: "approve", group: d.id, label: `Approve: ${d.live.msg ?? "the prompt"}`, keywords: "permission yes allow", run: () => hub.answer(d, true) });
         out.push({ id: "deny", group: d.id, label: "Deny the prompt", keywords: "permission no reject", run: () => hub.answer(d, false) });
       }

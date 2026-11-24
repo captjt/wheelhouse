@@ -42,6 +42,9 @@ export const agentOfEntry = (d: Docket, e: { actor?: Record<string, unknown>; da
 export const entryBlock = (e: { actor?: Record<string, unknown>; data?: Record<string, unknown> }): string | undefined =>
   (e.data?.block as string | undefined) || ((e.data?.agent as { block?: string } | undefined)?.block) || (e.actor?.block as string | undefined) || undefined;
 
+/** Whether a prompt can be answered where it's shown cut short: an older hub doesn't say, so answerable. */
+export const quick = (l?: Live | null): boolean => !!l?.answerable && (l.short ?? true);
+
 /** The runtimes the hub follows now, for people: "Rex and Herdr". */
 export const followedRuntimes = (s?: { runtimes?: RuntimeLink[] } | null): string => {
   const on = s?.runtimes ? s.runtimes.filter((r) => r.connected).map((r) => r.title) : ["Rex"];
@@ -58,6 +61,8 @@ export type Live = {
   record?: string | null;
   /** Wheelhouse can answer this prompt with a key (a Claude Code permission). */
   answerable?: boolean;
+  /** It can also be answered where it's shown cut short (a menu, a row, the palette): one short line. */
+  short?: boolean;
   app: string;
   state: string;
   kind?: string | null;

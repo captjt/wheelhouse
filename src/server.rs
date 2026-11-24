@@ -667,6 +667,10 @@ async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
             }
             return Err(fail(StatusCode::CONFLICT, why));
         }
+        // A mirror that lost the pane's runtime may be stale.
+        if !core.mirror.connected_for(&b) {
+            return Err(fail(StatusCode::CONFLICT, format!("Wheelhouse can't see {} right now, so it won't type into the pane", crate::runtime::of(&b).title())));
+        }
         let session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
         (s, b, pane.app().unwrap_or("agent").to_string(), session)
     };

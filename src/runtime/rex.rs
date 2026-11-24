@@ -221,8 +221,17 @@ impl Rex {
     /// Paste, a moment for the program to take it, then Enter.
     pub async fn submit(&self, session: &str, block: &str, text: &str) -> Result<()> {
         self.paste(session, block, text).await?;
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        self.send_keys(session, block, &["enter"]).await
+        // Pasted: from here, a failure is Enter's, retried alone. Pasting
+        // again would put the text in the agent's box twice.
+        let mut last = None;
+        for wait in [150, 300, 600] {
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            match self.send_keys(session, block, &["enter"]).await {
+                Ok(()) => return Ok(()),
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(super::PastedNoEnter(last.map(|e| format!("{e:#}")).unwrap_or_default()).into())
     }
 
     /// The pane's program status records (OSC 7501), read now.

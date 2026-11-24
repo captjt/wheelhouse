@@ -583,7 +583,8 @@ pub async fn built(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     let count = git(&w, &["rev-list", "--count", &range]).await.unwrap_or_default().trim().parse::<i64>().unwrap_or(0);
     let tmp: Vec<String> = git(&w, &["diff", "--name-only", &range]).await.unwrap_or_default().lines().filter(|l| l.starts_with(".tmp/")).map(str::to_string).collect();
     let open = open_of(t);
-    let d: Option<Value> = std::fs::read_to_string(replies_path(t)).ok().and_then(|s| serde_json::from_str(&s).ok());
+    let d: Option<Value> =
+        (crate::review::through_link(&replies_path(t)).is_none()).then(|| std::fs::read_to_string(replies_path(t)).ok()).flatten().and_then(|s| serde_json::from_str(&s).ok());
     let needs_commit = !open["checks"].as_array().is_none_or(Vec::is_empty) || !open["base_state"].is_null();
     let mut problem = if !tmp.is_empty() {
         Some(format!("the commits include files under .tmp/, which never ship: {}. Take them out of the commits", tmp.join(", ")))
@@ -902,7 +903,9 @@ pub async fn push(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<Option<
     let round = t.rounds;
     {
         let mut core = shared.lock();
-        if let Ok(bytes) = std::fs::read(replies_path(t)) {
+        if crate::review::through_link(&replies_path(t)).is_none()
+            && let Ok(bytes) = std::fs::read(replies_path(t))
+        {
             steps::keep(&mut core, t, format!("Round {round}'s replies"), "replies.json".into(), bytes, &format!("Round {round}"), json!({ "role": "replies", "round": round }));
         }
         super::event(

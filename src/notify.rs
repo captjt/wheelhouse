@@ -133,7 +133,13 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 message: None,
                 key: None,
                 sound: if h.state == "error" { "task.error" } else { "input.required" },
-                seen: serde_json::json!({ "record": h.id, "updated_at": h.updated_at, "msg": h.msg.clone().or_else(|| h.title.clone()), "block": p.block_id }),
+                // Approve and Deny on the banner only for a prompt it shows
+                // whole; otherwise it opens the docket, where it's shown in full.
+                seen: if crate::agents::live(&core, &p.block_id).is_some_and(|l| l.short) {
+                    serde_json::json!({ "record": h.id, "updated_at": h.updated_at, "msg": h.msg.clone().or_else(|| h.title.clone()), "block": p.block_id })
+                } else {
+                    Value::Null
+                },
             })
         }
         // An agent answered what you sent it from the app.

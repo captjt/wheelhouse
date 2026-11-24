@@ -72,16 +72,31 @@ fn keep(shared: &Shared, bytes: &[u8]) -> Result<String> {
     Ok(format!("sha256:{h}"))
 }
 
-/// The wall, as agents have it: no tokens, no SSH agent, a gh signed out,
-/// and every push sent nowhere.
+/// The wall, as agents have it: no tokens, no SSH agent, a gh that refuses,
+/// and every push sent nowhere. A check is the repo's own code, so it gets
+/// only the hub's plain environment (`KEEP`), never what a hub started by
+/// hand inherited from your terminal (cloud keys, registry tokens).
 fn walled(cmd: &mut tokio::process::Command, dir: &Path, path: &[String]) {
+    const KEEP: &[&str] = &["HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR"];
     let empty = crate::paths::state_dir().join("gh-empty");
     let _ = std::fs::create_dir_all(&empty);
-    for v in ["GH_TOKEN", "GITHUB_TOKEN", "LINEAR_API_KEY", "WH_LINEAR_KEY", "SSH_AUTH_SOCK"] {
-        cmd.env_remove(v);
+    cmd.env_clear();
+    for k in KEEP {
+        if let Ok(v) = std::env::var(k) {
+            cmd.env(k, v);
+        }
     }
+    let no = crate::review::agentcli::NO_TOKEN;
+    cmd.env("GH_TOKEN", no).env("GITHUB_TOKEN", no);
     let never = "https://wheelhouse.invalid/no-push";
-    let git = [("remote.origin.pushurl", never.to_string()), ("credential.helper", String::new()), (&*format!("url.{never}.pushInsteadOf"), "https://".to_string())];
+    let instead = format!("url.{never}.pushInsteadOf");
+    let git = [
+        ("remote.origin.pushurl", never.to_string()),
+        ("credential.helper", String::new()),
+        (instead.as_str(), "https://".to_string()),
+        (instead.as_str(), "git@".to_string()),
+        (instead.as_str(), "ssh://".to_string()),
+    ];
     cmd.env("GIT_CONFIG_COUNT", git.len().to_string());
     for (i, (k, v)) in git.iter().enumerate() {
         cmd.env(format!("GIT_CONFIG_KEY_{i}"), k).env(format!("GIT_CONFIG_VALUE_{i}"), v);
@@ -136,7 +151,7 @@ async fn run_inner(shared: &Shared, docket: &str, t: &Target, run: &str, why: &s
     // the commit, and says so.
     let dirty = !git(&t.dir, &["status", "--porcelain", "--untracked-files=no"]).await.unwrap_or_default().trim().is_empty();
     let patch = match &t.base {
-        Some(b) => match git(&t.dir, &["diff", &format!("{b}...{head}")]).await {
+        Some(b) => match git(&t.dir, &["diff", "--no-ext-diff", "--no-textconv", &format!("{b}...{head}")]).await {
             Ok(d) if !d.is_empty() => Some(keep(shared, d.as_bytes())?),
             _ => None,
         },
@@ -283,9 +298,13 @@ mod tests {
         let s = CheckSpec { name: "env".into(), run: "echo token=${GH_TOKEN:-none} ssh=${SSH_AUTH_SOCK:-none} check=$WH_CHECK; exit 3".into(), required: true, timeout: 30 };
         // SAFETY: this test alone reads these, in its own child.
         unsafe { std::env::set_var("GH_TOKEN", "secret") };
+        unsafe { std::env::set_var("WH_TEST_CLOUD_KEY", "secret") };
+        let s = CheckSpec { run: "echo token=${GH_TOKEN:-none} ssh=${SSH_AUTH_SOCK:-none} cloud=${WH_TEST_CLOUD_KEY:-none} check=$WH_CHECK; exit 3".into(), ..s };
         let (exit, out, _) = run_one(&s, &dir, &[]).await;
         assert_eq!(exit, Some(3));
-        assert!(String::from_utf8_lossy(&out).contains("token=none ssh=none check=1"), "{}", String::from_utf8_lossy(&out));
+        // A token that works nowhere (so gh never reads yours from the
+        // Keychain), and nothing else of the hub's environment.
+        assert!(String::from_utf8_lossy(&out).contains("token=wheelhouse-wall-no-token ssh=none cloud=none check=1"), "{}", String::from_utf8_lossy(&out));
         let quick = CheckSpec { name: "slow".into(), run: "sleep 5".into(), required: true, timeout: 1 };
         let (exit, out, _) = run_one(&quick, &dir, &[]).await;
         assert_eq!(exit, None);

@@ -90,7 +90,7 @@ pub async fn start_from(shared: &Shared, spec: &str, repo: Option<&str>) -> Resu
                 repo: pick_repo(repo)?,
                 ..Default::default()
             };
-            t.branch = l.branch.clone().filter(|b| !b.is_empty());
+            t.branch = l.branch.clone().filter(|b| super::safe_branch(b));
             t
         } else {
             if st.intent.as_ref().is_none_or(|i| i.body.trim().is_empty()) {
@@ -129,7 +129,7 @@ pub async fn start_from(shared: &Shared, spec: &str, repo: Option<&str>) -> Resu
             repo,
             ..Default::default()
         };
-        if let Some(b) = i.branch.clone().filter(|b| !b.is_empty()) {
+        if let Some(b) = i.branch.clone().filter(|b| super::safe_branch(b)) {
             t.branch = Some(b);
         }
         t
@@ -880,7 +880,7 @@ async fn built(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     let range = format!("{base_head}..HEAD");
     let count = git(&w, &["rev-list", "--count", &range]).await.unwrap_or_default().trim().parse::<i64>().unwrap_or(0);
     let tmp: Vec<String> = git(&w, &["diff", "--name-only", &range]).await.unwrap_or_default().lines().filter(|l| l.starts_with(".tmp/")).map(str::to_string).collect();
-    let prj = std::fs::read_to_string(w.join(".tmp/pr.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok());
+    let prj = Some(pr_said(&w).0).filter(|v| !v.is_null());
     let pr_ok = prj.as_ref().is_some_and(|p| p["title"].as_str().is_some_and(|x| !x.trim().is_empty()) && p["body"].as_str().is_some_and(|x| !x.trim().is_empty()));
     let problem = if count == 0 {
         Some(format!(
@@ -1238,8 +1238,11 @@ pub async fn open_pr(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     if t.approved_head.as_ref() != Some(&head) {
         bail!("you approved {}, but the branch is at {}; nothing was pushed", t.approved_head.as_deref().map(short).unwrap_or_else(|| "nothing".into()), short(&head));
     }
+    // Read once: the PR opens with exactly the text checked here, never a
+    // second read the builder (its pane still open) could have changed since.
+    let (prj, said) = pr_said(&w);
     if let Some(asked) = t.extra.get("asked_pr").and_then(Value::as_str)
-        && asked != pr_said(&w).1
+        && asked != said
     {
         bail!("the PR's title or description changed after you were asked; ask again before it opens. Nothing was pushed");
     }
@@ -1253,10 +1256,6 @@ pub async fn open_pr(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
     {
         bail!("the witnessed checks don't pass at {} ({why}); nothing was pushed", short(&head));
     }
-    let prj: Value = std::fs::read_to_string(w.join(".tmp/pr.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .ok_or_else(|| anyhow!(".tmp/pr.json has no title and body; nothing was pushed"))?;
     let (title, body) = (prj["title"].as_str().unwrap_or("").trim().to_string(), plan::strip(prj["body"].as_str().unwrap_or("")));
     if title.is_empty() || body.is_empty() {
         bail!(".tmp/pr.json has no title and body; nothing was pushed");

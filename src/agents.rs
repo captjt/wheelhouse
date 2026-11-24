@@ -731,6 +731,9 @@ pub struct Live {
     pub record: Option<String>,
     /// Whether Wheelhouse can answer this prompt with a key.
     pub answerable: bool,
+    /// Whether it can be answered where it's shown cut short (a banner, a
+    /// menu): `approve::short`.
+    pub short: bool,
     pub app: String,
     pub state: String,
     pub kind: Option<String>,
@@ -744,12 +747,17 @@ pub struct Live {
 pub fn live(core: &Core, block: &str) -> Option<Live> {
     let p = core.mirror.panes.get(block)?;
     let h = p.headline();
-    let answerable = h.is_some_and(|r| r.state == "blocked" && r.kind.as_deref() == Some("permission")) && p.app().and_then(crate::approve::prompt_keys).is_some();
+    // Answerable from Wheelhouse only when the prompt's text is what it
+    // shows; `short` also from a banner or a menu, which cut it.
+    let answerable = h.is_some_and(|r| r.state == "blocked" && r.kind.as_deref() == Some("permission") && crate::approve::plain(r.msg.as_deref()))
+        && p.app().and_then(crate::approve::prompt_keys).is_some();
+    let short = answerable && h.is_some_and(|r| crate::approve::short(r.msg.as_deref()));
     Some(Live {
         block: block.to_string(),
         runtime: p.runtime,
         record: h.map(|r| r.id.clone()),
         answerable,
+        short,
         app: p.app().unwrap_or("agent").to_string(),
         state: h.map_or("starting".into(), |r| r.state.clone()),
         kind: h.and_then(|r| r.kind.clone()),
