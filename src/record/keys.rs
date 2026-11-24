@@ -100,11 +100,6 @@ impl Keyring {
         Ok((&self.keys[name], new))
     }
 
-    /// The key named `name`, if the hub has it.
-    pub fn get(&self, name: &str) -> Option<&Key> {
-        self.keys.get(name)
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &Key> {
         self.keys.values()
     }
