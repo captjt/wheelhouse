@@ -6540,3 +6540,45 @@ code {
 .chat-steer:disabled {
   opacity: 0.45;
 }
+
+/* ---- team (docs/teams.md) ---- */
+
+.tm-person {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.tm-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: light-dark(oklch(0.38 0.09 var(--hue)), oklch(0.9 0.06 var(--hue)));
+  background: light-dark(oklch(0.92 0.05 var(--hue)), oklch(0.36 0.07 var(--hue)));
+  flex: none;
+}
+.tm-row {
+  gap: 10px;
+}
+.tm-people {
+  gap: 8px;
+}
+.tm-empty {
+  padding: 10px 16px 14px 40px;
+}
+.row-status-text {
+  min-width: 64px;
+  text-align: right;
+}
+@media (max-width: 640px) {
+  .tm-people .tm-person:nth-child(n + 3),
+  .row-status-text {
+    display: none;
+  }
+}

@@ -4,7 +4,7 @@ import SwiftUI
 
 /// The sidebar's places.
 enum Place: Hashable {
-    case inbox, reviews, builds, active, all, done, agents, recap
+    case inbox, reviews, builds, active, all, done, agents, recap, team
     case session(String)
 
     var title: String {
@@ -17,6 +17,7 @@ enum Place: Hashable {
         case .done: "Done"
         case .agents: "Agents"
         case .recap: "Recap"
+        case .team: "Team"
         case let .session(s): s
         }
     }
@@ -31,6 +32,7 @@ enum Place: Hashable {
         case .done: "checkmark.circle"
         case .agents: "terminal"
         case .recap: "chart.bar.xaxis"
+        case .team: "person.2"
         case .session: "rectangle.split.3x1"
         }
     }

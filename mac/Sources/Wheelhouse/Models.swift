@@ -107,7 +107,11 @@ struct Ask: Hashable {
 /// `agent`, and `Docket.crew` stands one in for it.
 struct DocketAgent: Hashable, Identifiable {
     let j: JSON
-    var id: String { block }
+    /// Its pane, and on a shared docket whose it is: two Macs can each have
+    /// a `herdr:t1` on one docket.
+    var id: String { member.map { "\($0)/\(block)" } ?? block }
+    /// On a shared docket, the workspace member whose agent it is.
+    var member: String? { j["member"].text }
     var app: String { j["app"].str ?? "" }
     var host: String? { j["host"].text }
     var block: String { j["block"].str ?? "" }
@@ -216,6 +220,12 @@ struct Docket: Hashable, Identifiable {
     var canStartAgent: Bool { isOpen && proto != "review" && (hasAgents || live == nil) }
     /// On hold: Build and Review take no steps on it. The reason, or nil.
     var hold: String? { j["hold"].text }
+    /// A local docket that was shared: the shared docket it went on as.
+    var sharedAs: String? { j["shared_as"].text }
+    /// A shared docket: who shared it, from which of their dockets.
+    var sharedFrom: String? { j["shared_from"].text }
+    var owners: [String] { j["owners"].strings }
+    var members: [String] { j["members"].strings }
     /// Closed on your word, with nothing witnessed or checkable: why.
     var closedOn: String? { j["closed_on"].text }
     var talks: Bool { proto == "agent" && (agent != nil || !agents.isEmpty) }
@@ -536,6 +546,8 @@ struct HubState: Hashable {
     var tasks: [BuildTask] { build?.tasks ?? [] }
     /// What needs a look beyond your asks, worst first.
     var attention: [Concern] { j["attention"].array.map(Concern.init) }
+    /// The workspace this hub is in, if any (docs/teams.md).
+    var team: TeamStatus? { j["team"].object == nil ? nil : TeamStatus(j: j["team"]) }
     func task(for docket: String) -> BuildTask? { tasks.first { $0.docket == docket } }
     func pr(for docket: String) -> ReviewPr? { prs.first { $0.docket == docket } }
 }

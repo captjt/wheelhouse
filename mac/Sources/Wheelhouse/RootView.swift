@@ -23,6 +23,7 @@ struct RootView: View {
                     case .builds: BuildsScreen()
                     case .agents: AgentsScreen()
                     case .recap: RecapScreen()
+                    case .team: TeamScreen()
                     default: DocketsScreen(section: nav.section)
                     }
                 }
@@ -127,6 +128,11 @@ struct Sidebar: View {
                 row(.all)
                 row(.done)
                 row(.agents, count: s?.agents.count ?? 0)
+                if let t = s?.team, t.inOne {
+                    Label(t.name, systemImage: Place.team.symbol)
+                        .badge(t.dockets.isEmpty ? nil : Text("\(t.dockets.count)").foregroundStyle(t.alert ? K.blocked : .secondary).fontWeight(t.alert ? .semibold : .regular))
+                        .tag(Place.team)
+                }
                 row(.recap)
             }
             if !sessions.isEmpty {

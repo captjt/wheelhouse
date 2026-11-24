@@ -167,6 +167,8 @@ export const IconInbox = glyph("M2.5 9.5 4 3.5h8l1.5 6v3h-11v-3ZM2.5 9.5H6l.8 1.
 export const IconActive = glyph("M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM8 5v3l2 1.5");
 export const IconLayers = glyph("M8 2.5 2.5 5.3 8 8.1l5.5-2.8L8 2.5ZM2.5 8 8 10.8 13.5 8M2.5 10.7 8 13.5l5.5-2.8");
 export const IconDone = glyph("M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM5.6 8.1l1.6 1.6 3.2-3.4");
+/** Two people: a workspace's members. */
+export const IconTeam = glyph("M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM2 13c0-2.2 1.8-3.75 4-3.75S10 10.8 10 13M11 7.25a1.9 1.9 0 1 0 0-3.8M11.5 9.4c1.5.3 2.5 1.6 2.5 3.6");
 export const IconAgents = glyph("M4 4.5h8a1.5 1.5 0 0 1 1.5 1.5v5A1.5 1.5 0 0 1 12 12.5H4A1.5 1.5 0 0 1 2.5 11V6A1.5 1.5 0 0 1 4 4.5ZM5.5 7.5l1.5 1.2-1.5 1.3M8.5 10h2");
 export const IconSearch = glyph("M7 2.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9ZM10.3 10.3l3.2 3.2");
 export const IconPlus = glyph("M8 3v10M3 8h10");
