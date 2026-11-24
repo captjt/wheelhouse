@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
-import { Person } from "./Team";
+import { Person, PersonDot } from "./Team";
 import { agentLabel, agentOfEntry, agentsOn, appName, entryBlock, liveAgents, paneRuntime, runtimeOf, runtimeTitle, spawnRuntime, type CheckRun, type Docket, type DocketAgent, type DocketPage, type EntryView } from "./api";
 import { AppAvatar, HubAvatar, IconChevron, IconDown, IconDownload, IconShield, IconUp, LiveIcon, PersonAvatar, SessionIcon, StatusIcon, TitleText, liveWord, shortPath } from "./icons";
 import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
@@ -466,7 +466,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             {(earlier || entries.length <= 200 ? entries : entries.slice(-150))
               .filter((e) => !only || entryBlock(e) === only)
               .map((e) => (
-              <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} onOpen={setViewing} onCheck={setCheckOut} />
+              <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} me={hub.state?.team?.workspace?.you} onOpen={setViewing} onCheck={setCheckOut} />
             ))}
           </div>
           <Composer ref={composerRef} onSend={(t) => hub.note(d.id, t).then(reload)} />
@@ -514,8 +514,11 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
 function AgentsProp({ d }: { d: Docket }) {
   const hub = useHub();
   const pane = usePane();
-  const on = liveAgents(d).concat(agentsOn(d).filter((a) => !a.live));
-  const left = (d.agents ?? []).filter((a) => !a.on);
+  // A shared docket's teammates' agents are on their Macs: the Team section lists them.
+  const me = hub.state?.team?.workspace?.you;
+  const mine = (a: DocketAgent) => !a.member || a.member === me;
+  const on = liveAgents(d).concat(agentsOn(d).filter((a) => !a.live)).filter(mine);
+  const left = (d.agents ?? []).filter((a) => !a.on && mine(a));
   const [earlier, setEarlier] = useState(false);
   const row = (a: DocketAgent) => {
     const state = a.live?.state;
@@ -575,11 +578,18 @@ function Prop({ label, children }: { label: string; children: ReactNode }) {
 
 // ---- the activity feed ----
 
-function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; owner: string; onOpen: (e: EntryView) => void; onCheck: (c: CheckRun) => void }) {
+function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docket; owner: string; me?: string; onOpen: (e: EntryView) => void; onCheck: (c: CheckRun) => void }) {
+  // On a shared docket, whose it is: a teammate's (`sam`, `hub@sam`,
+  // `codex@sam`) is named for them, never "You".
+  const shared = !d.id.startsWith("D-");
+  const memberOf = String(e.actor.id).includes("@") ? String(e.actor.id).split("@").pop() : e.actor.type === "person" ? String(e.actor.id) : undefined;
+  const mate = shared && memberOf && memberOf !== "local" && memberOf !== me ? memberOf : null;
+  const youName = mate && e.actor.type === "person" ? mate : "You";
+  const actorApp = (mate ? `${mate}'s ` : "") + appName(String(e.actor.id).split("@")[0]);
   // The entry's own agent, on a docket that's had several; named by its role or pane.
   const who = agentOfEntry(d, e);
   const several = (d.agents?.length ?? 0) > 1;
-  const agent = several && who ? `${appName(who.app)} (${agentLabel(who)})` : appName(who?.app);
+  const agent = (mate ? `${mate}'s ` : "") + (several && who ? `${appName(who.app)} (${agentLabel(who)})` : appName(who?.app));
   const time = (
     <span className="act-time" title={`${stamp(e.at)}\n#${e.seq} · ${e.mark}, signed by ${e.key || "?"}\n${e.id}`}>
       {agoLong(e.at)}
@@ -613,19 +623,39 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
       </div>
     </div>
   );
-  const you = <PersonAvatar name={owner} size={18} />;
+  const you = mate && e.actor.type === "person" ? <PersonDot handle={mate} /> : <PersonAvatar name={owner} size={18} />;
   const hubA = <HubAvatar size={18} />;
   const app = <AppAvatar app={who?.app} size={18} />;
   const data = e.data || {};
 
   switch (e.kind) {
+    case "share":
+      return sys(you, <><b>{youName}</b> shared this docket with the team{data.local ? <> from <span className="mono-s">{data.local}</span></> : null}</>);
+    case "people": {
+      const h = data.handle as string | undefined;
+      const self = h && h === e.actor.id;
+      const them = h === me ? "you" : h;
+      const text = !h
+        ? <>let {data.answer === "members" ? "anyone on it" : "only owners"} answer its agents' questions</>
+        : data.action === "remove"
+          ? self ? <>left this docket</> : <>took {them} off this docket</>
+          : self ? <>joined as {data.role === "owner" ? "an owner" : "a member"}</> : <>made {them} {data.role === "owner" ? "an owner" : "a member"}</>;
+      return sys(you, <><b>{youName}</b> {text}</>);
+    }
+    case "trust": {
+      const t = data.teammate === me ? "your" : data.teammate ? `${data.teammate}'s` : null;
+      const parts: ReactNode[] = [];
+      if (t) parts.push(<span key="t">{data.on === false ? <>asks before letting {t} agents' messages in</> : <>lets {t} agents' messages in</>}</span>);
+      if (typeof data.private_prompts === "boolean") parts.push(<span key="p">{data.private_prompts ? "keeps their prompts here private" : "shares their prompts here"}</span>);
+      return sys(you, <><b>{youName}</b> {parts.reduce<ReactNode[]>((a, p, i) => (i ? [...a, " and ", p] : [p]), [])}</>);
+    }
     case "open":
       if (data.protocol === "review")
         return sys(<IconPR size={16} />, <><b>Wheelhouse</b> opened this Review docket{data.review?.key ? <> for {data.review.key}</> : null}</>);
       return data.protocol === "agent"
         ? sys(hubA, <><b>Wheelhouse</b> picked up {agent}{who?.cwd ? <> in <span className="act-path" title={who.cwd}>{shortPath(who.cwd)}</span></> : null}</>)
         : e.actor.type === "person"
-          ? sys(you, <><b>You</b> opened this docket</>)
+          ? sys(you, <><b>{youName}</b> opened this docket</>)
           : sys(hubA, <><b>Wheelhouse</b> opened this docket</>);
     case "claim": {
       if (data.source === "rex-reviewer")
@@ -643,19 +673,19 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
       );
     }
     case "question":
-      return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, e.actor.type === "agent" ? appName(String(e.actor.id).split("@")[0]) : "You", `asked ${data.to === "me" ? "you" : data.to}${data.subject ? ` · ${data.subject}` : ""} (#${data.message})`, `${e.body || ""}\n\nOptions: ${(data.options || []).join(" · ")}`, "ask");
+      return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, e.actor.type === "agent" ? actorApp : youName, `asked ${data.to === "me" ? "you" : data.to}${data.subject ? ` · ${data.subject}` : ""} (#${data.message})`, `${e.body || ""}\n\nOptions: ${(data.options || []).join(" · ")}`, "ask");
     case "decision":
-      return comment(e.actor.type === "person" ? you : <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} />, e.actor.type === "person" ? "You" : appName(String(e.actor.id).split("@")[0]), `chose “${data.choice}” (#${data.replies_to})`, e.body && e.body !== data.choice ? e.body : `**${data.choice}**`, e.actor.type === "person" ? "you" : "");
+      return comment(e.actor.type === "person" ? you : <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} />, e.actor.type === "person" ? youName : actorApp, `chose “${data.choice}” (#${data.replies_to})`, e.body && e.body !== data.choice ? e.body : `**${data.choice}**`, e.actor.type === "person" ? "you" : "");
     case "note":
       if (data.message) {
-        const writer = e.actor.type === "agent" ? appName(String(e.actor.id).split("@")[0]) : "You";
+        const writer = e.actor.type === "agent" ? actorApp : youName;
         const verb = data.replies_to ? `replied to #${data.replies_to}` : data.to === "me" ? `wrote to you${data.subject ? ` · ${data.subject}` : ""}` : `wrote to ${data.to}`;
         return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, writer, verb, e.body || "", e.actor.type === "person" ? "you" : "");
       }
-      if (data.via === "prompt") return comment(you, "You", `asked ${agent}`, e.body || "", "you");
+      if (data.via === "prompt") return comment(you, youName, `asked ${agent}`, e.body || "", "you");
       if (data.via === "message") return comment(hubA, "rex-inbox", "delivered a message", e.body || "");
       if (e.actor.type === "agent") return comment(app, agent, "noted", e.body || "");
-      return comment(you, "You", "noted", e.body || "", "you");
+      return comment(you, youName, "noted", e.body || "", "you");
     case "turn":
       if (!e.body) return sys(app, <><b>{agent}</b> finished a turn{data.state && data.state !== "done" ? ` (${data.state})` : ""}</>);
       return comment(app, agent, "finished a turn", e.body, "agent");
@@ -668,7 +698,7 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
         ) : data.source === "review" ? (
           <><b>Wheelhouse</b> wrote the intent from the PR{data.linear?.length ? <> and {data.linear.join(", ")}</> : null}</>
         ) : (
-          <><b>{e.actor.type === "person" ? "You" : e.actor.type === "agent" ? appName(writer) : "Wheelhouse"}</b> {e.actor.type === "person" ? "updated" : "proposed"} the intent</>
+          <><b>{e.actor.type === "person" ? youName : e.actor.type === "agent" ? appName(writer) : "Wheelhouse"}</b> {e.actor.type === "person" ? "updated" : "proposed"} the intent</>
         );
       return sys(data.source === "linear" ? <IconIssue size={16} /> : e.actor.type === "person" ? you : data.source === "review" ? hubA : <AppAvatar app={writer} size={18} />, by, "intent");
     }
@@ -688,7 +718,7 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
         return sys(
           you,
           <>
-            <b>You</b> linked <a className="act-link" href={data.url} target="_blank" rel="noreferrer">{data.key}</a> {data.title ? <>· {data.title}</> : null}
+            <b>{youName}</b> linked <a className="act-link" href={data.url} target="_blank" rel="noreferrer">{data.key}</a> {data.title ? <>· {data.title}</> : null}
           </>,
         );
       if (data.kind === "github-pr")
@@ -724,7 +754,7 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
         ? sys(<LiveIcon state="error" size={16} />, <><b>{agent}</b> failed{e.body ? <>: {e.body}</> : null}</>, "error")
         : sys(<LiveIcon state="blocked" size={16} />, <><b>{agent}</b> waited on you{data.kind ? ` (${data.kind})` : ""}{e.body ? <>: {e.body}</> : null}</>, "blocked");
     case "set": {
-      const who = e.actor.type === "person" ? "You" : "Wheelhouse";
+      const who = e.actor.type === "person" ? youName : "Wheelhouse";
       const parts: ReactNode[] = [];
       if (data.title)
         parts.push(data.title_source === "prompt" ? <span key="t">named it from your prompt</span> : <span key="t">renamed it to “{data.title}”</span>);
@@ -741,14 +771,14 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
       return sys(e.actor.type === "person" ? you : hubA, <><b>{who}</b> {parts.reduce<ReactNode[]>((a, p, i) => (i ? [...a, " and ", p] : [p]), [])}</>);
     }
     case "approval": {
-      if (data.what === "post-review") return sys(you, <><b>You</b> approved posting round {data.round}'s review</>, "approved");
+      if (data.what === "post-review") return sys(you, <><b>{youName}</b> approved posting round {data.round}'s review</>, "approved");
       if (data.kind === "review")
-        return sys(you, <><b>You</b> {data.decision === "post" ? "posted" : "dismissed"} the review{e.body ? <>: {e.body}</> : null}{data.url ? <> · <a className="act-link" href={data.url} target="_blank" rel="noreferrer">on GitHub</a></> : null}</>, data.decision === "post" ? "approved" : "denied");
+        return sys(you, <><b>{youName}</b> {data.decision === "post" ? "posted" : "dismissed"} the review{e.body ? <>: {e.body}</> : null}{data.url ? <> · <a className="act-link" href={data.url} target="_blank" rel="noreferrer">on GitHub</a></> : null}</>, data.decision === "post" ? "approved" : "denied");
       const ok = data.decision === "approve";
       return sys(
         you,
         <>
-          <b>You</b> {ok ? "approved" : "denied"} {agent}'s {data.kind || "prompt"}
+          <b>{youName}</b> {ok ? "approved" : "denied"} {agent}'s {data.kind || "prompt"}
           {e.body ? <>: <span className="act-path">{e.body}</span></> : null}
         </>,
         ok ? "approved" : "denied",
@@ -756,7 +786,7 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
     }
     case "artifact": {
       const by = e.actor.type === "person" ? you : e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : hubA;
-      const name = e.actor.type === "person" ? "You" : e.actor.type === "agent" ? appName(String(e.actor.id).split("@")[0]) : "Wheelhouse";
+      const name = e.actor.type === "person" ? youName : e.actor.type === "agent" ? actorApp : "Wheelhouse";
       return sys(
         by,
         <>
@@ -955,7 +985,7 @@ function SharedProps({ d }: { d: Docket }) {
         </Prop>
       )}
       {theirs.length > 0 && (
-        <Prop label="Teammates">
+        <Prop label="Agents">
           <span className="prop-val">
             {theirs.map((a) => (
               <span key={`${a.member}/${a.block}`} className="prop-text" title={`On ${a.member}'s Mac. Reach them with wh send --to @${d.id}`}>

@@ -518,7 +518,7 @@ struct Properties: View {
                     }
                     let theirs = d.agents.filter { $0.on && $0.member != nil && $0.member != me }
                     if !theirs.isEmpty {
-                        prop("Teammates") {
+                        prop("Agents") {
                             VStack(alignment: .leading, spacing: 3) {
                                 ForEach(theirs) { a in
                                     Text("\(a.member ?? "")'s \(appName(a.app))\(a.role.map { " · \($0)" } ?? "")")

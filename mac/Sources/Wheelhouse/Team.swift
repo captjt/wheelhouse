@@ -54,10 +54,10 @@ struct OutboxItem: Hashable, Identifiable {
     var at: String { j["at"].str ?? "" }
 }
 
-/// A handle as a small round mark: the same color for a person everywhere.
-struct PersonChip: View {
+/// A person's round mark: their initial on their color, the same everywhere.
+struct PersonDot: View {
     let handle: String
-    var you = false
+    var size: CGFloat = 16
 
     private var hue: Double {
         var h = 0
@@ -66,15 +66,39 @@ struct PersonChip: View {
     }
 
     var body: some View {
+        Text(handle.prefix(1).uppercased())
+            .font(.system(size: size * 0.55, weight: .semibold))
+            .frame(width: size, height: size)
+            .background(Circle().fill(Color(hue: hue, saturation: 0.22, brightness: 0.93)))
+            .foregroundStyle(Color(hue: hue, saturation: 0.65, brightness: 0.42))
+    }
+}
+
+/// A handle with its mark, for the inspector.
+struct PersonChip: View {
+    let handle: String
+    var you = false
+
+    var body: some View {
         HStack(spacing: 5) {
-            Text(handle.prefix(1).uppercased())
-                .font(.system(size: 9.5, weight: .semibold))
-                .frame(width: 16, height: 16)
-                .background(Circle().fill(Color(hue: hue, saturation: 0.25, brightness: 0.9)))
-                .foregroundStyle(Color(hue: hue, saturation: 0.6, brightness: 0.4))
+            PersonDot(handle: handle)
             Text(handle).font(.system(size: 12.5)).foregroundStyle(K.text2)
         }
         .help(you ? "\(handle) (you)" : handle)
+    }
+}
+
+/// Several people as overlapping marks.
+struct PersonStack: View {
+    let handles: [String]
+    var body: some View {
+        HStack(spacing: -4) {
+            ForEach(handles.prefix(4), id: \.self) { h in
+                PersonDot(handle: h, size: 15).overlay(Circle().strokeBorder(K.main, lineWidth: 1.5))
+            }
+            if handles.count > 4 { Text("+\(handles.count - 4)").font(.system(size: 11)).foregroundStyle(.tertiary).padding(.leading, 6) }
+        }
+        .help(handles.joined(separator: ", "))
     }
 }
 
@@ -107,17 +131,7 @@ struct TeamScreen: View {
                             }
                         }
                         Section("Members") {
-                            ForEach(t.members) { m in
-                                HStack(spacing: 8) {
-                                    PersonChip(handle: m.handle, you: m.you)
-                                    if !m.name.isEmpty && m.name != m.handle { Text(m.name).foregroundStyle(.secondary) }
-                                    Spacer()
-                                    if m.role == "admin" { Text("admin").font(.system(size: 11)).foregroundStyle(.tertiary) }
-                                    if m.you { Text("you").font(.system(size: 11)).foregroundStyle(.tertiary) }
-                                    if let l = m.login { Text(l).font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary) }
-                                }
-                                .selectionDisabled()
-                            }
+                            ForEach(t.members) { m in memberRow(m) }
                         }
                     }
                     .listStyle(.inset)
@@ -145,34 +159,75 @@ struct TeamScreen: View {
     }
 
     private func sharedRow(_ d: SharedDocket, you: String) -> some View {
-        HStack(spacing: 10) {
-            Circle().fill(d.halted != nil ? K.error : d.agents.isEmpty ? K.faint : K.working).frame(width: 7, height: 7)
-            Text(d.id).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
-            Text(d.title).lineLimit(1)
-            if let h = d.halted { Text("Not followed: \(h)").font(.system(size: 11.5)).foregroundStyle(K.error).lineLimit(1) }
-            Spacer()
-            ForEach(d.owners, id: \.self) { PersonChip(handle: $0, you: $0 == you) }
-            if !d.members.isEmpty { Text("+\(d.members.count)").font(.system(size: 11.5)).foregroundStyle(.tertiary) }
-            if !d.agents.isEmpty {
-                let whose = Array(Set(d.agents.map { $0.member ?? you })).sorted()
-                Text("\(d.agents.count) agent\(d.agents.count == 1 ? "" : "s") · \(whose.joined(separator: ", "))")
-                    .font(.system(size: 11.5)).foregroundStyle(.tertiary)
+        let x = store.docket(d.id)
+        let mates = Array(Set(d.agents.compactMap(\.member).filter { $0 != you })).sorted()
+        return HStack(alignment: .top, spacing: 9) {
+            Group {
+                if d.halted != nil { LiveIcon(state: .error, size: 14) } else if let l = x?.live { LiveIcon(state: l.state, size: 14) } else { StatusIcon(status: x?.status ?? .todo, size: 14) }
+            }
+            .padding(.top, 1.5)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(d.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if let x { Text(ago(x.updatedAt)).font(.system(size: 11.5)).foregroundStyle(.tertiary).monospacedDigit() }
+                }
+                HStack(spacing: 6) {
+                    IdText(id: d.id)
+                    if x?.live != nil, let st = x?.status { StatusIcon(status: st, size: 11) }
+                    if !d.agents.isEmpty {
+                        HStack(spacing: 3) { Image(systemName: "terminal").imageScale(.small); Text("\(d.agents.count)") }
+                        if !mates.isEmpty { Text(mates.joined(separator: ", ")).lineLimit(1) }
+                    }
+                    if d.halted != nil { Text("Not followed").foregroundStyle(K.error) }
+                    Spacer(minLength: 0)
+                    PersonStack(handles: d.owners + d.members)
+                }
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
             }
         }
+        .padding(.vertical, 4)
+    }
+
+    private func memberRow(_ m: TeamMember) -> some View {
+        HStack(spacing: 9) {
+            PersonDot(handle: m.handle, size: 20)
+            Text(m.handle).font(.system(size: 13, weight: .medium))
+            if m.you { Text("(you)").foregroundStyle(.secondary) }
+            if !m.name.isEmpty && m.name != m.handle { Text(m.name).foregroundStyle(.secondary).lineLimit(1) }
+            Spacer()
+            if m.role == "admin" {
+                Text("Admin").font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.separator))
+            }
+            if let l = m.login { Text(l).font(.system(size: 11.5)).foregroundStyle(.tertiary).lineLimit(1) }
+        }
+        .padding(.vertical, 3)
+        .selectionDisabled()
     }
 
     private func heldRow(_ o: OutboxItem) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: o.status == "held" ? "hand.raised" : "xmark.octagon").foregroundStyle(o.status == "held" ? K.blocked : K.error)
-            Text(o.docket).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
-            Text(o.status == "held" ? "Held: it looks like it holds a secret" : "Refused by the workspace").lineLimit(1)
-            if let w = o.why { Text(w).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1) }
+        let what = o.status == "refused" ? "Refused by the workspace" : (o.why?.range(of: "holds ").map { "Looks like " + o.why![$0.upperBound...] } ?? "Looks like a secret")
+        return HStack(alignment: .top, spacing: 9) {
+            Image(systemName: o.status == "held" ? "exclamationmark.square.fill" : "xmark.octagon.fill")
+                .foregroundStyle(o.status == "held" ? K.blocked : K.error).padding(.top, 1.5)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(what).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                HStack(spacing: 6) {
+                    IdText(id: o.docket)
+                    Text(o.status == "held" ? "Kept on this Mac until you say" : (o.why ?? "")).lineLimit(1)
+                }
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+            }
             Spacer()
             if o.status == "held" {
-                Button("Send anyway") { Task { await store.act("/api/team/outbox/\(o.id)", ["action": "send"], done: "#\(o.id) goes to the workspace") } }
+                Button("Send anyway") { Task { await store.act("/api/team/outbox/\(o.id)", ["action": "send"], done: "Sent to the workspace") } }
             }
-            Button("Drop") { Task { await store.act("/api/team/outbox/\(o.id)", ["action": "drop"], done: "#\(o.id) dropped") } }
+            Button("Drop") { Task { await store.act("/api/team/outbox/\(o.id)", ["action": "drop"], done: "Dropped") } }
         }
+        .padding(.vertical, 4)
         .selectionDisabled()
     }
 }

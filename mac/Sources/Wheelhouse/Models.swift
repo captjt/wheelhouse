@@ -240,7 +240,12 @@ struct Docket: Hashable, Identifiable {
     /// The block of the agent the apps put first: the one that needs you most.
     var lead: String? { j["lead"].text }
 
-    /// Its agents, the lead first. An older hub's one agent stands in.
+    /// This hub's member handle in its workspace (docs/teams.md), set as
+    /// state arrives: a shared docket's teammates' agents aren't this hub's.
+    nonisolated(unsafe) static var me: String?
+
+    /// Its agents (this hub's own: a teammate's are on their Mac), the lead
+    /// first. An older hub's one agent stands in.
     var crew: [DocketAgent] {
         guard hasAgents else {
             guard var o = j["agent"].object else { return [] }
@@ -250,7 +255,7 @@ struct Docket: Hashable, Identifiable {
             if let s = session { o["session"] = .string(s) }
             return [DocketAgent(j: .object(o))]
         }
-        let all = agents
+        let all = agents.filter { $0.member == nil || $0.member == Docket.me }
         guard let lead, let i = all.firstIndex(where: { $0.block == lead }) else { return all }
         return [all[i]] + all.enumerated().filter { $0.offset != i }.map(\.element)
     }
