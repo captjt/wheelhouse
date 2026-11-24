@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""A stand-in for `tailscale serve`, for tests: it forwards everything on
+127.0.0.1:LISTEN to TARGET, and does to identity what Serve does: drops any
+Tailscale-* header the caller sent, and adds Tailscale-User-Login for the
+one tailnet user it stands in for. One per member, so each member's hub
+reaches the workspace hub as its own login.
+
+    fake-tailscale-serve LISTEN TARGET LOGIN
+    fake-tailscale-serve 7720 http://127.0.0.1:7710 jordan@acme.dev
+"""
+import http.client
+import sys
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+listen, target, login = int(sys.argv[1]), urllib.parse.urlsplit(sys.argv[2]), sys.argv[3]
+HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate", "host"}
+
+
+class Proxy(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):
+        pass
+
+    def forward(self):
+        n = int(self.headers.get("content-length") or 0)
+        body = self.rfile.read(n) if n else None
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP and not k.lower().startswith("tailscale-")}
+        headers["Tailscale-User-Login"] = login
+        conn = http.client.HTTPConnection(target.hostname, target.port, timeout=60)
+        try:
+            conn.request(self.command, self.path, body=body, headers=headers)
+            r = conn.getresponse()
+            data = r.read()
+        except OSError as e:
+            self.send_response(502)
+            msg = f"the workspace hub didn't answer: {e}".encode()
+            self.send_header("content-length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
+            return
+        finally:
+            conn.close()
+        self.send_response(r.status)
+        for k, v in r.getheaders():
+            if k.lower() not in HOP and k.lower() != "content-length":
+                self.send_header(k, v)
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    do_GET = do_POST = do_PUT = do_DELETE = forward
+
+
+ThreadingHTTPServer(("127.0.0.1", listen), Proxy).serve_forever()

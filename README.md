@@ -30,6 +30,10 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
   Linear issues with a label (or in your cycle) can start one.
 - **Recap.** What happened today, this week, or in 30 days, as a standup
   note, and the tokens all of it took, by provider and model.
+- **Teams.** A wheelhouse of wheelhouses: share the dockets you choose
+  with your teammates, see who's on each, people and agents alike, and let
+  your agents work with theirs across Macs, on one signed record. Your
+  panes, credentials and approvals stay on your Mac.
 
 <table>
   <tr>
@@ -157,6 +161,42 @@ and words in the system's own controls:
 The web app is the same Wheelhouse at http://127.0.0.1:7500, and on your
 phone over Tailscale.
 
+## Teams
+
+A **workspace** joins each engineer's own Wheelhouse into one: a wheelhouse
+of wheelhouses. A small **workspace hub** (the same `wh`, on a Linux box or
+an always-on Mac on your tailnet) orders the dockets the team shares, and
+every engineer's hub keeps a copy it checks entry by entry.
+
+- **Share what you choose.** `wh team share D-12`, or `wh new --team`.
+  Nothing else leaves your Mac, and a shared docket carries approvals
+  redacted: the team sees that you approved, not what.
+- **Owners and members.** Any number of each on a shared docket. Owners
+  change its intent and status; everyone can note, keep files, and put
+  agents on it.
+- **Agents across Macs.** Every agent's brief lists its teammates' agents,
+  and `wh send --to @ACME-1` reaches them all. A teammate's agent's first
+  message waits in your Inbox until you let it in. An agent's question
+  reaches its person and the docket's owners, and the first answer stands.
+- **Checked, not trusted.** Every entry is signed by whoever wrote it. A
+  workspace hub that changes, drops or reorders an entry, or adds a key
+  nobody issued, is caught by every hub that follows it.
+
+<table>
+  <tr>
+    <td><img src="docs/images/team-light.png" alt="The Acme workspace in the web app: connected, an entry held back because it looks like a GitHub token, four shared dockets with their agents and people, and three members"></td>
+    <td><img src="docs/images/team-docket-dark.png" alt="A shared docket in dark mode: a teammate's agent's message held with Deliver, Drop and Let sam's agents through, its question with two answers, the intent, and its owners, members and teammates' agents in the properties"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/mac-team-light.png" alt="Wheelhouse.app's Team place: shared dockets with their people, the members, and ACME-1 open beside them"></td>
+    <td><img src="docs/images/team-inbox-dark.png" alt="The Inbox in dark mode: a teammate's agent's question and its held message, beside the shared docket"></td>
+  </tr>
+</table>
+
+[docs/teams-guide.md](docs/teams-guide.md) is how it works day to day,
+[docs/teams-start.md](docs/teams-start.md) gets a workspace running, and
+[docs/teams.md](docs/teams.md) is the design and the protocol.
+
 ## Requirements
 
 - macOS and [Rex](https://www.superlogical.com/rex), with the `rex` CLI, or
@@ -256,6 +296,8 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh start [--codex\|--agy] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have (beside any agents already on it), in Rex (or Herdr, with `runtime` set) |
 | `wh join D-4 [--role R]`, `wh leave` | From an agent's pane: put it on a docket beside the agents there, or take it off its docket |
 | `wh send --to ADDR "text"`, `wh reply N "text"`, `wh whoami`, `wh name NAME` | From an agent's pane, in either runtime: message another agent (`api/builder`, `reviewer`, `herdr:wheelhouse/D-12`, `herdr:t2h`), every agent on a docket (`@D-12`), or you (`--to me`); answer; where you are; name your pane |
+| `wh team`, `wh team create\|invite\|join\|members\|share\|people\|trust\|role\|remove\|leave\|send\|drop\|sync\|follow` | Your workspace, and everything a team does with it ([docs/teams-guide.md](docs/teams-guide.md#commands)) |
+| `wh new --team "title"`, `wh serve --workspace`, `wh up --workspace` | Open a docket shared from the start; run a workspace hub |
 | `wh open [D-4]` | Open a docket (or the Inbox) in Wheelhouse.app, or the web app without it |
 | `wh verify [D-4]`, `wh export D-4 > D-4.jsonl`, `wh verify --file D-4.jsonl` | Check a record, every kept file included; one that checks without the hub |
 | `wh review`, `on`, `off`, `pause`, `resume`, `check` | The Review protocol, and its switches |

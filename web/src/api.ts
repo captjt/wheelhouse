@@ -101,6 +101,8 @@ export type DocketAgent = AgentRef & {
   live?: Live | null;
   /** Its message address, when live. */
   addr?: string | null;
+  /** On a shared docket, the workspace member whose agent it is; none for this hub's own dockets. */
+  member?: string | null;
 };
 
 export type Docket = {
@@ -141,6 +143,13 @@ export type Docket = {
   closed_on?: string | null;
   /** Its witnessed checks, the latest of each. */
   checks?: Record<string, { ok: boolean; head: string; at: string; required: boolean }> | null;
+  /** A local docket that was shared: the shared docket it went on as (`ACME-31`). */
+  shared_as?: string | null;
+  /** A shared docket: who shared it, and from which of their dockets (`jordan/D-12`). */
+  shared_from?: string | null;
+  /** A shared docket's owners and members, by handle. */
+  owners?: string[];
+  members?: string[];
 };
 
 /** One witnessed check: the hub ran it itself, at a commit (src/checks.rs). */
@@ -250,6 +259,8 @@ export type Msg = {
   docket?: string | null;
   from: string;
   from_app?: string | null;
+  /** A teammate's agent's message (docs/teams.md): whose agent it is. */
+  from_member?: string | null;
   to: string;
   subject?: string | null;
   body: string;
@@ -420,10 +431,33 @@ export type HubState = {
   rex: { connected: boolean; error?: string | null };
   /** Every runtime, followed or not (older hubs leave it out). */
   runtimes?: RuntimeLink[];
+  /** The workspace this hub is a member of (docs/teams.md); `workspace` is null when it's in none. */
+  team?: TeamStatus;
   dockets: Docket[];
   asks: Ask[];
   agents: (Live & { docket?: string | null; role?: string | null })[];
   attention?: Attention[];
+};
+
+/** This hub's workspace, as `/api/team` and `/api/state` serve it (src/team/member.rs `status`). */
+export type TeamStatus = {
+  workspace: { name: string; prefix: string; url: string; id: string; you: string } | null;
+  online?: boolean;
+  error?: string | null;
+  members?: { handle: string; name: string; role: "admin" | "member"; login?: string | null; active: boolean; joined_at: string; you: boolean }[];
+  dockets?: {
+    id: string;
+    title?: string | null;
+    status?: Docket["status"] | null;
+    owners: string[];
+    members: string[];
+    agents?: { member?: string | null; app: string; pane: string; role?: string | null }[] | null;
+    halted?: string | null;
+  }[];
+  aliases?: Record<string, string>;
+  outbox?: { n: number; docket: string; status: "queued" | "held" | "refused"; why?: string | null; at: string }[];
+  halted?: Record<string, string>;
+  log?: { entries: number; head: string };
 };
 
 export type Mark = "said" | "witnessed" | "checkable";
@@ -532,6 +566,25 @@ export async function post<T>(path: string, body: unknown = {}): Promise<T> {
 
 export const appName = (app?: string | null) =>
   app === "claude-code" ? "Claude Code" : app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : app || "Agent";
+
+/** On a shared docket (docs/teams.md), the teammate an entry's writer
+ * belongs to (`sam`, `hub@sam`, `codex@sam`); null when it's yours, or the
+ * docket isn't shared. `me` is your handle in the workspace. */
+export function mateOf(actor: { type: string; id: unknown }, docket: string, me?: string | null): string | null {
+  if (docket.startsWith("D-")) return null;
+  const id = String(actor.id);
+  const member = id.includes("@") ? id.split("@").pop() : actor.type === "person" ? id : undefined;
+  return member && member !== "local" && member !== me ? member : null;
+}
+
+/** Who wrote an entry, in words: "You", "sam", "Codex", "sam's Codex", "Wheelhouse". */
+export function actorName(actor: { type: string; id: unknown }, docket: string, me?: string | null): string {
+  const mate = mateOf(actor, docket, me);
+  if (actor.type === "person") return mate ?? "You";
+  const whose = mate ? `${mate}'s ` : "";
+  if (actor.type === "agent") return whose + appName(String(actor.id).split("@")[0]);
+  return whose + "Wheelhouse";
+}
 
 /** The footer's line: the runtimes followed, or the one that's down. A
  * runtime that isn't installed is no trouble; one that is and isn't

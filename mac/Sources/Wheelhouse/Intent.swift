@@ -5,7 +5,7 @@ func intentAuthor(_ e: Entry, _ d: Docket) -> String {
     switch e.data["source"].str {
     case "linear": return e.data["taken_by"].exists ? "Linear (\(e.data["key"].str ?? "")), taken by you" : "Linear (\(e.data["key"].str ?? d.linear?.key ?? "issue"))"
     case "review": return "Wheelhouse, from the PR"
-    default: return e.actorType == "person" ? "You" : e.actorType == "agent" ? appName(e.actorApp) : "Wheelhouse"
+    default: return e.writer(on: d.id)
     }
 }
 

@@ -32,12 +32,14 @@ check-app:
 # and GitHub: the plan, the PR, two address rounds, and the merge. Once
 # with the agents' panes in Rex, once in Herdr. Then Rex and Herdr
 # together: agents in each messaging, approved and started across both.
-# Then several agents, in both, on one docket.
+# Then several agents, in both, on one docket. Then teams: a workspace hub
+# and two members' hubs sharing a docket (docs/teams.md).
 e2e:
     scripts/build-e2e.sh rex
     PORT=7624 scripts/build-e2e.sh herdr
     scripts/runtimes-e2e.sh
     scripts/shared-e2e.sh
+    scripts/team-e2e.sh
 
 # Build Wheelhouse.app and put it in ~/Applications.
 app:
@@ -82,6 +84,8 @@ dev:
     cd ./web && npm run dev
 
 # The README's screenshots (the web app, on a Mac and a phone, and
-# Wheelhouse.app) and the social preview card, from a made-up world.
+# Wheelhouse.app) and the social preview card, from a made-up world; then
+# the Teams ones, from a made-up workspace (docs/teams-guide.md).
 screenshots:
     scripts/screenshots.sh
+    scripts/team-screenshots.sh

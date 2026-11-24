@@ -172,6 +172,34 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [ ] Signed and notarized builds, so a teammate can install it without
       building it
 
+### Teams ([teams.md](teams.md))
+
+- [x] A workspace hub (`wh serve --workspace`): no runtime, Keychain or
+      launchctl, so it runs on Linux too; it orders the member log and
+      shared dockets and checks every entry before it does
+- [x] The member log: a workspace made with a setup code, invites bound
+      to the joiner's key by the invite's secret, keys members issue,
+      roles, removals, and always an admin (`wh team create`, `invite`,
+      `join`, `members`, `role`, `remove`, `leave`)
+- [x] Shared dockets: `wh team share D-12` (its history goes with it) and
+      `wh new --team`, numbered `ACME-n`; owners and members, any number
+      of each; owners change the intent and status
+- [x] Each member's hub follows the workspace, writes through an outbox
+      (offline too), redacts approvals and blocked prompts at writing,
+      and holds an entry that looks like a secret
+- [x] Checked on every hub: a changed entry, a fork, or a key no member
+      issued stops it following, says so in Attention and `wh verify`
+- [x] Agents across Macs: teammates' agents in `wh brief`, `wh send --to
+      @ACME-n` reaching them, held for their person until let in (or
+      trusted), and marked a peer's in the pane; an agent's question to
+      its own person and the owners, the first answer standing
+- [x] `scripts/team-e2e.sh`: a workspace hub and two members' hubs
+      through all of it
+- [ ] The Team view in both apps, and the docket page's people
+- [ ] The workspace hub packaged for Linux (systemd, a container) and
+      `wh up --workspace` on a Mac
+- [ ] A live test with other engineers on a real repo
+
 ## Next
 
 ### Build after the PR opens
@@ -209,6 +237,6 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
   independence rests on its key
 - **Your own protocols:** standing orders and protocols you write
   (milestone 5)
-- **Teams:** a workspace hub, member keys, and shared dockets, so
-  teammates work on one record (milestone 6). The record format is built
-  for it already.
+- **Teams, further:** handoff, shared standing decisions, Build and
+  Review across the team, a team Recap, and cosigned checkpoints
+  ([teams.md](teams.md); D-187's phases 2 and 3).

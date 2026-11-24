@@ -167,7 +167,7 @@ private struct RecordRow: View {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(e.problems, id: \.self) { p in Text("• \(p)").foregroundStyle(K.error) }
                     Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 5) {
-                        fact("Written by", "\(e.actorType == "person" ? "You" : e.actorType == "agent" ? appName(e.actorApp) : "Wheelhouse") (\(e.actorType): \(e.actorId))")
+                        fact("Written by", "\(e.writer(on: id)) (\(e.actorType): \(e.actorId))")
                         fact("Signed with", "\(keyName) \(e.keyid ?? "")")
                         fact("When", stamp(e.at))
                         fact("How it's known", "\(e.mark): \(Mark.words[e.mark] ?? "")")

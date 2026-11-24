@@ -182,12 +182,20 @@ fn docket_addr(to: &str) -> Option<String> {
 /// each, on one entry of the docket's record, so replies stay on its thread.
 fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<String>, body: String, options: Vec<String>) -> Result<Message> {
     let st = core.store.state(docket)?.ok_or_else(|| anyhow!("no docket {docket}"))?;
+    let me = core.team.as_ref().map(|t| t.config.handle.clone());
     let to: Vec<(String, String)> = st
-        .agents_on()
+        .own_agents_on(me.as_deref())
         .filter(|a| Some(&a.agent.block) != from.block.as_ref() && agents::docket_of(core, &a.agent.block).as_deref() == Some(docket))
         .filter_map(|a| core.mirror.panes.get(&a.agent.block).map(|p| (addr_of(core, p), p.block_id.clone())))
         .collect();
-    if to.is_empty() {
+    // On a shared docket, teammates' agents too: the message is an entry, and
+    // each of their hubs delivers it (or asks its person first).
+    let remote: Vec<Value> = st
+        .agents_on()
+        .filter(|a| a.member.is_some() && a.member != me)
+        .map(|a| json!({ "member": a.member, "block": a.agent.block, "pane": if a.agent.pane.is_empty() { a.agent.app.clone() } else { a.agent.pane.clone() } }))
+        .collect();
+    if to.is_empty() && remote.is_empty() {
         bail!("no other agent is on {docket} now");
     }
     for (addr, b) in &to {
@@ -211,15 +219,36 @@ fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<Str
         m.id = core.store.insert_message(&m)?;
         sent.push(m);
     }
+    let mut addrs: Vec<String> = to.iter().map(|(a, _)| a.clone()).collect();
+    addrs.extend(remote.iter().map(|r| format!("{}/{}", r["member"].as_str().unwrap_or("?"), r["pane"].as_str().unwrap_or("?"))));
+    if sent.is_empty() {
+        // Only teammates' agents: one message here keeps the thread.
+        let mut m = Message {
+            from_addr: from.addr.clone(),
+            from_block: from.block.clone(),
+            to_addr: format!("@{docket}"),
+            subject: subject.clone(),
+            body: body.clone(),
+            options: options.clone(),
+            status: "remote".into(),
+            created_at: crate::time::now_ms(),
+            ..Default::default()
+        };
+        m.id = core.store.insert_message(&m)?;
+        sent.push(m);
+    }
     let kind = if options.is_empty() { "note" } else { "question" };
     let ids: Vec<i64> = sent.iter().map(|m| m.id).collect();
-    let addrs: Vec<&str> = to.iter().map(|(a, _)| a.as_str()).collect();
-    let data = json!({ "message": ids[0], "messages": ids, "from": from.addr, "to": format!("@{docket}"), "agents": addrs, "subject": subject, "options": options });
+    let mut data = json!({ "message": ids[0], "messages": ids, "from": from.addr, "to": format!("@{docket}"), "agents": addrs, "subject": subject, "options": options });
+    if !remote.is_empty() {
+        data["team_to"] = Value::Array(remote);
+    }
     let s = core.append(docket, kind, &from.who, Some(body), data)?;
     for m in &mut sent {
         m.docket = Some(docket.to_string());
         m.seq = Some(s.seq);
         core.store.set_message_place(m.id, docket, s.seq)?;
+        core.store.set_message_entry(m.id, &s.id)?;
         let _ = core.events.send(json!({ "type": "message", "id": m.id, "to_block": m.to_block, "to": m.to_addr }));
     }
     let mut first = sent.swap_remove(0);
@@ -292,6 +321,7 @@ pub fn send(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, b
         m.docket = Some(d.clone());
         m.seq = Some(s.seq);
         core.store.set_message_place(m.id, d, s.seq)?;
+        core.store.set_message_entry(m.id, &s.id)?;
     }
     let _ = core.events.send(json!({ "type": "message", "id": m.id, "to_block": m.to_block, "to": m.to_addr }));
     Ok(m)
@@ -323,6 +353,7 @@ pub fn ask(core: &mut Core, docket: &str, subject: &str, body: &str, options: Ve
     m.docket = Some(docket.to_string());
     m.seq = Some(s.seq);
     core.store.set_message_place(m.id, docket, s.seq)?;
+    core.store.set_message_entry(m.id, &s.id)?;
     let _ = core.events.send(json!({ "type": "message", "id": m.id, "to": ME }));
     Ok(m)
 }
@@ -353,8 +384,10 @@ pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option
     if body.trim().is_empty() && choice.is_none() {
         bail!("an empty reply");
     }
-    // The other end of the thread.
+    // The other end of the thread. One on a teammate's Mac (`team:sam:…`) is
+    // reached through the shared docket's record.
     let to = if mine(&orig.to_addr) { (orig.from_addr.clone(), orig.from_block.clone()) } else { (orig.to_addr.clone(), orig.to_block.clone()) };
+    let remote = to.1.as_deref().and_then(crate::team::member::remote_block);
     let mut m = Message {
         from_addr: from.addr.clone(),
         from_block: from.block.clone(),
@@ -370,6 +403,8 @@ pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option
             "open".into()
         } else if to.0 == HUB {
             "done".into()
+        } else if remote.is_some() {
+            "remote".into()
         } else {
             "queued".into()
         },
@@ -382,19 +417,35 @@ pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option
     }
     if let Some(d) = orig.docket.clone() {
         let kind = if choice.is_some() { "decision" } else { "note" };
-        let data = json!({ "message": m.id, "replies_to": id, "from": m.from_addr, "to": m.to_addr, "choice": choice });
+        let mut data = json!({ "message": m.id, "replies_to": id, "from": m.from_addr, "to": m.to_addr, "choice": choice });
+        // What it answers, the same on every hub: a teammate's hub delivers
+        // it, or withdraws its own copy of the question.
+        if let Some(e) = &orig.entry {
+            data["answers"] = json!(e);
+        }
+        if let Some((member, block)) = &remote {
+            data["team_to"] = json!([{ "member": member, "block": block }]);
+        }
         let s = core.append(&d, kind, &from.who, Some(m.body.clone()), data)?;
         m.docket = Some(d.clone());
         m.seq = Some(s.seq);
         core.store.set_message_place(m.id, &d, s.seq)?;
+        core.store.set_message_entry(m.id, &s.id)?;
     }
     let _ = core.events.send(json!({ "type": "message", "id": m.id, "to_block": m.to_block, "to": m.to_addr, "reply_to": id }));
+    // Your answer to a teammate's message waiting for you to let it in.
+    crate::team::member::gate_answered(core, id, choice.as_deref())?;
     Ok(m)
 }
 
 /// The text pasted into an agent's pane.
 pub fn render(m: &Message, docket: Option<&str>) -> String {
-    let from = if m.from_addr == ME { "the user (through Wheelhouse)".to_string() } else { m.from_addr.clone() };
+    let from = match m.from_block.as_deref().and_then(crate::team::member::remote_block) {
+        // Never mistaken for you: a teammate's, through the shared docket.
+        Some((member, _)) => format!("{} (a teammate's agent: {member}'s, not the user)", m.from_addr),
+        None if m.from_addr == ME => "the user (through Wheelhouse)".to_string(),
+        None => m.from_addr.clone(),
+    };
     let mut head = format!("[wheelhouse] Message #{} from {from}", m.id);
     if let Some(r) = m.reply_to {
         head.push_str(&format!(", replying to #{r}"));
@@ -678,9 +729,22 @@ fn together<'a>(bodies: impl Iterator<Item = &'a str>) -> String {
 
 /// A message as the apps show it.
 pub fn view(core: &Core, m: &Message) -> Value {
-    let from_app = m.from_block.as_deref().and_then(|b| core.mirror.panes.get(b)).and_then(|p| p.app()).map(app_name);
+    let remote = m.from_block.as_deref().and_then(crate::team::member::remote_block);
+    let from_app = match &remote {
+        // A teammate's agent: its pane is on their Mac, so the shared
+        // docket says which app it is.
+        Some((member, block)) => m
+            .docket
+            .as_deref()
+            .and_then(|d| core.store.state(d).ok().flatten())
+            .and_then(|st| st.agents.into_iter().find(|a| a.member.as_deref() == Some(member.as_str()) && a.agent.block == *block))
+            .map(|a| app_name(&a.agent.app).to_string()),
+        None => m.from_block.as_deref().and_then(|b| core.mirror.panes.get(b)).and_then(|p| p.app()).map(|a| app_name(a).to_string()),
+    };
+    // Whose it is, when it's a teammate's: the apps say "sam's Codex".
+    let from_member = remote.map(|(member, _)| member);
     json!({
-        "id": m.id, "docket": m.docket, "from": m.from_addr, "from_app": from_app, "to": m.to_addr,
+        "id": m.id, "docket": m.docket, "from": m.from_addr, "from_app": from_app, "from_member": from_member, "to": m.to_addr,
         "subject": m.subject, "body": m.body, "options": m.options, "reply_to": m.reply_to, "choice": m.choice,
         "status": m.status, "created_at": m.created_at, "preview": m.preview,
     })

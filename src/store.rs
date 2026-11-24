@@ -31,10 +31,31 @@ pub struct Message {
     /// A preview the message carries: its url, local url, ports, and why
     /// it came down.
     pub preview: Option<serde_json::Value>,
+    /// The id of its entry on the record (`sha256:…`): the same on every
+    /// hub, so a teammate's hub can answer it (docs/teams.md).
+    pub entry: Option<String>,
 }
 
 pub struct Store {
     conn: Connection,
+}
+
+/// One entry waiting in the outbox for the workspace hub.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct OutboxRow {
+    pub n: i64,
+    pub docket: String,
+    pub id: String,
+    pub envelope: String,
+    pub status: String,
+    pub why: Option<String>,
+    pub created_at: String,
+}
+
+/// A docket's number, for ordering: `12` for `D-12`, and for a shared
+/// docket's `ACME-12` too.
+fn docket_n(id: &str) -> i64 {
+    id.rsplit_once('-').and_then(|(_, n)| n.parse().ok()).unwrap_or(0)
 }
 
 const SCHEMA: &str = "
@@ -111,6 +132,15 @@ CREATE TABLE IF NOT EXISTS prompt_queue (  -- what you sent an agent while it wo
 );
 CREATE INDEX IF NOT EXISTS messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS prompt_queue_status ON prompt_queue(status);
+CREATE TABLE IF NOT EXISTS team_outbox (  -- entries signed for a workspace, sent in order (docs/teams.md)
+  n INTEGER PRIMARY KEY AUTOINCREMENT,
+  docket TEXT NOT NULL,
+  id TEXT NOT NULL,          -- sha256:<hex> of envelope
+  envelope TEXT NOT NULL,
+  status TEXT NOT NULL,      -- queued | held (looks like a secret) | refused
+  why TEXT,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS blobs (  -- files entries name, by the sha256 of their bytes; never changed
   digest TEXT PRIMARY KEY,
   size INTEGER NOT NULL,
@@ -128,6 +158,10 @@ fn migrate(conn: &Connection) -> Result<()> {
     };
     if !has("messages", "preview")? {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN preview TEXT")?;
+    }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS entries_id ON entries(docket, id)")?;
+    if !has("messages", "entry")? {
+        conn.execute_batch("ALTER TABLE messages ADD COLUMN entry TEXT; CREATE INDEX IF NOT EXISTS messages_entry ON messages(entry)")?;
     }
     // A prompt the hub was typing when it stopped may or may not have gone
     // in: it's never typed again.
@@ -306,23 +340,112 @@ impl Store {
             None => None,
         };
         if let Some(st) = fold(&stored, was) {
-            let n: i64 = st.id.strip_prefix("D-").and_then(|n| n.parse().ok()).unwrap_or(0);
-            tx.execute("INSERT INTO dockets (id, n, state) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO UPDATE SET state = ?3", params![st.id, n, serde_json::to_string(&st)?])?;
+            tx.execute(
+                "INSERT INTO dockets (id, n, state) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO UPDATE SET state = ?3",
+                params![st.id, docket_n(&st.id), serde_json::to_string(&st)?],
+            )?;
         }
         tx.commit()?;
         Ok(stored)
     }
 
+    /// Store an entry another hub ordered (a workspace's), at the place it
+    /// gave it: only if it's the next one and follows the chain this store
+    /// has, so a history that changed underneath is never taken in. Folds
+    /// it in the same transaction, as `append_folded` does.
+    pub fn insert_ordered(&mut self, s: &Stored, kind: &str, at: &str, keyid: &str, fold: impl FnOnce(&Stored, Option<DocketState>) -> Option<DocketState>) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        let last: Option<(i64, String)> =
+            tx.query_row("SELECT seq, chain FROM entries WHERE docket = ?1 ORDER BY seq DESC LIMIT 1", params![s.docket], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let (want, prev) = match last {
+            None => (1, chain::GENESIS),
+            Some((n, c)) => (n + 1, chain::parse_chain(&c).context("a stored chain value isn't hex")?),
+        };
+        if s.seq != want {
+            bail!("{} #{} doesn't follow #{}", s.docket, s.seq, want - 1);
+        }
+        let id = chain::entry_id(s.envelope.as_bytes());
+        if chain::id_string(&id) != s.id {
+            bail!("{} #{}: its bytes don't match its id", s.docket, s.seq);
+        }
+        if hex::encode(&chain::next(&prev, &id)) != s.chain {
+            bail!("{} #{}: it doesn't follow the chain this hub has: the history changed", s.docket, s.seq);
+        }
+        tx.execute(
+            "INSERT INTO entries (docket, seq, id, chain, kind, at, keyid, envelope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![s.docket, s.seq, s.id, s.chain, kind, at, keyid, s.envelope],
+        )?;
+        let was: Option<String> = tx.query_row("SELECT state FROM dockets WHERE id = ?1", params![s.docket], |r| r.get(0)).optional()?;
+        let was = match was {
+            Some(x) => Some(serde_json::from_str(&x)?),
+            None => None,
+        };
+        if let Some(st) = fold(s, was) {
+            tx.execute(
+                "INSERT INTO dockets (id, n, state) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO UPDATE SET state = ?3",
+                params![st.id, docket_n(&st.id), serde_json::to_string(&st)?],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Put an entry in the outbox; its number.
+    pub fn outbox_push(&mut self, docket: &str, id: &str, envelope: &str, status: &str, why: Option<&str>) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO team_outbox (docket, id, envelope, status, why, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![docket, id, envelope, status, why, crate::time::now_ms()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// The outbox, oldest first: (n, docket, id, envelope, status, why, created_at).
+    pub fn outbox(&self) -> Result<Vec<OutboxRow>> {
+        let mut st = self.conn.prepare("SELECT n, docket, id, envelope, status, why, created_at FROM team_outbox ORDER BY n")?;
+        let rows =
+            st.query_map([], |r| Ok(OutboxRow { n: r.get(0)?, docket: r.get(1)?, id: r.get(2)?, envelope: r.get(3)?, status: r.get(4)?, why: r.get(5)?, created_at: r.get(6)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn outbox_set(&mut self, n: i64, status: &str, why: Option<&str>) -> Result<bool> {
+        Ok(self.conn.execute("UPDATE team_outbox SET status = ?2, why = ?3 WHERE n = ?1", params![n, status, why])? > 0)
+    }
+
+    pub fn outbox_remove(&mut self, n: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM team_outbox WHERE n = ?1", params![n])?;
+        Ok(())
+    }
+
     /// Save a docket's state as folded again from its entries.
     pub fn put_state(&mut self, st: &DocketState) -> Result<()> {
-        let n: i64 = st.id.strip_prefix("D-").and_then(|n| n.parse().ok()).unwrap_or(0);
-        self.conn.execute("INSERT INTO dockets (id, n, state) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO UPDATE SET state = ?3", params![st.id, n, serde_json::to_string(st)?])?;
+        self.conn.execute(
+            "INSERT INTO dockets (id, n, state) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO UPDATE SET state = ?3",
+            params![st.id, docket_n(&st.id), serde_json::to_string(st)?],
+        )?;
         Ok(())
     }
 
     pub fn entries(&self, docket: &str) -> Result<Vec<Stored>> {
         let mut st = self.conn.prepare("SELECT docket, seq, id, chain, envelope FROM entries WHERE docket = ?1 ORDER BY seq")?;
         let rows = st.query_map(params![docket], |r| Ok(Stored { docket: r.get(0)?, seq: r.get(1)?, id: r.get(2)?, chain: r.get(3)?, envelope: r.get(4)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Whether a docket has an entry with this id.
+    pub fn has_entry(&self, docket: &str, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row("SELECT 1 FROM entries WHERE docket = ?1 AND id = ?2", params![docket, id], |_| Ok(())).optional()?.is_some())
+    }
+
+    /// How many entries a docket has.
+    pub fn entries_len(&self, docket: &str) -> Result<i64> {
+        Ok(self.conn.query_row("SELECT COUNT(*) FROM entries WHERE docket = ?1", params![docket], |r| r.get(0))?)
+    }
+
+    /// A docket's entries after `after`, at most `limit` of them.
+    pub fn entries_after(&self, docket: &str, after: i64, limit: usize) -> Result<Vec<Stored>> {
+        let mut st = self.conn.prepare("SELECT docket, seq, id, chain, envelope FROM entries WHERE docket = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3")?;
+        let rows =
+            st.query_map(params![docket, after, limit as i64], |r| Ok(Stored { docket: r.get(0)?, seq: r.get(1)?, id: r.get(2)?, chain: r.get(3)?, envelope: r.get(4)? }))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -353,8 +476,8 @@ impl Store {
 
     pub fn insert_message(&mut self, m: &Message) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO messages (docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+            "INSERT INTO messages (docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, created_at, updated_at, entry)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14)",
             params![
                 m.docket,
                 m.seq,
@@ -368,7 +491,8 @@ impl Store {
                 m.reply_to,
                 m.choice,
                 m.status,
-                m.created_at
+                m.created_at,
+                m.entry
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -380,7 +504,7 @@ impl Store {
 
     pub fn messages_where(&self, cond: &str, args: impl rusqlite::Params) -> Result<Vec<Message>> {
         let sql = format!(
-            "SELECT id, docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, why, created_at, updated_at, preview
+            "SELECT id, docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, why, created_at, updated_at, preview, entry
              FROM messages WHERE {cond} ORDER BY id"
         );
         let mut st = self.conn.prepare(&sql)?;
@@ -403,6 +527,7 @@ impl Store {
                 created_at: r.get(14)?,
                 updated_at: r.get(15)?,
                 preview: r.get::<_, Option<String>>(16)?.and_then(|p| serde_json::from_str(&p).ok()),
+                entry: r.get(17)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -418,6 +543,12 @@ impl Store {
         let mut p = m.preview.unwrap_or_default();
         p["down"] = serde_json::json!(why);
         self.set_message_preview(id, &p)
+    }
+
+    /// The entry a message is on the record as.
+    pub fn set_message_entry(&mut self, id: i64, entry: &str) -> Result<()> {
+        self.conn.execute("UPDATE messages SET entry = ?2 WHERE id = ?1", params![id, entry])?;
+        Ok(())
     }
 
     pub fn set_message_place(&mut self, id: i64, docket: &str, seq: i64) -> Result<()> {

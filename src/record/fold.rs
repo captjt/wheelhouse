@@ -69,6 +69,19 @@ pub struct DocketState {
     /// Each witnessed check's latest result, by name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub checks: BTreeMap<String, CheckBrief>,
+    /// A local docket that was shared: the shared docket it goes on as
+    /// (`ACME-31`). Its record here ends at the share.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_as: Option<String>,
+    /// A shared docket: the sharer's local docket it started from, by its
+    /// sharer (`jordan/D-12`), when it had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_from: Option<String>,
+    /// A shared docket's owners and members, by handle (docs/teams.md).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owners: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
     /// The fold that made this state (`VERSION`). An older build that saves
     /// a state leaves it out, so the next start folds that docket again.
     #[serde(default)]
@@ -194,6 +207,12 @@ pub struct DocketAgent {
     /// `wh leave` gave it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+    /// Whose it is, on a shared docket: the workspace member whose hub
+    /// claimed it (docs/teams.md). None on your own dockets, where every
+    /// agent is yours. Panes are told apart by member and block together:
+    /// two Macs can each have a `herdr:t1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
     pub joined_at: String,
     /// When it last did something the record names it for.
     pub active_at: String,
@@ -207,6 +226,21 @@ impl DocketAgent {
     pub fn on(&self) -> bool {
         self.left_at.is_none()
     }
+}
+
+/// The member an entry's hub or agent belongs to, on a shared docket:
+/// `hub@sam` and `codex@sam` are Sam's. None for your own hub's (`@local`).
+pub fn member_of(e: &Entry) -> Option<String> {
+    // On a shared docket, anything a person wrote is theirs too: never
+    // read as this hub's own (the rules refuse a person's claim anyway).
+    if e.actor.typ == "person" {
+        return (!e.docket.starts_with("D-")).then(|| e.actor.id.clone());
+    }
+    if !matches!(e.actor.typ.as_str(), "hub" | "agent") {
+        return None;
+    }
+    let (_, m) = e.actor.id.rsplit_once('@')?;
+    (m != "local" && !m.is_empty()).then(|| m.to_string())
 }
 
 /// The pane an entry names as its agent's: an agent's own entries carry it
@@ -229,6 +263,7 @@ impl DocketState {
     /// Apply the next entry.
     pub fn apply(&mut self, seq: i64, chain: &str, e: &Entry) {
         let d = &e.data;
+        let member = member_of(e);
         match e.kind.as_str() {
             "open" => {
                 self.title = e.body.clone().unwrap_or_default();
@@ -238,13 +273,39 @@ impl DocketState {
                 self.status = if matches!(self.protocol.as_str(), "agent" | "review") { "in_progress".into() } else { "todo".into() };
                 self.created_at = e.at.clone();
                 if let Ok(a) = serde_json::from_value::<AgentRef>(d["agent"].clone()) {
-                    self.join(a, s(&d["session"]), None, None, s(&d["source"]), &e.at);
+                    self.join(a, member.clone(), s(&d["session"]), None, None, s(&d["source"]), &e.at);
                 }
                 if let Some(sess) = s(&d["session"]) {
                     self.session = Some(sess);
                 }
                 if let Ok(r) = serde_json::from_value::<ReviewRef>(d["review"].clone()) {
                     self.review = Some(r);
+                }
+            }
+            "share" => {
+                self.title = s(&d["title"]).unwrap_or_default();
+                self.title_source = "person".into();
+                self.protocol = s(&d["protocol"]).filter(|p| matches!(p.as_str(), "agent" | "none")).unwrap_or_else(|| "none".into());
+                self.status = s(&d["status"]).filter(|st| matches!(st.as_str(), "todo" | "in_progress")).unwrap_or_else(|| "todo".into());
+                self.created_at = e.at.clone();
+                self.shared_from = s(&d["local"]).map(|l| format!("{}/{l}", e.actor.id));
+                self.owners = d["owners"].as_array().into_iter().flatten().filter_map(|o| o.as_str().map(str::to_string)).collect();
+                if let Some(b) = s(&d["intent"]).filter(|b| !b.trim().is_empty()) {
+                    self.intent = Some(IntentRef { body: b, source: "person".into(), by: e.actor.id.clone(), at: e.at.clone(), seq });
+                    self.intent_versions += 1;
+                }
+            }
+            "people" => {
+                let on = |h: &String| self.owners.contains(h) || self.members.contains(h);
+                let self_join = |h: &String| e.actor.id == *h && d["action"] != "remove" && d["role"] != "owner";
+                if let Some(h) = s(&d["handle"]).filter(|h| !(self_join(h) && on(h))) {
+                    self.owners.retain(|o| *o != h);
+                    self.members.retain(|m| *m != h);
+                    match (d["action"].as_str(), d["role"].as_str()) {
+                        (Some("remove"), _) => {}
+                        (_, Some("owner")) => self.owners.push(h),
+                        _ => self.members.push(h),
+                    }
                 }
             }
             "observed" if d["what"].as_str() == Some("review") => {
@@ -265,6 +326,9 @@ impl DocketState {
                 if d.get("hold").is_some() {
                     self.hold = s(&d["hold"]);
                 }
+                if let Some(to) = s(&d["shared_as"]) {
+                    self.shared_as = Some(to);
+                }
             }
             "check" => {
                 if let Some(n) = s(&d["name"]) {
@@ -276,12 +340,12 @@ impl DocketState {
                 self.session = s(&d["session"]);
                 self.released = None;
                 match serde_json::from_value::<AgentRef>(d["agent"].clone()) {
-                    Ok(a) => self.join(a, s(&d["session"]), s(&d["role"]), d["round"].as_i64(), s(&d["source"]), &e.at),
+                    Ok(a) => self.join(a, member.clone(), s(&d["session"]), s(&d["role"]), d["round"].as_i64(), s(&d["source"]), &e.at),
                     // A claim that names no pane is the docket's agent's.
                     Err(_) => {
                         let sess = s(&d["session"]);
                         if let Some(b) = self.agent.as_ref().map(|a| a.block.clone())
-                            && let Some(x) = self.agents.iter_mut().rev().find(|x| x.agent.block == b)
+                            && let Some(x) = self.agents.iter_mut().rev().find(|x| x.agent.block == b && x.member == member)
                         {
                             x.session = sess;
                             x.active_at = e.at.clone();
@@ -295,7 +359,8 @@ impl DocketState {
                 let reason = s(&d["reason"]).unwrap_or_else(|| "released".into());
                 // A release names its pane; an old one that doesn't is everyone's.
                 let block = s(&d["block"]);
-                for x in self.agents.iter_mut().filter(|x| x.on() && block.as_ref().is_none_or(|b| *b == x.agent.block)) {
+                // Another member's hub releases only its own agents.
+                for x in self.agents.iter_mut().filter(|x| x.on() && x.member == member && block.as_ref().is_none_or(|b| *b == x.agent.block)) {
                     x.left_at = Some(e.at.clone());
                     x.left = Some(reason.clone());
                 }
@@ -378,7 +443,7 @@ impl DocketState {
         // What an agent did moves it to the front.
         if !matches!(e.kind.as_str(), "claim" | "release" | "open")
             && let Some(b) = block_of(e)
-            && let Some(x) = self.agents.iter_mut().rev().find(|x| x.agent.block == b && x.on())
+            && let Some(x) = self.agents.iter_mut().rev().find(|x| x.agent.block == b && x.member == member && x.on())
         {
             x.active_at = e.at.clone();
             self.pick_agent();
@@ -391,8 +456,9 @@ impl DocketState {
     /// An agent joins, or one already on the docket claims again (a new
     /// session, a resume). A claim that doesn't say its role keeps the one
     /// it had.
-    fn join(&mut self, a: AgentRef, session: Option<String>, role: Option<String>, round: Option<i64>, via: Option<String>, at: &str) {
-        match self.agents.iter_mut().rev().find(|x| x.agent.block == a.block) {
+    #[allow(clippy::too_many_arguments)]
+    fn join(&mut self, a: AgentRef, member: Option<String>, session: Option<String>, role: Option<String>, round: Option<i64>, via: Option<String>, at: &str) {
+        match self.agents.iter_mut().rev().find(|x| x.agent.block == a.block && x.member == member) {
             Some(x) => {
                 x.agent = a;
                 x.session = session;
@@ -410,7 +476,7 @@ impl DocketState {
                     }
                 }
             }
-            None => self.agents.push(DocketAgent { agent: a, session, role, round, via, joined_at: at.into(), active_at: at.into(), left_at: None, left: None }),
+            None => self.agents.push(DocketAgent { agent: a, session, role, round, via, member, joined_at: at.into(), active_at: at.into(), left_at: None, left: None }),
         }
         self.pick_agent();
     }
@@ -434,9 +500,17 @@ impl DocketState {
         self.agents_on().find_map(|a| a.agent.cwd.as_deref()).or_else(|| self.agents.iter().find_map(|a| a.agent.cwd.as_deref())).or_else(|| self.agent.as_ref()?.cwd.as_deref())
     }
 
-    /// The agents on the docket now.
+    /// The agents on the docket now, every member's.
     pub fn agents_on(&self) -> impl Iterator<Item = &DocketAgent> {
         self.agents.iter().filter(|x| x.on())
+    }
+
+    /// The agents on the docket now that are this hub's own: on a shared
+    /// docket, those its own hub claimed (`me` is this hub's member handle),
+    /// not a teammate's. Only these are this hub's to track, release,
+    /// message or approve.
+    pub fn own_agents_on<'a>(&'a self, me: Option<&'a str>) -> impl Iterator<Item = &'a DocketAgent> {
+        self.agents_on().filter(move |x| x.member.is_none() || x.member.as_deref() == me)
     }
 
     pub fn short_head(&self) -> &str {

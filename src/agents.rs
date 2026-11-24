@@ -76,11 +76,14 @@ pub struct Tracker {
 /// session wins over one without: a docket opened for the pane before it
 /// was found.
 pub fn load(core: &mut Core) -> Result<()> {
+    // On a shared docket, only this hub's own agents are its to follow: a
+    // teammate's are on their Mac.
+    let me = core.team.as_ref().map(|t| t.config.handle.clone());
     for st in core.store.states()? {
         if !st.is_open() || matches!(st.protocol.as_str(), "review" | "build") || core.store.build_task(&st.id)?.is_some() {
             continue;
         }
-        for a in st.agents_on() {
+        for a in st.own_agents_on(me.as_deref()) {
             if core.agents.by_block.get(&a.agent.block).is_some_and(|cur| cur.session.is_some() || a.session.is_none()) {
                 continue;
             }
@@ -394,7 +397,9 @@ pub fn join(core: &mut Core, block: &str, docket: &str, role: Option<&str>) -> R
     core.agents.by_block.insert(block.to_string(), Tracked::on(docket, &app, session.clone()));
     let a = agent_ref(core, &p);
     core.append(docket, "claim", &Who::Hub, None, json!({ "session": session, "source": "join", "role": role, "agent": a }))?;
-    if st.status == "todo" {
+    // Under way now; on a shared docket only if this hub may say so (an
+    // owner's): a member's agent joining doesn't move it.
+    if st.status == "todo" && crate::team::member::may(core, docket, "set") {
         core.append(docket, "set", &Who::Hub, None, json!({ "status": "in_progress" }))?;
     }
     core.live_changed();
