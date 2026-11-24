@@ -80,6 +80,61 @@ struct Live: Hashable {
     var pane: String { j["pane"].str ?? "" }
     var cwd: String? { j["cwd"].text }
     var docket: String? { j["docket"].text }
+    /// Its role on its docket, in /api/state's `agents`: builder, checker…
+    var role: String? { j["role"].text }
+}
+
+/// Something asking you in /api/state's `asks`: a blocked or failed agent,
+/// by its block.
+struct Ask: Hashable {
+    let j: JSON
+    var docket: String { j["docket"].str ?? "" }
+    var block: String? { j["block"].text }
+    var what: String { j["what"].str ?? "" }
+    var kind: String? { j["kind"].text }
+    var msg: String? { j["msg"].text }
+    var since: String? { j["since"].text }
+    var app: String { j["app"].str ?? "" }
+}
+
+/// One agent on a docket (`agents` on a docket): a docket can have several,
+/// side by side, each in its own pane. An older hub has none of these, only
+/// `agent`, and `Docket.crew` stands one in for it.
+struct DocketAgent: Hashable, Identifiable {
+    let j: JSON
+    var id: String { block }
+    var app: String { j["app"].str ?? "" }
+    var host: String? { j["host"].text }
+    var block: String { j["block"].str ?? "" }
+    var rexSession: String { j["rex_session"].str ?? "" }
+    var pane: String { j["pane"].str ?? "" }
+    var cwd: String? { j["cwd"].text }
+    var session: String? { j["session"].text }
+    var role: String? { j["role"].text }
+    var round: Int? { j["round"].int }
+    var joinedAt: String? { j["joined_at"].text }
+    var activeAt: String? { j["active_at"].text }
+    var leftAt: String? { j["left_at"].text }
+    /// Why it left, when it has.
+    var left: String? { j["left"].text }
+    /// Still on the docket.
+    var on: Bool { j["on"].exists ? j["on"].bool : leftAt == nil && left == nil }
+    var live: Live? { j["live"].object == nil ? nil : Live(j: j["live"]) }
+    /// Its message address, for `wh send`.
+    var addr: String? { j["addr"].text }
+    /// Where it runs, for people: "Rex", "Herdr".
+    var runtime: String {
+        switch j["runtime"].str {
+        case "herdr": "Herdr"
+        case "rex": "Rex"
+        default: live?.runtime ?? runtimeTitle(block: block)
+        }
+    }
+
+    /// What to call it among the others: its role, else its pane, else its app.
+    var label: String { role ?? (pane.isEmpty ? nil : pane) ?? appName(app) }
+    /// Its pane, for people: "wheelhouse / D-4".
+    var place: String { "\(rexSession.isEmpty ? "pane" : rexSession) / \(pane.isEmpty ? "pane" : pane)" }
 }
 
 struct AgentRef: Hashable {
@@ -152,12 +207,107 @@ struct Docket: Hashable, Identifiable {
     var review: ReviewRef? { j["review"].object == nil ? nil : ReviewRef(j: j["review"]) }
     var isOpen: Bool { status.isOpen }
     /// It can take an agent now: open, not a Review's, and no agent working on it.
-    var canStartAgent: Bool { isOpen && proto != "review" && live == nil }
+    /// A hub that lists agents adds one beside those on it.
+    var canStartAgent: Bool { isOpen && proto != "review" && (hasAgents || live == nil) }
     /// On hold: Build and Review take no steps on it. The reason, or nil.
     var hold: String? { j["hold"].text }
     /// Closed on your word, with nothing witnessed or checkable: why.
     var closedOn: String? { j["closed_on"].text }
-    var talks: Bool { proto == "agent" && agent != nil }
+    var talks: Bool { proto == "agent" && (agent != nil || !agents.isEmpty) }
+
+    // ---- its agents ----
+
+    /// The hub lists each agent (one from before several agents doesn't).
+    var hasAgents: Bool { j["agents"].exists }
+    /// Every agent the hub lists: on /api/state only those on it, on its
+    /// page those that left too.
+    var agents: [DocketAgent] { j["agents"].array.map(DocketAgent.init) }
+    /// The block of the agent the apps put first: the one that needs you most.
+    var lead: String? { j["lead"].text }
+
+    /// Its agents, the lead first. An older hub's one agent stands in.
+    var crew: [DocketAgent] {
+        guard hasAgents else {
+            guard var o = j["agent"].object else { return [] }
+            o["live"] = j["live"]
+            o["on"] = .bool(released == nil)
+            if let r = released { o["left"] = .string(r) }
+            if let s = session { o["session"] = .string(s) }
+            return [DocketAgent(j: .object(o))]
+        }
+        let all = agents
+        guard let lead, let i = all.firstIndex(where: { $0.block == lead }) else { return all }
+        return [all[i]] + all.enumerated().filter { $0.offset != i }.map(\.element)
+    }
+
+    /// The agents still on it, the lead first.
+    var onAgents: [DocketAgent] { crew.filter(\.on) }
+    /// Those that left, latest first.
+    var leftAgents: [DocketAgent] { crew.filter { !$0.on }.sorted { ($0.leftAt ?? "") > ($1.leftAt ?? "") } }
+    /// More than one is on it: say which, wherever one is named.
+    var several: Bool { onAgents.count > 1 }
+
+    /// The block a pane action names for this agent: its own on a hub that
+    /// lists agents; nil (the hub's lead, or its one agent) on an older one.
+    func blockFor(_ a: DocketAgent?) -> String? {
+        guard hasAgents, let b = a?.block, !b.isEmpty else { return nil }
+        return b
+    }
+
+    func member(block: String?) -> DocketAgent? {
+        guard let block, !block.isEmpty else { return nil }
+        return crew.first { $0.block == block }
+    }
+
+    /// The agent an entry is by or about: its block's, else (an older
+    /// entry, with none) the docket's agent.
+    func member(for e: Entry) -> DocketAgent? {
+        if let a = member(block: e.block ?? e.actorBlock) { return a }
+        if let b = e.block, e.actorType == "agent" {
+            // An agent this page doesn't list: what the entry says of it.
+            return DocketAgent(j: .object(["block": .string(b), "app": .string(e.actorApp)]))
+        }
+        if e.actorType == "agent", let a = agent, !e.actorApp.isEmpty, e.actorApp != a.app {
+            // Another app than the docket's agent wrote it: say that app.
+            return DocketAgent(j: .object(["app": .string(e.actorApp)]))
+        }
+        return agent.flatMap { a in crew.first { $0.block == a.block } } ?? agent.map { DocketAgent(j: $0.j) }
+    }
+
+    /// The block of the agent an entry is by or about, or nil when it's no
+    /// agent's in particular (your notes, Linear, checks). An older entry
+    /// about an agent, with no block, is the docket's agent's.
+    func blockOf(_ e: Entry) -> String? {
+        if let b = e.block ?? member(block: e.actorBlock)?.block { return b }
+        let x = e.data
+        let about: Bool
+        switch e.kind {
+        case "turn", "release": about = true
+        case "observed": about = x["what"].str == "blocked" || x["what"].str == "error" || !x["what"].exists
+        case "approval": about = x["kind"].str != "review" && x["what"].str != "post-review"
+        case "note": about = x["via"].str == "prompt" || x["via"].str == "message"
+        case "claim": about = x["source"].str != "rex-reviewer" && x["role"].str == nil
+        default: about = false
+        }
+        return about || e.actorType == "agent" ? agent?.block : nil
+    }
+
+    /// What to call the agent an entry is by: its label among several,
+    /// its app's name when there's one.
+    func agentName(_ a: DocketAgent?) -> String {
+        guard let a else { return appName(agent?.app) }
+        return crew.count > 1 ? a.label : appName(a.app)
+    }
+
+    /// Each live agent on it and what it's doing, the lead first. An
+    /// older hub says only the docket's `live`: one, with no agent.
+    var lives: [(agent: DocketAgent?, live: Live)] {
+        if hasAgents { return onAgents.compactMap { a in a.live.map { (a, $0) } } }
+        return live.map { [(nil, $0)] } ?? []
+    }
+
+    /// The live agents asking you: blocked on a prompt.
+    var asking: [(agent: DocketAgent?, live: Live)] { lives.filter { $0.live.state == .blocked } }
     var hasIntent: Bool { !(intent?.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }
 }
 
@@ -372,6 +522,7 @@ struct HubState: Hashable {
         return on.isEmpty ? (false, "\(spawnRuntime) isn't installed") : (true, on.count > 1 ? on.joined(separator: " · ") : "Following \(on[0])")
     }
     var agents: [Live] { j["agents"].array.map(Live.init) }
+    var asks: [Ask] { j["asks"].array.map(Ask.init) }
     var prs: [ReviewPr] { review?.prs ?? [] }
     var tasks: [BuildTask] { build?.tasks ?? [] }
     /// What needs a look beyond your asks, worst first.
@@ -393,6 +544,17 @@ struct Entry: Hashable, Identifiable {
     var actorId: String { j["actor"]["id"].str ?? "" }
     /// The app an agent actor speaks for (`claude-code@block` → `claude-code`).
     var actorApp: String { String(actorId.split(separator: "@").first ?? "") }
+    /// The agent that wrote it (`actor.block`), or that the hub wrote it
+    /// about (`data.block`). Older entries have neither.
+    /// The agent's pane: an agent's own entries name it in the actor, the
+    /// hub's in `data.block`, and a claim in its `data.agent`.
+    var block: String? { j["actor"]["block"].text ?? j["data"]["block"].text ?? j["data"]["agent"]["block"].text }
+    /// An agent actor's id names its block too (`claude-code@block`).
+    var actorBlock: String? {
+        guard actorType == "agent", let at = actorId.firstIndex(of: "@") else { return nil }
+        let b = actorId[actorId.index(after: at)...]
+        return b.isEmpty ? nil : String(b)
+    }
     var body: String? { j["body"].str }
     var data: JSON { j["data"] }
     var mark: String { j["mark"].str ?? "said" }

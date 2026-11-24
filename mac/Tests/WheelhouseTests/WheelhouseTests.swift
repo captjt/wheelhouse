@@ -156,3 +156,128 @@ private func boxes(_ text: String) -> [(Int, Bool)] {
     let old = try s(#"{"rex":{"connected":true}}"#)
     #expect(old.connection.text == "Following Rex")
 }
+
+// ---- several agents on a docket ----
+
+private func docket(_ json: String) throws -> Docket { Docket(j: try JSON.parse(Data(json.utf8))) }
+
+@Test func readsEachAgentOnADocket() throws {
+    let d = try docket("""
+    {"id": "D-5", "status": "in_progress", "protocol": "agent", "lead": "b2",
+     "agent": {"app": "claude-code", "block": "b1", "pane": "D-5"},
+     "live": {"block": "b2", "state": "blocked", "answerable": true, "msg": "Bash: rm", "record": "r2"},
+     "agents": [
+       {"app": "claude-code", "host": "mac", "block": "b1", "rex_session": "wheelhouse", "pane": "D-5", "joined_at": "2026-11-20T10:00:00Z", "active_at": "2026-11-20T11:00:00Z", "on": true, "runtime": "rex", "live": {"block": "b1", "state": "working"}, "addr": "wheelhouse/D-5"},
+       {"app": "codex", "host": "mac", "block": "herdr:t2", "rex_session": "wheelhouse", "pane": "D-5-2", "role": "checker", "round": 2, "joined_at": "2026-11-20T10:30:00Z", "on": true, "runtime": "herdr", "live": null, "addr": null},
+       {"app": "codex", "block": "b2", "pane": "D-5-3", "on": true, "runtime": "rex", "live": {"block": "b2", "state": "blocked", "answerable": true, "msg": "Bash: rm", "record": "r2"}},
+       {"app": "agy", "block": "b0", "pane": "D-5-0", "on": false, "left_at": "2026-11-20T09:00:00Z", "left": "pane closed", "runtime": "rex", "live": null}
+     ]}
+    """)
+    #expect(d.hasAgents)
+    #expect(d.agents.count == 4)
+    // The lead first, then the others in the hub's order.
+    #expect(d.crew.map(\.block) == ["b2", "b1", "herdr:t2", "b0"])
+    #expect(d.onAgents.map(\.block) == ["b2", "b1", "herdr:t2"])
+    #expect(d.leftAgents.map(\.block) == ["b0"])
+    #expect(d.leftAgents.first?.left == "pane closed")
+    #expect(d.several)
+    // Named by role, else pane, else app.
+    let checker = try #require(d.member(block: "herdr:t2"))
+    #expect(checker.label == "checker")
+    #expect(checker.round == 2)
+    #expect(checker.runtime == "Herdr")
+    #expect(checker.addr == nil)
+    #expect(d.member(block: "b1")?.label == "D-5")
+    #expect(d.member(block: "b1")?.addr == "wheelhouse/D-5")
+    // Each live agent, the lead first; and who's asking.
+    #expect(d.lives.map { $0.agent?.block } == ["b2", "b1"])
+    #expect(d.asking.map { $0.agent?.block } == ["b2"])
+    // Pane actions name the agent's own block.
+    #expect(d.blockFor(checker) == "herdr:t2")
+    // A hub that lists agents adds one beside those on it.
+    #expect(d.canStartAgent)
+}
+
+@Test func tellsWhichAgentWroteAnEntry() throws {
+    let d = try docket("""
+    {"id": "D-5", "agent": {"app": "claude-code", "block": "b1"},
+     "agents": [{"app": "claude-code", "block": "b1", "pane": "D-5", "on": true}, {"app": "codex", "block": "b2", "pane": "D-5-2", "role": "checker", "on": true}]}
+    """)
+    let entry = { (json: String) throws in Entry(j: try JSON.parse(Data(json.utf8))) }
+    // An agent's own entry says its block; the hub's says it in data.
+    let turn = try entry(#"{"seq": 3, "kind": "turn", "actor": {"type": "hub", "id": "wheelhouse"}, "data": {"block": "b2"}}"#)
+    #expect(d.member(for: turn)?.label == "checker")
+    #expect(d.blockOf(turn) == "b2")
+    #expect(d.agentName(d.member(for: turn)) == "checker")
+    let note = try entry(#"{"seq": 4, "kind": "note", "actor": {"type": "agent", "id": "codex@b2", "block": "b2"}}"#)
+    #expect(d.member(for: note)?.block == "b2")
+    // An older entry has neither: the docket's agent.
+    let old = try entry(#"{"seq": 1, "kind": "turn", "actor": {"type": "hub", "id": "wheelhouse"}, "data": {}}"#)
+    #expect(d.member(for: old)?.block == "b1")
+    #expect(d.blockOf(old) == "b1")
+    // Your note is no agent's.
+    let mine = try entry(#"{"seq": 2, "kind": "note", "actor": {"type": "person", "id": "jordan"}, "data": {}}"#)
+    #expect(d.blockOf(mine) == nil)
+}
+
+@Test func readsAnOlderHubsDocketWithNoAgents() throws {
+    let d = try docket("""
+    {"id": "D-2", "status": "in_progress", "protocol": "agent", "session": "s-1",
+     "agent": {"app": "codex", "block": "herdr:t2h", "rex_session": "wheelhouse", "pane": "D-2", "cwd": "/w"},
+     "live": {"block": "herdr:t2h", "state": "blocked", "answerable": true, "msg": "Bash: ls"}}
+    """)
+    #expect(!d.hasAgents)
+    #expect(d.agents.isEmpty)
+    #expect(d.lead == nil)
+    // Its one agent stands in for the list, with the docket's live.
+    #expect(d.crew.count == 1)
+    #expect(d.crew.first?.app == "codex")
+    #expect(d.crew.first?.on == true)
+    #expect(d.crew.first?.session == "s-1")
+    #expect(d.crew.first?.live?.state == .blocked)
+    #expect(d.crew.first?.runtime == "Herdr")
+    #expect(!d.several)
+    // One live, about no agent in particular, and no block to send.
+    #expect(d.lives.count == 1)
+    #expect(d.lives.first?.agent == nil)
+    #expect(d.blockFor(d.crew.first) == nil)
+    // An older hub refuses a second agent: no start while one is live.
+    #expect(!d.canStartAgent)
+    #expect(d.talks)
+    // One that ended is in Earlier.
+    let ended = try docket(#"{"id": "D-3", "status": "todo", "agent": {"app": "claude-code", "block": "b"}, "released": "pane closed"}"#)
+    #expect(ended.onAgents.isEmpty)
+    #expect(ended.leftAgents.first?.left == "pane closed")
+    #expect(ended.canStartAgent)
+    // And a docket with no agent at all has none.
+    #expect(try docket(#"{"id": "D-4"}"#).crew.isEmpty)
+}
+
+@Test func asksOncePerAgentThatNeedsYou() throws {
+    let state = HubState(try JSON.parse(Data("""
+    {"dockets": [
+      {"id": "D-7", "title": "two ask", "status": "in_progress", "lead": "b1",
+       "live": {"block": "b1", "state": "blocked", "msg": "Bash: ls", "since": "2026-11-17T10:00:00Z"},
+       "agents": [
+         {"app": "claude-code", "block": "b1", "pane": "D-7", "on": true, "live": {"block": "b1", "state": "blocked", "msg": "Bash: ls", "since": "2026-11-17T10:00:00Z"}},
+         {"app": "codex", "block": "b2", "pane": "D-7-2", "role": "checker", "on": true, "live": {"block": "b2", "state": "blocked", "msg": "Edit: a.rs", "since": "2026-11-17T09:00:00Z"}},
+         {"app": "codex", "block": "b3", "pane": "D-7-3", "on": true, "live": {"block": "b3", "state": "working"}}
+       ]}
+    ], "asks": [{"docket": "D-7", "block": "b2", "what": "blocked"}], "agents": [{"block": "b2", "docket": "D-7", "role": "checker", "state": "blocked"}]}
+    """.utf8)))
+    let items = Store.inbox(state)
+    // One for each asking agent; the lead's is the docket's own.
+    #expect(items.map(\.id) == ["D-7", "D-7@b2"])
+    #expect(items.map(\.block) == ["b1", "b2"])
+    #expect(items.map(\.who) == ["D-7", "checker"])
+    #expect(items[1].line == "Edit: a.rs")
+    #expect(state.asks.first?.block == "b2")
+    #expect(state.agents.first?.role == "checker")
+}
+
+@Test func namesTheBlockInAPaneAction() {
+    #expect(Store.blockQuery(nil) == "")
+    #expect(Store.blockQuery("") == "")
+    #expect(Store.blockQuery("b1") == "?block=b1")
+    #expect(Store.blockQuery("herdr:t2 x") == "?block=herdr%3At2%20x")
+}

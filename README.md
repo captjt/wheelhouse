@@ -59,6 +59,11 @@ it doesn't matter which one an agent runs in:
 
 - **One list of agents.** Every agent in a Rex pane or a Herdr terminal
   gets a docket, in the same Inbox, Active list, Agents view and sessions.
+- **Several agents on one docket.** Any number of agents, in Rex and
+  Herdr at once, can work on one docket: `wh join D-12`, or **Add an
+  agent…** on its page. Each has its own place on the record, the apps
+  say which one did what and which one is asking, and `wh send --to
+  @D-12` reaches all of them.
 - **Agents talk across runtimes.** A Claude Code in Rex can `wh send` to a
   Codex in Herdr and get its reply. A message goes in through the
   receiving pane's own runtime, between its turns. When both runtimes have
@@ -245,8 +250,9 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh intent D-4 [TEXT\|-]` | Print a docket's intent, or set it |
 | `wh link D-4 ENG-142` | Link a Linear issue |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or a link with a docket |
-| `wh start [--codex\|--agy] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have, in Rex (or Herdr, with `runtime` set) |
-| `wh send --to ADDR "text"`, `wh reply N "text"`, `wh whoami`, `wh name NAME` | From an agent's pane, in either runtime: message another agent (`api/builder`, `reviewer`, `herdr:wheelhouse/D-12`, `herdr:t2h`) or you (`--to me`); answer; where you are; name your pane |
+| `wh start [--codex\|--agy] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have (beside any agents already on it), in Rex (or Herdr, with `runtime` set) |
+| `wh join D-4 [--role R]`, `wh leave` | From an agent's pane: put it on a docket beside the agents there, or take it off its docket |
+| `wh send --to ADDR "text"`, `wh reply N "text"`, `wh whoami`, `wh name NAME` | From an agent's pane, in either runtime: message another agent (`api/builder`, `reviewer`, `herdr:wheelhouse/D-12`, `herdr:t2h`), every agent on a docket (`@D-12`), or you (`--to me`); answer; where you are; name your pane |
 | `wh open [D-4]` | Open a docket (or the Inbox) in Wheelhouse.app, or the web app without it |
 | `wh verify [D-4]`, `wh export D-4 > D-4.jsonl`, `wh verify --file D-4.jsonl` | Check a record, every kept file included; one that checks without the hub |
 | `wh review`, `on`, `off`, `pause`, `resume`, `check` | The Review protocol, and its switches |
@@ -339,7 +345,7 @@ doesn't.
 
 ```sh
 just check          # what a pull request needs to pass (there's no CI: run it)
-just e2e            # a Build end to end, in Rex and in Herdr, with stand-ins for both, gh, GitHub and Linear
+just e2e            # a Build end to end in Rex and in Herdr, both runtimes together, and several agents on one docket, with stand-ins for both, gh, GitHub and Linear
 just app            # build Wheelhouse.app into ~/Applications
 just dev-install    # Wheelhouse Dev: this checkout beside your everyday one, never meeting it
 just dev            # the web app with hot reload on :5180, against a running hub

@@ -287,10 +287,28 @@ struct DocketMenu: View {
 
     var body: some View {
         Button("Open in New Window") { openWindow(id: "docket", value: d.id) }
-        if d.live != nil {
+        if d.several {
+            // Each agent on it, by name: its pane, and its prompt.
+            Divider()
+            ForEach(Array(d.lives.enumerated()), id: \.offset) { _, x in
+                if let a = x.agent {
+                    let b = d.blockFor(a)
+                    let l = x.live
+                    Menu("\(a.label) · \(l.state.word)") {
+                        Button("Show Pane in \(a.runtime)") { store.openInRex(d.id, block: b) }
+                        Button("Peek at Pane") { nav.peek(d.id, block: b) }
+                        if l.state == .blocked, l.answerable {
+                            Divider()
+                            Button("Approve\(l.msg.map { ": \($0.prefix(40))" } ?? "")") { Task { await store.answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: true, block: b) } }
+                            Button("Deny") { Task { await store.answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: false, block: b) } }
+                        }
+                    }
+                }
+            }
+        } else if d.live != nil {
             Divider()
             Button("Show Pane in \(d.runtime)") { store.openInRex(d.id) }
-            Button("Peek at Pane") { nav.pane = d.id }
+            Button("Peek at Pane") { nav.peek(d.id) }
             if d.live?.answerable == true {
                 Button("Approve\(d.live?.msg.map { ": \($0.prefix(40))" } ?? "")") { Task { await store.answer(d, approve: true) } }
                 Button("Deny") { Task { await store.answer(d, approve: false) } }
@@ -306,7 +324,7 @@ struct DocketMenu: View {
             Button("Hold…") { nav.holding = d.id }
         }
         Button("Run Checks") { Task { await store.runChecks(d.id) } }
-        if d.canStartAgent { Button("Start an Agent…") { nav.starting = d.id } }
+        if d.canStartAgent { Button(d.onAgents.isEmpty ? "Start an Agent…" : "Add an Agent…") { nav.starting = d.id } }
         Divider()
         Button("Copy ID") { copy(d.id) }
         Button("Copy Link") { copy("\(Flavor.scheme)://docket/\(d.id)") }
@@ -443,34 +461,36 @@ struct AgentsScreen: View {
     @Environment(Store.self) private var store
     @Environment(Nav.self) private var nav
 
+    /// Group the agents by their session, or by the docket they're on.
+    @AppStorage("agents:group") private var group = "session"
+
     var body: some View {
         let agents = store.state?.agents ?? []
-        let bySession = Dictionary(grouping: agents) { $0.rexSession.isEmpty ? "—" : $0.rexSession }
+        let byDocket = group == "docket"
+        // A docket's agents together, newest docket first; those on none last.
+        let groups: [(key: String, agents: [Live])] = byDocket
+            ? Dictionary(grouping: agents) { $0.docket ?? "" }.map { ($0.key, $0.value) }.sorted { a, b in
+                a.key.isEmpty != b.key.isEmpty ? !a.key.isEmpty : (store.docket(a.key)?.updatedAt ?? "") > (store.docket(b.key)?.updatedAt ?? "")
+            }
+            : Dictionary(grouping: agents) { $0.rexSession.isEmpty ? "—" : $0.rexSession }.map { ($0.key, $0.value) }.sorted { $0.key < $1.key }
         Group {
             if store.state != nil && agents.isEmpty {
                 ContentUnavailableView("No agents running", systemImage: "terminal", description: Text("Every Claude Code, Codex and Antigravity pane in \(store.state?.followed ?? "Rex") shows up here, live."))
             } else {
                 SplitPane {
                     List(selection: Binding<String?>(get: { nav.selected(.agents) }, set: { nav.select($0, in: .agents) })) {
-                        ForEach(bySession.keys.sorted(), id: \.self) { s in
+                        ForEach(groups, id: \.key) { g in
                             Section {
-                                ForEach(bySession[s] ?? [], id: \.block) { a in
-                                    AgentRow(a: a, d: store.docket(a.docket))
+                                ForEach(g.agents, id: \.block) { a in
+                                    AgentRow(a: a, d: store.docket(a.docket), inDocket: byDocket)
                                         .tag(a.docket ?? a.block)
                                         .contextMenu { if let d = store.docket(a.docket) { DocketMenu(d: d) } }
                                 }
                             } header: {
-                                HStack(spacing: 7) {
-                                    SessionIcon(name: s, size: 14)
-                                    Text(s).font(.system(size: 12, weight: .semibold)).foregroundStyle(K.text)
-                                    Text("\(bySession[s]?.count ?? 0)").font(.system(size: 11.5)).foregroundStyle(.tertiary)
-                                    // Which runtime the session's agents are in: Rex, Herdr.
-                                    ForEach(Array(Set((bySession[s] ?? []).map(\.runtime))).sorted(), id: \.self) { r in
-                                        Text(r).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
-                                            .padding(.horizontal, 6).padding(.vertical, 1)
-                                            .overlay(Capsule().strokeBorder(.separator))
-                                            .help("In \(r)")
-                                    }
+                                if byDocket {
+                                    docketHeader(g.key, g.agents)
+                                } else {
+                                    sessionHeader(g.key, g.agents)
                                 }
                             }
                         }
@@ -478,28 +498,72 @@ struct AgentsScreen: View {
                     .listStyle(.inset)
                     .scrollContentBackground(.hidden)
                 } detail: {
-                    DocketDetail(id: nav.selected(.agents))
+                    DocketDetail(id: nav.selected(.agents).flatMap { sel in store.docket(sel) != nil ? sel : agents.first { $0.block == sel }?.docket })
                 }
             }
         }
         .navigationSubtitle(agents.isEmpty ? "" : "\(agents.count) in \(store.state?.followed ?? "Rex")")
+        .toolbar {
+            ToolbarItem {
+                Picker("Group by", selection: $group) {
+                    Text("Session").tag("session")
+                    Text("Docket").tag("docket")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .help("Group the agents by their session, or by the docket they're on")
+            }
+        }
+    }
+
+    private func sessionHeader(_ s: String, _ agents: [Live]) -> some View {
+        HStack(spacing: 7) {
+            SessionIcon(name: s, size: 14)
+            Text(s).font(.system(size: 12, weight: .semibold)).foregroundStyle(K.text)
+            Text("\(agents.count)").font(.system(size: 11.5)).foregroundStyle(.tertiary)
+            // Which runtime the session's agents are in: Rex, Herdr.
+            ForEach(Array(Set(agents.map(\.runtime))).sorted(), id: \.self) { r in
+                Text(r).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .overlay(Capsule().strokeBorder(.separator))
+                    .help("In \(r)")
+            }
+        }
+    }
+
+    private func docketHeader(_ id: String, _ agents: [Live]) -> some View {
+        let d = store.docket(id)
+        return HStack(spacing: 7) {
+            if let d { StatusIcon(status: d.status, size: 12) } else { Image(systemName: "questionmark.circle").font(.system(size: 11)).foregroundStyle(K.muted) }
+            if !id.isEmpty { IdText(id: id) }
+            Text(id.isEmpty ? "On no docket" : d?.title ?? id).font(.system(size: 12, weight: .semibold)).foregroundStyle(K.text).lineLimit(1)
+            Text("\(agents.count)").font(.system(size: 11.5)).foregroundStyle(.tertiary)
+        }
     }
 }
 
 struct AgentRow: View {
     let a: Live
     let d: Docket?
+    /// Under its docket's header: name the agent, not the docket again.
+    var inDocket = false
     var body: some View {
+        // Its role or pane among its docket's others, as the docket names it.
+        let member = d?.member(block: a.block)
+        let name = inDocket ? (member?.label ?? a.role ?? (a.pane.isEmpty ? appName(a.app) : a.pane)) : d?.title ?? appName(a.app)
         HStack(alignment: .top, spacing: 9) {
             LiveIcon(state: a.state, size: 14).padding(.top, 1.5)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(d?.title ?? appName(a.app)).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Text(name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    if !inDocket, d?.several == true, let label = member?.label ?? a.role {
+                        Text(label).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+                    }
                     Spacer(minLength: 4)
                     AppAvatar(app: a.app, size: 14)
                 }
                 HStack(spacing: 6) {
-                    if let id = a.docket { IdText(id: id) }
+                    if !inDocket, let id = a.docket { IdText(id: id) }
                     Text(a.state == .blocked ? a.msg ?? a.state.word : a.state.word).foregroundStyle(a.state == .blocked ? K.blocked : a.state == .error ? K.error : .secondary).lineLimit(1)
                     Text("· \(a.pane.isEmpty ? "pane" : a.pane)")
                     Spacer(minLength: 0)

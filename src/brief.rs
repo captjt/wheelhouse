@@ -5,7 +5,8 @@ use anyhow::{Result, anyhow};
 
 use crate::hub::Core;
 
-pub fn brief(core: &Core, id: &str) -> Result<String> {
+/// `me`: the pane reading it, so the agents on the docket are the others.
+pub fn brief(core: &Core, id: &str, me: Option<&str>) -> Result<String> {
     let st = core.store.state(id)?.ok_or_else(|| anyhow!("no docket {id}"))?;
     let mut out = format!("# {id}: {}\n\n", st.title);
     let mut meta = vec![format!("Status: {}", st.status.replace('_', " "))];
@@ -29,6 +30,7 @@ pub fn brief(core: &Core, id: &str) -> Result<String> {
         }
         None => out.push_str("None yet. If the work's goal is clear, write it: what must be true when it's done, and what's out of scope.\n"),
     }
+    out.push_str(&agents_on(core, &st, me));
     let entries = core.store.entries(id)?;
     let read: Vec<crate::record::Entry> = entries.iter().filter_map(|s| s.entry().ok()).collect();
     let ds = crate::decisions::of(&read);
@@ -93,7 +95,7 @@ Its intent has acceptance items, so it closes on evidence (passing checks, a mer
         let line = match (e.kind.as_str(), e.data["via"].as_str(), e.data["what"].as_str()) {
             ("note", Some("prompt"), _) => format!("You asked: {}", one_line(e.body.as_deref())),
             ("note", _, _) => format!("Note ({}): {}", e.actor.id, one_line(e.body.as_deref())),
-            ("turn", _, _) if e.body.is_some() => format!("Agent: {}", e.data["summary"].as_str().map(str::to_string).unwrap_or_else(|| one_line(e.body.as_deref()))),
+            ("turn", _, _) if e.body.is_some() => format!("{}: {}", who(&st, &e), e.data["summary"].as_str().map(str::to_string).unwrap_or_else(|| one_line(e.body.as_deref()))),
             ("observed", _, Some("linear-comment")) => format!("{} in Linear: {}", e.data["author"].as_str().unwrap_or("someone"), one_line(e.body.as_deref())),
             ("observed", _, Some("github-feedback")) => format!("{} on GitHub: {}", e.data["summary"].as_str().unwrap_or("someone"), one_line(e.body.as_deref())),
             ("approval", _, _) => format!("You {}: {}", if e.data["decision"] == "approve" { "approved" } else { "denied" }, one_line(e.body.as_deref())),
@@ -116,7 +118,71 @@ Its intent has acceptance items, so it closes on evidence (passing checks, a mer
     Ok(out)
 }
 
+/// The agents on the docket besides `me`, and how to reach them. Nothing
+/// when it's only you.
+fn agents_on(core: &Core, st: &crate::record::fold::DocketState, me: Option<&str>) -> String {
+    let others: Vec<String> = st
+        .agents_on()
+        .filter(|a| Some(a.agent.block.as_str()) != me && crate::agents::docket_of(core, &a.agent.block).as_deref() == Some(st.id.as_str()))
+        .map(|a| {
+            let addr = core.mirror.panes.get(&a.agent.block).map(|p| crate::messages::addr_of(core, p)).unwrap_or_else(|| a.agent.block.clone());
+            let state = crate::agents::live(core, &a.agent.block).map(|l| l.state).unwrap_or_else(|| "not seen".into());
+            let role = a.role.as_deref().map(|r| format!(", {r}")).unwrap_or_default();
+            format!("- `{addr}`: {}{role}, in {} ({state})\n", crate::mirror::app_name(&a.agent.app), crate::runtime::of(&a.agent.block).title())
+        })
+        .collect();
+    if others.is_empty() {
+        return String::new();
+    }
+    let id = &st.id;
+    format!(
+        "\n## Other agents on {id}\n\nThey work on this docket beside you. Message one by its address (`wh send --to ADDR`), or all of them with `wh send --to @{id} \"...\"`.\n\n{}",
+        others.concat()
+    )
+}
+
+/// Who an entry's agent was, on a docket that's had more than one.
+fn who(st: &crate::record::fold::DocketState, e: &crate::record::Entry) -> String {
+    let block = crate::record::fold::block_of(e);
+    match st.agents.iter().rev().find(|a| Some(a.agent.block.as_str()) == block) {
+        Some(a) if st.agents.len() > 1 => {
+            let name = a.role.clone().filter(|r| !r.is_empty()).unwrap_or_else(|| a.agent.pane.clone());
+            format!("Agent ({})", if name.is_empty() { crate::mirror::app_name(&a.agent.app).to_string() } else { name })
+        }
+        _ => "Agent".into(),
+    }
+}
+
 fn one_line(s: Option<&str>) -> String {
     let s = s.unwrap_or_default().lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
     if s.chars().count() > 160 { format!("{}…", s.chars().take(160).collect::<String>()) } else { s.to_string() }
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+    use crate::hub::{Who, test_core};
+    use crate::mirror::Record;
+    use serde_json::json;
+
+    #[test]
+    fn the_brief_names_the_other_agents_and_how_to_reach_them() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Shared", json!({ "protocol": "none" })).unwrap();
+        for (b, l) in [("b1", "planner"), ("b2", "builder")] {
+            let fg = json!({ "foreground": { "name": "claude", "cwd": "/w" } });
+            core.mirror.apply_pane_status("s1", b, vec![Record { state: "idle".into(), app: Some("claude-code".into()), ..Default::default() }], Some(&fg), None);
+            core.mirror.panes.get_mut(b).unwrap().label = l.into();
+            crate::agents::reconcile(&mut core, [b.to_string()]);
+            crate::agents::join(&mut core, b, &d, (b == "b2").then_some("tests")).unwrap();
+        }
+        let b = brief(&core, &d, Some("b1")).unwrap();
+        assert!(b.contains(&format!("## Other agents on {d}")), "{b}");
+        assert!(b.contains("builder`: Claude Code, tests, in Rex (idle)"), "{b}");
+        assert!(!b.contains("planner`"), "not the reader");
+        assert!(b.contains(&format!("wh send --to @{d}")));
+        // Alone on it: no section.
+        crate::agents::leave(&mut core, "b2", None).unwrap();
+        assert!(!brief(&core, &d, Some("b1")).unwrap().contains("Other agents"));
+    }
 }

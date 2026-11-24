@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Talking to a docket's agent, as a conversation: what you asked, what it
-/// answered, what it's doing now, and a box to send it the next thing.
-/// While it works, what you send waits and goes in when its turn ends.
+/// Talking to a docket's agents, as a conversation: what you asked, what
+/// each answered, what they're doing now, and a box to send one the next
+/// thing. While it works, what you send waits and goes in when its turn ends.
 struct ChatView: View {
     let d: Docket
     let page: DocketPage
@@ -11,58 +11,75 @@ struct ChatView: View {
     @State private var text = ""
     @State private var busy = false
     @State private var sent: [String] = []
+    /// Only this agent's part of the conversation (its block), or everyone's.
+    @State private var only: String?
+    /// Who the box sends to (a block); nil, the docket's lead.
+    @State private var to: String?
 
     enum Item: Identifiable {
-        case you(Int, String, String, note: Bool)
-        case agent(Int, String, String, app: String, ask: [String]?, subject: String?)
+        case you(Int, String, String, note: Bool, to: String?)
+        case agent(Int, String, String, app: String, who: String?, ask: [String]?, subject: String?)
         case chose(Int, String)
         case sys(Int, String, LiveState?)
         case file(Entry)
         case pause(Int, String)
         var id: Int {
             switch self {
-            case let .you(s, _, _, _), let .agent(s, _, _, _, _, _), let .chose(s, _), let .sys(s, _, _), let .pause(s, _): s
+            case let .you(s, _, _, _, _), let .agent(s, _, _, _, _, _, _), let .chose(s, _), let .sys(s, _, _), let .pause(s, _): s
             case let .file(e): e.seq
             }
         }
     }
 
-    private var items: [Item] {
-        var out: [Item] = []
-        var session: String?
-        let fallback = d.agent?.app ?? "agent"
+    /// The conversation, each line with the agent it's by or to (nil: no
+    /// one's in particular, such as your notes).
+    private var lines: [(item: Item, block: String?)] {
+        var out: [(item: Item, block: String?)] = []
+        var session: [String: String] = [:]
+        let named = d.crew.count > 1
         for e in page.entries {
             let x = e.data
-            let app = e.actorType == "agent" ? e.actorApp : fallback
+            let a = d.member(for: e)
+            let app = a?.app ?? (e.actorType == "agent" ? e.actorApp : d.agent?.app ?? "agent")
+            let who = named ? a?.label : nil
+            let by = a?.block
+            func put(_ i: Item, _ b: String?) { out.append((i, b)) }
             switch e.kind {
             case "claim":
                 let s = x["session"].str ?? ""
-                if !s.isEmpty, s != session {
-                    if session != nil { out.append(.pause(e.seq, x["source"].str == "resume" ? "Resumed an earlier session" : x["source"].str == "clear" ? "A new session (/clear)" : "A new session")) }
-                    session = s
+                let k = by ?? ""
+                if x["source"].str == "join" {
+                    put(.pause(e.seq, "\(appName(app))\(who.map { " (\($0))" } ?? "") joined"), by)
+                }
+                if !s.isEmpty, s != session[k] {
+                    if session[k] != nil {
+                        let what = x["source"].str == "resume" ? "Resumed an earlier session" : x["source"].str == "clear" ? "A new session (/clear)" : "A new session"
+                        put(.pause(e.seq, "\(who.map { "\($0): " } ?? "")\(what)"), by)
+                    }
+                    session[k] = s
                 }
             case "note":
-                if x["via"].str == "prompt" { out.append(.you(e.seq, e.at, e.body ?? "", note: false)) }
-                else if x["message"].exists, e.actorType == "agent" { out.append(.agent(e.seq, e.at, "\(x["subject"].str.map { "**\($0)**\n\n" } ?? "")\(e.body ?? "")", app: app, ask: nil, subject: nil)) }
-                else if e.actorType == "person", !x["message"].exists { out.append(.you(e.seq, e.at, e.body ?? "", note: true)) }
+                if x["via"].str == "prompt" { put(.you(e.seq, e.at, e.body ?? "", note: false, to: who), by) }
+                else if x["message"].exists, e.actorType == "agent" { put(.agent(e.seq, e.at, "\(x["subject"].str.map { "**\($0)**\n\n" } ?? "")\(e.body ?? "")", app: app, who: who, ask: nil, subject: nil), by) }
+                else if e.actorType == "person", !x["message"].exists { put(.you(e.seq, e.at, e.body ?? "", note: true, to: nil), nil) }
             case "question":
-                out.append(.agent(e.seq, e.at, e.body ?? "", app: app, ask: x["options"].strings, subject: x["subject"].str))
+                put(.agent(e.seq, e.at, e.body ?? "", app: app, who: who, ask: x["options"].strings, subject: x["subject"].str), by)
             case "decision":
                 let c = x["choice"].str ?? ""
-                out.append(.chose(e.seq, e.body.flatMap { $0 != c ? "\(c): \($0)" : nil } ?? c))
+                put(.chose(e.seq, e.body.flatMap { $0 != c ? "\(c): \($0)" : nil } ?? c), nil)
             case "turn":
-                if let b = e.body, !b.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.append(.agent(e.seq, e.at, b, app: fallback, ask: nil, subject: nil)) }
+                if let b = e.body, !b.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { put(.agent(e.seq, e.at, b, app: app, who: who, ask: nil, subject: nil), by) }
             case "observed":
-                if x["what"].str == "blocked" { out.append(.sys(e.seq, "Waited on you\(x["kind"].str.map { " (\($0))" } ?? "")\(e.body.map { ": \($0)" } ?? "")", .blocked)) }
-                else if x["what"].str == "error" { out.append(.sys(e.seq, "Failed\(e.body.map { ": \($0)" } ?? "")", .error)) }
+                if x["what"].str == "blocked" { put(.sys(e.seq, "\(who.map { "\($0) waited" } ?? "Waited") on you\(x["kind"].str.map { " (\($0))" } ?? "")\(e.body.map { ": \($0)" } ?? "")", .blocked), by) }
+                else if x["what"].str == "error" { put(.sys(e.seq, "\(who.map { "\($0) failed" } ?? "Failed")\(e.body.map { ": \($0)" } ?? "")", .error), by) }
             case "approval":
                 if x["what"].exists || x["kind"].exists, x["kind"].str != "review" {
-                    out.append(.sys(e.seq, "You \(x["decision"].str == "approve" ? "approved" : "denied") \(x["kind"].str ?? "a prompt")\(e.body.map { ": \($0)" } ?? "")", nil))
+                    put(.sys(e.seq, "You \(x["decision"].str == "approve" ? "approved" : "denied") \(who.map { "\($0)'s " } ?? "")\(x["kind"].str ?? "a prompt")\(e.body.map { ": \($0)" } ?? "")", nil), by)
                 }
             case "artifact":
-                out.append(.file(e))
+                put(.file(e), e.actorType == "agent" ? by : nil)
             case "release":
-                out.append(.pause(e.seq, "The session ended: \(x["reason"].str ?? "released")"))
+                put(.pause(e.seq, "\(who.map { "\($0)'s session" } ?? "The session") ended: \(x["reason"].str ?? "released")"), by)
             default: break
             }
         }
@@ -70,19 +87,31 @@ struct ChatView: View {
     }
 
     var body: some View {
-        let items = items
+        let items = lines.filter { only == nil || $0.block == nil || $0.block == only }.map(\.item)
         let queued = page.queued
         let pending = sent.filter { t in
-            !items.contains { if case let .you(_, _, x, _) = $0 { return x.trimmingCharacters(in: .whitespacesAndNewlines) == t } else { return false } }
+            !items.contains { if case let .you(_, _, x, _, _) = $0 { return x.trimmingCharacters(in: .whitespacesAndNewlines) == t } else { return false } }
                 && !queued.contains { $0.body.trimmingCharacters(in: .whitespacesAndNewlines) == t }
         }
         let asks = (store.state?.messages ?? []).filter { $0.docket == d.id }
-        let state = d.live?.state
-        let canSend = d.live != nil && state != .error
+        // The agent the box sends to: the one picked, else the lead.
+        let on = d.onAgents
+        let target = d.member(block: to).flatMap { $0.on ? $0 : nil } ?? on.first
+        let tlive = d.hasAgents ? target?.live : d.live
+        let state = tlive?.state
+        let canSend = tlive != nil && state != .error
         let willQueue = state == .working || state == .starting || state == .blocked
-        let app = appName(d.agent?.app)
+        let app = target.map { d.several ? $0.label : appName($0.app) } ?? appName(d.agent?.app)
+        let now = d.lives.filter { only == nil || $0.agent?.block == only }
 
         VStack(spacing: 0) {
+            if d.crew.count > 1 {
+                AgentChips(d: d, only: $only) { b in if let b, d.member(block: b)?.on == true { to = b } }
+                    .padding(.horizontal, 28).padding(.vertical, 8)
+                    .frame(maxWidth: 820, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                Divider()
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
@@ -101,7 +130,11 @@ struct ChatView: View {
                             .frame(maxWidth: .infinity, alignment: .trailing)
                         }
                         ForEach(pending, id: \.self) { t in YouBubble(text: t).opacity(0.6).frame(maxWidth: .infinity, alignment: .trailing) }
-                        NowLine(d: d)
+                        if now.isEmpty {
+                            NowLine(d: d, agent: d.member(block: only), live: nil)
+                        } else {
+                            ForEach(Array(now.enumerated()), id: \.offset) { _, x in NowLine(d: d, agent: x.agent, live: x.live) }
+                        }
                         Color.clear.frame(height: 1).id("end")
                     }
                     .padding(.horizontal, 28)
@@ -111,11 +144,28 @@ struct ChatView: View {
                 }
                 .defaultScrollAnchor(.bottom)
                 .onChange(of: items.count + queued.count + pending.count + asks.count) { proxy.scrollTo("end", anchor: .bottom) }
-                .onChange(of: state) { proxy.scrollTo("end", anchor: .bottom) }
+                .onChange(of: d.lives.map { $0.live.state.rawValue }) { proxy.scrollTo("end", anchor: .bottom) }
             }
             Divider()
             HStack(alignment: .bottom, spacing: 10) {
-                Editor(text: $text, placeholder: !canSend ? (d.live != nil ? "\(app) stopped with an error" : "\(app) isn't running") : willQueue ? "Queue a message for \(app)…" : "Message \(app)…", returnSends: true, minHeight: 20, maxHeight: 180, onSubmit: send)
+                if on.count > 1 {
+                    Menu {
+                        ForEach(on) { a in
+                            Button { to = a.block } label: {
+                                Label("\(a.label) · \(a.live?.state.word ?? "Not running")", systemImage: a.block == target?.block ? "checkmark" : "")
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 5) { AppAvatar(app: target?.app, size: 14); Text(target?.label ?? "Agent").lineLimit(1) }
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(ChipButton())
+                    .font(.system(size: 11.5, weight: .medium))
+                    .fixedSize()
+                    .padding(.bottom, 8)
+                    .help("Who it goes to: one of the \(on.count) agents on \(d.id)")
+                }
+                Editor(text: $text, placeholder: !canSend ? (tlive != nil ? "\(app) stopped with an error" : "\(app) isn't running") : willQueue ? "Queue a message for \(app)…" : "Message \(app)…", returnSends: true, minHeight: 20, maxHeight: 180, onSubmit: send)
                     .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(K.elev, in: RoundedRectangle(cornerRadius: 10))
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(K.line))
@@ -142,17 +192,19 @@ struct ChatView: View {
     @ViewBuilder
     private func bubble(_ it: Item) -> some View {
         switch it {
-        case let .you(_, at, text, note):
+        case let .you(_, at, text, note, to):
             VStack(alignment: .trailing, spacing: 4) {
                 if note { Text("Your note on the record (not sent)").font(.system(size: 11)).foregroundStyle(K.muted) }
+                else if let to { Text("To \(to)").font(.system(size: 11)).foregroundStyle(K.muted) }
                 YouBubble(text: text, note: note).help(stamp(at))
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
-        case let .agent(_, at, text, app, ask, subject):
+        case let .agent(_, at, text, app, who, ask, subject):
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 7) {
                     AppAvatar(app: app, size: 18)
-                    Text(appName(app)).font(.system(size: 12.5, weight: .semibold))
+                    Text(who ?? appName(app)).font(.system(size: 12.5, weight: .semibold))
+                    if let who, who != appName(app) { Text(appName(app)).foregroundStyle(K.muted) }
                     if ask != nil { Text("asked you\(subject.map { " · \($0)" } ?? "")").foregroundStyle(K.muted) }
                     Text(agoLong(at)).foregroundStyle(K.faint).help(stamp(at))
                 }
@@ -192,15 +244,61 @@ struct ChatView: View {
 
     private func send() {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, !busy, d.live != nil else { return }
+        // The one picked, if it's still on; else the lead (no block).
+        let target = d.member(block: to).flatMap { $0.on ? $0 : nil }
+        let live = d.hasAgents ? (target ?? d.onAgents.first)?.live : d.live
+        guard !t.isEmpty, !busy, live != nil else { return }
         busy = true
         Task {
-            if await store.send(d.id, t) {
+            if await store.send(d.id, t, block: d.blockFor(target)) {
                 text = ""
                 sent.append(t)
             }
             busy = false
         }
+    }
+}
+
+/// Everyone's, or one agent's: a chip for each agent a docket has had.
+/// `picked` hears the block chosen (nil for everyone's).
+struct AgentChips: View {
+    let d: Docket
+    @Binding var only: String?
+    var picked: (String?) -> Void = { _ in }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                chip(nil) { Text("All agents") }
+                ForEach(d.crew) { a in
+                    chip(a.block) {
+                        HStack(spacing: 5) {
+                            AppAvatar(app: a.app, size: 13)
+                            Text(a.label).lineLimit(1)
+                            if let l = a.live, a.on { LiveIcon(state: l.state, size: 10) }
+                        }
+                        .opacity(a.on ? 1 : 0.65)
+                    }
+                    .help("\(appName(a.app))\(a.role.map { " · \($0)" } ?? "") · \(a.place)\(a.on ? "" : " · left")")
+                }
+            }
+            .font(.system(size: 11.5, weight: .medium))
+        }
+    }
+
+    private func chip(_ block: String?, @ViewBuilder _ label: () -> some View) -> some View {
+        let on = only == block
+        return Button {
+            only = block
+            picked(block)
+        } label: {
+            label()
+                .foregroundStyle(on ? K.text : K.text2)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(on ? K.accentSoft : K.recessed, in: Capsule())
+                .overlay(Capsule().strokeBorder(on ? K.accent.opacity(0.45) : K.line))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -217,17 +315,23 @@ struct YouBubble: View {
     }
 }
 
-/// What the agent is doing now, at the end of the conversation.
+/// What one agent is doing now, at the end of the conversation: the
+/// agent's (nil for an older hub's one) and its live.
 struct NowLine: View {
     let d: Docket
+    var agent: DocketAgent?
+    var live: Live?
     @Environment(Store.self) private var store
     @Environment(Nav.self) private var nav
     @State private var peek = false
     @State private var tail = ""
 
+    /// The block to act on: this agent's when the docket has several.
+    private var block: String? { d.blockFor(agent) }
+
     var body: some View {
-        let app = appName(d.agent?.app)
-        if let l = d.live {
+        let app = agent.map { d.several ? $0.label : appName($0.app) } ?? appName(d.agent?.app)
+        if let l = live {
             switch l.state {
             case .blocked:
                 Callout(tone: .blocked) {
@@ -236,14 +340,14 @@ struct NowLine: View {
                         if let m = l.msg { Text(m).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(K.text2) }
                     }
                     Spacer(minLength: 8)
-                    AnswerButtons(d: d, small: true)
-                    Button("Terminal", systemImage: "terminal") { nav.pane = d.id }.controlSize(.small)
+                    if l.answerable { AnswerButtons(d: d, block: block, live: l, small: true) }
+                    Button("Terminal", systemImage: "terminal") { nav.peek(d.id, block: block) }.controlSize(.small)
                 }
             case .error:
                 HStack(spacing: 8) {
                     LiveIcon(state: .error, size: 15)
                     Text("\(app) stopped with an error\(l.msg.map { ": \($0)" } ?? ".")").foregroundStyle(K.error)
-                    Button("Look at the terminal") { nav.pane = d.id }.buttonStyle(.link)
+                    Button("Look at the terminal") { nav.peek(d.id, block: block) }.buttonStyle(.link)
                 }
                 .font(.system(size: 12.5))
             case .working, .starting:
@@ -268,17 +372,25 @@ struct NowLine: View {
                     }
                 }
             default:
-                EmptyView()
+                if d.several {
+                    HStack(spacing: 6) {
+                        LiveIcon(state: l.state, size: 12)
+                        Text("\(app) · \(l.state.word.lowercased())")
+                    }
+                    .font(.system(size: 12)).foregroundStyle(K.muted)
+                }
             }
+        } else if let a = agent, !a.on {
+            Text("\(a.label) left\(a.left.map { " (\($0))" } ?? "").").font(.system(size: 12.5)).foregroundStyle(K.muted)
         } else {
-            Text("\(d.released.map { "The session ended (\($0))." } ?? "\(app) isn't running in \(d.runtime).") Start it again on the Mac to keep going.")
+            Text("\(d.released.map { "The session ended (\($0))." } ?? "\(app) isn't running in \(agent?.runtime ?? d.runtime).") Start it again on the Mac to keep going.")
                 .font(.system(size: 12.5)).foregroundStyle(K.muted)
         }
     }
 
     private func follow() async {
         while !Task.isCancelled && peek {
-            if let s = try? await store.hub.get("/api/dockets/\(d.id)/screen") {
+            if let s = try? await store.hub.get("/api/dockets/\(d.id)/screen\(Store.blockQuery(block))") {
                 let lines = (s["text"].str ?? "").replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression).components(separatedBy: "\n")
                 tail = lines.suffix(14).joined(separator: "\n")
             }
@@ -309,36 +421,55 @@ struct Dots: View {
     }
 }
 
-/// A live look at an agent's pane, and a box to message it between turns.
+/// A live look at an agent's pane, and a box to message it between turns:
+/// that block's agent, or the docket's lead.
 struct PaneSheet: View {
     let id: String
+    var block: String?
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var screen = ""
     @State private var error: String?
     @State private var text = ""
     @State private var busy = false
+    /// The agent shown, once you pick another; else `block`'s.
+    @State private var picked: String?
 
     var body: some View {
         let d = store.docket(id)
-        let state = d?.live?.state
-        let app = appName(d?.agent?.app)
-        let why: String? = state == .error ? "\(app) stopped with an error." : state == nil ? "The pane isn't open in \(d?.runtime ?? "Rex")." : nil
+        let shownBlock = picked ?? block
+        let a = d?.member(block: shownBlock) ?? d?.onAgents.first
+        let live = d?.hasAgents == true ? a?.live : d?.live
+        let state = live?.state
+        let several = d?.several == true
+        let app = a.map { several ? $0.label : appName($0.app) } ?? appName(d?.agent?.app)
+        let runtime = a?.runtime ?? d?.runtime ?? "Rex"
+        let why: String? = state == .error ? "\(app) stopped with an error." : state == nil ? "The pane isn't open in \(runtime)." : nil
         let queues = state == .working || state == .starting || state == .blocked
+        let act = d?.blockFor(a)
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                AppAvatar(app: d?.agent?.app, size: 22)
+                AppAvatar(app: a?.app ?? d?.agent?.app, size: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(d?.title ?? id).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                     HStack(spacing: 6) {
                         IdText(id: id)
+                        if several, let a { Text(a.label).fontWeight(.medium) }
                         if let s = state { LiveIcon(state: s, size: 11); Text(s.word) }
-                        if let a = d?.agent { Text("\(a.rexSession) / \(a.pane.isEmpty ? "pane" : a.pane)").foregroundStyle(.secondary) }
+                        if let a { Text(a.place).foregroundStyle(.secondary) }
                     }
                     .font(.system(size: 11.5))
                 }
                 Spacer()
-                Button("Open in \(d?.runtime ?? "Rex")", systemImage: "terminal") { store.openInRex(id) }
+                if several, let d {
+                    Picker("Agent", selection: Binding(get: { a?.block ?? "" }, set: { picked = $0; screen = "" })) {
+                        ForEach(d.onAgents) { x in Text("\(x.label) · \(x.live?.state.word ?? "Not running")").tag(x.block) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("Which of \(d.id)'s agents to look at")
+                }
+                Button("Open in \(runtime)", systemImage: "terminal") { store.openInRex(id, block: act) }
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             .padding(14)
@@ -359,22 +490,22 @@ struct PaneSheet: View {
                 .onChange(of: screen) { proxy.scrollTo("end", anchor: .bottom) }
             }
             Divider()
-            if let d, d.live?.answerable == true, state == .blocked {
+            if let d, let live, live.answerable, state == .blocked {
                 HStack(spacing: 10) {
                     LiveIcon(state: .blocked, size: 15)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(app) is asking\(d.live?.kind.map { " (\($0))" } ?? "")").font(.system(size: 12.5, weight: .semibold))
-                        if let m = d.live?.msg { Text(m).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2) }
+                        Text("\(app) is asking\(live.kind.map { " (\($0))" } ?? "")").font(.system(size: 12.5, weight: .semibold))
+                        if let m = live.msg { Text(m).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2) }
                     }
                     Spacer()
-                    AnswerButtons(d: d)
+                    AnswerButtons(d: d, block: act, live: live)
                 }
                 .padding(14)
             } else {
                 HStack(alignment: .bottom, spacing: 8) {
-                    Editor(text: $text, placeholder: why ?? (queues ? "Queue a message for \(app)…" : "Message \(app)…"), minHeight: 20, maxHeight: 120, onSubmit: send)
+                    Editor(text: $text, placeholder: why ?? (queues ? "Queue a message for \(app)…" : "Message \(app)…"), minHeight: 20, maxHeight: 120, onSubmit: { send(act) })
                         .disabled(why != nil)
-                    Button(queues ? "Queue  ⌘↩" : "Send  ⌘↩", action: send)
+                    Button(queues ? "Queue  ⌘↩" : "Send  ⌘↩") { send(act) }
                         .buttonStyle(.borderedProminent).tint(K.accent)
                         .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy || why != nil)
                 }
@@ -382,13 +513,13 @@ struct PaneSheet: View {
             }
         }
         .frame(minWidth: 760, idealWidth: 900, minHeight: 520, idealHeight: 640)
-        .task { await follow() }
+        .task(id: shownBlock) { await follow(act) }
     }
 
-    private func follow() async {
+    private func follow(_ block: String?) async {
         while !Task.isCancelled {
             do {
-                let s = try await store.hub.get("/api/dockets/\(id)/screen")
+                let s = try await store.hub.get("/api/dockets/\(id)/screen\(Store.blockQuery(block))")
                 screen = s["text"].str ?? ""
                 error = nil
             } catch {
@@ -398,12 +529,12 @@ struct PaneSheet: View {
         }
     }
 
-    private func send() {
+    private func send(_ block: String?) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, !busy else { return }
         busy = true
         Task {
-            if await store.send(id, t) { text = "" }
+            if await store.send(id, t, block: block) { text = "" }
             busy = false
         }
     }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { appName, followedRuntimes, paneRuntime, runtimeOf, runtimeTitle, type Docket } from "./api";
+import { appName, followedRuntimes, liveAgents, paneRuntime, runtimeOf, runtimeTitle, type Docket } from "./api";
 import { AppAvatar, IconBoard, IconChevronDown, IconEye, SessionChip, SessionIcon, TitleText, shortPath, IconCopy, IconDisplay, IconList, IconTerminal, LiveIcon, StatusIcon, liveWord } from "./icons";
 import { ago, go, lastList, store, useHub } from "./live";
 import { useKeys, useMenu, usePhone, type MenuItem } from "./ui";
@@ -44,12 +44,15 @@ export function rowMenu(d: Docket, hub: ReturnType<typeof useHub>, pane: ReturnT
       : { key: "hold", label: "Hold…", icon: <IconPause size={14} />, onPick: () => hub.setDialog({ kind: "hold", id: d.id }) },
     { key: "copy", label: "Copy ID", icon: <IconCopy size={14} />, onPick: () => navigator.clipboard?.writeText(d.id) },
   );
-  if (canStartAgent(d)) items.splice(1, 0, { key: "start-agent", label: "Start an agent…", icon: <IconAgents size={14} />, onPick: () => hub.setDialog({ kind: "agent", id: d.id }) });
+  if (canStartAgent(d)) items.splice(1, 0, { key: "start-agent", label: startLabel(d), icon: <IconAgents size={14} />, onPick: () => hub.setDialog({ kind: "agent", id: d.id }) });
   return items;
 }
 
-/** Whether a docket can take an agent now: open, not a Review's, and no agent working on it. */
-export const canStartAgent = (d: Docket) => (d.status === "todo" || d.status === "in_progress") && d.protocol !== "review" && !d.live;
+/** Whether a docket can take an agent now: open, and not a Review's. One with agents on it takes another beside them. */
+export const canStartAgent = (d: Docket) => (d.status === "todo" || d.status === "in_progress") && d.protocol !== "review" && !d.review;
+
+/** "Start an agent…", or with agents on it already, "Add an agent…". */
+export const startLabel = (d: Docket) => (liveAgents(d).length ? "Add an agent…" : "Start an agent…");
 
 // ---- grouping ----
 
@@ -367,15 +370,36 @@ function Card({ d, onMenu }: { d: Docket; onMenu: (e: React.MouseEvent) => void 
 
 // ---- agents ----
 
+const AGENTS_BY = "wh.agents.by";
+
 export function AgentsView() {
   const hub = useHub();
   const pane = usePane();
   const menu = useMenu();
+  // By the runtime session each pane is in, or by the docket each is on.
+  const [by, setBy] = useState<"session" | "docket">(() => {
+    try {
+      return localStorage.getItem(AGENTS_BY) === "docket" ? "docket" : "session";
+    } catch {
+      return "session";
+    }
+  });
+  const pick = (b: "session" | "docket") => {
+    setBy(b);
+    try {
+      localStorage.setItem(AGENTS_BY, b);
+    } catch {
+      /* a private window: it's only for this visit */
+    }
+  };
   const groups = useMemo(() => {
     const m = new Map<string, NonNullable<typeof hub.state>["agents"]>();
-    for (const a of hub.state?.agents ?? []) m.set(a.rex_session || "—", [...(m.get(a.rex_session || "—") ?? []), a]);
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [hub.state]);
+    const keyOf = (a: NonNullable<typeof hub.state>["agents"][number]) => (by === "docket" ? a.docket || "—" : a.rex_session || "—");
+    for (const a of hub.state?.agents ?? []) m.set(keyOf(a), [...(m.get(keyOf(a)) ?? []), a]);
+    // Dockets newest first, those with the most agents on top; sessions by name.
+    const n = (k: string) => Number(k.replace(/^D-/, "")) || 0;
+    return [...m.entries()].sort((a, b) => (by === "docket" ? b[1].length - a[1].length || n(b[0]) - n(a[0]) : a[0].localeCompare(b[0])));
+  }, [hub.state, by]);
   const total = hub.state?.agents.length ?? 0;
   return (
     <div className="view">
@@ -385,6 +409,14 @@ export function AgentsView() {
         </span>
         <span className="spacer" />
         <span className="muted small m-hide">Every Claude Code, Codex and Antigravity pane in {followedRuntimes(hub.state)}, live</span>
+        <span className="seg seg-text" role="tablist" aria-label="Group by">
+          <button className={by === "session" ? "on" : ""} onClick={() => pick("session")} role="tab" aria-selected={by === "session"}>
+            Session
+          </button>
+          <button className={by === "docket" ? "on" : ""} onClick={() => pick("docket")} role="tab" aria-selected={by === "docket"}>
+            Docket
+          </button>
+        </span>
       </header>
       <LargeTitle title="Agents" count={total} />
       {total === 0 ? (
@@ -394,8 +426,17 @@ export function AgentsView() {
           {groups.map(([session, list]) => (
             <div key={session}>
               <div className="group-head static">
-                <SessionIcon name={session} size={14} />
-                <span className="group-label">{session}</span>
+                {by === "docket" ? (
+                  <>
+                    <span className="row-id">{session}</span>
+                    <span className="group-label">{hub.byId.get(session)?.title ?? (session === "—" ? "On no docket" : "")}</span>
+                  </>
+                ) : (
+                  <>
+                    <SessionIcon name={session} size={14} />
+                    <span className="group-label">{session}</span>
+                  </>
+                )}
                 <span className="view-count">{list.length}</span>
                 {[...new Set(list.map((a) => runtimeTitle(a.runtime ?? runtimeOf(a.block))))].sort().map((r) => (
                   <span key={r} className="runtime-tag" title={`In ${r}`}>
@@ -419,9 +460,24 @@ export function AgentsView() {
                     <span className="row-live">
                       <LiveIcon state={a.state} />
                     </span>
-                    <span className="row-id">{a.docket || "—"}</span>
+                    <span className="row-id">{by === "docket" ? "" : a.docket || "—"}</span>
                     <AppAvatar app={a.app} />
-                    <span className="row-title">{d ? <TitleText d={d} /> : appName(a.app)}</span>
+                    <span className="row-title">
+                      {by === "docket" ? (
+                        <>
+                          {a.role || appName(a.app)}
+                          <span className="muted">
+                            {" "}
+                            · {a.rex_session || "—"} · {runtimeTitle(a.runtime ?? runtimeOf(a.block))}
+                          </span>
+                        </>
+                      ) : d ? (
+                        <TitleText d={d} />
+                      ) : (
+                        appName(a.app)
+                      )}
+                      {by === "session" && a.role ? <span className="muted"> · {a.role}</span> : null}
+                    </span>
                     <span className={`agent-state state-${a.state}`} title={a.msg || ""}>
                       {a.state === "blocked" && a.msg ? a.msg : liveWord(a.state)}
                     </span>
@@ -436,7 +492,7 @@ export function AgentsView() {
                       title={onThisMac() ? `Show pane in ${runtimeTitle(a.runtime ?? runtimeOf(a.block))}` : "View pane"}
                       onClick={(e) => {
                         e.preventDefault();
-                        if (a.docket) pane.act(a.docket);
+                        if (a.docket) pane.act(a.docket, a.block);
                       }}
                     >
                       {onThisMac() ? <IconTerminal size={14} /> : <IconEye size={14} />}

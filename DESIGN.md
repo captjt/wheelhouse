@@ -66,7 +66,7 @@ on the Mac or on their phone, without watching panes.
 | **Protocol** | The playbook a docket follows: its steps, its roles, and its gates. v1 ships three: **Build**, **Review**, and **Agent**. |
 | **Standing order** | A rule you wrote: when something happens, open a docket with a protocol. For example: "when a PR in acme/api requests me, Review it". |
 | **Task** | A unit of work an agent claims: builder, checker, a reviewer. A docket with no tasks has one task with no name. |
-| **Agent** | A Claude Code or Codex session in a Rex pane or a Herdr terminal, holding a task. Every agent is on a docket. |
+| **Agent** | A Claude Code or Codex session in a Rex pane or a Herdr terminal, holding a task. Every agent is on a docket, and a docket can have any number of agents, in either runtime, each by its pane. |
 | **Runtime** | The terminal multiplexer an agent's pane is in: Rex or Herdr ([docs/runtimes.md](docs/runtimes.md)). The hub follows every one that's installed. |
 | **Ask** | Something that waits on you: a permission prompt, a decision, a gate (plan, open PR, post review, push replies), a preview, an issue to start or skip, a failure, a message. Your inbox is your open asks. |
 | **Artifact** | A versioned file on a docket: a plan, a review draft, a preview, a screenshot, a diff. |
@@ -125,9 +125,13 @@ Rex pane or Herdr terminal.
 - **Its entries:** each prompt you give (`note`), each turn's summary
   (`turn`), each permission you answer (`approval`), its messages, and
   what it shares.
-- **Join instead (planned).** `wh join D-41` in a pane, or **Working
-  on…** in the app, attaches the session to an existing docket. Its own
-  docket then folds into that one.
+- **Join instead.** `wh join D-41` in a pane puts the agent on an
+  existing docket, beside the agents already there; its own docket is
+  dropped if nothing was done on it. **Add an agent…** in the app (or
+  `wh start --docket D-41`) starts one there. `wh leave` takes it off
+  again. The docket is held while any agent is on it and released when the
+  last one leaves; the agents on it find each other in `wh brief` and
+  reach them all with `wh send --to @D-41`.
 - **Promote.** **Make this a Build** turns a spike into planned work.
   The plan starts from the session's record.
 - **It ends with the session** and moves to Done on its own. Short

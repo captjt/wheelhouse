@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { appName, get, paneRuntime, post, type Live } from "./api";
+import { agentLabel, agentsOn, appName, get, paneRuntime, post, runtimeOf, runtimeTitle, type Live } from "./api";
 import { AppAvatar, IconEye, IconTerminal, IconX, LiveIcon, TitleText, liveWord } from "./icons";
 import { useHub } from "./live";
 import { Kbd, Modal, useToast } from "./ui";
@@ -8,20 +8,21 @@ import { Kbd, Modal, useToast } from "./ui";
  * From a phone, "Open in Rex" would only move a window on a Mac across the room. */
 export const onThisMac = () => ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
 
-type PaneCtx = { view: (id: string) => void; act: (id: string) => void };
+/** `block`: which of the docket's agents; its lead when left out. */
+type PaneCtx = { view: (id: string, block?: string) => void; act: (id: string, block?: string) => void };
 const Ctx = createContext<PaneCtx>({ view: () => {}, act: () => {} });
 
 /** Opens the pane sheet from anywhere: rows, menus, the palette, keys. */
 export function PaneProvider({ children }: { children: ReactNode }) {
   const hub = useHub();
-  const [open, setOpen] = useState<string | null>(null);
-  const view = useCallback((id: string) => setOpen(id), []);
+  const [open, setOpen] = useState<{ id: string; block?: string } | null>(null);
+  const view = useCallback((id: string, block?: string) => setOpen({ id, block }), []);
   // The one action for "show me this agent": its runtime's app on the Mac, the sheet elsewhere.
-  const act = useCallback((id: string) => (onThisMac() ? hub.openInRex(id) : setOpen(id)), [hub]);
+  const act = useCallback((id: string, block?: string) => (onThisMac() ? hub.openInRex(id, block) : setOpen({ id, block })), [hub]);
   return (
     <Ctx.Provider value={{ view, act }}>
       {children}
-      {open && <PaneSheet id={open} onClose={() => setOpen(null)} />}
+      {open && <PaneSheet key={`${open.id} ${open.block ?? ""}`} id={open.id} block={open.block} onClose={() => setOpen(null)} />}
     </Ctx.Provider>
   );
 }
@@ -29,23 +30,23 @@ export function PaneProvider({ children }: { children: ReactNode }) {
 export const usePane = () => useContext(Ctx);
 
 /** The pane button: Open in Rex or Herdr (and a peek) on the Mac, View pane anywhere else. */
-export function PaneButton({ id, small, label }: { id: string; small?: boolean; label?: string }) {
+export function PaneButton({ id, block, small, label }: { id: string; block?: string; small?: boolean; label?: string }) {
   const hub = useHub();
   const pane = usePane();
   const cls = small ? "btn btn-small" : "btn";
-  const rt = paneRuntime(hub.byId.get(id));
+  const rt = block ? runtimeTitle(runtimeOf(block)) : paneRuntime(hub.byId.get(id));
   if (!onThisMac())
     return (
-      <button className={cls} onClick={() => pane.view(id)} title="See the agent's terminal, and message it">
+      <button className={cls} onClick={() => pane.view(id, block)} title="See the agent's terminal, and message it">
         <IconEye size={small ? 13 : 14} /> {label ? label.replace(/in (Rex|Herdr)$/, "").trim() || "View pane" : "View pane"}
       </button>
     );
   return (
     <span className="btn-pair">
-      <button className={cls} onClick={() => hub.openInRex(id)} title={`Bring the pane to the front in ${rt} (O)`}>
+      <button className={cls} onClick={() => hub.openInRex(id, block)} title={`Bring the pane to the front in ${rt} (O)`}>
         <IconTerminal size={small ? 13 : 14} /> {label || `Open in ${rt}`}
       </button>
-      <button className={`${cls} btn-icon`} onClick={() => pane.view(id)} title="Peek at the pane here">
+      <button className={`${cls} btn-icon`} onClick={() => pane.view(id, block)} title="Peek at the pane here">
         <IconEye size={small ? 13 : 14} />
       </button>
     </span>
@@ -54,21 +55,22 @@ export function PaneButton({ id, small, label }: { id: string; small?: boolean; 
 
 /** Approve and Deny for a permission prompt Wheelhouse can answer. The hub
  * re-reads the prompt from the pane's runtime first and refuses if it isn't the one shown. */
-export function AnswerButtons({ d, small }: { d: import("./api").Docket; small?: boolean }) {
+export function AnswerButtons({ d, live, small }: { d: import("./api").Docket; live?: Live | null; small?: boolean }) {
   const hub = useHub();
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
-  if (!d.live?.answerable) return null;
+  const l = live ?? d.live;
+  if (!l?.answerable) return null;
   const go = (approve: boolean) => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     if (busy) return;
     setBusy(approve ? "approve" : "deny");
-    hub.answer(d, approve).finally(() => setBusy(null));
+    hub.answer(d, approve, l).finally(() => setBusy(null));
   };
   const cls = small ? "btn btn-small" : "btn";
   return (
     <span className="btn-pair answer">
-      <button className={`${cls} btn-approve`} disabled={!!busy} onClick={go(true)} title={`Approve: ${d.live.msg ?? ""}`}>
+      <button className={`${cls} btn-approve`} disabled={!!busy} onClick={go(true)} title={`Approve: ${l.msg ?? ""}`}>
         {busy === "approve" ? "Approving…" : "Approve"}
       </button>
       <button className={cls} disabled={!!busy} onClick={go(false)} title="Deny (Esc in the pane)">
@@ -81,10 +83,15 @@ export function AnswerButtons({ d, small }: { d: import("./api").Docket; small?:
 type Screen = { text: string; live: Live | null; at: string };
 
 /** A live look at an agent's pane, and a box to message it between turns. */
-function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
+function PaneSheet({ id, block, onClose }: { id: string; block?: string; onClose: () => void }) {
   const hub = useHub();
   const toast = useToast();
   const d = hub.byId.get(id);
+  // The agent shown: the one asked for, or the docket's lead.
+  const on = agentsOn(d);
+  const agent = on.find((a) => a.block === (block ?? d?.lead)) ?? d?.agent;
+  const dLive = (block ? on.find((a) => a.block === block)?.live : d?.live) ?? null;
+  const q = block ? `?block=${encodeURIComponent(block)}` : "";
   const [screen, setScreen] = useState<Screen | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState("");
@@ -96,7 +103,7 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
     let live = true;
     let timer: number | undefined;
     const load = () =>
-      get<Screen>(`/api/dockets/${id}/screen`)
+      get<Screen>(`/api/dockets/${id}/screen${q}`)
         .then((s) => {
           if (!live) return;
           setScreen(s);
@@ -111,7 +118,7 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
       live = false;
       window.clearTimeout(timer);
     };
-  }, [id]);
+  }, [id, q]);
 
   // Follow the bottom, the way a terminal does, unless you've scrolled up.
   useLayoutEffect(() => {
@@ -119,15 +126,16 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [screen?.text]);
 
-  const state = screen?.live?.state ?? d?.live?.state;
-  const app = appName(d?.agent?.app);
-  const why = state === "error" ? `${app} stopped with an error.` : !state ? `The pane isn't open in ${paneRuntime(d)}.` : null;
+  const state = screen?.live?.state ?? dLive?.state;
+  const app = on.length > 1 ? `${appName(agent?.app)} (${agentLabel(agent)})` : appName(agent?.app);
+  const rt = agent?.block ? runtimeTitle(runtimeOf(agent.block)) : paneRuntime(d);
+  const why = state === "error" ? `${app} stopped with an error.` : !state ? `The pane isn't open in ${rt}.` : null;
   const queues = state === "working" || state === "starting" || state === "blocked";
   const send = () => {
     const t = text.trim();
     if (!t || busy || why) return;
     setBusy(true);
-    post<{ queued?: number }>(`/api/dockets/${id}/send`, { text: t, queue: true }).then(
+    post<{ queued?: number }>(`/api/dockets/${id}/send`, { text: t, queue: true, block: agent?.block }).then(
       (r) => {
         setText("");
         setBusy(false);
@@ -145,7 +153,7 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
   return (
     <Modal onClose={onClose} className="pane-sheet">
       <div className="ps-head">
-        <AppAvatar app={d?.agent?.app} size={20} />
+        <AppAvatar app={agent?.app} size={20} />
         <div className="ps-title">
           <div className="ps-name">{d ? <TitleText d={d} /> : id}</div>
           <div className="ps-sub">
@@ -155,16 +163,16 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
                 <LiveIcon state={state} size={11} /> {liveWord(state)}
               </span>
             )}
-            {d?.agent && (
+            {agent && (
               <span className="muted">
-                {screen?.live?.rex_session || d.agent.rex_session} / {screen?.live?.pane || d.agent.pane || "pane"}
+                {screen?.live?.rex_session || agent.rex_session} / {screen?.live?.pane || agent.pane || "pane"}
               </span>
             )}
           </div>
         </div>
         <span className="spacer" />
-        <button className="btn btn-small" onClick={() => hub.openInRex(id)} title={onThisMac() ? `Bring the pane to the front in ${paneRuntime(d)}` : `Bring the pane to the front in ${paneRuntime(d)}, on the Mac`}>
-          <IconTerminal size={13} /> {onThisMac() ? `Open in ${paneRuntime(d)}` : "Show on Mac"}
+        <button className="btn btn-small" onClick={() => hub.openInRex(id, agent?.block)} title={onThisMac() ? `Bring the pane to the front in ${rt}` : `Bring the pane to the front in ${rt}, on the Mac`}>
+          <IconTerminal size={13} /> {onThisMac() ? `Open in ${rt}` : "Show on Mac"}
         </button>
         <button className="icon-btn" onClick={onClose} aria-label="Close">
           <IconX size={15} />
@@ -180,14 +188,14 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
       >
         {screen ? screen.text || " " : error ? error : "Loading the pane…"}
       </pre>
-      {d?.live?.answerable && state === "blocked" ? (
+      {d && dLive?.answerable && state === "blocked" ? (
         <div className="ps-answer">
           <LiveIcon state="blocked" size={14} />
           <div className="ps-answer-text">
-            <div className="ps-answer-title">{app} is asking{d.live.kind ? ` (${d.live.kind})` : ""}</div>
-            {d.live.msg && <div className="ps-answer-msg">{d.live.msg}</div>}
+            <div className="ps-answer-title">{app} is asking{dLive.kind ? ` (${dLive.kind})` : ""}</div>
+            {dLive.msg && <div className="ps-answer-msg">{dLive.msg}</div>}
           </div>
-          <AnswerButtons d={d} />
+          <AnswerButtons d={d} live={dLive} />
         </div>
       ) : (
       <div className="ps-compose">

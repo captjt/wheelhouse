@@ -47,6 +47,12 @@ pub struct Tracked {
     pending_prompt: Option<String>,
 }
 
+impl Tracked {
+    fn on(docket: &str, app: &str, session: Option<String>) -> Self {
+        Tracked { docket: docket.to_string(), app: app.to_string(), session, state: None, root: None, blocked_seen: None, missing_since: None, pending_prompt: None }
+    }
+}
+
 struct PendingTurn {
     since: Instant,
     status: Option<String>,
@@ -57,39 +63,29 @@ struct PendingTurn {
 pub struct Tracker {
     pub by_block: BTreeMap<String, Tracked>,
     turns: BTreeMap<String, PendingTurn>,
-    /// Dockets whose agent is answering a prompt you sent from the app:
-    /// its reply is pushed to you, since you're away from the terminal.
+    /// Panes answering a prompt you sent from the app: the reply is pushed
+    /// to you, since you're away from the terminal.
     pub remote: std::collections::HashSet<String>,
 }
 
-/// Pick up the dockets agents held when the hub last stopped: open, not
-/// released, with an agent on the record. That's the hub's own Agent
-/// dockets, and dockets you opened and put an agent on (wh start --docket,
-/// or a resumed session). Review's and Build's panes come back through
-/// their own maps. When two claim one pane, the one with a session wins
-/// over one without: a docket opened for the pane before it was found.
+/// Pick up the dockets agents held when the hub last stopped: open, with
+/// agents on the record that haven't left. That's the hub's own Agent
+/// dockets, and dockets you opened and put agents on (wh start --docket,
+/// wh join, or a resumed session). Review's and Build's panes come back
+/// through their own maps. When two dockets claim one pane, the one with a
+/// session wins over one without: a docket opened for the pane before it
+/// was found.
 pub fn load(core: &mut Core) -> Result<()> {
     for st in core.store.states()? {
-        let Some(a) = &st.agent else { continue };
-        if !st.is_open() || st.released.is_some() || matches!(st.protocol.as_str(), "review" | "build") || core.store.build_task(&st.id)?.is_some() {
+        if !st.is_open() || matches!(st.protocol.as_str(), "review" | "build") || core.store.build_task(&st.id)?.is_some() {
             continue;
         }
-        if core.agents.by_block.get(&a.block).is_some_and(|cur| cur.session.is_some() || st.session.is_none()) {
-            continue;
+        for a in st.agents_on() {
+            if core.agents.by_block.get(&a.agent.block).is_some_and(|cur| cur.session.is_some() || a.session.is_none()) {
+                continue;
+            }
+            core.agents.by_block.insert(a.agent.block.clone(), Tracked::on(&st.id, &a.agent.app, a.session.clone()));
         }
-        core.agents.by_block.insert(
-            a.block.clone(),
-            Tracked {
-                docket: st.id.clone(),
-                app: a.app.clone(),
-                session: st.session.clone(),
-                state: None,
-                root: None,
-                blocked_seen: None,
-                missing_since: None,
-                pending_prompt: None,
-            },
-        );
     }
     Ok(())
 }
@@ -198,37 +194,13 @@ fn open_for(core: &mut Core, a: AgentRef, session: Option<&str>, source: Option<
         "source": source,
     });
     let id = core.open(&Who::Hub, &default_title(&a), data)?;
-    core.agents.by_block.insert(
-        a.block.clone(),
-        Tracked {
-            docket: id.clone(),
-            app: a.app.clone(),
-            session: session.map(str::to_string),
-            state: None,
-            root: None,
-            blocked_seen: None,
-            missing_since: None,
-            pending_prompt: None,
-        },
-    );
+    core.agents.by_block.insert(a.block.clone(), Tracked::on(&id, &a.app, session.map(str::to_string)));
     Ok(id)
 }
 
 /// Track a pane Wheelhouse started on a docket it already opened.
 pub fn adopt(core: &mut Core, docket: &str, a: &AgentRef, prompt: Option<&str>) {
-    core.agents.by_block.insert(
-        a.block.clone(),
-        Tracked {
-            docket: docket.to_string(),
-            app: a.app.clone(),
-            session: None,
-            state: None,
-            root: None,
-            blocked_seen: None,
-            missing_since: None,
-            pending_prompt: prompt.map(str::to_string),
-        },
-    );
+    core.agents.by_block.insert(a.block.clone(), Tracked { pending_prompt: prompt.map(str::to_string), ..Tracked::on(docket, &a.app, None) });
 }
 
 /// Write what changed in a tracked pane's program status.
@@ -241,7 +213,7 @@ fn status(core: &mut Core, p: &Pane) -> Result<()> {
     if let Some(h) = head.as_ref().filter(|h| matches!(h.state.as_str(), "blocked" | "error")) {
         let seen = h.updated_at.clone().or_else(|| h.msg.clone());
         if state != t.state || seen != t.blocked_seen {
-            let data = json!({ "what": h.state, "kind": h.kind, "record": h.id, "title": h.title });
+            let data = json!({ "what": h.state, "kind": h.kind, "record": h.id, "title": h.title, "block": p.block_id });
             core.append(&t.docket, "observed", &Who::Hub, h.msg.clone(), data)?;
             let _ = core.events.send(json!({ "type": "needs", "docket": t.docket, "block": p.block_id, "what": h.state, "updated_at": h.updated_at }));
             if let Some(tt) = core.agents.by_block.get_mut(&p.block_id) {
@@ -296,9 +268,9 @@ fn flush_turn(core: &mut Core, block: &str) -> Result<()> {
     let reply = core
         .agents
         .remote
-        .remove(&docket)
+        .remove(block)
         .then(|| summary.clone().or_else(|| pt.message.as_deref().map(|m| m.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect())));
-    core.append(&docket, "turn", &Who::Hub, pt.message, json!({ "state": pt.status, "summary": summary }))?;
+    core.append(&docket, "turn", &Who::Hub, pt.message, json!({ "state": pt.status, "summary": summary, "block": block }))?;
     // You asked from the app: the reply comes to your phone.
     if let Some(text) = reply {
         let _ = core.events.send(json!({ "type": "turn", "docket": docket, "block": block, "text": text }));
@@ -316,28 +288,106 @@ fn release(core: &mut Core, block: &str, reason: &str) -> Result<()> {
     release_as(core, block, reason, "done")
 }
 
-/// Release the pane's docket and set it to `status`.
+/// The pane leaves its docket. When it was the last agent on it, the
+/// docket is released and set to `status`.
 fn release_as(core: &mut Core, block: &str, reason: &str, status: &str) -> Result<()> {
+    release_only(core, block, reason)?.map_or(Ok(()), |d| {
+        // A Review's or a Build's docket status is its protocol's to set: a
+        // Review docket outlives any one of its panes, and ends when the PR's
+        // review is over and no pane of it is left.
+        let st = core.store.state(&d)?;
+        let ours = st.as_ref().is_none_or(|s| s.protocol != "review") && core.store.build_task(&d)?.is_none();
+        let last = st.as_ref().is_none_or(|s| s.agents_on().next().is_none());
+        if ours && last {
+            core.append(&d, "set", &Who::Hub, None, json!({ "status": status }))?;
+        }
+        Ok(())
+    })
+}
+
+/// The pane leaves its docket, which keeps its status. Returns the docket.
+fn release_only(core: &mut Core, block: &str, reason: &str) -> Result<Option<String>> {
     flush_turn(core, block)?;
-    let Some(t) = core.agents.by_block.remove(block) else { return Ok(()) };
+    let Some(t) = core.agents.by_block.remove(block) else { return Ok(None) };
     core.append(&t.docket, "release", &Who::Hub, None, json!({ "reason": reason, "block": block }))?;
-    // A Review docket outlives any one of its panes: it ends when the PR's
-    // review is over and no pane of it is left.
-    // A Review's or a Build's docket status is its protocol's to set.
-    let ours = core.store.state(&t.docket)?.is_none_or(|s| s.protocol != "review") && core.store.build_task(&t.docket)?.is_none();
-    if ours {
-        core.append(&t.docket, "set", &Who::Hub, None, json!({ "status": status }))?;
+    Ok(Some(t.docket))
+}
+
+/// Whether a docket's panes are a protocol's (Review's, Build's), which
+/// starts and ends them itself.
+fn protocols(core: &Core, docket: &str) -> Result<Option<&'static str>> {
+    if core.store.build_task(docket)?.is_some() {
+        return Ok(Some("Build"));
     }
-    Ok(())
+    Ok(match core.store.state(docket)?.map(|s| s.protocol) {
+        Some(p) if p == "review" => Some("Review"),
+        Some(p) if p == "build" => Some("Build"),
+        _ => None,
+    })
+}
+
+/// An agent already running joins a docket, beside the agents on it. Its
+/// pane leaves the docket it was on: one with nothing on it yet is dropped.
+pub fn join(core: &mut Core, block: &str, docket: &str, role: Option<&str>) -> Result<Value> {
+    let p = core.mirror.panes.get(block).filter(|p| p.is_agent()).cloned().ok_or_else(|| anyhow::anyhow!("wh join runs in an agent's pane"))?;
+    let st = core.store.state(docket)?.ok_or_else(|| anyhow::anyhow!("no docket {docket}"))?;
+    if !st.is_open() {
+        anyhow::bail!("{docket} is {}: reopen it first", st.status.replace('_', " "));
+    }
+    if let Some(h) = &st.hold {
+        anyhow::bail!("{docket} is on hold ({h}): resume it first");
+    }
+    if let Some(p) = protocols(core, docket)? {
+        anyhow::bail!("{docket} is {p}'s: {p} puts its own agents on it");
+    }
+    let t = core.agents.by_block.get(block).cloned();
+    if let Some(t) = &t {
+        if t.docket == docket {
+            return Ok(json!({ "docket": docket, "already": true, "others": st.agents_on().filter(|a| a.agent.block != block).count() }));
+        }
+        if let Some(p) = protocols(core, &t.docket)? {
+            anyhow::bail!("this pane is {p}'s, on {}", t.docket);
+        }
+        let fresh = core.store.state(&t.docket)?.is_some_and(|s| s.prompts == 0 && s.turns == 0);
+        release_as(core, block, &format!("joined {docket}"), if fresh { "dropped" } else { "done" })?;
+    }
+    let app = p.app().unwrap_or("agent").to_string();
+    let session = t.and_then(|t| t.session);
+    core.agents.by_block.insert(block.to_string(), Tracked::on(docket, &app, session.clone()));
+    let a = agent_ref(core, &p);
+    core.append(docket, "claim", &Who::Hub, None, json!({ "session": session, "source": "join", "role": role, "agent": a }))?;
+    if st.status == "todo" {
+        core.append(docket, "set", &Who::Hub, None, json!({ "status": "in_progress" }))?;
+    }
+    core.live_changed();
+    Ok(json!({ "docket": docket, "others": st.agents_on().filter(|a| a.agent.block != block).count() }))
+}
+
+/// The pane leaves its docket, which stays as it is: held by the agents
+/// still on it. The pane gets a docket of its own again.
+pub fn leave(core: &mut Core, block: &str, reason: Option<&str>) -> Result<Value> {
+    let t = core.agents.by_block.get(block).cloned().ok_or_else(|| anyhow::anyhow!("this pane isn't on a docket"))?;
+    if let Some(p) = protocols(core, &t.docket)? {
+        anyhow::bail!("this pane is {p}'s, on {}: {p} ends it", t.docket);
+    }
+    let reason = reason.map(str::trim).filter(|r| !r.is_empty()).unwrap_or("left");
+    release_only(core, block, reason)?;
+    let p = core.mirror.panes.get(block).cloned();
+    let own = match p {
+        Some(p) => Some(open_for(core, agent_ref(core, &p), t.session.as_deref(), Some("leave"))?),
+        None => None,
+    };
+    core.live_changed();
+    Ok(json!({ "left": t.docket, "docket": own }))
 }
 
 /// The docket a resumed session was on: the first one it was claimed on
-/// that wasn't dropped. Not one another live pane still holds (the session
-/// resumed twice at once): that pane keeps it.
+/// that wasn't dropped. Not when another live pane on it is in that same
+/// session (the session resumed twice at once): that pane keeps it.
 fn resumed_docket(core: &Core, block: &str, session: &str) -> Result<Option<crate::record::fold::DocketState>> {
     // States come newest first.
-    let d = core.store.states()?.into_iter().rfind(|st| st.session.as_deref() == Some(session) && st.status != "dropped");
-    Ok(d.filter(|d| !core.agents.by_block.iter().any(|(b, t)| b != block && t.docket == d.id)))
+    let d = core.store.states()?.into_iter().rfind(|st| st.status != "dropped" && st.agents.iter().any(|a| a.session.as_deref() == Some(session)));
+    Ok(d.filter(|d| !core.agents.by_block.iter().any(|(b, t)| b != block && t.docket == d.id && t.session.as_deref() == Some(session))))
 }
 
 /// The pane `block` as a docket records it.
@@ -356,9 +406,14 @@ fn claim(core: &mut Core, block: &str, session: &str, source: &str) -> Result<()
 /// when that may not be the pane the docket last had.
 fn claim_in(core: &mut Core, block: &str, session: &str, source: &str, here: Option<AgentRef>) -> Result<()> {
     let Some(t) = core.agents.by_block.get(block).cloned() else { return Ok(()) };
+    // This pane, as the docket has it, never the docket's other agents.
     let agent = match here {
-        Some(a) => Some(a),
-        None => core.store.state(&t.docket)?.and_then(|s| s.agent),
+        Some(a) => a,
+        None => core
+            .store
+            .state(&t.docket)?
+            .and_then(|s| s.agents.into_iter().rev().find(|x| x.agent.block == block).map(|x| x.agent))
+            .unwrap_or_else(|| pane_ref(core, block, &t.app, None)),
     };
     core.append(&t.docket, "claim", &Who::Hub, None, json!({ "session": session, "source": source, "agent": agent }))?;
     if let Some(tt) = core.agents.by_block.get_mut(block) {
@@ -457,9 +512,9 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
                 return Ok(json!({ "docket": docket }));
             }
             if prompt.starts_with("[rex-inbox]") || prompt.starts_with("[wheelhouse]") {
-                core.append(&docket, "note", &Who::Hub, Some(prompt.to_string()), json!({ "via": "message" }))?;
+                core.append(&docket, "note", &Who::Hub, Some(prompt.to_string()), json!({ "via": "message", "block": block }))?;
             } else {
-                note_prompt(core, &docket, prompt, session, None)?;
+                note_prompt(core, &docket, prompt, session, Some(block), None)?;
             }
         }
         "Stop" => {
@@ -510,9 +565,10 @@ fn from_the_harness(prompt: &str) -> bool {
 
 /// A prompt you gave an agent: a note on its docket, and the docket's title
 /// if it has none of its own yet. `from` says where you typed it, when that
-/// wasn't the pane (`wheelhouse`).
-pub fn note_prompt(core: &mut Core, docket: &str, prompt: &str, session: Option<&str>, from: Option<&str>) -> Result<()> {
-    core.append(docket, "note", &Who::Owner, Some(prompt.to_string()), json!({ "via": "prompt", "session": session, "from": from }))?;
+/// wasn't the pane (`wheelhouse`). `block`: the agent's pane, on a docket
+/// with several.
+pub fn note_prompt(core: &mut Core, docket: &str, prompt: &str, session: Option<&str>, block: Option<&str>, from: Option<&str>) -> Result<()> {
+    core.append(docket, "note", &Who::Owner, Some(prompt.to_string()), json!({ "via": "prompt", "session": session, "block": block, "from": from }))?;
     let untitled = core.store.state(docket)?.is_some_and(|st| st.title_source == "pane");
     if untitled && let Some(title) = title_from(prompt) {
         core.append(docket, "set", &Who::Hub, None, json!({ "title": title, "title_source": "prompt" }))?;
@@ -645,6 +701,34 @@ pub fn live(core: &Core, block: &str) -> Option<Live> {
     })
 }
 
+/// Of a docket's agents live now, the one the apps put first: the one that
+/// needs you (blocked, then failed), then one at work, then the most
+/// recently active. None when no agent of it is live.
+pub fn lead(core: &Core, st: &crate::record::fold::DocketState) -> Option<String> {
+    let rank = |l: &Live| match l.state.as_str() {
+        "blocked" => 0,
+        "error" => 1,
+        "working" => 2,
+        _ => 3,
+    };
+    st.agents_on()
+        .filter(|a| docket_of(core, &a.agent.block).as_deref() == Some(st.id.as_str()))
+        .filter_map(|a| Some((a, live(core, &a.agent.block)?)))
+        // The lowest rank; among equals, the most recently active.
+        .min_by(|(a, la), (b, lb)| rank(la).cmp(&rank(lb)).then(b.active_at.cmp(&a.active_at)))
+        .map(|(a, _)| a.agent.block.clone())
+}
+
+/// The pane to act on for a docket: `want`, when it's one of the docket's
+/// own, or else its lead.
+pub fn pane_on(core: &Core, st: &crate::record::fold::DocketState, want: Option<&str>) -> std::result::Result<String, String> {
+    match want.filter(|w| !w.is_empty()) {
+        Some(w) if docket_of(core, w).as_deref() == Some(st.id.as_str()) => Ok(w.to_string()),
+        Some(w) => Err(format!("{w} isn't an agent on {}", st.id)),
+        None => lead(core, st).ok_or_else(|| format!("{} has no pane open", st.id)),
+    }
+}
+
 /// The docket a pane is on, if any.
 pub fn docket_of(core: &Core, block: &str) -> Option<String> {
     core.agents.by_block.get(block).map(|t| t.docket.clone())
@@ -742,7 +826,7 @@ mod tests {
         reconcile(&mut core, ["b1".to_string()]);
         assert!(turns(&mut rx).is_empty());
         // You sent it something from the app: its reply comes to you, once.
-        core.agents.remote.insert(d.clone());
+        core.agents.remote.insert("b1".into());
         agent_pane(&mut core, "b1", Some("working"));
         reconcile(&mut core, ["b1".to_string()]);
         hook(&mut core, "Stop", "claude-code", "b1", &json!({ "last_assistant_message": "**Fixed.** The retry test passes now." })).unwrap();
@@ -752,7 +836,7 @@ mod tests {
         assert_eq!(t.len(), 1, "{t:?}");
         assert_eq!(t[0]["docket"], d.as_str());
         assert_eq!(t[0]["text"], "Fixed. The retry test passes now.");
-        assert!(!core.agents.remote.contains(&d));
+        assert!(core.agents.remote.is_empty());
     }
 
     #[test]
@@ -890,6 +974,118 @@ mod tests {
         assert!(docket_of(&core, "b3").is_none(), "{gone} was released");
         assert!(docket_of(&core, "b4").is_none(), "Review's panes come back through its own map");
         assert_eq!(core.agents.by_block["b1"].session.as_deref(), Some("s-1"));
+    }
+
+    fn gone(core: &mut Core, block: &str) {
+        core.mirror.panes.remove(block);
+        reconcile(core, [block.to_string()]);
+        if let Some(t) = core.agents.by_block.get_mut(block) {
+            t.missing_since = Some(Instant::now() - GRACE);
+        }
+        tick(core);
+    }
+
+    #[test]
+    fn several_agents_in_rex_and_herdr_share_a_docket_until_the_last_leaves() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Shared dockets", json!({ "protocol": "none" })).unwrap();
+        // Two agents in Rex, one in Herdr, each on a docket of its own first.
+        agent_pane(&mut core, "block:1", Some("idle"));
+        agent_pane(&mut core, "block:2", Some("idle"));
+        let fg = json!({ "foreground": { "name": "claude", "cwd": "/Users/you/git/web" } });
+        let rec = vec![Record { state: "idle".into(), app: Some("claude-code".into()), ..Default::default() }];
+        core.mirror.apply_pane_status("herdr:space:web", "herdr:t3", rec, Some(&fg), None);
+        reconcile(&mut core, ["block:1".to_string(), "block:2".to_string(), "herdr:t3".to_string()]);
+        let own2 = docket_of(&core, "block:2").unwrap();
+        hook(&mut core, "SessionStart", "claude-code", "block:2", &json!({ "session_id": "s-2", "source": "startup" })).unwrap();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "block:2", &json!({ "session_id": "s-2", "prompt": "Look at the fold" })).unwrap();
+
+        for b in ["block:1", "block:2", "herdr:t3"] {
+            join(&mut core, b, &d, (b == "herdr:t3").then_some("reviewer")).unwrap();
+        }
+        assert!(join(&mut core, "block:1", &d, None).unwrap()["already"] == true);
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert_eq!(st.status, "in_progress");
+        let on: Vec<&str> = st.agents_on().map(|a| a.agent.block.as_str()).collect();
+        assert_eq!(on, ["block:1", "block:2", "herdr:t3"]);
+        assert_eq!(st.agents[2].role.as_deref(), Some("reviewer"));
+        assert_eq!(st.agents[1].session.as_deref(), Some("s-2"), "it keeps its session");
+        // The docket each was on: dropped when nothing was on it, done when it had work.
+        assert_eq!(core.store.state(&own2).unwrap().unwrap().status, "done");
+
+        // Each pane's prompts and turns land on the shared docket.
+        hook(&mut core, "UserPromptSubmit", "claude-code", "herdr:t3", &json!({ "session_id": "s-3", "prompt": "Review the fold" })).unwrap();
+        assert_eq!(core.store.state(&d).unwrap().unwrap().prompts, 1);
+
+        // A restart finds all three.
+        core.agents.by_block.clear();
+        load(&mut core).unwrap();
+        for b in ["block:1", "block:2", "herdr:t3"] {
+            assert_eq!(docket_of(&core, b).as_deref(), Some(d.as_str()), "{b}");
+        }
+
+        // One leaves: the docket stays held, and the pane gets one of its own.
+        let v = leave(&mut core, "herdr:t3", None).unwrap();
+        let own3 = v["docket"].as_str().unwrap().to_string();
+        assert_ne!(own3, d);
+        assert_eq!(docket_of(&core, "herdr:t3").as_deref(), Some(own3.as_str()));
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert!(st.released.is_none());
+        assert_eq!(st.status, "in_progress");
+
+        // One pane closes: still held. The last one closes: released, and done.
+        gone(&mut core, "block:1");
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert!(st.released.is_none());
+        assert_eq!(st.status, "in_progress");
+        assert_eq!(st.agent.as_ref().unwrap().block, "block:2");
+        gone(&mut core, "block:2");
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert_eq!(st.released.as_deref(), Some("pane closed"));
+        assert_eq!(st.status, "done");
+        assert!(core.verify(&d).unwrap().ok);
+        assert!(core.rebuild_check().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_review_docket_takes_no_joins_and_a_held_one_waits() {
+        let mut core = test_core();
+        agent_pane(&mut core, "b1", Some("idle"));
+        reconcile(&mut core, ["b1".to_string()]);
+        let review = core.open(&Who::Hub, "Review acme/api#3", json!({ "protocol": "review" })).unwrap();
+        assert!(join(&mut core, "b1", &review, None).unwrap_err().to_string().contains("Review's"));
+        let held = core.open(&Who::Owner, "Later", json!({ "protocol": "none" })).unwrap();
+        core.append(&held, "set", &Who::Owner, None, json!({ "hold": "waiting on the API" })).unwrap();
+        assert!(join(&mut core, "b1", &held, None).unwrap_err().to_string().contains("on hold"));
+        let shell = json!({ "foreground": { "name": "zsh", "cwd": "/w" } });
+        core.mirror.apply_pane_status("s1", "sh", vec![], Some(&shell), None);
+        assert!(join(&mut core, "sh", &held, None).is_err(), "a shell isn't an agent");
+    }
+
+    #[test]
+    fn a_new_session_in_one_pane_leaves_the_others_on_the_docket() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Shared", json!({ "protocol": "none" })).unwrap();
+        for b in ["b1", "b2"] {
+            agent_pane(&mut core, b, Some("idle"));
+            reconcile(&mut core, [b.to_string()]);
+            hook(&mut core, "SessionStart", "claude-code", b, &json!({ "session_id": format!("s-{b}"), "source": "startup" })).unwrap();
+            join(&mut core, b, &d, None).unwrap();
+        }
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b1", &json!({ "session_id": "s-b1", "prompt": "Start" })).unwrap();
+        // /clear in b1: a new docket for b1; b2 still holds the shared one.
+        hook(&mut core, "SessionStart", "claude-code", "b1", &json!({ "session_id": "s-new", "source": "clear" })).unwrap();
+        assert_ne!(docket_of(&core, "b1").as_deref(), Some(d.as_str()));
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert_eq!(st.status, "in_progress");
+        assert!(st.released.is_none());
+        assert_eq!(st.agents_on().map(|a| a.agent.block.as_str()).collect::<Vec<_>>(), ["b2"]);
+        // b1's old session resumed in a new pane goes back to the shared docket, beside b2.
+        agent_pane(&mut core, "b3", Some("idle"));
+        reconcile(&mut core, ["b3".to_string()]);
+        hook(&mut core, "SessionStart", "claude-code", "b3", &json!({ "session_id": "s-b1", "source": "resume" })).unwrap();
+        assert_eq!(docket_of(&core, "b3").as_deref(), Some(d.as_str()));
+        assert_eq!(core.store.state(&d).unwrap().unwrap().agents_on().count(), 2);
     }
 
     #[test]

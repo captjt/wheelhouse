@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
-import { appName, paneRuntime, runtimeOf, runtimeTitle, spawnRuntime, type CheckRun, type Docket, type DocketPage, type EntryView } from "./api";
+import { agentLabel, agentOfEntry, agentsOn, appName, entryBlock, liveAgents, paneRuntime, runtimeOf, runtimeTitle, spawnRuntime, type CheckRun, type Docket, type DocketAgent, type DocketPage, type EntryView } from "./api";
 import { AppAvatar, HubAvatar, IconChevron, IconDown, IconDownload, IconShield, IconUp, LiveIcon, PersonAvatar, SessionIcon, StatusIcon, TitleText, liveWord, shortPath } from "./icons";
 import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
 import { Kbd, Prose, Sheet, useKeys, useMenu, usePhone } from "./ui";
@@ -19,7 +19,7 @@ import { LinearChip, LinearModal } from "./Linear";
 import { post } from "./api";
 import { IconIssue, IconPR } from "./icons";
 import { useToast } from "./ui";
-import { STATUSES, canStartAgent, statusItems } from "./views";
+import { STATUSES, canStartAgent, startLabel, statusItems } from "./views";
 import { CheckOutput, VerifySection } from "./Verify";
 import { checkState, checkWord, independence, shortSha, verifyShown } from "./evidence";
 import { IconAgents, IconPause, IconPlay } from "./icons";
@@ -44,6 +44,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   const [tab, setTab] = useState<"chat" | "docket" | null>(null);
   // A long record shows its latest entries first; the rest are a tap away.
   const [earlier, setEarlier] = useState(false);
+  // On a docket with several agents: only one agent's entries, by its pane.
+  const [only, setOnly] = useState<string | null>(null);
 
   const ids = lastList.ids;
   const pos = ids.indexOf(id);
@@ -162,7 +164,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </button>
             </Prop>
           )}
-          {d.agent && d.protocol !== "review" && !building && (
+          {agentsOn(d).length > 1 && d.protocol !== "review" && !building && <AgentsProp d={d} />}
+          {d.agent && agentsOn(d).length <= 1 && d.protocol !== "review" && !building && (
             <>
               <Prop label="Agent">
                 <span className="prop-val">
@@ -171,7 +174,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
                 </span>
               </Prop>
               <Prop label="Now">
-                {canStartAgent(d) ? (
+                {!d.live && canStartAgent(d) ? (
                   <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title={`${d.released ? `Ended: ${d.released}. ` : ""}Start an agent on this docket again, in a new ${spawnRuntime(hub.state)} pane`}>
                     <LiveIcon state="idle" />
                     <span className="prop-text">Not running · Start one…</span>
@@ -211,6 +214,13 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
                 <Prop label="Session">
                   <button className="prop-btn mono-s" title="Copy the agent's session id" onClick={() => navigator.clipboard?.writeText(d.session!)}>
                     {d.session.slice(0, 8)}
+                  </button>
+                </Prop>
+              )}
+              {d.live && canStartAgent(d) && (
+                <Prop label="">
+                  <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title={`Start another agent on this docket, beside this one, in a new ${spawnRuntime(hub.state)} pane`}>
+                    <IconAgents size={14} /> Add an agent…
                   </button>
                 </Prop>
               )}
@@ -375,33 +385,42 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               )}
             </div>
           )}
-          {d.live?.state === "blocked" && (
-            <div className="callout callout-blocked">
-              <LiveIcon state="blocked" />
-              <div>
-                <strong>{appName(d.agent?.app)} is waiting on you{d.live.kind ? ` · ${d.live.kind}` : ""}</strong>
-                {d.live.msg && <div className="callout-msg">{d.live.msg}</div>}
-              </div>
-              <span className="spacer" />
-              {d.live.answerable ? (
-                <span className="callout-actions">
-                  <AnswerButtons d={d} small />
-                  <PaneButton id={d.id} small />
-                </span>
+          {/* Each agent that's asking, or failed: on a docket with several, by name. */}
+          {liveAgents(d)
+            .filter((a) => a.live?.state === "blocked" || a.live?.state === "error")
+            .map((a) => {
+              const l = a.live!;
+              const who = agentsOn(d).length > 1 ? `${appName(a.app)} (${agentLabel(a)})` : appName(a.app);
+              const rt = runtimeTitle(runtimeOf(a.block));
+              return l.state === "blocked" ? (
+                <div key={a.block} className="callout callout-blocked">
+                  <LiveIcon state="blocked" />
+                  <div>
+                    <strong>
+                      {who} is waiting on you{l.kind ? ` · ${l.kind}` : ""}
+                    </strong>
+                    {l.msg && <div className="callout-msg">{l.msg}</div>}
+                  </div>
+                  <span className="spacer" />
+                  {l.answerable ? (
+                    <span className="callout-actions">
+                      <AnswerButtons d={d} live={l} small />
+                      <PaneButton id={d.id} block={a.block} small />
+                    </span>
+                  ) : (
+                    <PaneButton id={d.id} block={a.block} small label={onThisMac() ? `Answer in ${rt}` : "View pane"} />
+                  )}
+                </div>
               ) : (
-                <PaneButton id={d.id} small label={onThisMac() ? `Answer in ${paneRuntime(d)}` : "View pane"} />
-              )}
-            </div>
-          )}
-          {d.live?.state === "error" && (
-            <div className="callout callout-error">
-              <LiveIcon state="error" />
-              <div>
-                <strong>{appName(d.agent?.app)} failed</strong>
-                {d.live.msg && <div className="callout-msg">{d.live.msg}</div>}
-              </div>
-            </div>
-          )}
+                <div key={a.block} className="callout callout-error">
+                  <LiveIcon state="error" />
+                  <div>
+                    <strong>{who} failed</strong>
+                    {l.msg && <div className="callout-msg">{l.msg}</div>}
+                  </div>
+                </div>
+              );
+            })}
 
           <ReviewPanel d={d} />
           <BuildPanel d={d} />
@@ -419,6 +438,18 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
 
           <div className="activity-head">
             <span>Activity</span>
+            {(d.agents?.length ?? 0) > 1 && (
+              <span className="act-agents" role="group" aria-label="Show one agent's activity">
+                <button className={`act-agent-chip${only ? "" : " on"}`} onClick={() => setOnly(null)}>
+                  All
+                </button>
+                {d.agents!.map((a) => (
+                  <button key={a.block} className={`act-agent-chip${only === a.block ? " on" : ""}`} onClick={() => setOnly(only === a.block ? null : a.block)} title={`${appName(a.app)} in ${runtimeTitle(runtimeOf(a.block))}${a.on ? "" : `, left${a.left ? `: ${a.left}` : ""}`}`}>
+                    <AppAvatar app={a.app} size={13} /> {agentLabel(a)}
+                  </button>
+                ))}
+              </span>
+            )}
             <span className="spacer" />
             <button className={`verify-chip ${verify.ok ? "ok" : "bad"}`} onClick={() => setRecord(true)} title={verify.ok ? `Every entry's id, chain link and signature checks. Head ${verify.head}. Open the record.` : verify.problems.join("\n")}>
               <IconShield size={13} /> {verify.ok ? `Verified · ${verify.entries} signed` : "Record doesn't check"}
@@ -430,7 +461,9 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
                 Show {entries.length - 150} earlier entries
               </button>
             )}
-            {(earlier || entries.length <= 200 ? entries : entries.slice(-150)).map((e) => (
+            {(earlier || entries.length <= 200 ? entries : entries.slice(-150))
+              .filter((e) => !only || entryBlock(e) === only)
+              .map((e) => (
               <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} onOpen={setViewing} onCheck={setCheckOut} />
             ))}
           </div>
@@ -475,6 +508,60 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   );
 }
 
+/** A docket's agents, when it has several: each on its own line, to open, with the ones that left folded away. */
+function AgentsProp({ d }: { d: Docket }) {
+  const hub = useHub();
+  const pane = usePane();
+  const on = liveAgents(d).concat(agentsOn(d).filter((a) => !a.live));
+  const left = (d.agents ?? []).filter((a) => !a.on);
+  const [earlier, setEarlier] = useState(false);
+  const row = (a: DocketAgent) => {
+    const state = a.live?.state;
+    const rt = runtimeTitle(runtimeOf(a.block));
+    return (
+      <button
+        key={a.block}
+        className="prop-btn da-row"
+        disabled={!a.live}
+        onClick={() => pane.act(d.id, a.block)}
+        title={a.live ? `${onThisMac() ? `Show ${a.rex_session} / ${a.pane} in ${rt}` : "View the pane"}${a.addr ? `\nMessage it: wh send --to ${a.addr}` : ""}` : `Not running${a.left ? `: ${a.left}` : ""}`}
+      >
+        <AppAvatar app={a.app} size={16} />
+        <span className="prop-text">
+          {agentLabel(a)}
+          <span className="muted">
+            {" "}
+            · {appName(a.app)} · {rt}
+          </span>
+          <span className={`da-state live-${state || "gone"}`}>
+            <LiveIcon state={state ?? "idle"} size={11} /> {state ? `${liveWord(state)}${a.live?.since ? ` · ${ago(a.live.since)}` : ""}` : a.left ? `Left · ${a.left}` : "Not running"}
+          </span>
+        </span>
+      </button>
+    );
+  };
+  return (
+    <>
+      <Prop label="Agents">
+        <span className="agent-list">
+          {on.map(row)}
+          {canStartAgent(d) && (
+            <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title={`Start another agent on this docket, in a new ${spawnRuntime(hub.state)} pane`}>
+              <IconAgents size={14} /> {startLabel(d)}
+            </button>
+          )}
+          {left.length > 0 && (
+            <button className="prop-btn muted small" onClick={() => setEarlier((e) => !e)} aria-expanded={earlier}>
+              {earlier ? "Hide" : "Earlier"} · {left.length} left
+            </button>
+          )}
+          {earlier && left.map(row)}
+        </span>
+      </Prop>
+    </>
+  );
+}
+
 function Prop({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="prop">
@@ -487,7 +574,10 @@ function Prop({ label, children }: { label: string; children: ReactNode }) {
 // ---- the activity feed ----
 
 function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; owner: string; onOpen: (e: EntryView) => void; onCheck: (c: CheckRun) => void }) {
-  const agent = appName(d.agent?.app);
+  // The entry's own agent, on a docket that's had several; named by its role or pane.
+  const who = agentOfEntry(d, e);
+  const several = (d.agents?.length ?? 0) > 1;
+  const agent = several && who ? `${appName(who.app)} (${agentLabel(who)})` : appName(who?.app);
   const time = (
     <span className="act-time" title={`${stamp(e.at)}\n#${e.seq} · ${e.mark}, signed by ${e.key || "?"}\n${e.id}`}>
       {agoLong(e.at)}
@@ -523,7 +613,7 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
   );
   const you = <PersonAvatar name={owner} size={18} />;
   const hubA = <HubAvatar size={18} />;
-  const app = <AppAvatar app={d.agent?.app} size={18} />;
+  const app = <AppAvatar app={who?.app} size={18} />;
   const data = e.data || {};
 
   switch (e.kind) {
@@ -531,7 +621,7 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
       if (data.protocol === "review")
         return sys(<IconPR size={16} />, <><b>Wheelhouse</b> opened this Review docket{data.review?.key ? <> for {data.review.key}</> : null}</>);
       return data.protocol === "agent"
-        ? sys(hubA, <><b>Wheelhouse</b> picked up {agent}{d.agent?.cwd ? <> in <span className="act-path" title={d.agent.cwd}>{shortPath(d.agent.cwd)}</span></> : null}</>)
+        ? sys(hubA, <><b>Wheelhouse</b> picked up {agent}{who?.cwd ? <> in <span className="act-path" title={who.cwd}>{shortPath(who.cwd)}</span></> : null}</>)
         : e.actor.type === "person"
           ? sys(you, <><b>You</b> opened this docket</>)
           : sys(hubA, <><b>Wheelhouse</b> opened this docket</>);
@@ -541,6 +631,8 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
       if (data.source === "wheelhouse" && data.role)
         return sys(hubA, <><b>Wheelhouse</b> {data.round ? "started" : "found"} the {data.role}{data.round ? ` for round ${data.round}` : ""}</>);
       if (data.source === "wheelhouse") return sys(hubA, <><b>Wheelhouse</b> started {agent} in {runtimeTitle(runtimeOf((data.agent as { block?: string } | undefined)?.block))}'s wheelhouse session</>);
+      if (data.source === "join") return sys(app, <><b>{agent}</b> joined this docket{data.role ? <> as {data.role}</> : null}, from {runtimeTitle(runtimeOf((data.agent as { block?: string } | undefined)?.block))}</>);
+      if (data.source === "leave") return null;
       const s = <span className="mono-s">{String(data.session || "").slice(0, 8)}</span>;
       const src = data.source;
       return sys(
@@ -676,6 +768,7 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
       );
     }
     case "release":
+      if (several) return sys(app, <><b>{agent}</b> left: {data.reason}</>);
       return sys(hubA, <><b>Wheelhouse</b> saw the session end: {data.reason}</>);
     case "check": {
       const st = checkState(data);

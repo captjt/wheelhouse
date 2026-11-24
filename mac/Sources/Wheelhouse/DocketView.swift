@@ -25,7 +25,7 @@ struct DocketWindow: View {
             .frame(minWidth: 620, minHeight: 480)
             .background(K.main)
             .overlay(alignment: .bottom) { ToastStack() }
-            .sheet(item: Binding(get: { nav.pane.map(IdBox.init) }, set: { nav.pane = $0?.id })) { b in PaneSheet(id: b.id) }
+            .sheet(item: Binding(get: { nav.pane.map(IdBox.init) }, set: { nav.pane = $0?.id })) { b in PaneSheet(id: b.id, block: nav.paneBlock) }
             .sheet(item: Binding(get: { nav.record.map(IdBox.init) }, set: { nav.record = $0?.id })) { b in RecordSheet(id: b.id) }
             .sheet(item: Binding(get: { nav.linking.map(IdBox.init) }, set: { nav.linking = $0?.id })) { b in LinkIssueSheet(docket: b.id) }
             .sheet(item: Binding(get: { nav.holding.map(IdBox.init) }, set: { nav.holding = $0?.id })) { b in HoldSheet(id: b.id) }
@@ -130,7 +130,7 @@ struct DocketView: View {
             if d.live != nil {
                 Button { store.openInRex(d.id) } label: { Label("Open in \(d.runtime)", systemImage: "terminal") }
                     .help("Bring the agent's pane to the front in \(d.runtime) (O)")
-                Button { nav.pane = d.id } label: { Label("Peek", systemImage: "eye") }
+                Button { nav.peek(d.id) } label: { Label("Peek", systemImage: "eye") }
                     .help("Peek at the agent's pane here")
             }
         }
@@ -145,6 +145,8 @@ struct DocketBody: View {
     @Environment(Nav.self) private var nav
     @Environment(\.openWindow) private var openWindow
     @State private var earlier = false
+    /// Only this agent's activity (its block), or everyone's.
+    @State private var only: String?
 
     var body: some View {
         let d = page.docket
@@ -156,7 +158,7 @@ struct DocketBody: View {
                         Spacer()
                         if d.live != nil {
                             Button("Open in \(d.runtime)", systemImage: "terminal") { store.openInRex(d.id) }.controlSize(.small)
-                            Button { nav.pane = d.id } label: { Image(systemName: "eye") }.controlSize(.small).help("Peek at the pane")
+                            Button { nav.peek(d.id) } label: { Image(systemName: "eye") }.controlSize(.small).help("Peek at the pane")
                         }
                         Button("Open Docket") { openWindow(id: "docket", value: d.id) }.controlSize(.small)
                     }
@@ -165,24 +167,31 @@ struct DocketBody: View {
                 Chips(d: d)
             }
             HoldBanner(d: d)
-            if let l = d.live, l.state == .blocked {
-                Callout(tone: .blocked) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(appName(d.agent?.app)) is waiting on you\(l.kind.map { " · \($0)" } ?? "")").font(.system(size: 13, weight: .semibold))
-                        if let m = l.msg { Text(m).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(K.text2).textSelection(.enabled) }
+            // Each agent waiting on you, or failed: by name when there are several.
+            ForEach(Array(d.lives.enumerated()), id: \.offset) { _, x in
+                let name = x.agent.map { d.several ? $0.label : appName($0.app) } ?? appName(d.agent?.app)
+                let block = d.blockFor(x.agent)
+                let runtime = x.agent?.runtime ?? d.runtime
+                let l = x.live
+                if l.state == .blocked {
+                    Callout(tone: .blocked) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(name) is waiting on you\(l.kind.map { " · \($0)" } ?? "")").font(.system(size: 13, weight: .semibold))
+                            if let m = l.msg { Text(m).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(K.text2).textSelection(.enabled) }
+                        }
+                        Spacer(minLength: 8)
+                        if l.answerable { AnswerButtons(d: d, block: block, live: l) } else { Button("Answer in \(runtime)") { store.openInRex(d.id, block: block) } }
                     }
-                    Spacer(minLength: 8)
-                    if l.answerable { AnswerButtons(d: d) } else { Button("Answer in \(d.runtime)") { store.openInRex(d.id) } }
+                } else if l.state == .error {
+                    Callout(tone: .error) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(name) failed").font(.system(size: 13, weight: .semibold))
+                            if let m = l.msg { Text(m).font(.system(size: 12.5)).foregroundStyle(K.text2).textSelection(.enabled) }
+                        }
+                    }
                 }
             }
-            if let l = d.live, l.state == .error {
-                Callout(tone: .error) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(appName(d.agent?.app)) failed").font(.system(size: 13, weight: .semibold))
-                        if let m = l.msg { Text(m).font(.system(size: 12.5)).foregroundStyle(K.text2).textSelection(.enabled) }
-                    }
-                }
-            }
+            AgentsSection(d: d)
             ReviewPanel(d: d)
             BuildPanel(d: d)
             SubagentsSection(d: d)
@@ -198,7 +207,9 @@ struct DocketBody: View {
                     Spacer()
                     VerifiedChip(page: page)
                 }
-                let all = page.entries
+                if d.crew.count > 1 { AgentChips(d: d, only: $only) }
+                // One agent's: what it did and was asked, and what's no agent's.
+                let all = only.map { b in page.entries.filter { e in d.blockOf(e).map { $0 == b } ?? true } } ?? page.entries
                 let shown = earlier || all.count <= 200 ? all : Array(all.suffix(150))
                 if shown.count < all.count {
                     Button("Show \(all.count - shown.count) earlier entries") { earlier = true }.buttonStyle(.link)
@@ -334,9 +345,13 @@ struct ChipButton: ButtonStyle {
     }
 }
 
-/// Approve and Deny for a prompt the hub can answer.
+/// Approve and Deny for a prompt the hub can answer: the agent's at
+/// `block`, or the docket's lead's.
 struct AnswerButtons: View {
     let d: Docket
+    var block: String? = nil
+    /// The prompt shown, when it's not the lead's.
+    var live: Live? = nil
     var small = false
     @Environment(Store.self) private var store
     @State private var busy: Bool?
@@ -346,7 +361,7 @@ struct AnswerButtons: View {
             Button(busy == true ? "Approving…" : "Approve") { go(true) }
                 .buttonStyle(.borderedProminent)
                 .tint(K.accent)
-                .help("Approve: \(d.live?.msg ?? "")")
+                .help("Approve: \((live ?? d.live)?.msg ?? "")")
             Button(busy == false ? "Denying…" : "Deny") { go(false) }
                 .help("Deny (Esc in the pane)")
         }
@@ -357,7 +372,12 @@ struct AnswerButtons: View {
     private func go(_ approve: Bool) {
         busy = approve
         Task {
-            await store.answer(d, approve: approve)
+            if let l = live {
+                // Exactly the prompt shown: the hub refuses if it changed.
+                await store.answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: approve, block: block)
+            } else {
+                await store.answer(d, block: block, approve: approve)
+            }
             busy = nil
         }
     }
@@ -410,33 +430,41 @@ struct Properties: View {
                         Button("Link issue…") { nav.linking = d.id }.buttonStyle(.link)
                     }
                 }
-                if d.agent == nil, task == nil, d.canStartAgent {
+                if d.crew.isEmpty, task == nil, d.canStartAgent {
                     prop("Agent") {
                         Button("Start an agent…") { nav.starting = d.id }.buttonStyle(.link)
                             .help("Start Claude Code, Codex or Antigravity on this docket, in a new \(store.state?.spawnRuntime ?? "Rex") pane")
                     }
                 }
-                if let a = d.agent, d.proto != "review", task == nil {
-                    prop("Agent") { HStack(spacing: 6) { AppAvatar(app: a.app, size: 15); Text(appName(a.app)) } }
+                // The lead (or the one agent); the Agents section lists them all.
+                if let a = d.onAgents.first ?? d.leftAgents.first, d.proto != "review", task == nil {
+                    let on = d.onAgents.count
+                    prop(d.several ? "Lead" : "Agent") {
+                        HStack(spacing: 6) {
+                            AppAvatar(app: a.app, size: 15)
+                            Text(d.several ? a.label : appName(a.app))
+                            if on > 1 { Text("+\(on - 1)").foregroundStyle(K.muted).help("\(plural(on, "agent")) are on \(d.id)") }
+                        }
+                    }
                     prop("Now") {
                         HStack(spacing: 6) {
-                            LiveIcon(state: d.live?.state ?? .idle, size: 12)
-                            Text(d.live.map { "\($0.state.word)\($0.since.map { " · \(ago($0))" } ?? "")" } ?? (d.released.map { "Ended · \($0)" } ?? "Not running"))
+                            LiveIcon(state: a.live?.state ?? .idle, size: 12)
+                            Text(a.live.map { "\($0.state.word)\($0.since.map { " · \(ago($0))" } ?? "")" } ?? (a.on ? "Not running" : "Ended\(a.left.map { " · \($0)" } ?? "")"))
                             if d.canStartAgent {
-                                Button("Start one…") { nav.starting = d.id }.buttonStyle(.link)
-                                    .help("Start an agent on this docket again, in a new \(store.state?.spawnRuntime ?? "Rex") pane")
+                                Button(on > 0 ? "Add one…" : "Start one…") { nav.starting = d.id }.buttonStyle(.link)
+                                    .help(on > 0 ? "Add an agent beside the \(plural(on, "one")) on this docket, in a new \(store.state?.spawnRuntime ?? "Rex") pane" : "Start an agent on this docket again, in a new \(store.state?.spawnRuntime ?? "Rex") pane")
                             }
                         }
                     }
-                    prop(d.runtime) {
+                    prop(a.runtime) {
                         Button {
-                            if d.live != nil { store.openInRex(d.id) }
+                            if a.live != nil { store.openInRex(d.id, block: d.blockFor(a)) }
                         } label: {
-                            HStack(spacing: 6) { SessionIcon(name: a.rexSession, size: 14); Text("\(a.rexSession) / \(a.pane.isEmpty ? "pane" : a.pane)") }
+                            HStack(spacing: 6) { SessionIcon(name: a.rexSession, size: 14); Text(a.place) }
                         }
                         .buttonStyle(.plain)
-                        .disabled(d.live == nil)
-                        .help(d.live == nil ? "" : "Show the pane in \(d.runtime)")
+                        .disabled(a.live == nil)
+                        .help(a.live == nil ? "" : "Show the pane in \(a.runtime)")
                     }
                     if let cwd = a.cwd {
                         prop("Folder") {
@@ -445,7 +473,7 @@ struct Properties: View {
                                 .contextMenu { Button("Copy Path") { copy(cwd) } }
                         }
                     }
-                    if let s = d.session {
+                    if let s = a.session ?? d.session {
                         prop("Session") { Button(String(s.prefix(8))) { copy(s) }.buttonStyle(.plain).font(.system(size: 12, design: .monospaced)).help("Copy the agent's session id") }
                     }
                 }
@@ -543,6 +571,158 @@ enum Exporter {
                 store.toast("Saved \(url.lastPathComponent)")
             } catch {
                 store.toast(Store.words(error), error: true)
+            }
+        }
+    }
+}
+
+// ---- its agents ----
+
+/// Every agent on the docket, side by side: what each is, where it runs,
+/// what it's doing, and its pane and prompt to act on. Those that left fold
+/// into Earlier.
+struct AgentsSection: View {
+    let d: Docket
+    @Environment(Store.self) private var store
+    @Environment(Nav.self) private var nav
+    @State private var earlier = false
+
+    var body: some View {
+        let on = d.onAgents
+        let left = d.leftAgents
+        // One agent, ever: the inspector says all there is, as it always has.
+        if d.crew.count > 1 {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("Agents").font(.system(size: 13, weight: .semibold)).foregroundStyle(K.text)
+                    Text(on.isEmpty ? "none on it now" : "\(on.count) on it").font(.system(size: 12)).foregroundStyle(K.muted)
+                    Spacer()
+                    if d.canStartAgent, store.state?.task(for: d.id) == nil {
+                        Button(on.isEmpty ? "Start an agent…" : "Add an agent…", systemImage: "plus") { nav.starting = d.id }
+                            .buttonStyle(.link).font(.system(size: 12))
+                            .help(on.isEmpty ? "Start an agent on this docket, in a new \(store.state?.spawnRuntime ?? "Rex") pane" : "Add an agent beside the \(plural(on.count, "one")) on it, in a new \(store.state?.spawnRuntime ?? "Rex") pane")
+                    }
+                }
+                if !on.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(Array(on.enumerated()), id: \.element.id) { i, a in
+                            if i > 0 { Divider() }
+                            AgentLine(d: d, a: a, lead: i == 0 && on.count > 1)
+                        }
+                    }
+                    .background(K.elev, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(K.line))
+                }
+                if !left.isEmpty {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.15)) { earlier.toggle() }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).rotationEffect(.degrees(earlier ? 90 : 0))
+                            Text("Earlier").fontWeight(.medium)
+                            Text("\(left.count)").foregroundStyle(.tertiary)
+                        }
+                        .font(.system(size: 12))
+                        .foregroundStyle(K.muted)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("The agents that left this docket")
+                    if earlier {
+                        VStack(spacing: 0) {
+                            ForEach(Array(left.enumerated()), id: \.element.id) { i, a in
+                                if i > 0 { Divider() }
+                                AgentLine(d: d, a: a, lead: false)
+                            }
+                        }
+                        .background(K.recessed, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(K.line))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One agent on a docket, as a row: who, where, what now, and its actions.
+struct AgentLine: View {
+    let d: Docket
+    let a: DocketAgent
+    /// It's first, and there are others: the one that needs you most.
+    var lead = false
+    @Environment(Store.self) private var store
+    @Environment(Nav.self) private var nav
+
+    var body: some View {
+        let l = a.live
+        let block = d.blockFor(a)
+        HStack(alignment: .top, spacing: 10) {
+            AppAvatar(app: a.app, size: 20).padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(a.label).font(.system(size: 13, weight: .medium)).foregroundStyle(K.text).lineLimit(1)
+                    if a.label != appName(a.app) { Text(appName(a.app)).foregroundStyle(K.muted) }
+                    if a.role != nil, let r = a.round { Text("round \(r)").foregroundStyle(K.muted) }
+                    if lead { Text("Lead").font(.system(size: 10.5, weight: .medium)).foregroundStyle(K.accent).help("The one that needs you most: the apps put it first, and pane actions without a choice go to it") }
+                    Text(a.runtime).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .overlay(Capsule().strokeBorder(K.line))
+                }
+                .font(.system(size: 12))
+                HStack(spacing: 6) {
+                    if a.on {
+                        LiveIcon(state: l?.state ?? .idle, size: 11)
+                        Text(l.map { "\($0.state.word)\($0.since.map { " · \(ago($0))" } ?? "")" } ?? "Not running")
+                            .foregroundStyle(l?.state == .blocked ? K.blocked : l?.state == .error ? K.error : K.text2)
+                            .lineLimit(1)
+                            .fixedSize()
+                    } else {
+                        Text("Left\(a.leftAt.map { " \(agoLong($0))" } ?? "")\(a.left.map { " · \($0)" } ?? "")")
+                    }
+                    Text("·").foregroundStyle(K.faint)
+                    Text(a.place).lineLimit(1)
+                    if let cwd = a.cwd {
+                        Text("·").foregroundStyle(K.faint)
+                        Text(shortPath(cwd)).lineLimit(1).truncationMode(.head).help(cwd)
+                    }
+                }
+                .font(.system(size: 11.5))
+                .foregroundStyle(K.muted)
+                if let l, l.state == .blocked, let m = l.msg {
+                    Text(m).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(K.text2).lineLimit(2).textSelection(.enabled)
+                }
+                // Under what it asks, so a narrow column keeps the line above whole.
+                if let l, a.on, l.state == .blocked, l.answerable {
+                    AnswerButtons(d: d, block: block, live: l, small: true).padding(.top, 3)
+                }
+            }
+            Spacer(minLength: 8)
+            if let l, a.on {
+                HStack(spacing: 6) {
+                    Button("Open in \(a.runtime)", systemImage: "terminal") { store.openInRex(d.id, block: block) }
+                        .labelStyle(.iconOnly)
+                        .help("Bring \(a.label)'s pane to the front in \(a.runtime)")
+                    Button { nav.peek(d.id, block: block) } label: { Image(systemName: "eye") }
+                        .help("Peek at \(a.label)'s pane here")
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .contextMenu {
+            if let addr = a.addr {
+                Button("Copy Address") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(addr, forType: .string)
+                    store.toast("Copied \(addr)")
+                }
+            }
+            if let s = a.session {
+                Button("Copy Session ID") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(s, forType: .string)
+                }
             }
         }
     }

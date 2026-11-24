@@ -145,7 +145,7 @@ private struct PanelItem: View {
                         Spacer(minLength: 4)
                         Text(ago(it.at)).font(.system(size: 11)).foregroundStyle(.tertiary)
                     }
-                    Text("\(it.docketId)  \(it.line)").font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(2)
+                    Text("\(it.docketId)  \(it.who.map { "\($0) · " } ?? "")\(it.line)").font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
             Group {
@@ -153,8 +153,8 @@ private struct PanelItem: View {
                     ReviewActions(p: p, small: true)
                 } else if let m = it.msg, !m.options.isEmpty {
                     OptionButtons(m: m)
-                } else if it.kind == .blocked, let d = it.docket, d.live?.answerable == true {
-                    AnswerButtons(d: d, small: true)
+                } else if it.kind == .blocked, let d = it.docket, (it.live ?? d.live)?.answerable == true {
+                    AnswerButtons(d: d, block: d.blockFor(it.agent), live: it.live, small: true)
                 }
             }
             .padding(.leading, 22)
