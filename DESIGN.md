@@ -7,7 +7,7 @@ is Wheelhouse. This is the design: what's built so far is in
 README.md and `wh --help`.
 
 Wheelhouse is where you run all your agent work on your Mac. Each piece of
-work is a **docket**. Agents run in Rex or Herdr, side by side. Wheelhouse starts them, briefs
+work is a **docket**. Agents run in Rex or [Herdr](https://herdr.dev), side by side. Wheelhouse starts them, briefs
 them, and watches them. It asks you only what you must decide, and keeps a
 record you can check.
 

@@ -4,7 +4,7 @@
 
 Every piece of agent work as a docket, on a record you can check.
 
-Wheelhouse follows [Rex](https://www.superlogical.com/rex) and Herdr, side
+Wheelhouse follows [Rex](https://www.superlogical.com/rex) and [Herdr](https://herdr.dev), side
 by side. Every Claude Code, Codex or Antigravity agent running in a Rex pane
 or a Herdr terminal gets a **docket**: what you asked,
 what the agent answered, when it waited on you, the files it made, and how
@@ -44,16 +44,17 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
   <img src="docs/images/phone-artifact-light.png" width="250" alt="A kept file open on the phone, pinned by its entry's hash">
 </p>
 
-> Rex is in private beta. Wheelhouse needs a Rex build, or herdr-core
-> 0.1.20 or later, whose agents report program status (OSC 7501): Claude
+> Rex is in private beta. Wheelhouse needs a Rex build, or
+> [herdr-core](https://herdr.dev/core/) 0.1.20 or later, whose agents report program status (OSC 7501): Claude
 > Code, Codex and Antigravity do on their own. With both installed,
 > Wheelhouse follows both.
 
 ## Rex and Herdr, together
 
 Wheelhouse isn't tied to one terminal. It follows
-[Rex](https://www.superlogical.com/rex) and Herdr (herdr-core, with the
-Herdr app and its phone app) at the same time, through one interface, so
+[Rex](https://www.superlogical.com/rex) and [Herdr](https://herdr.dev)
+([herdr-core](https://herdr.dev/core/), with the Herdr app and its
+[phone app](https://herdr.dev/mobile/)) at the same time, through one interface, so
 it doesn't matter which one an agent runs in:
 
 - **One list of agents.** Every agent in a Rex pane or a Herdr terminal
@@ -151,7 +152,8 @@ phone over Tailscale.
 ## Requirements
 
 - macOS and [Rex](https://www.superlogical.com/rex), with the `rex` CLI, or
-  Herdr (herdr-core 0.1.20 or later, `hc`), or both: see
+  [Herdr](https://herdr.dev) ([herdr-core](https://herdr.dev/core/) 0.1.20
+  or later, with the `hc` CLI), or both: see
   [docs/runtimes.md](docs/runtimes.md)
 - [Rust](https://rustup.rs) 1.88 or later, [Node](https://nodejs.org) 22.18
   or later, and [just](https://github.com/casey/just) (`brew install just`)

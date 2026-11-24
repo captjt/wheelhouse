@@ -1,8 +1,9 @@
 # Runtimes: Rex and Herdr
 
 Wheelhouse's agents run in terminals, and a **runtime** is the terminal
-multiplexer that holds them: Rex or Herdr (herdr-core's
-`hc`, with the Herdr app and its phone app). The hub follows every runtime
+multiplexer that holds them: [Rex](https://www.superlogical.com/rex) or
+[Herdr](https://herdr.dev) ([herdr-core](https://herdr.dev/core/)'s `hc`, with the
+[Herdr app](https://herdr.dev) and its [phone app](https://herdr.dev/mobile/)). The hub follows every runtime
 that's on this Mac at once, so an agent in a Herdr terminal and one in a
 Rex pane sit side by side in the same dockets, inbox, approvals and
 messages. One setting says where the agents Wheelhouse starts itself open.
@@ -13,8 +14,8 @@ wh status                    # each runtime: following, not connected, or not in
 
 | | Rex | Herdr |
 | --- | --- | --- |
-| Runs the panes | the Rex server | herdr-core (`hc` 0.1.20 or later) |
-| Shows them | Rex.app | the Herdr app, and the phone app |
+| Runs the panes | the Rex server | [herdr-core](https://herdr.dev/core/) (`hc` 0.1.20 or later; [source](https://github.com/herdrdev/herdr-core)) |
+| Shows them | Rex.app | the [Herdr app](https://herdr.dev) ([download](https://herdr.dev/download/)), and the [phone app](https://herdr.dev/mobile/) |
 | A pane | a block (`block:…`) | a terminal (`herdr:t2h`) |
 | A session | a Rex session | a space (the `herdr.space` label) |
 | A tab | a window | a tab (the `herdr.tab` label) |

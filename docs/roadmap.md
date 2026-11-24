@@ -1,6 +1,6 @@
 # Roadmap
 
-Wheelhouse is one hub and one app for agent work in Rex and Herdr: every agent on a
+Wheelhouse is one hub and one app for agent work in Rex and [Herdr](https://herdr.dev): every agent on a
 docket, a signed record of what happened, and two protocols, Review and
 Build. It replaces three earlier tools on Rex by the same author:
 rex-inbox (follow agents and answer them), rex-reviewer (multi-agent PR

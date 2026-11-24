@@ -1,7 +1,7 @@
 # Contributing to Wheelhouse
 
 Thanks for looking. Wheelhouse is macOS only for now, and needs
-[Rex](https://www.superlogical.com/rex) (in private beta) or Herdr, or
+[Rex](https://www.superlogical.com/rex) (in private beta) or [Herdr](https://herdr.dev), or
 both: [docs/runtimes.md](docs/runtimes.md). Read the
 [README](README.md) for what it does and [DESIGN.md](DESIGN.md) for why
 it's built the way it is. This page covers how to work on it.
