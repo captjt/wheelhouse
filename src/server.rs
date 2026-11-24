@@ -77,6 +77,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/agents/start", post(start_agent))
         .route("/api/folders", get(folders_list))
         .route("/api/hub/stop", post(hub_stop))
+        .route("/api/diag/viewport", post(viewport_diag))
         .route("/api/push/key", get(push_key))
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/push/unsubscribe", post(push_unsubscribe))
@@ -1025,6 +1026,29 @@ struct FoldersQ {
 /// Where an agent could start, and where this docket's should.
 async fn folders_list(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<FoldersQ>) -> ApiResult {
     crate::start::folders(&shared, q.docket.as_deref()).await.map(Json).map_err(internal)
+}
+
+/// What the phone's Home Screen app measured of its screen (the top bar
+/// out of place, the keyboard, a return to the app): kept in
+/// `viewport.jsonl` in the hub's state, for fixing the layout on a device
+/// the Mac can't run. At most 64 KB a report and 1 MB in all; the oldest
+/// half goes when it's full. Nothing leaves this Mac.
+async fn viewport_diag(Json(v): Json<Value>) -> ApiResult {
+    use std::io::Write;
+    let line = serde_json::to_string(&json!({ "at": crate::time::now_ms(), "report": v })).map_err(|e| internal(e.into()))?;
+    if line.len() > 64 * 1024 {
+        return Err(fail(StatusCode::PAYLOAD_TOO_LARGE, "a report is at most 64 KB"));
+    }
+    let path = crate::paths::state_dir().join("viewport.jsonl");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 1 << 20)
+        && let Ok(old) = std::fs::read_to_string(&path)
+    {
+        let lines: Vec<&str> = old.lines().collect();
+        let _ = std::fs::write(&path, lines[lines.len() / 2..].join("\n") + "\n");
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| internal(e.into()))?;
+    writeln!(f, "{line}").map_err(|e| internal(e.into()))?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Stop this hub, so `wh up` can hand over to launchd. Not on the tailnet.
