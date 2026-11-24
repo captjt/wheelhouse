@@ -684,6 +684,7 @@ pub fn ask_push(shared: &Shared, t: &mut Task) -> Result<()> {
         .arg("-C")
         .arg(&w)
         .args(crate::review::rounds::SAFE_GIT)
+        .args(crate::review::rounds::ssh_command())
         .args(["log", "--oneline", &format!("{from}..HEAD")])
         .env("PATH", github::command_path())
         .output()

@@ -160,12 +160,7 @@ impl Runtime {
     pub async fn submit_checked(&self, session: &str, block: &str, text: &str, check: bool) -> Result<()> {
         let _typing = Typing::wait(block).await?;
         if check {
-            let records = self.records(session, block).await?;
-            let root = records.iter().find(|r| r.is_root());
-            let ok = root.is_some_and(|r| matches!(r.state.as_str(), "idle" | "done") && r.app.as_deref().is_none_or(crate::mirror::is_agent_app));
-            if !ok {
-                anyhow::bail!("the pane isn't an agent between turns now ({})", root.map_or("no status", |r| r.state.as_str()));
-            }
+            between_turns(&self.records(session, block).await?)?;
         }
         let text = plain(text);
         match self {
@@ -265,6 +260,18 @@ pub fn plain(text: &str) -> String {
         .collect()
 }
 
+/// Whether a pane's records, read now, are an agent between turns: its root
+/// record idle or done, from an agent (by the same names the mirror knows:
+/// Rex calls Antigravity `antigravity`).
+pub fn between_turns(records: &[Record]) -> Result<()> {
+    let root = records.iter().find(|r| r.is_root());
+    let agent = |r: &Record| r.effective_app.as_deref().or(r.app.as_deref()).map(crate::mirror::canonical_app).is_none_or(crate::mirror::is_agent_app);
+    if root.is_some_and(|r| matches!(r.state.as_str(), "idle" | "done") && agent(r)) {
+        return Ok(());
+    }
+    anyhow::bail!("the pane isn't an agent between turns now ({})", root.map_or("no status", |r| r.state.as_str()))
+}
+
 /// The panes being typed into now: one text at a time per pane.
 static TYPING: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
@@ -314,6 +321,19 @@ pub fn pasted(e: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_an_agent_between_turns_is_typed_into() {
+        let rec = |state: &str, app: Option<&str>| Record { state: state.into(), app: app.map(str::to_string), ..Default::default() };
+        for app in ["claude-code", "codex", "agy", "antigravity"] {
+            assert!(between_turns(&[rec("idle", Some(app))]).is_ok(), "{app}");
+        }
+        assert!(between_turns(&[rec("done", None)]).is_ok());
+        assert!(between_turns(&[rec("working", Some("claude-code"))]).is_err());
+        assert!(between_turns(&[rec("blocked", Some("claude-code"))]).is_err());
+        assert!(between_turns(&[rec("idle", Some("zsh"))]).is_err(), "not an agent");
+        assert!(between_turns(&[]).is_err(), "no status: a shell");
+    }
 
     #[test]
     fn one_text_at_a_time_per_pane() {

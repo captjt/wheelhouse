@@ -125,9 +125,6 @@ pub struct Hub {
     /// What the loop is doing now, for the status line.
     pub doing: Option<String>,
     locks: HashMap<String, Arc<tokio::sync::Mutex<()>>>,
-    /// The checked review each PR's last preview showed, by its digest: a
-    /// post that doesn't name what it saw (`wh review post`) posts only that.
-    pub previewed: HashMap<String, String>,
     /// Review panes by label (the review session's labels are unique):
     /// their docket and role, for the tracker.
     pub panes: BTreeMap<String, (String, String)>,

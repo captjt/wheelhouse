@@ -340,14 +340,14 @@ pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option
     if !mine(&orig.to_addr) && !mine(&orig.from_addr) {
         bail!("#{id} isn't to or from you");
     }
-    // An option, by its button, its exact words, or its number.
-    let pick = |c: &str| {
-        let c = c.trim();
-        orig.options.iter().find(|o| o.eq_ignore_ascii_case(c)).cloned().or_else(|| c.parse::<usize>().ok().filter(|n| *n >= 1).and_then(|n| orig.options.get(n - 1).cloned()))
-    };
+    // An option, by its button or its exact words; `--choice` also by its
+    // number, which comes first (the paste says `--choice 1`), never from a
+    // reply's words.
+    let by_words = |c: &str| orig.options.iter().find(|o| o.eq_ignore_ascii_case(c.trim())).cloned();
+    let by_number = |c: &str| c.trim().parse::<usize>().ok().filter(|n| *n >= 1).and_then(|n| orig.options.get(n - 1).cloned());
     let choice = match choice {
-        Some(c) => Some(pick(c).ok_or_else(|| anyhow!("#{id} offers {}, not {c}", orig.options.join(", ")))?),
-        None => pick(body),
+        Some(c) => Some(by_number(c).or_else(|| by_words(c)).ok_or_else(|| anyhow!("#{id} offers {}, not {c}", orig.options.join(", ")))?),
+        None => by_words(body),
     };
     let body = body.trim_end();
     if body.trim().is_empty() && choice.is_none() {
@@ -807,6 +807,13 @@ mod tests {
         let b2 = caller(&core, Some("b2"));
         assert_eq!(reply(&mut core, &b2, m.id, "", Some("2")).unwrap().choice.as_deref(), Some("Wait"));
         assert!(reply(&mut core, &b2, m.id, "", Some("7")).is_err());
+        assert_eq!(reply(&mut core, &b2, m.id, "", Some("wait")).unwrap().choice.as_deref(), Some("Wait"), "by its words still");
+        // Options that are numbers: `--choice 1` is the first, as the paste says.
+        let n = send(&mut core, &from, "builder", None, "Which?", vec!["2".into(), "1".into()]).unwrap();
+        assert_eq!(reply(&mut core, &b2, n.id, "", Some("1")).unwrap().choice.as_deref(), Some("2"));
+        // A reply's words that are just a number pick nothing.
+        let o = send(&mut core, &from, "builder", None, "Which?", vec!["Merge".into(), "Wait".into()]).unwrap();
+        assert_eq!(reply(&mut core, &b2, o.id, "1", None).unwrap().choice, None);
     }
 
     #[test]

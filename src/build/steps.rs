@@ -1166,6 +1166,7 @@ fn ask_open(shared: &Shared, t: &mut Task, failed: Option<&str>) -> Result<()> {
         .arg("-C")
         .arg(&w)
         .args(crate::review::rounds::SAFE_GIT)
+        .args(crate::review::rounds::ssh_command())
         .args(["log", "--oneline", &format!("{}..HEAD", t.base_head.clone().unwrap_or_default())])
         .env("PATH", github::command_path())
         .output()

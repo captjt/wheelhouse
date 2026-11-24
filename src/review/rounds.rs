@@ -43,13 +43,9 @@ fn short(s: &str) -> String {
 /// to, while it holds your credentials: run hooks or an fsmonitor program
 /// from the repo's config, skip TLS checks, or stall forever on a dead
 /// connection.
-pub(crate) const SAFE_GIT: [&str; 14] = [
+pub(crate) const SAFE_GIT: [&str; 12] = [
     "-c",
     "core.hooksPath=/dev/null",
-    // Plain ssh: a repo's own `core.sshCommand` (agents can write its
-    // .git/config) never runs with the hub's SSH agent.
-    "-c",
-    "core.sshCommand=ssh",
     "-c",
     "core.fsmonitor=false",
     "-c",
@@ -62,6 +58,26 @@ pub(crate) const SAFE_GIT: [&str; 14] = [
     "http.lowSpeedTime=60",
 ];
 
+/// `-c core.sshCommand=…`: yours, from your global git config, or plain
+/// `ssh`; never a repo's own (agents can write its .git/config, and it
+/// would run with the hub's SSH agent). A second account's key belongs in
+/// a `Host` alias in ~/.ssh/config, which still applies.
+pub(crate) fn ssh_command() -> [String; 2] {
+    static GLOBAL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let cmd = GLOBAL.get_or_init(|| {
+        std::process::Command::new("git")
+            .args(["config", "--global", "--get", "core.sshCommand"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "ssh".into())
+    });
+    ["-c".into(), format!("core.sshCommand={cmd}")]
+}
+
 /// How long one git command may take: a fetch of a big repo, at most.
 const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
@@ -70,6 +86,7 @@ pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String> {
         .arg("-C")
         .arg(dir)
         .args(SAFE_GIT)
+        .args(ssh_command())
         .args(args)
         .env("PATH", github::command_path())
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1095,12 +1112,14 @@ async fn post_as(shared: &Shared, key: &str, dry: bool, asker: Asker, seen: Opti
     let draft: Value = serde_json::from_str(&text).map_err(|err| anyhow!("{} isn't valid JSON: {err}", path.display()))?;
     let digest = draft_digest(&text);
     // A preview is what a post without its own digest is held to.
+    // Kept in the store, so a post after the hub restarts still knows it.
     let previewed = {
         let mut core = shared.lock();
+        let k = format!("review.previewed.{key}");
         if dry {
-            core.review.previewed.insert(key.to_string(), digest.clone());
+            core.store.meta_set(&k, &digest)?;
         }
-        core.review.previewed.get(key).cloned()
+        core.store.meta_get(&k)?
     };
     let seen = match seen.filter(|s| !s.is_empty()) {
         Some(s) => Some(s.to_string()),

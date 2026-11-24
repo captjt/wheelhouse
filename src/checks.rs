@@ -77,7 +77,13 @@ fn keep(shared: &Shared, bytes: &[u8]) -> Result<String> {
 /// only the hub's plain environment (`KEEP`), never what a hub started by
 /// hand inherited from your terminal (cloud keys, registry tokens).
 fn walled(cmd: &mut tokio::process::Command, dir: &Path, path: &[String]) {
-    const KEEP: &[&str] = &["HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR"];
+    // Where things are and how to reach the network, not secrets: what a
+    // toolchain needs and a login shell (`$SHELL -lc`) may not set again.
+    const KEEP: &[&str] = &[
+        "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+        "DOCKER_HOST", "JAVA_HOME", "GOPATH", "GOROOT", "OPENSSL_DIR", "CARGO_HOME", "RUSTUP_HOME", "NVM_DIR", "PYENV_ROOT",
+    ];
     let empty = crate::paths::state_dir().join("gh-empty");
     let _ = std::fs::create_dir_all(&empty);
     cmd.env_clear();

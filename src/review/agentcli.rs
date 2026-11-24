@@ -93,8 +93,15 @@ pub fn codex_mcp_off(program: &str) -> Vec<String> {
     off_args(&names)
 }
 
+/// Codex splits a `-c` key on `.` and takes no quotes (a quoted name is a
+/// new server with no command, and Codex won't start), and its server names
+/// are letters, digits, `_` and `-`: only those are named.
 pub(crate) fn off_args(names: &[String]) -> Vec<String> {
-    names.iter().flat_map(|n| ["-c".to_string(), format!("mcp_servers.\"{}\".enabled=false", n.replace('\\', "\\\\").replace('"', "\\\""))]).collect()
+    names
+        .iter()
+        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        .flat_map(|n| ["-c".to_string(), format!("mcp_servers.{n}.enabled=false")])
+        .collect()
 }
 
 fn codex_mcp_listed(program: &str) -> Option<Vec<String>> {
@@ -943,8 +950,8 @@ mod tests {
     }
     #[test]
     fn codex_gets_each_mcp_server_switched_off_by_name() {
-        let a = off_args(&["linear".into(), "k8s_prod".into(), "odd\"name".into()]);
-        assert_eq!(a, ["-c", "mcp_servers.\"linear\".enabled=false", "-c", "mcp_servers.\"k8s_prod\".enabled=false", "-c", "mcp_servers.\"odd\\\"name\".enabled=false"]);
+        let a = off_args(&["linear".into(), "k8s-prod".into(), "odd\"name".into(), "a.b".into()]);
+        assert_eq!(a, ["-c", "mcp_servers.linear.enabled=false", "-c", "mcp_servers.k8s-prod.enabled=false"], "unquoted; nothing Codex couldn't name");
     }
 
     #[test]

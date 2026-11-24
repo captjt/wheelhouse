@@ -90,7 +90,9 @@ asked.
   you approved.
 - The hub's own git commands, which run with your credentials in repos
   agents can write to, never run hooks, an fsmonitor, the repo's
-  `core.sshCommand`, or its external diff and textconv programs. They
+  `core.sshCommand` (they use your global one, or plain `ssh`: a second
+  account's key belongs in a `Host` alias in `~/.ssh/config`), or its
+  external diff and textconv programs. They
   never skip TLS checks. A branch name from Linear is used only if it's a
   safe ref.
 - `wh review post` without a digest posts only the draft its last preview
