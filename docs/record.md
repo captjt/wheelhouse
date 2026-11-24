@@ -105,12 +105,12 @@ Verify adds. The protocols write others (`question`, `decision`,
 | Kind | Writer | `data` |
 | --- | --- | --- |
 | `open` | any | `protocol` (`agent` or `none`), `title_source` (`pane`, `prompt`, `person`), and for an agent `agent`: `{app, host, block, rex_session, pane, cwd}` (`rex_session` is the session's name in either runtime: a Rex session, or a Herdr space) |
-| `claim` | hub | An agent session holds the docket: `session`, `source` (`startup`, `resume`, `clear`, `compact`, `fork`), `agent` as in `open` |
+| `claim` | hub | An agent is on the docket, or claims it again: `agent` as in `open` (its `block` is the agent's key), `session`, `source` (`startup`, `resume`, `clear`, `compact`, `fork`, `wheelhouse` when Wheelhouse started it, `join` for `wh join`), and `role` and `round` when a protocol or `wh join --role` gives one. A docket has any number of agents, one per pane |
 | `note` | person, agent, hub | `via`: `prompt` (you typed it to the agent), `message` (another agent's message, delivered), or absent (a note on the docket) |
-| `turn` | hub | An agent's turn ended. `body` is its last message, when its hook sent one. `state` is what the agent reported after the turn (`done`, `idle`) |
-| `observed` | hub | Something the hub saw in the pane's runtime: `what` (`blocked`, `error`), `kind`, `record` |
+| `turn` | hub | An agent's turn ended. `body` is its last message, when its hook sent one. `state` is what the agent reported after the turn (`done`, `idle`), `block` the agent's pane |
+| `observed` | hub | Something the hub saw in the pane's runtime: `what` (`blocked`, `error`), `kind`, `record`, `block` |
 | `set` | person, hub | Any of `title`, `title_source`, `status`, `hold`. Done on your word, without evidence: `on: "word"` and `reason` (docs/verify.md). `hold` is the reason it's held, or `null` to resume |
-| `release` | hub | The session no longer holds the docket: `reason` |
+| `release` | hub | One agent left the docket: `block` (its pane) and `reason`. An older `release` with no `block` means every agent left |
 | `check` | hub | A witnessed check (docs/verify.md): `name`, `command`, `required`, `repo`, `head` (the commit it ran at), `base`, `dirty`, `patch` (`sha256:` of the diff it covered), `exit` (null when it timed out), `ok`, `ms`, `output` (`sha256:` of its output), `run`, `why`. `blobs` names the output and the patch |
 | `verdict` | agent | A checker's judgment of a Build: `role`, `n`, `verdict`, `findings`, `head`, `round`, `independent` (its session and pane differ from the builder's), and the builder's `session` and `block` |
 | `standing` | person | A decision made standing for a repo: `repo`, `key`, `question`, `answer`; `body` is the rule as it went into the repo's notes |
@@ -130,15 +130,26 @@ no longer matches, and a lost one is missing. A file is at most 25 MB.
 Applying entries in order, from nothing:
 
 - `open` sets the title (its `body`), the protocol, the status
-  (`in_progress` for an agent, otherwise `todo`), and the agent.
+  (`in_progress` for an agent, otherwise `todo`), and the first agent.
 - `set` changes what it names. Done with `on: word` notes the reason it
   closed on; `hold` holds or resumes.
 - `check` is that check's latest result.
-- `claim` sets the session and the agent.
+- `claim` adds its agent, by pane, or updates the one on that pane
+  (its session; its role, when the claim gives one). An agent that had
+  left is on again.
 - `note` with `via: prompt` counts a prompt and is the last prompt.
 - `turn` counts a turn and is the last turn.
-- `release` ends the session.
+- `release` marks its pane's agent as left, or every agent when it names
+  no pane. The docket is released when no agent is left on it.
+- Of the agents on it, the docket's `agent` (and `session`) is the one
+  most recently active: its last claim, or the last entry that names its
+  pane (`data.block`, or an agent actor's `block`). With none on it, the
+  last to be active. A record with one agent folds as it always did.
 - Every entry moves `updated_at` and the head.
+
+The hub keeps each docket's folded state as a copy, for speed. When the
+fold changes (a release of the hub that reads more from the same
+entries), the hub folds every docket again once, at start.
 
 ## Checking a docket
 

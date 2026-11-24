@@ -328,6 +328,11 @@ fn index_panes(core: &mut Core, t: &Task) {
     }
     core.build.panes.insert(t.label("builder"), (t.docket.clone(), "builder".into()));
     core.build.panes.insert(t.label("checker"), (t.docket.clone(), "checker".into()));
+    // Pre-reviewers too, so a restarted hub (or a re-index) still knows them.
+    for name in t.prereview.as_ref().and_then(|p| p["reviewers"].as_object()).into_iter().flat_map(|r| r.keys()) {
+        let role = format!("reviewer:{name}");
+        core.build.panes.insert(t.label(&role), (t.docket.clone(), role));
+    }
 }
 
 /// Rebuild the pane map from every Build (at start).
@@ -353,4 +358,19 @@ pub fn event(core: &mut Core, docket: &str, what: &str, body: String, data: Valu
     data["event"] = json!(what);
     core.append(docket, "observed", &Who::Hub, Some(body), data)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_builds_pre_reviewers_stay_in_its_pane_map() {
+        let mut core = crate::hub::test_core();
+        let t = Task { docket: "D-41".into(), state: "building".into(), prereview: Some(json!({ "n": 1, "reviewers": { "codex": {}, "claude": {} } })), ..Default::default() };
+        index_panes(&mut core, &t);
+        assert_eq!(core.build.panes.get("d-41-codex"), Some(&("D-41".to_string(), "reviewer:codex".to_string())));
+        assert!(core.build.panes.contains_key("d-41-claude"));
+        assert!(core.build.panes.contains_key("d-41-check"));
+    }
 }

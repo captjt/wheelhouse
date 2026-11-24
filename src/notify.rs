@@ -133,14 +133,17 @@ pub fn still_due(shared: &Shared, ev: &Value) -> Option<Note> {
                 message: None,
                 key: None,
                 sound: if h.state == "error" { "task.error" } else { "input.required" },
-                seen: serde_json::json!({ "record": h.id, "updated_at": h.updated_at, "msg": h.msg.clone().or_else(|| h.title.clone()) }),
+                seen: serde_json::json!({ "record": h.id, "updated_at": h.updated_at, "msg": h.msg.clone().or_else(|| h.title.clone()), "block": p.block_id }),
             })
         }
         // An agent answered what you sent it from the app.
         "turn" => {
             let docket = ev["docket"].as_str()?.to_string();
             let st = core.store.state(&docket).ok()??;
-            let app = st.agent.as_ref().map(|a| crate::mirror::app_name(&a.app).to_string()).unwrap_or_else(|| "The agent".into());
+            // The agent that answered: the docket may have several.
+            let block = ev["block"].as_str();
+            let a = st.agents.iter().rev().find(|a| Some(a.agent.block.as_str()) == block).map(|a| &a.agent).or(st.agent.as_ref());
+            let app = a.map(|a| crate::mirror::app_name(&a.app).to_string()).unwrap_or_else(|| "The agent".into());
             Some(Note {
                 title: format!("{app} replied"),
                 subtitle: format!("{docket} · {}", st.title),

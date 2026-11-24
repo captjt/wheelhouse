@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { getText, paneRuntime, post, type ApiError, type Docket, type HubState } from "./api";
+import { getText, paneRuntime, post, runtimeOf, runtimeTitle, type ApiError, type Docket, type HubState, type Live } from "./api";
 import { useToast } from "./ui";
 
 // One stream of the hub's events for the whole app. Each event bumps a
@@ -130,8 +130,10 @@ type Hub = {
   setStatus: (id: string, status: Docket["status"], undo?: Docket["status"]) => Promise<void>;
   rename: (id: string, title: string) => Promise<void>;
   note: (id: string, body: string) => Promise<void>;
-  openInRex: (id: string) => Promise<void>;
-  answer: (d: Docket, approve: boolean) => Promise<void>;
+  /** `block`: which of the docket's agents; its lead when left out. */
+  openInRex: (id: string, block?: string) => Promise<void>;
+  /** `live`: which agent's prompt; the docket's lead's when left out. */
+  answer: (d: Docket, approve: boolean, live?: Live | null) => Promise<void>;
   replyTo: (id: number, body: string, choice?: string) => Promise<void>;
   fileMessage: (id: number) => Promise<void>;
   create: (title: string, note?: string) => Promise<string>;
@@ -210,18 +212,19 @@ export function HubProvider({ children }: { children: ReactNode }) {
     setDialog,
     rename: (id, title) => post(`/api/dockets/${id}/set`, { title }).then(reload, fail),
     note: (id, body) => post(`/api/dockets/${id}/note`, { body }).then(reload, fail),
-    openInRex: (id) =>
-      post(`/api/dockets/${id}/open`).then(
-        () => toast(`Showing ${id}'s pane in ${paneRuntime(byId.get(id))}`),
+    openInRex: (id, block) =>
+      post(`/api/dockets/${id}/open${block ? `?block=${encodeURIComponent(block)}` : ""}`).then(
+        () => toast(`Showing ${id}'s pane in ${block ? runtimeTitle(runtimeOf(block)) : paneRuntime(byId.get(id))}`),
         (e: Error) => toast(e.message, "error"),
       ),
-    answer: (d, approve) => {
-      const l = d.live;
+    answer: (d, approve, live) => {
+      const l = live ?? d.live;
       if (!l) return Promise.resolve();
       return post<{ cleared: boolean; now: string }>(`/api/dockets/${d.id}/${approve ? "approve" : "deny"}`, {
         record: l.record ?? "",
         updated_at: l.since ?? null,
         msg: l.msg ?? null,
+        block: l.block,
       }).then(
         (r) => {
           toast(r.cleared ? `${approve ? "Approved" : "Denied"}${l.msg ? `: ${l.msg}` : ""}` : "Sent, but the prompt is still showing. Look at the pane.", r.cleared ? undefined : "error");

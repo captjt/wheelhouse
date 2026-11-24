@@ -22,6 +22,10 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [x] Rex and Herdr as runtimes behind one interface, followed side by
       side: agents in each message, answer and start each other, and new
       agents open in the one you pick ([runtimes.md](runtimes.md))
+- [x] Several agents on one docket, in either runtime: `wh join`,
+      `wh leave`, `wh start --docket` beside the others, `wh send --to
+      @D-12`; each agent on the record by its pane, and the docket released
+      when the last one leaves ([record.md](record.md))
 - [x] The hub at login, as a LaunchAgent: `wh up`, `down`, `logs`, `status`
 - [x] The app on your tailnet, answering only you (`wh web --publish`)
 
@@ -100,7 +104,9 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       the PR opens, posting nothing; blocking findings go back to the
       builder, and what's left is at the open gate
 - [x] `scripts/build-e2e.sh`: a Build end to end on a scratch hub, with
-      stand-in agents, gh, origin and Linear
+      stand-in agents, gh, origin and Linear; `scripts/runtimes-e2e.sh`
+      and `scripts/shared-e2e.sh` for Rex and Herdr together, and several
+      agents on one docket
 
 ### Verify ([verify.md](verify.md))
 
@@ -188,6 +194,8 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [ ] Runtimes on other machines: Rex hosts (`rex -S`) and Herdr machines
       (`hc --on`)
 - [ ] More runtimes behind the same interface (tmux, Zellij)
+- [ ] Whether every agent session needs a docket: a one-off question
+      could join a shared docket, or stay unfiled in the Agents view
 
 ## Later
 

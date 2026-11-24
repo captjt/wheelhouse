@@ -3285,6 +3285,12 @@ code {
     -webkit-text-size-adjust: 100%;
     touch-action: manipulation;
   }
+  /* The page itself never scrolls on a phone, only the views in it: a
+     scrolled page takes the top bar off the screen. */
+  html,
+  body {
+    overflow: hidden;
+  }
   body {
     overscroll-behavior: none;
     background: var(--main);
@@ -3297,6 +3303,13 @@ code {
 .phone {
   flex-direction: column;
   background: var(--main);
+  /* Pinned to the visible part of the screen (main.tsx sets these from the
+     visual viewport): with the keyboard up, the bar stays at the top. */
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--vv-top, 0px);
+  height: var(--vv-h, 100%);
 }
 .phone .main.m-main {
   margin: 0;
@@ -4930,10 +4943,8 @@ code {
 .phone .chat-you {
   font-size: 15px;
 }
-/* The keyboard: the conversation stays above it, its bar in place. */
-.phone .m-top {
-  bottom: var(--kb, 0px);
-}
+/* The keyboard: the app is already sized to what's above it (.phone), so
+   the conversation's box sits on it; only the home bar's inset goes. */
 .phone .chat-compose {
   padding-bottom: calc(8px + max(0px, env(safe-area-inset-bottom) - var(--kb, 0px)));
 }
@@ -6279,4 +6290,87 @@ code {
   font-size: 11px;
   font-weight: 500;
   line-height: 16px;
+}
+
+/* ---- a docket's agents, when it has several ---- */
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  width: 100%;
+}
+.da-row .prop-text {
+  display: flex;
+  flex-direction: column;
+}
+.da-row:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+.da-row:disabled:hover {
+  background: none;
+}
+.da-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.nd-beside {
+  padding: 0 16px 6px;
+  line-height: 1.45;
+}
+.act-agents {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 10px;
+  min-width: 0;
+}
+.act-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.act-agent-chip:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.act-agent-chip.on {
+  color: var(--text);
+  background: var(--sel);
+  border-color: transparent;
+}
+.chat-role {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--sel);
+}
+.chat-to {
+  flex: none;
+  max-width: 34%;
+  height: 32px;
+  align-self: flex-end;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--main);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 0 6px;
+}
+.inbox-who {
+  color: var(--text-2);
+  font-weight: 500;
 }

@@ -292,6 +292,13 @@ impl Store {
         Ok(stored)
     }
 
+    /// Save a docket's state as folded again from its entries.
+    pub fn put_state(&mut self, st: &DocketState) -> Result<()> {
+        let n: i64 = st.id.strip_prefix("D-").and_then(|n| n.parse().ok()).unwrap_or(0);
+        self.conn.execute("INSERT INTO dockets (id, n, state) VALUES (?1, ?2, ?3) ON CONFLICT (id) DO UPDATE SET state = ?3", params![st.id, n, serde_json::to_string(st)?])?;
+        Ok(())
+    }
+
     pub fn entries(&self, docket: &str) -> Result<Vec<Stored>> {
         let mut st = self.conn.prepare("SELECT docket, seq, id, chain, envelope FROM entries WHERE docket = ?1 ORDER BY seq")?;
         let rows = st.query_map(params![docket], |r| Ok(Stored { docket: r.get(0)?, seq: r.get(1)?, id: r.get(2)?, chain: r.get(3)?, envelope: r.get(4)? }))?;

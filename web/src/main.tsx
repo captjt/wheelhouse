@@ -403,23 +403,51 @@ function PhoneApp({
   }, [back]);
   useSwipeBack(top, base, shade, docket ?? false, back);
   useScrolledViews(true);
-  // The on-screen keyboard: how much of the screen it covers, so the docket
-  // (and its conversation's box) stays above it. Safari scrolls the page
-  // when a box takes focus; it goes back to the top.
+  // The app fills what's visible of the screen, and nothing else: its bar at
+  // the top, its tab bar or a conversation's box at the bottom, above the
+  // keyboard. Safari scrolls the page when a box takes focus, and doesn't
+  // always scroll it back when the keyboard goes, which left the bar above
+  // the screen, out of reach. The page never scrolls (only the views in it
+  // do): it goes back to the top on every change, and the app follows the
+  // visible part of the screen (`--vv-top`, `--vv-h`).
   useEffect(() => {
     const vv = window.visualViewport;
-    if (!vv) return;
-    const on = () => {
-      const kb = Math.max(0, Math.round(window.innerHeight - vv.height));
-      document.documentElement.style.setProperty("--kb", kb > 80 ? `${kb}px` : "0px");
-      if (kb > 80 && window.scrollY) window.scrollTo(0, 0);
+    const root = document.documentElement.style;
+    const home = () => {
+      if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
     };
+    if (!vv) {
+      window.addEventListener("scroll", home);
+      return () => window.removeEventListener("scroll", home);
+    }
+    const on = () => {
+      home();
+      // Zoomed in with two fingers: the page is bigger than the screen on purpose.
+      if (Math.abs(vv.scale - 1) > 0.01) {
+        root.removeProperty("--vv-top");
+        root.removeProperty("--vv-h");
+        return;
+      }
+      const kb = Math.max(0, Math.round(window.innerHeight - vv.height));
+      root.setProperty("--kb", kb > 80 ? `${kb}px` : "0px");
+      root.setProperty("--vv-top", `${Math.max(0, Math.round(vv.offsetTop))}px`);
+      root.setProperty("--vv-h", `${Math.round(vv.height)}px`);
+    };
+    // A box losing focus is the keyboard going: Safari settles a moment later.
+    const blur = () => window.setTimeout(on, 60);
+    on();
     vv.addEventListener("resize", on);
     vv.addEventListener("scroll", on);
+    window.addEventListener("scroll", on);
+    window.addEventListener("focusout", blur);
+    window.addEventListener("orientationchange", blur);
     return () => {
       vv.removeEventListener("resize", on);
       vv.removeEventListener("scroll", on);
-      document.documentElement.style.removeProperty("--kb");
+      window.removeEventListener("scroll", on);
+      window.removeEventListener("focusout", blur);
+      window.removeEventListener("orientationchange", blur);
+      for (const k of ["--kb", "--vv-top", "--vv-h"]) root.removeProperty(k);
     };
   }, []);
   const page = route[0] || "view";

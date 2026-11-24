@@ -98,7 +98,27 @@ impl Core {
         for (id, name) in known {
             core.store.put_key(&id, &name, &at)?;
         }
+        core.refold()?;
         Ok(core)
+    }
+
+    /// Fold every docket again when the fold has changed since its states
+    /// were saved: they're a copy of what the entries say, kept for speed.
+    fn refold(&mut self) -> Result<()> {
+        if self.store.meta_get("fold")?.as_deref() == Some(crate::record::fold::VERSION) {
+            return Ok(());
+        }
+        let ids = self.store.docket_ids()?;
+        for id in &ids {
+            let entries = self.store.entries(id)?;
+            let parsed: Vec<Entry> = entries.iter().map(|s| s.entry()).collect::<Result<_>>()?;
+            let st = crate::record::fold::fold(id, entries.iter().zip(&parsed).map(|(s, e)| (s.seq, s.chain.as_str(), e)));
+            self.store.put_state(&st)?;
+        }
+        if !ids.is_empty() {
+            say!("folded {} dockets again for fold v{}", ids.len(), crate::record::fold::VERSION);
+        }
+        self.store.meta_set("fold", crate::record::fold::VERSION)
     }
 
     fn actor(&self, who: &Who) -> (Actor, String) {

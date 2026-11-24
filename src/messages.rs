@@ -145,7 +145,60 @@ pub fn caller(core: &Core, block: Option<&str>) -> Caller {
     }
 }
 
-/// Send a message. Returns its number.
+/// The docket an `@D-12` address names, if it's one.
+fn docket_addr(to: &str) -> Option<String> {
+    let d = to.trim().strip_prefix('@')?.trim().to_ascii_uppercase();
+    Some(if d.chars().all(|c| c.is_ascii_digit()) { format!("D-{d}") } else { d })
+}
+
+/// A message to every agent on a docket (`@D-12`) but the sender: one to
+/// each, on one entry of the docket's record, so replies stay on its thread.
+fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<String>, body: String, options: Vec<String>) -> Result<Message> {
+    let st = core.store.state(docket)?.ok_or_else(|| anyhow!("no docket {docket}"))?;
+    let to: Vec<(String, String)> = st
+        .agents_on()
+        .filter(|a| Some(&a.agent.block) != from.block.as_ref() && agents::docket_of(core, &a.agent.block).as_deref() == Some(docket))
+        .filter_map(|a| core.mirror.panes.get(&a.agent.block).map(|p| (addr_of(core, p), p.block_id.clone())))
+        .collect();
+    if to.is_empty() {
+        bail!("no other agent is on {docket} now");
+    }
+    let subject = subject.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let mut sent = Vec::new();
+    for (addr, block) in &to {
+        let mut m = Message {
+            from_addr: from.addr.clone(),
+            from_block: from.block.clone(),
+            to_addr: addr.clone(),
+            to_block: Some(block.clone()),
+            subject: subject.clone(),
+            body: body.clone(),
+            options: options.clone(),
+            status: "queued".into(),
+            created_at: crate::time::now_ms(),
+            ..Default::default()
+        };
+        m.id = core.store.insert_message(&m)?;
+        sent.push(m);
+    }
+    let kind = if options.is_empty() { "note" } else { "question" };
+    let ids: Vec<i64> = sent.iter().map(|m| m.id).collect();
+    let addrs: Vec<&str> = to.iter().map(|(a, _)| a.as_str()).collect();
+    let data = json!({ "message": ids[0], "messages": ids, "from": from.addr, "to": format!("@{docket}"), "agents": addrs, "subject": subject, "options": options });
+    let s = core.append(docket, kind, &from.who, Some(body), data)?;
+    for m in &mut sent {
+        m.docket = Some(docket.to_string());
+        m.seq = Some(s.seq);
+        core.store.set_message_place(m.id, docket, s.seq)?;
+        let _ = core.events.send(json!({ "type": "message", "id": m.id, "to_block": m.to_block, "to": m.to_addr }));
+    }
+    let mut first = sent.swap_remove(0);
+    first.to_addr = format!("@{docket} ({})", addrs.join(", "));
+    Ok(first)
+}
+
+/// Send a message. Returns its number. `@D-12` sends it to every agent on
+/// that docket.
 pub fn send(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, body: &str, options: Vec<String>) -> Result<Message> {
     let body = body.trim_end().to_string();
     if body.trim().is_empty() {
@@ -154,6 +207,9 @@ pub fn send(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, b
     let options: Vec<String> = options.into_iter().map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect();
     if options.len() > MAX_OPTIONS {
         bail!("a message offers at most {MAX_OPTIONS} options");
+    }
+    if let Some(d) = docket_addr(to) {
+        return send_docket(core, from, &d, subject, body, options);
     }
     let (to_addr, to_block) = if to.trim() == ME {
         if from.addr == ME {
@@ -477,9 +533,9 @@ async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<S
                 let app = core.mirror.panes.get(&block).and_then(|p| p.app()).unwrap_or("agent").to_string();
                 let session_id = core.agents.by_block.get(&block).and_then(|t| t.session.clone());
                 if !crate::hooks::installed_for(&app) {
-                    let _ = agents::note_prompt(&mut core, &docket, &body, session_id.as_deref(), Some("wheelhouse"));
+                    let _ = agents::note_prompt(&mut core, &docket, &body, session_id.as_deref(), Some(&block), Some("wheelhouse"));
                 }
-                core.agents.remote.insert(docket.clone());
+                core.agents.remote.insert(block.clone());
             }
             Err(e) => {
                 let n = tries.entry(format!("p{id}")).or_default();
@@ -611,6 +667,36 @@ mod tests {
         let text = render(&r, Some(&d));
         assert!(text.starts_with(&format!("[wheelhouse] Message #{} from the user", r.id)), "{text}");
         assert!(text.contains(&format!("wh reply {}", r.id)));
+    }
+
+    #[test]
+    fn a_message_to_a_docket_reaches_every_agent_on_it_on_one_thread() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Shared", json!({ "protocol": "none" })).unwrap();
+        for (b, l) in [("b1", "planner"), ("b2", "builder"), ("b3", "reviewer")] {
+            agent(&mut core, b, l, "idle");
+            agents::join(&mut core, b, &d, None).unwrap();
+        }
+        agent(&mut core, "b4", "elsewhere", "idle");
+        let from = caller(&core, Some("b1"));
+        let num = d.trim_start_matches("D-");
+        let m = send(&mut core, &from, &format!("@{num}"), None, "I'm taking the fold; who has the apps?", vec![]).unwrap();
+        assert!(m.to_addr.starts_with(&format!("@{d}")), "{}", m.to_addr);
+        let to: Vec<Option<String>> = core.store.messages_where("status = 'queued'", []).unwrap().into_iter().map(|m| m.to_block).collect();
+        assert_eq!(to, [Some("b2".to_string()), Some("b3".to_string())], "everyone on it but the sender");
+        let e = core.store.entries(&d).unwrap().last().unwrap().entry().unwrap();
+        assert_eq!(e.data["to"], format!("@{d}"));
+        assert_eq!(e.data["messages"].as_array().unwrap().len(), 2);
+        // A reply stays on the docket's thread.
+        let b3 = caller(&core, Some("b3"));
+        let r = reply(&mut core, &b3, m.id + 1, "Me, the apps.", None).unwrap();
+        assert_eq!(r.docket.as_deref(), Some(d.as_str()));
+        assert_eq!(r.to_block.as_deref(), Some("b1"));
+        // From outside it, too; a docket with nobody else on it says so.
+        let me = caller(&core, None);
+        assert!(send(&mut core, &me, &format!("@{d}"), None, "Status?", vec![]).is_ok());
+        let lone = core.open(&Who::Owner, "Lone", json!({ "protocol": "none" })).unwrap();
+        assert!(send(&mut core, &from, &format!("@{lone}"), None, "hi", vec![]).unwrap_err().to_string().contains("no other agent"));
     }
 
     #[test]

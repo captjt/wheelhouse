@@ -118,10 +118,13 @@ struct ActivityRow: View {
 
     private var shape: Shape {
         let data = e.data
-        let agent = appName(d.agent?.app)
+        // The agent it's by or about: its own, by block, on a docket with
+        // several; the docket's agent for an older entry.
+        let who = d.member(for: e)
+        let agent = d.agentName(who)
         let you = Avatar.you(owner)
-        let app = Avatar.app(d.agent?.app ?? "")
-        let writer = e.actorType == "agent" ? appName(e.actorApp) : e.actorType == "person" ? "You" : "Wheelhouse"
+        let app = Avatar.app(who?.app ?? d.agent?.app ?? "")
+        let writer = e.actorType == "agent" ? (d.crew.count > 1 && who != nil ? agent : appName(e.actorApp)) : e.actorType == "person" ? "You" : "Wheelhouse"
         let writerAvatar: Avatar = e.actorType == "agent" ? .app(e.actorApp) : e.actorType == "person" ? you : .hub
         func sys(_ a: Avatar, _ bits: [Bit], _ tone: String? = nil) -> Shape { .sys(a, line(bits), tone) }
 

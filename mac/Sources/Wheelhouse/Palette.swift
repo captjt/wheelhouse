@@ -50,9 +50,11 @@ struct PaletteOverlay: View {
         var out: [Command] = []
         // What needs you, answerable right here.
         for it in store.inbox {
-            if it.kind == .blocked, let d = it.docket, d.live?.answerable == true {
-                out.append(Command(id: "ap-\(d.id)", group: "Needs you", label: "Approve \(d.id): \(d.live?.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "approve permission yes \(d.title)") { Task { await store.answer(d, approve: true) } })
-                out.append(Command(id: "dn-\(d.id)", group: "Needs you", label: "Deny \(d.id): \(d.live?.msg ?? "the prompt")", symbol: "xmark.circle", keywords: "deny permission no \(d.title)") { Task { await store.answer(d, approve: false) } })
+            if it.kind == .blocked, let d = it.docket, let l = it.live ?? d.live, l.answerable {
+                // Each asking agent: by name, on a docket with several.
+                let whose = it.who.map { "\(d.id) · \($0)" } ?? d.id
+                out.append(Command(id: "ap-\(it.id)", group: "Needs you", label: "Approve \(whose): \(l.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "approve permission yes \(d.title) \(it.who ?? "")") { Task { await store.answer(it, approve: true) } })
+                out.append(Command(id: "dn-\(it.id)", group: "Needs you", label: "Deny \(whose): \(l.msg ?? "the prompt")", symbol: "xmark.circle", keywords: "deny permission no \(d.title) \(it.who ?? "")") { Task { await store.answer(it, approve: false) } })
             } else if let m = it.msg, !m.options.isEmpty {
                 for o in m.options {
                     out.append(Command(id: "op-\(m.id)-\(o)", group: "Needs you", label: "\(it.docketId) · \(m.title): \(o)", symbol: "arrowshape.turn.up.left", keywords: "answer reply \(m.who) \(it.title)") { Task { _ = await store.reply(m, "", choice: o) } })
@@ -62,13 +64,27 @@ struct PaletteOverlay: View {
             }
         }
         if !floating, let id = nav.current, let d = store.docket(id) {
-            if d.live != nil {
-                out.append(Command(id: "rex", group: d.id, label: "Show pane in \(d.runtime)", symbol: "terminal", hint: "O") { store.openInRex(d.id) })
-                out.append(Command(id: "peek", group: d.id, label: "Peek at pane", symbol: "eye", keywords: "screen terminal message send") { reveal(); nav.pane = d.id })
-            }
-            if d.live?.answerable == true {
-                out.append(Command(id: "approve", group: d.id, label: "Approve: \(d.live?.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "permission yes allow") { Task { await store.answer(d, approve: true) } })
-                out.append(Command(id: "deny", group: d.id, label: "Deny the prompt", symbol: "xmark.circle", keywords: "permission no reject") { Task { await store.answer(d, approve: false) } })
+            if d.several {
+                // Each agent's pane and prompt, by name.
+                for (a, l) in d.lives {
+                    guard let a else { continue }
+                    let b = d.blockFor(a)
+                    out.append(Command(id: "rex-\(a.block)", group: d.id, label: "Show \(a.label)'s pane in \(a.runtime)", symbol: "terminal", keywords: "\(appName(a.app)) \(a.pane)") { store.openInRex(d.id, block: b) })
+                    out.append(Command(id: "peek-\(a.block)", group: d.id, label: "Peek at \(a.label)'s pane", symbol: "eye", keywords: "screen terminal message send \(appName(a.app)) \(a.pane)") { reveal(); nav.peek(d.id, block: b) })
+                    if l.state == .blocked, l.answerable {
+                        out.append(Command(id: "approve-\(a.block)", group: d.id, label: "Approve \(a.label): \(l.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "permission yes allow") { Task { await store.answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: true, block: b) } })
+                        out.append(Command(id: "deny-\(a.block)", group: d.id, label: "Deny \(a.label)'s prompt", symbol: "xmark.circle", keywords: "permission no reject") { Task { await store.answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: false, block: b) } })
+                    }
+                }
+            } else {
+                if d.live != nil {
+                    out.append(Command(id: "rex", group: d.id, label: "Show pane in \(d.runtime)", symbol: "terminal", hint: "O") { store.openInRex(d.id) })
+                    out.append(Command(id: "peek", group: d.id, label: "Peek at pane", symbol: "eye", keywords: "screen terminal message send") { reveal(); nav.peek(d.id) })
+                }
+                if d.live?.answerable == true {
+                    out.append(Command(id: "approve", group: d.id, label: "Approve: \(d.live?.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "permission yes allow") { Task { await store.answer(d, approve: true) } })
+                    out.append(Command(id: "deny", group: d.id, label: "Deny the prompt", symbol: "xmark.circle", keywords: "permission no reject") { Task { await store.answer(d, approve: false) } })
+                }
             }
             if d.hold != nil {
                 out.append(Command(id: "resume", group: d.id, label: "Resume: take it off hold", symbol: "play.circle", hint: "⇧⌘H", keywords: "hold unpause continue") { store.resume(d.id) })
@@ -77,7 +93,7 @@ struct PaletteOverlay: View {
             }
             out.append(Command(id: "checks", group: d.id, label: "Run checks", symbol: "checklist", hint: "⇧⌘U", keywords: "verify test lint witnessed") { Task { await store.runChecks(d.id) } })
             if d.canStartAgent {
-                out.append(Command(id: "start-agent", group: d.id, label: "Start an agent…", symbol: "terminal", hint: "⇧⌘A", keywords: "agent claude codex agy antigravity start pane work") { reveal(); nav.starting = d.id })
+                out.append(Command(id: "start-agent", group: d.id, label: d.onAgents.isEmpty ? "Start an agent…" : "Add an agent…", symbol: "terminal", hint: "⇧⌘A", keywords: "agent claude codex agy antigravity start pane work") { reveal(); nav.starting = d.id })
             }
             for s in Status.allCases where s != d.status {
                 out.append(Command(id: "st-\(s.rawValue)", group: d.id, label: "Move to \(s.label)", status: s, keywords: "status") { store.setStatus(d.id, s, undo: d.status) })
@@ -392,9 +408,10 @@ struct StartAgentSheet: View {
 
     var body: some View {
         let d = store.docket(id)
+        let others = d?.onAgents.count ?? 0
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                Text("Start an agent on \(id)").font(.system(size: 14, weight: .semibold))
+                Text(others > 0 ? "Add an agent to \(id)" : "Start an agent on \(id)").font(.system(size: 14, weight: .semibold))
                 if let t = d?.title { Text(t).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail) }
             }
             Editor(text: $note, placeholder: "What should the agent do first? Leave it empty to start it idle.", minHeight: 80, maxHeight: 220, focus: true, onSubmit: start)
@@ -422,11 +439,13 @@ struct StartAgentSheet: View {
                 }
             }
             HStack {
-                Text("A new tab in \(store.state?.spawnRuntime ?? "Rex")'s wheelhouse session, named \(id). The agent works on this docket and reads its intent.")
+                Text(others > 0
+                    ? "A new tab in \(store.state?.spawnRuntime ?? "Rex")'s wheelhouse session. It joins \(id) beside the \(others == 1 ? "one" : "\(others)") already there\(others == 1 ? "" : ", each in its own pane"), and reads its intent."
+                    : "A new tab in \(store.state?.spawnRuntime ?? "Rex")'s wheelhouse session, named \(id). The agent works on this docket and reads its intent.")
                     .font(.system(size: 11.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(busy ? "Starting…" : "Start Agent") { start() }
+                Button(busy ? "Starting…" : others > 0 ? "Add Agent" : "Start Agent") { start() }
                     .buttonStyle(.borderedProminent).tint(K.accent)
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(cwd.trimmingCharacters(in: .whitespaces).isEmpty || busy)

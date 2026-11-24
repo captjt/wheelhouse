@@ -70,6 +70,19 @@ panes' addresses name their runtime (`rex:wheelhouse/D-12`,
 tab completion. A name that's in both and not in your own session is
 never a guess: the hub refuses it and names each one.
 
+`@D-12` is every agent on docket D-12 but the sender, in whichever
+runtime each is: one entry on D-12's record, one message to each.
+
+## Several agents on one docket
+
+A docket's agents are keyed by their pane's id, so one docket can hold
+agents in Rex and in Herdr at once (docs/record.md, `claim` and
+`release`). An agent joins with `wh join D-12` or `wh start --docket
+D-12`, and leaves with `wh leave` or when its pane closes; the docket is
+released when its last agent leaves. Approving a prompt, Open in Rex or
+Herdr, the screen and sending all take the agent's pane, and without one
+act on the docket's lead: the agent that needs you most.
+
 ## Agents in Herdr
 
 An agent you start yourself in a Herdr terminal gets a docket, as in Rex,
@@ -130,7 +143,9 @@ same. `Live` adds `runtime` for the apps, and `/api/state` lists
   panes), replacing one runtime's part without touching another's, and
   agents tracked side by side.
 - `just e2e` runs the Build end to end twice: once in Rex
-  (`scripts/fake-rex`), once in Herdr (`scripts/fake-hc`).
+  (`scripts/fake-rex`), once in Herdr (`scripts/fake-hc`); then both
+  together (`scripts/runtimes-e2e.sh`), and several agents across both on
+  one docket (`scripts/shared-e2e.sh`).
 - `WH_HC` and `WH_HERDR_APP` move the hub's `hc` and `herdr-app`, as
   `WH_REX` moves `rex`. The e2e, the screenshots and Wheelhouse Dev set
   them, so none of them reaches your own Herdr.
