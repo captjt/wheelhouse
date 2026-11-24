@@ -52,6 +52,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         if let docket { info["docket"] = docket }
         if let m = ev["message"].int { info["message"] = m }
         if let k = ev["key"].str { info["key"] = k }
+        // Which of the docket's agents it's about, when the hub says.
+        if let b = ev["block"].text ?? ev["seen"]["block"].text { info["block"] = b }
         // What the banner shows, so an answer from it is to exactly that.
         for (k, v) in ev["seen"].object ?? [:] { if let s = v.str { info["seen_\(k)"] = s } }
         c.userInfo = info
@@ -72,7 +74,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
         switch kind {
         case "needs":
-            if let d = state?.byId[docket ?? ""], d.live?.answerable == true, ev["seen"]["record"].str != nil { c.categoryIdentifier = "prompt" }
+            // The prompt of the agent it's about, else the lead's.
+            let b = ev["block"].text ?? ev["seen"]["block"].text
+            if let d = state?.byId[docket ?? ""], ((d.member(block: b)?.live ?? d.live)?.answerable == true), ev["seen"]["record"].str != nil { c.categoryIdentifier = "prompt" }
         case "turn":
             c.categoryIdentifier = "turn"
         case "message":
@@ -105,8 +109,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 let d = docket.flatMap { state.byId[$0] }
                 let due: Bool
                 switch u["kind"] as? String {
-                case "needs": due = d?.live?.state == .blocked || d?.live?.state == .error
-                case "turn": due = ![LiveState.working, .starting, .blocked].contains(d?.live?.state ?? .idle)
+                // The agent it's about, by block; else any on the docket.
+                case "needs":
+                    let ls = d.map { d in (u["block"] as? String).map { b in d.member(block: b)?.live.map { [$0] } ?? [] } ?? d.lives.map { $0.live } } ?? []
+                    due = ls.contains { $0.state == .blocked || $0.state == .error }
+                case "turn":
+                    let l = d.flatMap { d in d.member(block: u["block"] as? String)?.live ?? d.live }
+                    due = ![LiveState.working, .starting, .blocked].contains(l?.state ?? .idle)
                 case "message": due = state.messages.contains { $0.id == (u["message"] as? NSNumber)?.intValue }
                 case "review": due = state.prs.contains { ($0.fullKey == u["key"] as? String || $0.key == u["key"] as? String) && $0.attention != nil }
                 case "build": due = state.task(for: docket ?? "")?.attention != nil
@@ -132,15 +141,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let docket = u["docket"] as? String
         let message = (u["message"] as? NSNumber)?.intValue
         let key = u["key"] as? String
+        let block = u["block"] as? String
         var seen: [String: String] = [:]
         for (k, v) in u { if let k = k as? String, k.hasPrefix("seen_"), let v = v as? String { seen[String(k.dropFirst(5))] = v } }
         Task { @MainActor in
-            await self.respond(action: action, text: text, docket: docket, message: message, key: key, seen: seen)
+            await self.respond(action: action, text: text, docket: docket, block: block, message: message, key: key, seen: seen)
             done()
         }
     }
 
-    private func respond(action: String, text: String?, docket: String?, message: Int?, key: String?, seen: [String: String]) async {
+    private func respond(action: String, text: String?, docket: String?, block: String?, message: Int?, key: String?, seen: [String: String]) async {
         let store = Store.shared
         await store.refresh()
         let state = store.state
@@ -149,7 +159,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             // The prompt the banner showed, not whatever waits now: the hub
             // refuses if they differ.
             if let docket, let record = seen["record"] {
-                await store.answer(docket, record: record, since: seen["updated_at"], msg: seen["msg"], approve: action == "approve")
+                await store.answer(docket, record: record, since: seen["updated_at"], msg: seen["msg"], approve: action == "approve", block: block)
             }
         case "reply":
             guard let t = text?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return }
@@ -161,7 +171,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                     Windows.showMain()
                 }
             } else if let docket {
-                _ = await store.send(docket, t)
+                _ = await store.send(docket, t, block: block)
             }
         case let a where a.hasPrefix("opt-"):
             if let id = message, let m = state?.messages.first(where: { $0.id == id }), let i = Int(a.dropFirst(4)), m.options.indices.contains(i) {

@@ -72,13 +72,13 @@ struct InboxScreen: View {
                         switch press.characters {
                         case "j": nav.select(ids[min(ids.count - 1, i + 1)], in: .inbox)
                         case "k": nav.select(ids[max(0, i - 1)], in: .inbox)
-                        case "o": if let d, d.live != nil { store.openInRex(d.id) }
+                        case "o": if let d, d.live != nil { store.openInRex(d.id, block: d.blockFor(item?.agent)) }
                         case "e": if let d, d.isOpen { store.setStatus(d.id, .done, undo: d.status) }
                         // A prompt: approve or deny it.
                         case "a", "d":
-                            guard let it = item, it.kind == .blocked, let pd = it.docket, pd.live?.answerable == true else { return .ignored }
+                            guard let it = item, it.kind == .blocked, it.docket != nil, (it.live ?? it.docket?.live)?.answerable == true else { return .ignored }
                             let yes = press.characters == "a"
-                            Task { await store.answer(pd, approve: yes) }
+                            Task { await store.answer(it, approve: yes) }
                         // A message with options: 1 to 6 picks one.
                         default:
                             guard let n = Int(press.characters), let m = item?.msg, n >= 1, n <= m.options.count else { return .ignored }
@@ -130,9 +130,9 @@ struct InboxScreen: View {
 
     @ViewBuilder
     private func leading(_ it: InboxItem) -> some View {
-        if it.kind == .blocked, let d = it.docket, d.live?.answerable == true {
-            Button { Task { await store.answer(d, approve: true) } } label: { Label("Approve", systemImage: "checkmark") }.tint(K.working)
-            Button { Task { await store.answer(d, approve: false) } } label: { Label("Deny", systemImage: "xmark") }.tint(K.error)
+        if it.kind == .blocked, it.docket != nil, (it.live ?? it.docket?.live)?.answerable == true {
+            Button { Task { await store.answer(it, approve: true) } } label: { Label("Approve", systemImage: "checkmark") }.tint(K.working)
+            Button { Task { await store.answer(it, approve: false) } } label: { Label("Deny", systemImage: "xmark") }.tint(K.error)
         }
     }
 
@@ -158,7 +158,7 @@ struct InboxRow: View {
                 } else if it.msg?.from == "wheelhouse" {
                     HubAvatar(size: 24)
                 } else {
-                    AppAvatar(app: it.docket?.agent?.app ?? (it.msg?.fromApp == "Codex" ? "codex" : it.msg?.fromApp == "Antigravity" ? "agy" : "claude-code"), size: 24)
+                    AppAvatar(app: it.agent?.app ?? it.docket?.agent?.app ?? (it.msg?.fromApp == "Codex" ? "codex" : it.msg?.fromApp == "Antigravity" ? "agy" : "claude-code"), size: 24)
                 }
                 LiveIcon(state: it.kind == .error ? .error : it.kind == .done ? .done : .blocked, size: 12)
                     .background(Circle().fill(K.main).padding(-1.5))
@@ -179,8 +179,8 @@ struct InboxRow: View {
                     ReviewActions(p: p, small: true)
                 } else if let m = it.msg, !m.options.isEmpty {
                     OptionButtons(m: m)
-                } else if it.kind == .blocked, let d = it.docket, d.live?.answerable == true {
-                    AnswerButtons(d: d, small: true)
+                } else if it.kind == .blocked, let d = it.docket, (it.live ?? d.live)?.answerable == true {
+                    AnswerButtons(d: d, block: d.blockFor(it.agent), live: it.live, small: true)
                 }
             }
         }
@@ -188,10 +188,13 @@ struct InboxRow: View {
     }
 
     private var prefix: String {
+        // Which agent, on a docket with several.
+        let who = it.who.map { "\($0) · " } ?? ""
         switch it.kind {
-        case .blocked: it.docket?.live?.kind.map { "\($0): " } ?? "Needs you: "
-        case .error: "Failed: "
-        default: ""
+        case .blocked: return who + ((it.live ?? it.docket?.live)?.kind.map { "\($0): " } ?? "Needs you: ")
+        case .error: return who + "Failed: "
+        case .done: return who
+        default: return ""
         }
     }
 }

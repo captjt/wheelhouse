@@ -23,8 +23,17 @@ struct InboxItem: Identifiable, Hashable {
     let msg: Msg?
     let pr: ReviewPr?
     let id: String
+    /// The agent asking, on a docket with several (nil on an older hub's).
+    var agent: DocketAgent? = nil
+    /// What it's doing: the prompt it waits on.
+    var live: Live? = nil
 
-    static func == (a: InboxItem, b: InboxItem) -> Bool { a.id == b.id && a.line == b.line && a.docket == b.docket && a.msg == b.msg && a.pr == b.pr }
+    /// Which agent, when its docket has more than one on it.
+    var who: String? { docket?.several == true ? agent?.label : nil }
+    /// The block to act on: nil means the docket's lead.
+    var block: String? { agent?.block }
+
+    static func == (a: InboxItem, b: InboxItem) -> Bool { a.id == b.id && a.line == b.line && a.docket == b.docket && a.msg == b.msg && a.pr == b.pr && a.live == b.live }
     func hash(into h: inout Hasher) { h.combine(id) }
 }
 
@@ -214,16 +223,23 @@ final class Store {
             let d = m.docket.flatMap { state.byId[$0] }
             items.append(InboxItem(kind: .message, docket: d, docketId: m.docket ?? "#\(m.id)", title: d?.title ?? m.title, line: "\(m.who): \(m.title)", at: m.createdAt, msg: m, pr: nil, id: "m\(m.id)"))
         }
+        // One for each agent that needs you, not one for each docket: the
+        // lead's is the docket's own (its id), the others' are by block.
         for d in state.dockets {
-            guard let l = d.live else { continue }
-            switch l.state {
-            case .blocked:
-                items.append(InboxItem(kind: .blocked, docket: d, docketId: d.id, title: d.title, line: l.msg ?? "\(appName(d.agent?.app)) needs you", at: l.since, msg: nil, pr: nil, id: d.id))
-            case .error where d.isOpen:
-                items.append(InboxItem(kind: .error, docket: d, docketId: d.id, title: d.title, line: l.msg ?? "Failed", at: l.since, msg: nil, pr: nil, id: d.id))
-            case .done where d.isOpen:
-                items.append(InboxItem(kind: .done, docket: d, docketId: d.id, title: d.title, line: firstLine(d.lastTurn) ?? "Finished its turn", at: l.since ?? d.updatedAt, msg: nil, pr: nil, id: d.id))
-            default: break
+            for (i, (a, l)) in d.lives.enumerated() {
+                let id = i == 0 ? d.id : "\(d.id)@\(a?.block ?? "\(i)")"
+                let name = a.map { d.several ? $0.label : appName($0.app) } ?? appName(d.agent?.app)
+                switch l.state {
+                case .blocked:
+                    items.append(InboxItem(kind: .blocked, docket: d, docketId: d.id, title: d.title, line: l.msg ?? "\(name) needs you", at: l.since, msg: nil, pr: nil, id: id, agent: a, live: l))
+                case .error where d.isOpen:
+                    items.append(InboxItem(kind: .error, docket: d, docketId: d.id, title: d.title, line: l.msg ?? "Failed", at: l.since, msg: nil, pr: nil, id: id, agent: a, live: l))
+                case .done where d.isOpen:
+                    // The docket's last turn is the lead's, or the only one's.
+                    let said = i == 0 ? firstLine(d.lastTurn) : nil
+                    items.append(InboxItem(kind: .done, docket: d, docketId: d.id, title: d.title, line: said ?? "Finished its turn", at: l.since ?? d.updatedAt, msg: nil, pr: nil, id: id, agent: a, live: l))
+                default: break
+                }
             }
         }
         return items.sorted { a, b in a.kind.rawValue != b.kind.rawValue ? a.kind.rawValue < b.kind.rawValue : (a.at ?? "") > (b.at ?? "") }
@@ -252,7 +268,7 @@ final class Store {
     /// What needs you now: the Dock badge and the menu bar's count.
     var urgent: Int {
         guard let s = state else { return 0 }
-        return s.dockets.filter { $0.live?.state == .blocked || $0.live?.state == .error }.count + s.messages.count + s.prs.filter { $0.attention != nil }.count + s.tasks.filter { $0.attention != nil }.count
+        return s.dockets.reduce(0) { n, d in n + d.lives.filter { $0.live.state == .blocked || $0.live.state == .error }.count } + s.messages.count + s.prs.filter { $0.attention != nil }.count + s.tasks.filter { $0.attention != nil }.count
     }
 
     // ---- toasts ----
@@ -387,21 +403,42 @@ final class Store {
         return id
     }
 
-    func openInRex(_ id: String) {
-        Task { await act("/api/dockets/\(id)/open", done: "Showing \(id)'s pane in \(docket(id)?.runtime ?? "Rex")") }
+    /// `?block=B`, for a pane action on one of a docket's agents; nothing
+    /// for its lead.
+    nonisolated static func blockQuery(_ block: String?) -> String {
+        guard let block, !block.isEmpty else { return "" }
+        return "?block=" + (block.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? block)
     }
 
-    /// Approve or deny an agent's prompt. The hub reads the prompt from its runtime
-    /// again and answers only if it's the one shown here.
-    func answer(_ d: Docket, approve: Bool) async {
-        guard let l = d.live else { return }
-        await answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: approve)
+    /// Bring an agent's pane forward: that block's, or the docket's lead's.
+    func openInRex(_ id: String, block: String? = nil) {
+        let d = docket(id)
+        let a = d?.member(block: block)
+        let whose = a.map { d?.several == true ? "\($0.label)'s" : "\(id)'s" } ?? "\(id)'s"
+        Task { await act("/api/dockets/\(id)/open\(Self.blockQuery(block))", done: "Showing \(whose) pane in \(a?.runtime ?? d?.runtime ?? "Rex")") }
+    }
+
+    /// Approve or deny an agent's prompt: that agent's, or the lead's. The
+    /// hub reads the prompt from its runtime again and answers only if it's
+    /// the one shown here.
+    func answer(_ d: Docket, block: String? = nil, approve: Bool) async {
+        let a = d.member(block: block)
+        guard let l = a?.live ?? (block == nil ? d.live : nil) else { return }
+        await answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: approve, block: a?.block)
+    }
+
+    /// Answer the prompt an Inbox item shows: its agent's, exactly as shown.
+    func answer(_ it: InboxItem, approve: Bool) async {
+        guard let d = it.docket else { return }
+        guard let l = it.live else { return await answer(d, approve: approve) }
+        await answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: approve, block: d.blockFor(it.agent))
     }
 
     /// Answer the prompt as it was shown: the hub refuses if what waits in
     /// the pane now is a different prompt.
-    func answer(_ id: String, record: String, since: String?, msg: String?, approve: Bool) async {
-        let body: [String: Any] = ["record": record, "updated_at": since ?? NSNull(), "msg": msg ?? NSNull()]
+    func answer(_ id: String, record: String, since: String?, msg: String?, approve: Bool, block: String? = nil) async {
+        var body: [String: Any] = ["record": record, "updated_at": since ?? NSNull(), "msg": msg ?? NSNull()]
+        if let block, !block.isEmpty { body["block"] = block }
         guard let r = await act("/api/dockets/\(id)/\(approve ? "approve" : "deny")", body) else { return }
         if r["cleared"].bool {
             toast("\(approve ? "Approved" : "Denied")\(msg.map { ": \($0)" } ?? "")")
@@ -410,8 +447,11 @@ final class Store {
         }
     }
 
-    func send(_ id: String, _ text: String) async -> Bool {
-        guard let r = await act("/api/dockets/\(id)/send", ["text": text, "queue": true]) else { return false }
+    /// Message an agent on the docket: that block's, or the lead.
+    func send(_ id: String, _ text: String, block: String? = nil) async -> Bool {
+        var body: [String: Any] = ["text": text, "queue": true]
+        if let block, !block.isEmpty { body["block"] = block }
+        guard let r = await act("/api/dockets/\(id)/send", body) else { return false }
         if r["queued"].int != nil { toast("Queued: it goes in when the turn ends") }
         return true
     }
@@ -450,7 +490,15 @@ final class Store {
         if let title, !title.isEmpty { body["title"] = title }
         if let docket { body["docket"] = docket }
         guard let r = await act("/api/agents/start", body), let id = r["docket"].str else { return nil }
-        toast(docket == nil ? "\(id): \(appName(app)) started in \(state?.spawnRuntime ?? "Rex")'s wheelhouse session" : "\(appName(app)) is on \(id), in wheelhouse/\(id)")
+        let pane = r["pane"].text ?? id
+        let others = r["others"].int ?? 0
+        if docket == nil {
+            toast("\(id): \(appName(app)) started in \(state?.spawnRuntime ?? "Rex")'s wheelhouse session")
+        } else if others > 0 {
+            toast("\(appName(app)) joined \(id) beside \(plural(others, "other agent")), in wheelhouse/\(pane)")
+        } else {
+            toast("\(appName(app)) is on \(id), in wheelhouse/\(pane)")
+        }
         return id
     }
 

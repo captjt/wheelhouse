@@ -38,7 +38,7 @@ struct RootView: View {
         .overlay(alignment: .bottom) { ToastStack() }
         .sheet(item: $nav.creating) { mode in NewDocketSheet(mode: mode) }
         .sheet(isPresented: $nav.shortcuts) { ShortcutsSheet() }
-        .sheet(item: Binding(get: { nav.pane.map(IdBox.init) }, set: { nav.pane = $0?.id })) { b in PaneSheet(id: b.id) }
+        .sheet(item: Binding(get: { nav.pane.map(IdBox.init) }, set: { nav.pane = $0?.id })) { b in PaneSheet(id: b.id, block: nav.paneBlock) }
         .sheet(item: Binding(get: { nav.record.map(IdBox.init) }, set: { nav.record = $0?.id })) { b in RecordSheet(id: b.id) }
         .sheet(item: Binding(get: { nav.linking.map(IdBox.init) }, set: { nav.linking = $0?.id })) { b in LinkIssueSheet(docket: b.id) }
         .sheet(item: Binding(get: { nav.holding.map(IdBox.init) }, set: { nav.holding = $0?.id })) { b in HoldSheet(id: b.id) }

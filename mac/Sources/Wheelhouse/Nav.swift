@@ -79,6 +79,8 @@ final class Nav {
     var palette = false
     var creating: NewMode?
     var pane: String?
+    /// Which of the docket's agents the pane sheet shows; nil, its lead.
+    var paneBlock: String?
     var record: String?
     var linking: String?
     /// Holding a docket: asking why.
@@ -91,6 +93,12 @@ final class Nav {
     var shortcuts = false
     /// The docket the window is about now: the one selected and shown.
     var current: String?
+
+    /// Peek at an agent's pane: that block's, or the docket's lead's.
+    func peek(_ id: String, block: String? = nil) {
+        paneBlock = block
+        pane = id
+    }
 
     func selected(_ s: Place) -> String? { selection[s] }
 
