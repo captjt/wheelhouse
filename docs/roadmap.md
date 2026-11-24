@@ -13,8 +13,9 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### The hub and the record
 
-- [x] Every Claude Code or Codex agent in a Rex pane gets a docket.
-      Claude Code's hooks (`wh hooks install`) add names from your prompts,
+- [x] Every Claude Code, Codex or Antigravity agent in a Rex pane gets a
+      docket. Claude Code's and Antigravity's hooks (`wh hooks install`)
+      add names from your prompts,
       each turn's summary, and a new docket on `/clear`.
 - [x] A signed, hash-chained record per docket: `wh verify`, `wh export`,
       and `wh verify --file` for an export ([record.md](record.md))
@@ -164,8 +165,9 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### Review
 
-- [ ] Codex reviewers and checkers tested in live rounds. The config
-      supports them, but they haven't run a live Wheelhouse round yet.
+- [ ] Codex and Antigravity reviewers and checkers tested in live rounds.
+      The config supports them, but they haven't run a live Wheelhouse
+      round yet.
 - [ ] Drafts and round status on the docket's record, rather than in the
       worktree's `.tmp/`
 
@@ -178,8 +180,8 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### Elsewhere
 
-- [ ] Codex's permission prompts answered from the app, as Claude Code's
-      are
+- [ ] Codex's and Antigravity's permission prompts answered from the app,
+      as Claude Code's are
 - [ ] Rex hosts other than this Mac
 
 ## Later

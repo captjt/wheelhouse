@@ -764,8 +764,8 @@ fn print_review_status(v: &Value) {
 }
 
 /// `wh skill [show|install|remove]`: the agents' skill. With a shared
-/// `~/.agents/skills`, it goes there and is linked into Claude Code's and
-/// Codex's skills; otherwise it goes in `~/.claude/skills`.
+/// `~/.agents/skills`, it goes there and is linked into Claude Code's,
+/// Codex's and Antigravity's skills; otherwise it goes in `~/.claude/skills`.
 fn skill(action: Option<&str>) -> Result<()> {
     let home = paths::home();
     let shared = home.join(".agents/skills");
@@ -1017,7 +1017,8 @@ fn status() -> Result<()> {
         if v["rex"]["connected"].as_bool() == Some(true) { "following".to_string() } else { format!("not connected: {}", v["rex"]["error"].as_str().unwrap_or("connecting")) }
     );
     println!("  agents   {} in Rex · dockets {} open, {} in all", v["agents"], v["dockets"]["open"], v["dockets"]["all"]);
-    println!("  hooks    {}", if v["hooks"].as_bool() == Some(true) { "Claude Code: on" } else { "off: wh hooks install" });
+    let on: Vec<&str> = [("claude-code", "Claude Code"), ("agy", "Antigravity")].into_iter().filter(|(app, _)| hooks::installed_for(app)).map(|(_, name)| name).collect();
+    println!("  hooks    {}", if on.is_empty() { "off: wh hooks install".to_string() } else { format!("{} on", on.join(", ")) });
     match v["tailnet"]["url"].as_str() {
         Some(u) => println!("  tailnet  {u} (answers {}) · publish with wh web --publish", v["tailnet"]["owner"].as_str().unwrap_or("?")),
         None => println!("  tailnet  Tailscale not seen"),

@@ -74,7 +74,9 @@ pub fn argv(cfg: &Config, s: &Spec) -> Launch {
         for d in std::iter::once(gitdir.display().to_string()).chain(caches) {
             argv.extend(["--add-dir".to_string(), d]);
         }
-        let mut deny = vec!["command(git push*)", "command(gh *)", "command(wh send*)", "command(wh share*)", "command(wh reply*)"];
+        // agy matches `command(…)` by whole-word prefix and takes no glob:
+        // `command(git push*)` would never match `git push`.
+        let mut deny = vec!["command(git push)", "command(gh)", "command(wh send)", "command(wh share)", "command(wh reply)"];
         if !cfg.mcp {
             deny.push("mcp(*)");
         }
@@ -135,6 +137,6 @@ mod tests {
         );
         let a = agy.argv.join(" ");
         assert!(a.contains("agy --conversation conv-42 --mode auto --effort high --add-dir /src/api/.git"), "{a}");
-        assert!(a.contains("command(git push*)") && a.contains("command(gh *)") && a.contains("mcp(*)"), "{a}");
+        assert!(a.contains("command(git push)") && a.contains("command(gh)") && !a.contains("command(gh *)") && a.contains("mcp(*)"), "{a}");
     }
 }

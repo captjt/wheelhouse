@@ -5,7 +5,7 @@
 Every piece of agent work as a docket, on a record you can check.
 
 Wheelhouse follows [Rex](https://www.superlogical.com/rex). Every Claude
-Code or Codex agent running in a Rex pane gets a **docket**: what you asked,
+Code, Codex or Antigravity agent running in a Rex pane gets a **docket**: what you asked,
 what the agent answered, when it waited on you, the files it made, and how
 it ended. Each entry is signed and chained, so `wh verify` shows that
 nothing in a docket's record was changed, removed or reordered.
@@ -44,7 +44,8 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
 </p>
 
 > Rex is in private beta. Wheelhouse needs a Rex build whose agents report
-> program status (OSC 7501): Claude Code and Codex do on their own.
+> program status (OSC 7501): Claude Code, Codex and Antigravity do on their
+> own.
 
 ## Wheelhouse.app
 
@@ -117,7 +118,8 @@ phone over Tailscale.
   `review.lua` and `build.lua`
 - [GitHub CLI](https://cli.github.com), signed in (`gh auth login`), for
   Review and Build
-- Claude Code, and Codex if you want it as a reviewer or builder
+- Claude Code, and Codex or Antigravity (`agy`) if you want them as
+  reviewers or builders
 - Optional: [Tailscale](https://tailscale.com) with HTTPS on, for the app
   on your phone and Web Push; `terminal-notifier`, for clickable Mac
   notifications; a Linear API key, for linking issues
@@ -132,8 +134,8 @@ just setup
 
 `just setup` builds the hub (`wh`, in `~/.cargo/bin`, with the web app
 built in), runs it at login as a LaunchAgent (`wh up`; logs with
-`wh logs`), installs Claude Code's hooks (names from your prompts, turns
-with their last message, a new docket on `/clear`) and the `wheelhouse`
+`wh logs`), installs Claude Code's and Antigravity's hooks (names from your
+prompts, turns with their last message, a new docket on `/clear`) and the `wheelhouse`
 skill for agents, and puts Wheelhouse.app in `~/Applications`. Run it again
 after pulling to update (`just app` rebuilds only the Mac app).
 
@@ -143,7 +145,8 @@ Then:
    Rex is already a docket. (Or open http://127.0.0.1:7500.)
 2. Tell your agents about Wheelhouse: paste the block in
    [docs/agent-instructions.md](docs/agent-instructions.md) into
-   `~/.claude/CLAUDE.md` (and `~/.codex/AGENTS.md`).
+   `~/.claude/CLAUDE.md` (and `~/.codex/AGENTS.md`,
+   `~/.gemini/config/GEMINI.md`).
 3. Tab completion: add `eval "$(wh completions zsh)"` to `~/.zshrc`
    (bash: `eval "$(wh completions bash)"` in `~/.bashrc`). Tab fills in
    commands and flags, and from the hub: the dockets in flight with their
@@ -198,7 +201,7 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh intent D-4 [TEXT\|-]` | Print a docket's intent, or set it |
 | `wh link D-4 ENG-142` | Link a Linear issue |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or a link with a docket |
-| `wh start [--codex] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have, in Rex |
+| `wh start [--codex\|--agy] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have, in Rex |
 | `wh open [D-4]` | Open a docket (or the Inbox) in Wheelhouse.app, or the web app without it |
 | `wh verify [D-4]`, `wh export D-4 > D-4.jsonl`, `wh verify --file D-4.jsonl` | Check a record, every kept file included; one that checks without the hub |
 | `wh review`, `on`, `off`, `pause`, `resume`, `check` | The Review protocol, and its switches |
@@ -208,7 +211,7 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh recap [today\|week\|30d]` | What happened, as Markdown |
 | `wh up`, `down`, `logs`, `status` | The hub at login; its log; what it sees |
 | `wh web [--publish]` | The app's address on your tailnet |
-| `wh hooks [install\|remove]`, `wh skill [install\|remove]` | Claude Code's hooks; the agents' skill |
+| `wh hooks [install\|remove]`, `wh skill [install\|remove]` | Claude Code's and Antigravity's hooks; the agents' skill |
 | `wh setup-linear` | Store a Linear API key in the Keychain |
 | `wh completions zsh\|bash` | Tab completion, for `eval "$(wh completions zsh)"` in `~/.zshrc` |
 | `wh import rex-reviewer` | Move over from rex-reviewer, once |
@@ -264,7 +267,7 @@ odd setups.
 
 - **The hub** (`wh serve`) follows Rex's events and mirrors its sessions,
   panes and each agent's program status. An agent pane gets a docket;
-  Claude Code's hooks add your prompts and its turns.
+  Claude Code's and Antigravity's hooks add your prompts and their turns.
 - **The record** is SQLite: one signed, chained entry per thing that
   happened, and each docket's state folded from its entries. Files are kept
   once, by hash. Keys are Ed25519, one per signer, on this Mac.

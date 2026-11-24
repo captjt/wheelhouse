@@ -4,7 +4,7 @@ Agents learn about Wheelhouse from two places: a few lines in your global
 agent instructions, and the `wheelhouse` skill they load when they need the
 details.
 
-1. Paste the block below into both of these files (create either one if
+1. Paste the block below into each of these files (create any one if
    it's missing):
    - `~/.claude/CLAUDE.md`, for Claude Code
    - `~/.codex/AGENTS.md`, for Codex
@@ -15,9 +15,10 @@ details.
    ```
 
    With a shared `~/.agents/skills` folder, it writes the skill there and
-   links it into `~/.claude/skills` and `~/.codex/skills`. Without one, it
-   goes in `~/.claude/skills/wheelhouse`, for Claude Code only; make
-   `~/.agents/skills` first to give Codex the skill too. `wh skill show`
+   links it into `~/.claude/skills`, `~/.codex/skills` and
+   `~/.gemini/config/skills`. Without one, it goes in
+   `~/.claude/skills/wheelhouse`, for Claude Code only; make
+   `~/.agents/skills` first to give Codex and Antigravity the skill too. `wh skill show`
    prints the skill, and `wh skill remove` takes it out.
 
 The lines apply only inside a Rex pane (`REX_SESSION` is set), so an agent
