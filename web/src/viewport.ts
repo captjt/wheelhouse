@@ -42,8 +42,9 @@ function bar(): DOMRect | null {
 }
 
 /** The whole screen's height, when the app has the whole screen (a Home
- * Screen app, not split): iOS 26 says the page is the screen less the
- * clock's safe area, which left that much empty at the bottom. */
+ * Screen app, not split). iOS 26 and later lay a Home Screen app's page out
+ * shorter than this, from the top: the strip below it isn't the page's, and
+ * nothing drawn past the page's edge shows there. */
 function fullHeight(): number {
   if (!standalone()) return 0;
   const [short, long] = [Math.min(screen.width, screen.height), Math.max(screen.width, screen.height)];
@@ -67,7 +68,7 @@ function measure(why: string) {
     scroll: { x: scrollX, y: scrollY },
     vv: vv ? { w: vv.width, h: vv.height, top: vv.offsetTop, pageTop: vv.pageTop, scale: vv.scale } : null,
     safe: insets(),
-    css: { vvTop: css.getPropertyValue("--vv-top"), vvH: css.getPropertyValue("--vv-h"), kb: css.getPropertyValue("--kb") },
+    css: { vvTop: css.getPropertyValue("--vv-top"), vvH: css.getPropertyValue("--vv-h"), kb: css.getPropertyValue("--kb"), safeBottom: css.getPropertyValue("--safe-bottom") },
     bar: b ? { top: b.top, bottom: b.bottom, height: b.height } : null,
     sheet: (() => {
       const m = document.querySelector(".modal, .sheet")?.getBoundingClientRect();
@@ -117,11 +118,18 @@ export function keepOnScreen(): () => void {
         root().removeProperty("--vv-h");
       } else {
         const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
-        // With the keyboard down, a Home Screen app has the whole screen.
-        const h = kb > 80 ? vv.height : Math.max(vv.height, fullHeight());
+        // What the page is given, and no more: from the Home Screen, iOS 26
+        // gives it less than the screen, and drawing past that is cut off.
+        const h = vv.height;
         root().setProperty("--kb", kb > 80 ? `${kb}px` : "0px");
         root().setProperty("--vv-top", `${Math.max(0, Math.round(vv.offsetTop))}px`);
         root().setProperty("--vv-h", `${Math.round(h)}px`);
+        // A page that ends well above the screen's bottom (a Home Screen
+        // app on iOS 26 and later) doesn't reach the home indicator: its
+        // inset would only add empty space under the tab bar and the box.
+        const full = fullHeight();
+        if (full && full - window.innerHeight >= 20) root().setProperty("--safe-bottom", "0px");
+        else root().removeProperty("--safe-bottom");
       }
     }
     // Out of place: say so once when it happens (and again if it stays).
@@ -165,6 +173,6 @@ export function keepOnScreen(): () => void {
     window.removeEventListener("focusin", focus);
     window.removeEventListener("focusout", blur);
     document.removeEventListener("visibilitychange", shown);
-    for (const k of ["--kb", "--vv-top", "--vv-h"]) root().removeProperty(k);
+    for (const k of ["--kb", "--vv-top", "--vv-h", "--safe-bottom"]) root().removeProperty(k);
   };
 }
