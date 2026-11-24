@@ -127,8 +127,11 @@ export function keepOnScreen(): () => void {
         // A page that ends well above the screen's bottom (a Home Screen
         // app on iOS 26 and later) doesn't reach the home indicator: its
         // inset would only add empty space under the tab bar and the box.
+        // It starts under the status bar (its top inset covers the
+        // shortfall) and so stops that much above the bottom.
         const full = fullHeight();
-        if (full && full - window.innerHeight >= 20) root().setProperty("--safe-bottom", "0px");
+        const short = full - window.innerHeight;
+        if (full && short >= 20 && insets().top >= short - 2) root().setProperty("--safe-bottom", "0px");
         else root().removeProperty("--safe-bottom");
       }
     }
