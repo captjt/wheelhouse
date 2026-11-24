@@ -167,7 +167,8 @@ seen=$(page | jq -c '.docket.agents[] | select(.block == "herdr:t1") | .live | {
 api -X POST "$base/api/dockets/$D/approve" -d "$seen" | jq -e '.answer == "approve" and .cleared' >/dev/null || fail "the reviewer's approval didn't clear"
 jq -e '[.keys[] | select(.terminal == "t1" and .keys == ["1"])] | length == 1' "$t/hc.json" >/dev/null || fail "no 1 in Herdr"
 jq -e '[.keys[] | select(.block == "block:builder-2" and .keys == ["1"])] | length == 0' "$t/rex.json" >/dev/null || fail "the approve key went to the builder"
-page | jq -e '.docket.lead == "block:builder-2" and .docket.live.msg == "Run cargo test?"' >/dev/null || fail "the builder isn't the lead now: $(page | jq -c '.docket | {lead, live}')"
+# Once the hub sees the reviewer's prompt gone, the builder leads.
+until_ "the builder isn't the lead now: $(page | jq -c '.docket | {lead, live}')" sh -c "curl -fsS -H 'x-wheelhouse: 1' $base/api/dockets/$D | jq -e '.docket.lead == \"block:builder-2\" and .docket.live.msg == \"Run cargo test?\"'"
 seen=$(page | jq -c '.docket.live | {record, updated_at: .since, msg}')
 api -X POST "$base/api/dockets/$D/approve" -d "$seen" | jq -e '.cleared' >/dev/null || fail "the lead's approval, with no pane named"
 jq -e '[.keys[] | select(.block == "block:builder-2" and .keys == ["1"])] | length == 1' "$t/rex.json" >/dev/null || fail "no 1 for the builder"
