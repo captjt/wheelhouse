@@ -101,6 +101,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/share/stop", post(share_stop))
         .route("/api/hook", post(hook))
         .route("/api/events", get(events))
+        .merge(crate::team::api::routes())
         .fallback(asset)
         .layer(middleware::from_fn(guard))
         .with_state(shared)
@@ -316,6 +317,8 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
     let core = shared.lock();
 
     let messages: Vec<Value> = core.store.messages_where("to_addr = 'me' AND status = 'open'", []).map_err(internal)?.iter().map(|m| crate::messages::view(&core, m)).collect();
+    let mut attention = crate::team::member::attention(&core);
+    attention.extend(crate::evidence::attention(&core, &core.store.states().map_err(internal)?));
     Ok(Json(json!({
         "review": review,
         "build": build,
@@ -329,7 +332,8 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         "dockets": dockets,
         "asks": asks,
         "agents": agents_now,
-        "attention": crate::evidence::attention(&core, &core.store.states().map_err(internal)?),
+        "attention": attention,
+        "team": crate::team::member::status(&core),
     })))
 }
 
@@ -387,7 +391,7 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
     }
     let report = core.verify(&id).map_err(internal)?;
     let queued: Vec<Value> = core.store.queued_prompts(Some(&id)).map_err(internal)?.into_iter().map(|(q, _, _, body, at)| json!({ "id": q, "body": body, "at": at })).collect();
-    let decisions: Vec<Value> = crate::decisions::of(&read).iter().map(crate::decisions::Decision::json).collect();
+    let decisions: Vec<Value> = crate::decisions::of_stored(&core.store.entries(&id).map_err(internal)?).iter().map(crate::decisions::Decision::json).collect();
     let numbered: Vec<(i64, record::Entry)> = entries.iter().filter_map(|v| v["seq"].as_i64()).zip(read.iter().cloned()).collect();
     let verify_view = crate::evidence::view(&core, &st, &numbered);
     Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions, "evidence": verify_view })))
@@ -537,8 +541,10 @@ async fn standing(State(shared): State<Shared>, Path(id): Path<String>, Json(req
     let (d, repo) = {
         let core = shared.lock();
         let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
-        let read: Vec<record::Entry> = core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| s.entry().ok()).collect();
-        let d = crate::decisions::of(&read).into_iter().find(|d| d.key == req.key).ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no decision {}", req.key)))?;
+        let d = crate::decisions::of_stored(&core.store.entries(&id).map_err(internal)?)
+            .into_iter()
+            .find(|d| d.key == req.key)
+            .ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no decision {}", req.key)))?;
         if let Some(r) = &d.standing {
             return Err(fail(StatusCode::CONFLICT, format!("it stands for {r} already")));
         }
@@ -1467,7 +1473,9 @@ async fn verify_all(State(shared): State<Shared>) -> ApiResult {
 /// One docket's full check: the record, and every file's bytes.
 async fn verify_one(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
     let core = shared.lock();
-    if core.store.state(&id).map_err(internal)?.is_none() {
+    // The workspace's member log has no docket page, and checks all the same.
+    let log = core.team.as_ref().is_some_and(|t| t.log_id() == id);
+    if !log && core.store.state(&id).map_err(internal)?.is_none() {
         return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
     }
     Ok(Json(serde_json::to_value(core.verify_full(&id).map_err(internal)?).unwrap_or_default()))

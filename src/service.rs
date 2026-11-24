@@ -227,6 +227,81 @@ pub async fn trim_logs(_shared: crate::hub::Shared) {
     }
 }
 
+/// A workspace hub's LaunchAgent, beside (never instead of) the daily hub.
+const WORKSPACE_LABEL: &str = "dev.wheelhouse.workspace";
+
+/// `wh up --workspace`: run a workspace hub at login on this Mac, for a
+/// team on an always-on Mac (docs/teams.md). Its state and address are its
+/// own: `~/.local/state/wheelhouse-workspace` and 127.0.0.1:7700.
+pub fn up_workspace() -> Result<()> {
+    let exe = std::env::current_exe()?.canonicalize()?;
+    let addr = crate::team::workspace::http_addr()?;
+    let log = home().join("Library/Logs/wheelhouse-workspace.log");
+    let path = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
+    let mut env = format!("    <key>PATH</key><string>{}</string>\n", xml(&path));
+    for var in ["WH_WORKSPACE_HTTP", "USER", "HOME"] {
+        if let Ok(v) = std::env::var(var) {
+            env.push_str(&format!("    <key>{var}</key><string>{}</string>\n", xml(&v)));
+        }
+    }
+    // Its own state, whatever WH_STATE the shell has for the daily hub.
+    env.push_str(&format!("    <key>WH_STATE</key><string>{}</string>\n", xml(&home().join(".local/state/wheelhouse-workspace").display().to_string())));
+    let body = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{WORKSPACE_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{exe}</string>
+    <string>serve</string>
+    <string>--workspace</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+{env}  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"#,
+        exe = xml(&exe.display().to_string()),
+        log = xml(&log.display().to_string()),
+    );
+    let plist = home().join(format!("Library/LaunchAgents/{WORKSPACE_LABEL}.plist"));
+    for dir in [plist.parent(), log.parent()].into_iter().flatten() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&plist, body).with_context(|| format!("writing {}", plist.display()))?;
+    let domain = domain()?;
+    let _ = Command::new("launchctl").args(["bootout", &format!("{domain}/{WORKSPACE_LABEL}")]).output();
+    std::thread::sleep(Duration::from_millis(500));
+    let out = Command::new("launchctl").args(["bootstrap", &domain, &plist.display().to_string()]).output()?;
+    if !out.status.success() {
+        bail!("launchctl bootstrap: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    for _ in 0..80 {
+        if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
+            println!("The workspace hub is up on {addr} ({WORKSPACE_LABEL}). Publish it on your tailnet: tailscale serve --bg {}", addr.port());
+            println!("Its setup code (until a workspace is made) is in {}", crate::paths::tilde(&log.display().to_string()));
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    bail!("the workspace hub didn't answer within 8s; see {}", log.display())
+}
+
+/// `wh down --workspace`.
+pub fn down_workspace() -> Result<()> {
+    let out = Command::new("launchctl").args(["bootout", &format!("{}/{WORKSPACE_LABEL}", domain()?)]).output()?;
+    println!("{}", if out.status.success() { "The workspace hub stopped" } else { "The workspace hub wasn't running" });
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

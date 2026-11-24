@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { appName, get, getText, type Docket, type EntryView, type RecordEntry, type RecordView } from "./api";
+import { actorName, appName, get, getText, mateOf, type Docket, type EntryView, type RecordEntry, type RecordView } from "./api";
 import { AppAvatar, HubAvatar, IconBraces, IconDownload, IconExternal, IconFile, IconGlobe, IconImage, IconLinkOut, IconShield, PersonAvatar } from "./icons";
 import { agoLong, stamp, useHub } from "./live";
 import { InlineMd, Modal, Prose } from "./ui";
@@ -34,10 +34,8 @@ function ArtifactIcon({ e, size = 16 }: { e: EntryView; size?: number }) {
 }
 
 /** Who kept it, in words. */
-function keptBy(e: EntryView): string {
-  if (e.actor.type === "person") return "You";
-  if (e.actor.type === "agent") return appName(String(e.actor.id).split("@")[0]);
-  return "Wheelhouse";
+function keptBy(e: EntryView, docket: string, me?: string | null): string {
+  return actorName(e.actor, docket, me);
 }
 
 /** The docket's artifacts, grouped (Round 3, Plan, Attached), newest group first. */
@@ -100,7 +98,8 @@ async function sha256(buf: ArrayBuffer): Promise<string | null> {
 type Loaded = { text?: string; json?: unknown; match: boolean | null; error?: string };
 
 /** One artifact: shown as what it is, with its place in the record. */
-export function ArtifactViewer({ e, onClose }: { e: EntryView; onClose: () => void }) {
+export function ArtifactViewer({ e, docket, onClose }: { e: EntryView; docket: string; onClose: () => void }) {
+  const me = useHub().state?.team?.workspace?.you;
   const k = kindOf(e);
   const [got, setGot] = useState<Loaded | null>(null);
   useEffect(() => {
@@ -161,7 +160,7 @@ export function ArtifactViewer({ e, onClose }: { e: EntryView; onClose: () => vo
           <div className="art-head-title">{e.body || e.data?.name}</div>
           <div className="art-head-meta">
             {e.data?.name}
-            {e.data?.size != null && ` · ${sizeOf(e.data.size)}`} · kept by {keptBy(e)} · <span title={stamp(e.at)}>{agoLong(e.at)}</span>
+            {e.data?.size != null && ` · ${sizeOf(e.data.size)}`} · kept by {keptBy(e, docket, me)} · <span title={stamp(e.at)}>{agoLong(e.at)}</span>
           </div>
         </div>
         {k !== "link" && (
@@ -179,7 +178,7 @@ export function ArtifactViewer({ e, onClose }: { e: EntryView; onClose: () => vo
         <IconShield size={13} />
         {k === "link" ? (
           <span>
-            Linked in entry #{e.seq}, signed by {keptBy(e)}.
+            Linked in entry #{e.seq}, signed by {keptBy(e, docket, me)}.
           </span>
         ) : (
           <span>
@@ -283,13 +282,11 @@ const MARKS: Record<string, string> = {
   said: "A person or an agent said it: true if you trust them.",
 };
 
-function who(e: { actor: EntryView["actor"] }, owner: string) {
-  if (e.actor.type === "person") return { name: "You", avatar: <PersonAvatar name={owner} size={16} /> };
-  if (e.actor.type === "agent") {
-    const app = String(e.actor.id).split("@")[0];
-    return { name: appName(app), avatar: <AppAvatar app={app} size={16} /> };
-  }
-  return { name: "Wheelhouse", avatar: <HubAvatar size={16} /> };
+function who(e: { actor: EntryView["actor"] }, owner: string, docket: string, me?: string | null) {
+  const name = actorName(e.actor, docket, me);
+  if (e.actor.type === "person") return { name, avatar: <PersonAvatar name={mateOf(e.actor, docket, me) ?? owner} size={16} /> };
+  if (e.actor.type === "agent") return { name, avatar: <AppAvatar app={String(e.actor.id).split("@")[0]} size={16} /> };
+  return { name, avatar: <HubAvatar size={16} /> };
 }
 
 const keyName = (k?: string | null) => (k === "owner" ? "your key" : k === "hub" ? "Wheelhouse's key" : k?.startsWith("agent-") ? `${appName(k.slice(6).split("@")[0])}'s key` : k || "an unknown key");
@@ -388,15 +385,15 @@ export function RecordViewer({ d, onClose }: { d: Docket; onClose: () => void })
       <div className="rec-list">
         {!rec && !error && <div className="art-loading muted">Loading…</div>}
         {shown.map((e) => (
-          <RecordRow key={e.seq} e={e} d={d} owner={owner} open={open === e.seq} onToggle={() => setOpen((o) => (o === e.seq ? null : e.seq))} />
+          <RecordRow key={e.seq} e={e} d={d} owner={owner} me={hub.state?.team?.workspace?.you} open={open === e.seq} onToggle={() => setOpen((o) => (o === e.seq ? null : e.seq))} />
         ))}
       </div>
     </Modal>
   );
 }
 
-function RecordRow({ e, d, owner, open, onToggle }: { e: RecordEntry; d: Docket; owner: string; open: boolean; onToggle: () => void }) {
-  const w = who(e, owner);
+function RecordRow({ e, d, owner, me, open, onToggle }: { e: RecordEntry; d: Docket; owner: string; me?: string | null; open: boolean; onToggle: () => void }) {
+  const w = who(e, owner, d.id, me);
   const [env, setEnv] = useState<{ envelope: string; payload: string } | null>(null);
   const summary = e.body ? e.body.replace(/\s+/g, " ").slice(0, 140) : e.data && Object.keys(e.data).length ? Object.entries(e.data).filter(([, x]) => typeof x !== "object").slice(0, 3).map(([k, x]) => `${k}: ${x}`).join(" · ") : "";
   return (

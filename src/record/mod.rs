@@ -12,7 +12,6 @@ pub mod verify;
 pub use entry::Entry;
 pub use envelope::Envelope;
 pub use fold::DocketState;
-#[cfg(test)]
 pub use keys::Key;
 pub use keys::Keyring;
 

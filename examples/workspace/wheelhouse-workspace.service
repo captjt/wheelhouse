@@ -1,0 +1,30 @@
+# A workspace hub under systemd, on a Linux box or VM on your tailnet
+# (docs/teams.md). Build wh there (cargo build --release; see
+# CONTRIBUTING.md), put it in /usr/local/bin, then:
+#
+#   sudo useradd --system --home /var/lib/wheelhouse-workspace --create-home wheelhouse
+#   sudo cp examples/workspace/wheelhouse-workspace.service /etc/systemd/system/
+#   sudo systemctl enable --now wheelhouse-workspace
+#   sudo tailscale serve --bg 7700
+#   journalctl -u wheelhouse-workspace     # the setup code, for wh team create
+
+[Unit]
+Description=Wheelhouse workspace hub
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=wheelhouse
+Environment=WH_STATE=/var/lib/wheelhouse-workspace
+Environment=WH_WORKSPACE_HTTP=127.0.0.1:7700
+ExecStart=/usr/local/bin/wh serve --workspace
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/wheelhouse-workspace
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

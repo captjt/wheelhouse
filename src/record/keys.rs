@@ -18,7 +18,9 @@ impl Key {
         Key { name: name.to_string(), pair: ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::generate()) }
     }
 
-    fn from_seed(name: &str, seed: &[u8]) -> Result<Self> {
+    /// The key a 32-byte seed makes: an invite's key is made this way, from
+    /// the secret in its code.
+    pub fn from_seed(name: &str, seed: &[u8]) -> Result<Self> {
         let seed = ed25519_compact::Seed::from_slice(seed).map_err(|e| anyhow!("bad seed for {name}: {e}"))?;
         Ok(Key { name: name.to_string(), pair: ed25519_compact::KeyPair::from_seed(seed) })
     }
@@ -31,6 +33,21 @@ impl Key {
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
         self.pair.sk.sign(msg, None).to_vec()
     }
+}
+
+/// 32 random bytes, from the system's source.
+pub fn random32() -> [u8; 32] {
+    let seed = ed25519_compact::Seed::generate();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(seed.as_ref());
+    out
+}
+
+/// Check a plain Ed25519 signature by the key a key id names.
+pub fn verify_by(keyid: &str, msg: &[u8], sig: &[u8]) -> bool {
+    let Some(pk) = public_from_keyid(keyid) else { return false };
+    let Ok(sig) = ed25519_compact::Signature::from_slice(sig) else { return false };
+    pk.verify(msg, &sig).is_ok()
 }
 
 /// The public key a key id names.

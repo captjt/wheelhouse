@@ -88,23 +88,47 @@ fn gate(d: &Value) -> bool {
 
 /// Every question asked on a docket, in the order first asked, each with
 /// the answer that stands.
+#[cfg(test)]
 pub fn of(entries: &[Entry]) -> Vec<Decision> {
+    fold(entries.iter().map(|e| (None, e)))
+}
+
+/// `of`, from stored entries: on a shared docket (docs/teams.md) a question
+/// is known by its entry's id, the same on every hub, since each hub numbers
+/// its own messages; an answer names it by `answers`.
+pub fn of_stored(stored: &[crate::record::Stored]) -> Vec<Decision> {
+    let read: Vec<(String, Entry)> = stored.iter().filter_map(|s| Some((s.id.clone(), s.entry().ok()?))).collect();
+    fold(read.iter().map(|(id, e)| (Some(id.as_str()), e)))
+}
+
+fn fold<'a>(entries: impl Iterator<Item = (Option<&'a str>, &'a Entry)>) -> Vec<Decision> {
     let mut order: Vec<String> = Vec::new();
     let mut by_key: BTreeMap<String, Decision> = BTreeMap::new();
     let mut key_of: BTreeMap<i64, String> = BTreeMap::new();
-    for e in entries {
+    let mut key_of_entry: BTreeMap<String, String> = BTreeMap::new();
+    for (id, e) in entries {
         let d = &e.data;
+        let shared = !e.docket.starts_with("D-");
         match e.kind.as_str() {
             "question" => {
                 if gate(d) {
                     continue;
                 }
                 let Some(m) = d["message"].as_i64() else { continue };
-                let key = d["ask"].as_str().filter(|_| d["protocol"] == "build").map(str::to_string).unwrap_or_else(|| format!("#{m}"));
+                let key = match id.filter(|_| shared) {
+                    // Hubs' message numbers clash on a shared docket: its entry's id doesn't.
+                    Some(id) => format!("#{}", &id.trim_start_matches("sha256:")[..8.min(id.len())]),
+                    None => d["ask"].as_str().filter(|_| d["protocol"] == "build").map(str::to_string).unwrap_or_else(|| format!("#{m}")),
+                };
+                if let Some(id) = id {
+                    key_of_entry.insert(id.to_string(), key.clone());
+                }
                 let question = d["subject"].as_str().map(str::to_string).filter(|s| !s.trim().is_empty()).unwrap_or_else(|| first_line(e.body.as_deref().unwrap_or("")));
                 // A Build's subject leads with its key: "D-12 · D2 · Which store?"
                 let question = question.rsplit(" · ").next().unwrap_or(&question).to_string();
-                key_of.insert(m, key.clone());
+                if !shared {
+                    key_of.insert(m, key.clone());
+                }
                 if !by_key.contains_key(&key) {
                     order.push(key.clone());
                 }
@@ -141,7 +165,8 @@ pub fn of(entries: &[Entry]) -> Vec<Decision> {
                 }
             }
             "decision" | "note" => {
-                let Some(k) = d["replies_to"].as_i64().and_then(|m| key_of.get(&m)) else { continue };
+                let by_entry = d["answers"].as_str().and_then(|a| key_of_entry.get(a));
+                let Some(k) = by_entry.or_else(|| d["replies_to"].as_i64().and_then(|m| key_of.get(&m))) else { continue };
                 let Some(x) = by_key.get_mut(k) else { continue };
                 let choice = d["choice"].as_str().map(str::to_string);
                 let body = e.body.as_deref().map(str::trim).filter(|b| !b.is_empty()).map(str::to_string);
@@ -285,5 +310,30 @@ mod tests {
         assert!(b.contains("- PR #12: **Merge** (you). \"but squash it\""));
         assert!(b.contains("- Retry cap?: **3** (the recommendation, approved with the plan)"));
         assert!(b.contains("- Rename the flag?: waiting on an answer (Yes / No)"));
+    }
+
+    #[test]
+    fn on_a_shared_docket_answers_find_their_question_by_its_entry() {
+        let mk = |kind: &str, typ: &str, id: &str, data: serde_json::Value| {
+            let mut x = Entry::new("ACME-1", kind, "2026-11-24T10:00:00.000Z", crate::record::entry::Actor::new(typ, id));
+            x.data = data;
+            x
+        };
+        // Two hubs' questions, each numbered #3 on its own hub.
+        let q1 = mk("question", "agent", "codex@sam", json!({ "message": 3, "from": "api/agent", "to": "me", "subject": "Empty bucket", "options": ["429", "503"] }));
+        let q2 = mk(
+            "question",
+            "agent",
+            "claude-code@jordan",
+            json!({ "message": 3, "from": "api/agent", "to": "me", "subject": "Header names", "options": ["X-RateLimit", "RateLimit"] }),
+        );
+        // Jordan answers Sam's agent's question from his own copy, #7 on his hub.
+        let a = mk("decision", "person", "jordan", json!({ "message": 9, "replies_to": 7, "answers": "sha256:aaaa1111", "choice": "429" }));
+        let ids = ["sha256:aaaa1111", "sha256:bbbb2222", "sha256:cccc3333"];
+        let ds = fold(ids.iter().map(|i| Some(*i)).zip([&q1, &q2, &a]));
+        assert_eq!(ds.len(), 2, "two questions, not one");
+        assert_eq!(ds[0].question, "Empty bucket");
+        assert_eq!(ds[0].answer.as_deref(), Some("429"));
+        assert!(ds[1].answer.is_none());
     }
 }

@@ -1,19 +1,17 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { appName, post, type Decision, type Docket, type EntryView } from "./api";
+import { actorName, post, type Decision, type Docket, type EntryView } from "./api";
 import { IconEdit, IconHistory, IconIssue } from "./icons";
-import { agoLong, stamp } from "./live";
+import { agoLong, stamp, useHub } from "./live";
 import { Kbd, Modal, Prose, useToast } from "./ui";
 import { MarkdownEditor, type EditorHandle } from "./Editor";
 import { renderMarkdown, toggleTask } from "./markdown";
 import { lineDiff } from "./diff";
 
 /** Who wrote an intent version, in words. */
-function author(e: { actor: EntryView["actor"]; data: EntryView["data"] }, d: Docket) {
+function author(e: { actor: EntryView["actor"]; data: EntryView["data"] }, d: Docket, me?: string | null) {
   if (e.data?.source === "linear") return e.data?.taken_by ? `Linear (${e.data.key}), taken by you` : `Linear (${e.data?.key ?? d.linear?.key ?? "issue"})`;
   if (e.data?.source === "review") return "Wheelhouse, from the PR";
-  if (e.actor.type === "person") return "You";
-  if (e.actor.type === "agent") return appName(String(e.actor.id).split("@")[0]);
-  return "Wheelhouse";
+  return actorName(e.actor, d.id, me);
 }
 
 /**
@@ -22,6 +20,7 @@ function author(e: { actor: EntryView["actor"]; data: EntryView["data"] }, d: Do
  */
 export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: EntryView[]; onSaved: () => void }) {
   const toast = useToast();
+  const me = useHub().state?.team?.workspace?.you;
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -84,7 +83,7 @@ export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: Ent
         <span className="intent-label">Intent</span>
         {intent && current && (
           <span className="intent-meta" title={stamp(intent.at)}>
-            v{d.intent_versions} · {author(current, d)} · {agoLong(intent.at)}
+            v{d.intent_versions} · {author(current, d, me)} · {agoLong(intent.at)}
           </span>
         )}
         <span className="spacer" />
@@ -143,12 +142,12 @@ export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: Ent
           Write the intent: what this docket is for, how you'll know it's done, and what's out of scope. Agents read it with <code>wh brief</code>.
         </button>
       )}
-      {history && <IntentHistory d={d} versions={versions} onClose={() => setHistory(false)} />}
+      {history && <IntentHistory d={d} me={me} versions={versions} onClose={() => setHistory(false)} />}
     </section>
   );
 }
 
-function IntentHistory({ d, versions, onClose }: { d: Docket; versions: EntryView[]; onClose: () => void }) {
+function IntentHistory({ d, me, versions, onClose }: { d: Docket; me?: string | null; versions: EntryView[]; onClose: () => void }) {
   const [i, setI] = useState(versions.length - 1);
   const v = versions[i];
   const prev = versions[i - 1];
@@ -166,14 +165,14 @@ function IntentHistory({ d, versions, onClose }: { d: Docket; versions: EntryVie
             .map(({ x, n }) => (
               <button key={x.seq} className={`hist-item${n === i ? " sel" : ""}`} onClick={() => setI(n)}>
                 <span className="hist-v">v{n + 1}</span>
-                <span className="hist-who">{author(x, d)}</span>
+                <span className="hist-who">{author(x, d, me)}</span>
                 <span className="hist-at">{agoLong(x.at)}</span>
               </button>
             ))}
         </div>
         <div className="hist-body">
           <div className="hist-title">
-            v{i + 1} · {author(v, d)} · {stamp(v.at)}
+            v{i + 1} · {author(v, d, me)} · {stamp(v.at)}
             <span className="spacer" />
             {prev ? (
               <span className="seg seg-text hist-seg">

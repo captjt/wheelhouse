@@ -1072,6 +1072,12 @@ code {
 .act:hover .act-mark {
   opacity: 1;
 }
+/* Shown on hover only, so on a phone it would only take a line. */
+@media (hover: none) {
+  .act-card-head .act-mark {
+    display: none;
+  }
+}
 .act-mark.mark-witnessed {
   color: var(--working);
 }
@@ -1092,13 +1098,16 @@ code {
 }
 .act-card-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
+  gap: 2px 7px;
   margin-bottom: 6px;
   font-size: 12.5px;
 }
+/* A long name ("sam's Claude Code") wraps the line, never into a column. */
 .act-card-head strong {
   font-weight: 500;
+  white-space: nowrap;
 }
 .prose {
   color: var(--text-2);
@@ -1392,6 +1401,10 @@ code {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* A rail taller than the window scrolls; its rows never shrink into each other. */
+.props > * {
+  flex-shrink: 0;
 }
 .prop {
   display: flex;
@@ -2066,12 +2079,18 @@ code {
 }
 .msg-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
+  gap: 2px 7px;
   font-size: 12.5px;
 }
+/* A long subject wraps the line, never "asks you" into a column. */
 .msg-head strong {
   font-weight: 500;
+  white-space: nowrap;
+}
+.msg-head > .muted {
+  white-space: nowrap;
 }
 .msg-subject {
   color: var(--text-2);
@@ -6539,4 +6558,126 @@ code {
 }
 .chat-steer:disabled {
   opacity: 0.45;
+}
+
+/* ---- team (docs/teams.md) ---- */
+
+.tm-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-weight: 600;
+  line-height: 1;
+  flex: none;
+  color: light-dark(oklch(0.4 0.1 var(--hue)), oklch(0.92 0.05 var(--hue)));
+  background: light-dark(oklch(0.93 0.045 var(--hue)), oklch(0.38 0.07 var(--hue)));
+}
+.tm-person {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.tm-stack {
+  display: inline-flex;
+  align-items: center;
+}
+.tm-stack .tm-dot {
+  box-shadow: 0 0 0 2px var(--main);
+}
+.tm-stack .tm-dot + .tm-dot {
+  margin-left: -5px;
+}
+.tm-more {
+  margin-left: 4px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.tm-agents {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.tm-prefix {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--recessed);
+}
+.tm-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.tm-conn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.tm-conn.on .tm-conn-dot {
+  background: var(--working);
+}
+.tm-conn.off .tm-conn-dot {
+  background: var(--error);
+}
+.tm-banner {
+  padding: 8px 24px;
+  font-size: 12.5px;
+  color: var(--error);
+  background: var(--danger-tint);
+  border-bottom: 1px solid var(--line);
+}
+.tm-member {
+  gap: 10px;
+}
+.tm-role {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line-2);
+}
+.tm-login {
+  font-size: 12px;
+  color: var(--faint);
+}
+.tm-bad {
+  color: var(--error);
+}
+.tm-empty {
+  padding: 10px 16px 14px 40px;
+}
+/* On the phone a row is two lines: what it is, then its details. */
+.phone .row .tm-stack,
+.phone .row .tm-role,
+.phone .row .btn {
+  order: 6;
+  margin-left: 8px;
+}
+.phone .row .btn:first-of-type {
+  margin-left: 30px;
+}
+.phone .tm-member > .tm-dot {
+  order: 0;
+  margin-right: 10px;
+}
+.phone .tm-member .tm-role {
+  margin-left: 30px;
+}
+.phone .tm-prefix {
+  display: none;
+}
+.phone .tm-member {
+  gap: 0;
 }

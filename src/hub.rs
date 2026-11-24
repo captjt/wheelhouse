@@ -43,6 +43,8 @@ pub struct Core {
     /// Each docket's last quick check, by its head: a record that hasn't
     /// moved isn't checked again.
     verified: std::collections::HashMap<String, (String, verify::Report)>,
+    /// The workspace this hub is a member of, if any (docs/teams.md).
+    pub team: Option<crate::team::member::Team>,
 }
 
 #[derive(Clone)]
@@ -89,6 +91,7 @@ impl Core {
             live_dirty: Default::default(),
             mac_apps: Default::default(),
             verified: Default::default(),
+            team: None,
         };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;
@@ -99,6 +102,7 @@ impl Core {
             core.store.put_key(&id, &name, &at)?;
         }
         core.refold()?;
+        crate::team::member::load(&mut core)?;
         Ok(core)
     }
 
@@ -157,6 +161,19 @@ impl Core {
 
     /// `append`, naming files (`sha256:<hex>`, already in the blob store).
     pub fn append_with(&mut self, docket: &str, kind: &str, who: &Who, body: Option<String>, data: Value, blobs: Vec<String>) -> Result<Stored> {
+        // A shared docket's entries are ordered by its workspace: signed
+        // here, sent from the outbox. Nothing else but this hub's own `D-`
+        // dockets is ever written here.
+        // A local docket that was shared: what's written on it now goes on
+        // the shared one.
+        let docket = match self.team.as_ref().and_then(|t| t.aliases.get(docket)) {
+            Some(to) => &to.clone(),
+            None => docket,
+        };
+        if self.team.as_ref().is_some_and(|t| t.shares(docket)) {
+            return crate::team::member::append(self, docket, kind, who, body, data, blobs);
+        }
+        anyhow::ensure!(docket.starts_with("D-"), "{docket} isn't one of this hub's dockets");
         let (actor, key_name) = self.actor(who);
         let at = crate::time::now_ms();
         let mut e = Entry::new(docket, kind, &at, actor);
@@ -214,9 +231,16 @@ impl Core {
     }
 
     fn check(&self, docket: &str, hash: bool) -> Result<verify::Report> {
-        let known: BTreeSet<String> = self.store.keys()?.into_iter().map(|(id, _)| id).collect();
         let entries = self.store.entries(docket)?;
-        let mut r = verify::verify(docket, &entries, |k| known.contains(k));
+        let mut r = match &self.team {
+            // A shared docket checks with the keys its workspace's member
+            // log names, and every entry against the rules, again.
+            Some(t) if t.owns_id(docket) => crate::team::member::verify(t, docket, &entries),
+            _ => {
+                let known: BTreeSet<String> = self.store.keys()?.into_iter().map(|(id, _)| id).collect();
+                verify::verify(docket, &entries, |k| known.contains(k))
+            }
+        };
         for s in &entries {
             let Ok(e) = s.entry() else { continue };
             for b in &e.blobs {
