@@ -42,5 +42,7 @@ test("an entry names its agent by pane, or falls back to the docket's", () => {
   assert.equal(entryBlock({ data: { agent: { block: "block:1" } } }), "block:1");
   assert.equal(entryBlock({ actor: { type: "agent", block: "herdr:t2" }, data: {} }), "herdr:t2");
   assert.equal(agentOfEntry(d, { data: { block: "herdr:t2" } })?.block, "herdr:t2");
-  assert.equal(agentOfEntry(d, { data: {} })?.block, "block:1", "an old entry: the docket's agent");
+  assert.equal(agentOfEntry(d, { data: {} }), undefined, "an old entry on a docket that's had several: no one's in particular");
+  const one = docket({ agents: [agent("block:1")], agent: agent("block:1") });
+  assert.equal(agentOfEntry(one, { data: {} })?.block, "block:1", "an old entry on a docket with one: its agent");
 });

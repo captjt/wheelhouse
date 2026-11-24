@@ -52,7 +52,7 @@ pub fn target(shared: &Shared, docket: &str) -> Result<Target> {
         let specs = cfg.repos.get(&t.repo).map(|r| r.checks.clone()).unwrap_or_default();
         return Ok(Target { repo: t.repo.clone(), dir: PathBuf::from(t.worktree.clone().unwrap_or_default()), base: t.base_head.clone(), specs, path: cfg.path_dirs.clone() });
     }
-    let cwd = state.and_then(|s| s.agent).and_then(|a| a.cwd).map(|c| crate::paths::expand(&c)).ok_or_else(|| anyhow!("{docket} has no worktree or folder to check"))?;
+    let cwd = state.as_ref().and_then(|s| s.home_cwd()).map(crate::paths::expand).ok_or_else(|| anyhow!("{docket} has no worktree or folder to check"))?;
     for (repo, r) in &cfg.repos {
         if cwd.starts_with(&r.checkout) {
             return Ok(Target { repo: repo.clone(), dir: cwd, base: None, specs: r.checks.clone(), path: cfg.path_dirs.clone() });

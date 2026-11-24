@@ -69,6 +69,10 @@ pub struct DocketState {
     /// Each witnessed check's latest result, by name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub checks: BTreeMap<String, CheckBrief>,
+    /// The fold that made this state (`VERSION`). An older build that saves
+    /// a state leaves it out, so the next start folds that docket again.
+    #[serde(default)]
+    pub fold: u32,
 }
 
 /// A witnessed check's latest result, in brief.
@@ -185,6 +189,11 @@ pub struct DocketAgent {
     pub role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub round: Option<i64>,
+    /// How it came on: its first claim's `source` (`join` for `wh join`,
+    /// `wheelhouse`, `startup`, …), or the `open`'s (`leave` for the docket
+    /// `wh leave` gave it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
     pub joined_at: String,
     /// When it last did something the record names it for.
     pub active_at: String,
@@ -227,7 +236,7 @@ impl DocketState {
                 self.status = if matches!(self.protocol.as_str(), "agent" | "review") { "in_progress".into() } else { "todo".into() };
                 self.created_at = e.at.clone();
                 if let Ok(a) = serde_json::from_value::<AgentRef>(d["agent"].clone()) {
-                    self.join(a, s(&d["session"]), None, None, &e.at);
+                    self.join(a, s(&d["session"]), None, None, s(&d["source"]), &e.at);
                 }
                 if let Some(sess) = s(&d["session"]) {
                     self.session = Some(sess);
@@ -265,7 +274,7 @@ impl DocketState {
                 self.session = s(&d["session"]);
                 self.released = None;
                 match serde_json::from_value::<AgentRef>(d["agent"].clone()) {
-                    Ok(a) => self.join(a, s(&d["session"]), s(&d["role"]), d["round"].as_i64(), &e.at),
+                    Ok(a) => self.join(a, s(&d["session"]), s(&d["role"]), d["round"].as_i64(), s(&d["source"]), &e.at),
                     // A claim that names no pane is the docket's agent's.
                     Err(_) => {
                         let sess = s(&d["session"]);
@@ -373,6 +382,7 @@ impl DocketState {
             self.pick_agent();
         }
         self.updated_at = e.at.clone();
+        self.fold = VERSION;
         self.entries = seq;
         self.head = chain.to_string();
     }
@@ -380,7 +390,7 @@ impl DocketState {
     /// An agent joins, or one already on the docket claims again (a new
     /// session, a resume). A claim that doesn't say its role keeps the one
     /// it had.
-    fn join(&mut self, a: AgentRef, session: Option<String>, role: Option<String>, round: Option<i64>, at: &str) {
+    fn join(&mut self, a: AgentRef, session: Option<String>, role: Option<String>, round: Option<i64>, via: Option<String>, at: &str) {
         match self.agents.iter_mut().rev().find(|x| x.agent.block == a.block) {
             Some(x) => {
                 x.agent = a;
@@ -392,9 +402,10 @@ impl DocketState {
                     x.left_at = None;
                     x.left = None;
                     x.joined_at = at.to_string();
+                    x.via = via;
                 }
             }
-            None => self.agents.push(DocketAgent { agent: a, session, role, round, joined_at: at.into(), active_at: at.into(), left_at: None, left: None }),
+            None => self.agents.push(DocketAgent { agent: a, session, role, round, via, joined_at: at.into(), active_at: at.into(), left_at: None, left: None }),
         }
         self.pick_agent();
     }
@@ -408,6 +419,14 @@ impl DocketState {
             self.agent = Some(x.agent.clone());
             self.session = x.session.clone();
         }
+    }
+
+    /// The folder the docket's work is in, for its checks and evidence: the
+    /// first agent still on it (who it was opened for or who joined first),
+    /// else the docket's agent. Not whoever spoke last, which on a docket
+    /// with agents in different checkouts would move the checks around.
+    pub fn home_cwd(&self) -> Option<&str> {
+        self.agents_on().find_map(|a| a.agent.cwd.as_deref()).or_else(|| self.agent.as_ref()?.cwd.as_deref())
     }
 
     /// The agents on the docket now.
@@ -426,7 +445,7 @@ impl DocketState {
 
 /// The fold's version. When it changes (a field the state didn't have), the
 /// hub folds every docket again once, at start, so the saved copies match.
-pub const VERSION: &str = "2";
+pub const VERSION: u32 = 3;
 
 /// Fold a whole docket from its entries.
 pub fn fold<'a>(id: &str, entries: impl IntoIterator<Item = (i64, &'a str, &'a Entry)>) -> DocketState {

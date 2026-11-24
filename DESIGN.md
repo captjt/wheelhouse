@@ -129,7 +129,9 @@ Rex pane or Herdr terminal.
   existing docket, beside the agents already there; its own docket is
   dropped if nothing was done on it. **Add an agent…** in the app (or
   `wh start --docket D-41`) starts one there. `wh leave` takes it off
-  again. The docket is held while any agent is on it and released when the
+  again (a docket its last agent leaves with nothing done on it is
+  dropped). A resumed session goes back to its first docket, or to the
+  last one `wh join` or `wh leave` moved it to. The docket is held while any agent is on it and released when the
   last one leaves; the agents on it find each other in `wh brief` and
   reach them all with `wh send --to @D-41`.
 - **Promote.** **Make this a Build** turns a spike into planned work.

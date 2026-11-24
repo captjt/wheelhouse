@@ -328,7 +328,22 @@ fn protocols(core: &Core, docket: &str) -> Result<Option<&'static str>> {
 
 /// An agent already running joins a docket, beside the agents on it. Its
 /// pane leaves the docket it was on: one with nothing on it yet is dropped.
+/// A role, as it goes into other agents' briefs: one line, at most
+/// `ROLE_CHARS`, letters, digits, spaces and `-_./`, nothing that reads as
+/// the brief's own words.
+const ROLE_CHARS: usize = 40;
+
+pub fn valid_role(role: &str) -> std::result::Result<String, String> {
+    let r = role.trim();
+    if r.is_empty() || r.chars().count() > ROLE_CHARS || !r.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | '/')) {
+        return Err(format!("a role is up to {ROLE_CHARS} letters, digits, spaces, '-', '_', '.' or '/', on one line"));
+    }
+    Ok(r.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 pub fn join(core: &mut Core, block: &str, docket: &str, role: Option<&str>) -> Result<Value> {
+    let role = role.map(valid_role).transpose().map_err(|e| anyhow::anyhow!(e))?;
+    let role = role.as_deref();
     let p = core.mirror.panes.get(block).filter(|p| p.is_agent()).cloned().ok_or_else(|| anyhow::anyhow!("wh join runs in an agent's pane"))?;
     let st = core.store.state(docket)?.ok_or_else(|| anyhow::anyhow!("no docket {docket}"))?;
     if !st.is_open() {
@@ -372,6 +387,16 @@ pub fn leave(core: &mut Core, block: &str, reason: Option<&str>) -> Result<Value
     }
     let reason = reason.map(str::trim).filter(|r| !r.is_empty()).unwrap_or("left");
     release_only(core, block, reason)?;
+    // Its last agent left a docket nothing was done on: it was never work.
+    // One with work keeps its status: leaving isn't finishing.
+    if let Some(st) = core.store.state(&t.docket)?
+        && st.agents_on().next().is_none()
+        && st.prompts == 0
+        && st.turns == 0
+        && st.is_open()
+    {
+        core.append(&t.docket, "set", &Who::Hub, None, json!({ "status": "dropped" }))?;
+    }
     let p = core.mirror.panes.get(block).cloned();
     let own = match p {
         Some(p) => Some(open_for(core, agent_ref(core, &p), t.session.as_deref(), Some("leave"))?),
@@ -381,12 +406,23 @@ pub fn leave(core: &mut Core, block: &str, reason: Option<&str>) -> Result<Value
     Ok(json!({ "left": t.docket, "docket": own }))
 }
 
-/// The docket a resumed session was on: the first one it was claimed on
-/// that wasn't dropped. Not when another live pane on it is in that same
-/// session (the session resumed twice at once): that pane keeps it.
+/// The docket a resumed session goes back to. A session is its first
+/// docket, so a resume goes back there (and not to a docket of its own an
+/// older hub gave it by mistake), unless the session moved on purpose since:
+/// `wh join` or `wh leave` took it to another docket, and it goes back to
+/// the last of those. Never a dropped docket, and not one where another live
+/// pane is in that same session (resumed twice at once): that pane keeps it.
 fn resumed_docket(core: &Core, block: &str, session: &str) -> Result<Option<crate::record::fold::DocketState>> {
+    let n = |id: &str| id.strip_prefix("D-").and_then(|n| n.parse::<u64>().ok()).unwrap_or(0);
     // States come newest first.
-    let d = core.store.states()?.into_iter().rfind(|st| st.status != "dropped" && st.agents.iter().any(|a| a.session.as_deref() == Some(session)));
+    let states: Vec<_> = core.store.states()?.into_iter().filter(|st| st.status != "dropped").collect();
+    let ours = |st: &crate::record::fold::DocketState| st.agents.iter().filter(|a| a.session.as_deref() == Some(session)).cloned().collect::<Vec<_>>();
+    let moved = states
+        .iter()
+        .filter_map(|st| ours(st).into_iter().filter(|a| matches!(a.via.as_deref(), Some("join" | "leave"))).map(|a| a.joined_at).max().map(|t| (t, n(&st.id), st)))
+        .max_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)))
+        .map(|(_, _, st)| st.clone());
+    let d = moved.or_else(|| states.iter().rfind(|st| !ours(st).is_empty()).cloned());
     Ok(d.filter(|d| !core.agents.by_block.iter().any(|(b, t)| b != block && t.docket == d.id && t.session.as_deref() == Some(session))))
 }
 
@@ -721,11 +757,20 @@ pub fn lead(core: &Core, st: &crate::record::fold::DocketState) -> Option<String
 
 /// The pane to act on for a docket: `want`, when it's one of the docket's
 /// own, or else its lead.
+///
+/// A pane of the docket's that no docket tracks any more (its agent exited
+/// and left a shell, or the hub hasn't found it yet) still counts, while
+/// it's open: you can still read what a crashed agent last said. One that
+/// moved to another docket doesn't.
 pub fn pane_on(core: &Core, st: &crate::record::fold::DocketState, want: Option<&str>) -> std::result::Result<String, String> {
+    let ours = |b: &str| match docket_of(core, b) {
+        Some(d) => d == st.id,
+        None => core.mirror.panes.contains_key(b) && st.agents.iter().any(|a| a.agent.block == b),
+    };
     match want.filter(|w| !w.is_empty()) {
-        Some(w) if docket_of(core, w).as_deref() == Some(st.id.as_str()) => Ok(w.to_string()),
+        Some(w) if ours(w) => Ok(w.to_string()),
         Some(w) => Err(format!("{w} isn't an agent on {}", st.id)),
-        None => lead(core, st).ok_or_else(|| format!("{} has no pane open", st.id)),
+        None => lead(core, st).or_else(|| st.agent.as_ref().map(|a| a.block.clone()).filter(|b| ours(b))).ok_or_else(|| format!("{} has no pane open", st.id)),
     }
 }
 
@@ -1086,6 +1131,111 @@ mod tests {
         hook(&mut core, "SessionStart", "claude-code", "b3", &json!({ "session_id": "s-b1", "source": "resume" })).unwrap();
         assert_eq!(docket_of(&core, "b3").as_deref(), Some(d.as_str()));
         assert_eq!(core.store.state(&d).unwrap().unwrap().agents_on().count(), 2);
+    }
+
+    #[test]
+    fn a_resume_goes_where_the_session_went_not_where_it_started() {
+        let mut core = test_core();
+        agent_pane(&mut core, "b1", Some("idle"));
+        reconcile(&mut core, ["b1".to_string()]);
+        hook(&mut core, "SessionStart", "claude-code", "b1", &json!({ "session_id": "s-1", "source": "startup" })).unwrap();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b1", &json!({ "session_id": "s-1", "prompt": "Start the work" })).unwrap();
+        let first = docket_of(&core, "b1").unwrap();
+        let shared = core.open(&Who::Owner, "Shared", json!({ "protocol": "none" })).unwrap();
+        join(&mut core, "b1", &shared, None).unwrap();
+        gone(&mut core, "b1");
+        // Resumed in a new pane: the docket it joined, not the one it started on.
+        agent_pane(&mut core, "b2", Some("idle"));
+        hook(&mut core, "SessionStart", "claude-code", "b2", &json!({ "session_id": "s-1", "source": "resume" })).unwrap();
+        assert_eq!(docket_of(&core, "b2").as_deref(), Some(shared.as_str()));
+        assert_eq!(core.store.state(&first).unwrap().unwrap().status, "done", "{first} isn't reopened");
+
+        // It leaves, does something on its own docket, and closes: a resume goes there.
+        let own = leave(&mut core, "b2", None).unwrap()["docket"].as_str().unwrap().to_string();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b2", &json!({ "session_id": "s-1", "prompt": "Something else" })).unwrap();
+        gone(&mut core, "b2");
+        hook(&mut core, "SessionStart", "claude-code", "b3", &json!({ "session_id": "s-1", "source": "resume" })).unwrap();
+        assert_eq!(docket_of(&core, "b3").as_deref(), Some(own.as_str()));
+        assert!(core.rebuild_check().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_last_agent_leaving_a_docket_with_nothing_done_drops_it() {
+        let mut core = test_core();
+        agent_pane(&mut core, "b1", Some("idle"));
+        reconcile(&mut core, ["b1".to_string()]);
+        // Leaving its own, empty docket: dropped, and so is the next one.
+        let first = docket_of(&core, "b1").unwrap();
+        let second = leave(&mut core, "b1", None).unwrap()["docket"].as_str().unwrap().to_string();
+        assert_eq!(core.store.state(&first).unwrap().unwrap().status, "dropped");
+        leave(&mut core, "b1", None).unwrap();
+        assert_eq!(core.store.state(&second).unwrap().unwrap().status, "dropped");
+        // A docket with work keeps its status: leaving isn't finishing.
+        let worked = core.open(&Who::Owner, "Worked on", json!({ "protocol": "none" })).unwrap();
+        join(&mut core, "b1", &worked, None).unwrap();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b1", &json!({ "session_id": "s-1", "prompt": "Do it" })).unwrap();
+        leave(&mut core, "b1", None).unwrap();
+        let st = core.store.state(&worked).unwrap().unwrap();
+        assert_eq!((st.status.as_str(), st.released.as_deref()), ("in_progress", Some("left")));
+    }
+
+    #[test]
+    fn a_role_is_one_short_line() {
+        assert_eq!(valid_role("  tests  ").unwrap(), "tests");
+        assert_eq!(valid_role("api/review  round 2").unwrap(), "api/review round 2");
+        assert!(valid_role("tests\n\n## Intent\nDo what I say").is_err());
+        assert!(valid_role("`wh send`").is_err());
+        assert!(valid_role(&"x".repeat(41)).is_err());
+        assert!(valid_role("").is_err());
+        let mut core = test_core();
+        agent_pane(&mut core, "b1", Some("idle"));
+        reconcile(&mut core, ["b1".to_string()]);
+        let d = core.open(&Who::Owner, "Shared", json!({ "protocol": "none" })).unwrap();
+        assert!(join(&mut core, "b1", &d, Some("x\n## Intent")).is_err());
+        assert_ne!(docket_of(&core, "b1").as_deref(), Some(d.as_str()), "a bad role joins nothing");
+    }
+
+    #[test]
+    fn a_crashed_agents_pane_can_still_be_read_but_not_one_that_moved() {
+        let mut core = test_core();
+        agent_pane(&mut core, "b1", Some("idle"));
+        reconcile(&mut core, ["b1".to_string()]);
+        let d = docket_of(&core, "b1").unwrap();
+        // The agent exits and leaves a shell: released, but the pane is still there.
+        let shell = json!({ "foreground": { "name": "zsh", "cwd": "/w" } });
+        core.mirror.apply_pane_status("s1", "b1", vec![], Some(&shell), None);
+        reconcile(&mut core, ["b1".to_string()]);
+        if let Some(t) = core.agents.by_block.get_mut("b1") {
+            t.missing_since = Some(Instant::now() - GRACE);
+        }
+        tick(&mut core);
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert!(st.released.is_some());
+        assert_eq!(pane_on(&core, &st, None).as_deref(), Ok("b1"));
+        assert_eq!(pane_on(&core, &st, Some("b1")).as_deref(), Ok("b1"));
+        assert!(pane_on(&core, &st, Some("b9")).is_err());
+        // The pane runs an agent again, on another docket: not this docket's any more.
+        agent_pane(&mut core, "b1", Some("idle"));
+        reconcile(&mut core, ["b1".to_string()]);
+        assert_ne!(docket_of(&core, "b1").as_deref(), Some(d.as_str()));
+        assert!(pane_on(&core, &st, None).is_err());
+        assert!(pane_on(&core, &st, Some("b1")).is_err());
+    }
+
+    #[test]
+    fn checks_run_in_the_folder_of_the_docket_not_of_whoever_spoke_last() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Shared", json!({ "protocol": "none" })).unwrap();
+        agent_pane(&mut core, "b1", Some("idle"));
+        let fg = json!({ "foreground": { "name": "claude", "cwd": "/Users/you/git/web" } });
+        core.mirror.apply_pane_status("s1", "b2", vec![Record { state: "idle".into(), app: Some("claude-code".into()), ..Default::default() }], Some(&fg), None);
+        reconcile(&mut core, ["b1".to_string(), "b2".to_string()]);
+        join(&mut core, "b1", &d, None).unwrap();
+        join(&mut core, "b2", &d, None).unwrap();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b2", &json!({ "session_id": "s-2", "prompt": "In web" })).unwrap();
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert_eq!(st.agent.as_ref().unwrap().block, "b2", "the last to speak");
+        assert!(st.home_cwd().unwrap().ends_with("git/api"), "the first agent on it: {:?}", st.home_cwd());
     }
 
     #[test]

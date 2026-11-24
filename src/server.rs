@@ -547,7 +547,7 @@ async fn standing(State(shared): State<Shared>, Path(id): Path<String>, Json(req
             .flatten()
             .map(|t| t.repo)
             .or_else(|| st.review.as_ref().and_then(|r| r.key.split('#').next().map(str::to_string)))
-            .or_else(|| st.agent.as_ref().and_then(|a| a.cwd.as_deref()).and_then(|c| core.build.repo_of(&crate::paths::expand(c))).map(|(r, _)| r));
+            .or_else(|| st.home_cwd().and_then(|c| core.build.repo_of(&crate::paths::expand(c))).map(|(r, _)| r));
         (d, repo)
     };
     let repo = repo.ok_or_else(|| fail(StatusCode::CONFLICT, format!("{id} isn't in a repo Wheelhouse knows, so there's no repo to make it standing for")))?;

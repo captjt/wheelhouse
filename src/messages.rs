@@ -510,9 +510,29 @@ fn expire(shared: &Shared) {
     }
 }
 
+/// A prompt you queued for a docket's agent is for that docket: once the
+/// pane is on another one (wh join, wh leave, /clear), it's taken back,
+/// never typed into the other work. Returns how many.
+fn take_back_moved(core: &mut Core) -> usize {
+    let moved: Vec<(i64, String)> = core
+        .store
+        .queued_prompts(None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, docket, block, _, _)| agents::docket_of(core, block).is_some_and(|d| d != *docket))
+        .map(|(id, docket, ..)| (id, docket))
+        .collect();
+    for (id, docket) in &moved {
+        let _ = core.store.set_prompt_status(*id, docket, "cancelled");
+        let _ = core.events.send(json!({ "type": "docket", "docket": docket }));
+    }
+    moved.len()
+}
+
 async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<String, (Option<String>, Instant)>, tries: &mut std::collections::HashMap<String, u32>) {
     let due: Vec<(i64, String, String, String, String, Option<String>)> = {
-        let core = shared.lock();
+        let mut core = shared.lock();
+        take_back_moved(&mut core);
         let mut seen = std::collections::HashSet::new();
         core.store
             .queued_prompts(None)
@@ -697,6 +717,19 @@ mod tests {
         assert!(send(&mut core, &me, &format!("@{d}"), None, "Status?", vec![]).is_ok());
         let lone = core.open(&Who::Owner, "Lone", json!({ "protocol": "none" })).unwrap();
         assert!(send(&mut core, &from, &format!("@{lone}"), None, "hi", vec![]).unwrap_err().to_string().contains("no other agent"));
+    }
+
+    #[test]
+    fn a_prompt_queued_for_a_docket_never_goes_into_another() {
+        let mut core = test_core();
+        agent(&mut core, "b1", "builder", "working");
+        let d = agents::docket_of(&core, "b1").unwrap();
+        core.store.queue_prompt(&d, "b1", "Then run lint").unwrap();
+        assert_eq!(take_back_moved(&mut core), 0, "still on {d}");
+        let other = core.open(&Who::Owner, "Other", json!({ "protocol": "none" })).unwrap();
+        agents::join(&mut core, "b1", &other, None).unwrap();
+        assert_eq!(take_back_moved(&mut core), 1);
+        assert!(core.store.queued_prompts(None).unwrap().is_empty());
     }
 
     #[test]

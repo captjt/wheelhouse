@@ -29,10 +29,13 @@ export const liveAgents = (d?: Docket | null): DocketAgent[] => {
 /** An agent, for people, beside others on its docket: its role, else its pane, else its app. */
 export const agentLabel = (a?: { role?: string | null; pane?: string; app: string } | null): string => (a ? a.role || a.pane || appName(a.app) : "the agent");
 
-/** The agent an entry names (`data.block`, or an agent actor's `block`), on a docket that may have several. */
+/** The agent an entry names (`data.block`, or an agent actor's `block`), on a docket that may have several.
+ * An entry from before agents were named (no pane) is the docket's agent's only when it has had one:
+ * with several, it's no one's in particular, never the agent that happens to lead now. */
 export const agentOfEntry = (d: Docket, e: { actor?: Record<string, unknown>; data?: Record<string, unknown> }): DocketAgent | AgentRef | undefined => {
   const block = entryBlock(e);
-  return (block && d.agents?.slice().reverse().find((a) => a.block === block)) || d.agent;
+  if (block) return d.agents?.slice().reverse().find((a) => a.block === block) ?? ((d.agents?.length ?? 0) > 1 ? undefined : d.agent);
+  return (d.agents?.length ?? 0) > 1 ? undefined : d.agent;
 };
 
 /** The pane an entry names as its agent's, if any. */

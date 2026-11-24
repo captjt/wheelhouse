@@ -396,7 +396,7 @@ fn main() {
         Some(Cmd::Build { action, args, repo, json: as_json }) => build_cmd(action.as_deref().unwrap_or("status"), &args, repo, as_json),
         Some(Cmd::Recap { period }) => {
             let p = period.as_deref().unwrap_or("week");
-            client::json("GET", &format!("/api/recap?period={p}"), None).map(|v| print!("{}", v["markdown"].as_str().unwrap_or("")))
+            client::json("GET", &format!("/api/recap?period={}", enc(p)), None).map(|v| print!("{}", v["markdown"].as_str().unwrap_or("")))
         }
         Some(Cmd::Review { action, args, force, json }) => review_cmd(action.as_deref().unwrap_or("status"), &args, force, json),
         Some(Cmd::Share { port, title, ask, options, stop }) => {
@@ -546,9 +546,27 @@ fn open(docket: Option<String>) -> Result<()> {
     Ok(())
 }
 
+/// A docket as you typed it (`12`, `d-12`, `D-12`), as the hub names it.
+/// It goes into a URL's path, so anything else is encoded: a name with `/`
+/// or `..` in it is one segment the hub doesn't know, never another route.
 fn normalize(d: &str) -> String {
     let n = d.trim().trim_start_matches(['D', 'd']).trim_start_matches('-');
-    if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() { format!("D-{n}") } else { d.to_string() }
+    if n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty() { format!("D-{n}") } else { enc(d.trim()) }
+}
+
+/// Percent-encode a value for a URL's path segment or query: everything
+/// but RFC 3986's unreserved characters, and `:` (pane ids are `block:…`,
+/// `herdr:…`).
+fn enc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b':') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Run one of the hub's loops, and start it again if it panics: a bug in
@@ -853,7 +871,7 @@ fn skill(action: Option<&str>) -> Result<()> {
 }
 
 fn block_q(sep: &str) -> String {
-    crate::runtime::pane_from_env().map(|b| format!("{sep}block={b}")).unwrap_or_default()
+    crate::runtime::pane_from_env().map(|b| format!("{sep}block={}", enc(&b))).unwrap_or_default()
 }
 
 fn text_or_stdin(t: Option<String>) -> Result<String> {
@@ -1018,7 +1036,7 @@ fn attach(what: &str, title: Option<String>, docket: Option<String>) -> Result<(
         Some(d) => normalize(&d),
         None => {
             let b = block.clone().ok_or_else(|| anyhow::anyhow!("name a docket (--docket D-12), or run this from an agent's pane"))?;
-            client::json("GET", &format!("/api/whoami?block={b}"), None)?["docket"]
+            client::json("GET", &format!("/api/whoami?block={}", enc(&b)), None)?["docket"]
                 .as_str()
                 .map(str::to_string)
                 .ok_or_else(|| anyhow::anyhow!("this pane has no docket; name one with --docket"))?
@@ -1049,7 +1067,7 @@ fn brief(d: Option<String>) -> Result<()> {
         Some(d) => format!("/api/dockets/{d}/brief{}", block_q("?")),
         None => {
             let block = crate::runtime::pane_from_env().ok_or_else(|| anyhow::anyhow!("name a docket (wh brief D-12), or run this from an agent's pane"))?;
-            format!("/api/brief?block={block}")
+            format!("/api/brief?block={}", enc(&block))
         }
     };
     print!("{}", client::text(&path)?);
@@ -1254,5 +1272,24 @@ fn verify_file(file: &std::path::Path) -> Result<()> {
             println!("✕ {p}");
         }
         bail!("{docket} doesn't check");
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn a_docket_or_a_pane_never_leaves_its_place_in_a_url() {
+        assert_eq!(normalize("12"), "D-12");
+        assert_eq!(normalize(" d-7 "), "D-7");
+        assert_eq!(normalize("D-41"), "D-41");
+        // Not a docket id: one encoded segment, never another route.
+        assert_eq!(normalize("../hub/stop"), "..%2Fhub%2Fstop");
+        assert_eq!(normalize("D-1?x=1#y"), "D-1%3Fx%3D1%23y");
+        assert_eq!(enc("block:01a2-7806"), "block:01a2-7806");
+        assert_eq!(enc("herdr:t2h"), "herdr:t2h");
+        assert_eq!(enc("b&docket=D-1"), "b%26docket%3DD-1");
+        assert_eq!(enc("é"), "%C3%A9");
     }
 }

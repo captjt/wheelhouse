@@ -89,7 +89,10 @@ function PaneSheet({ id, block, onClose }: { id: string; block?: string; onClose
   const d = hub.byId.get(id);
   // The agent shown: the one asked for, or the docket's lead.
   const on = agentsOn(d);
-  const agent = on.find((a) => a.block === (block ?? d?.lead)) ?? d?.agent;
+  // Asked for one agent: that one, even after it leaves (then the sheet says
+  // so and sends nothing), never another that happens to be on the docket.
+  const agent = block ? (on.find((a) => a.block === block) ?? d?.agents?.find((a) => a.block === block)) : (on.find((a) => a.block === d?.lead) ?? d?.agent);
+  const gone = !!block && !on.some((a) => a.block === block);
   const dLive = (block ? on.find((a) => a.block === block)?.live : d?.live) ?? null;
   const q = block ? `?block=${encodeURIComponent(block)}` : "";
   const [screen, setScreen] = useState<Screen | null>(null);
@@ -129,7 +132,7 @@ function PaneSheet({ id, block, onClose }: { id: string; block?: string; onClose
   const state = screen?.live?.state ?? dLive?.state;
   const app = on.length > 1 ? `${appName(agent?.app)} (${agentLabel(agent)})` : appName(agent?.app);
   const rt = agent?.block ? runtimeTitle(runtimeOf(agent.block)) : paneRuntime(d);
-  const why = state === "error" ? `${app} stopped with an error.` : !state ? `The pane isn't open in ${rt}.` : null;
+  const why = gone ? `${app} left ${id}.` : state === "error" ? `${app} stopped with an error.` : !state ? `The pane isn't open in ${rt}.` : null;
   const queues = state === "working" || state === "starting" || state === "blocked";
   const send = () => {
     const t = text.trim();
