@@ -221,7 +221,9 @@ fn s(v: &Value) -> Option<String> {
 
 impl DocketState {
     pub fn new(id: &str) -> Self {
-        DocketState { id: id.to_string(), status: "todo".into(), protocol: "none".into(), ..Default::default() }
+        // Made by this fold, from nothing. A saved state an older fold made
+        // keeps its version through later appends, until it's folded again.
+        DocketState { id: id.to_string(), status: "todo".into(), protocol: "none".into(), fold: VERSION, ..Default::default() }
     }
 
     /// Apply the next entry.
@@ -382,7 +384,6 @@ impl DocketState {
             self.pick_agent();
         }
         self.updated_at = e.at.clone();
-        self.fold = VERSION;
         self.entries = seq;
         self.head = chain.to_string();
     }
@@ -402,7 +403,11 @@ impl DocketState {
                     x.left_at = None;
                     x.left = None;
                     x.joined_at = at.to_string();
-                    x.via = via;
+                    // A move on purpose (wh join, wh leave) is how it came
+                    // on; a resume of it in the same pane isn't a new way in.
+                    if matches!(via.as_deref(), Some("join" | "leave")) || x.via.is_none() {
+                        x.via = via;
+                    }
                 }
             }
             None => self.agents.push(DocketAgent { agent: a, session, role, round, via, joined_at: at.into(), active_at: at.into(), left_at: None, left: None }),
@@ -423,10 +428,10 @@ impl DocketState {
 
     /// The folder the docket's work is in, for its checks and evidence: the
     /// first agent still on it (who it was opened for or who joined first),
-    /// else the docket's agent. Not whoever spoke last, which on a docket
+    /// else the first it ever had, else the docket's agent. Not whoever spoke last, which on a docket
     /// with agents in different checkouts would move the checks around.
     pub fn home_cwd(&self) -> Option<&str> {
-        self.agents_on().find_map(|a| a.agent.cwd.as_deref()).or_else(|| self.agent.as_ref()?.cwd.as_deref())
+        self.agents_on().find_map(|a| a.agent.cwd.as_deref()).or_else(|| self.agents.iter().find_map(|a| a.agent.cwd.as_deref())).or_else(|| self.agent.as_ref()?.cwd.as_deref())
     }
 
     /// The agents on the docket now.

@@ -111,7 +111,9 @@ impl Core {
     /// log: it doesn't stop the hub (`wh verify` shows what's wrong).
     fn refold(&mut self) -> Result<()> {
         use crate::record::fold::{VERSION, fold};
-        let stale: Vec<String> = self.store.states()?.into_iter().filter(|s| s.fold != VERSION).map(|s| s.id).collect();
+        // Stale states, and dockets with entries but no state at all.
+        let fresh: std::collections::HashSet<String> = self.store.states()?.into_iter().filter(|s| s.fold == VERSION).map(|s| s.id).collect();
+        let stale: Vec<String> = self.store.docket_ids()?.into_iter().filter(|id| !fresh.contains(id)).collect();
         let (mut done, mut bad) = (0, Vec::new());
         for id in &stale {
             let folded = self.store.entries(id).and_then(|entries| {
@@ -304,6 +306,19 @@ mod tests {
         // Nothing stale left but the broken one: a second start folds only it.
         core.refold().unwrap();
         assert_eq!(core.store.state(&a).unwrap().unwrap(), st);
+
+        // A stale state that gets another entry stays stale, so it's folded
+        // at the next start; a docket with entries but no state gets one.
+        let mut old = core.store.state(&a).unwrap().unwrap();
+        old.agents.clear();
+        old.fold = 0;
+        core.store.put_state(&old).unwrap();
+        core.append(&a, "note", &Who::Owner, Some("later".into()), json!({})).unwrap();
+        assert_eq!(core.store.state(&a).unwrap().unwrap().fold, 0);
+        core.store.conn_for_tests().execute("DELETE FROM dockets WHERE id = ?1", [&a]).unwrap();
+        core.refold().unwrap();
+        let st = core.store.state(&a).unwrap().expect("a state again");
+        assert_eq!((st.fold, st.agents.len(), st.notes), (crate::record::fold::VERSION, 1, 1));
     }
 
     #[test]

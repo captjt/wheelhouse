@@ -41,7 +41,7 @@ trust any agent already has to note on any docket, since the hub holds
 every key on this machine. A join is witnessed on the record (a `claim`
 with `source: join`), so you can see who joined and when. Review's and
 Build's dockets refuse it: their panes are the protocol's. A role is one
-short line (letters, digits, spaces, `-_./`, up to 40), since it's shown in
+short line (letters, digits, spaces, `-_./+:`, up to 40), since it's shown in
 other agents' briefs. The hub can't tell which pane a local call came
 from, so an agent could also move or take off another agent's pane, as it
 could already name one: what stops it is that every join and leave is on

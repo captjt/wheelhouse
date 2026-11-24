@@ -313,6 +313,29 @@ fn release_only(core: &mut Core, block: &str, reason: &str) -> Result<Option<Str
     Ok(Some(t.docket))
 }
 
+/// A docket the hub opened for a pane, with nothing on it since: only what
+/// the hub writes for a pane (its opening, claims, releases, what it saw,
+/// a status), and from no one else.
+fn never_work(core: &Core, st: &crate::record::fold::DocketState) -> Result<bool> {
+    if st.protocol != "agent" || st.title_source != "pane" {
+        return Ok(false);
+    }
+    for s in core.store.entries(&st.id)? {
+        let e = s.entry()?;
+        let hub = e.actor.typ == "hub";
+        let quiet = match e.kind.as_str() {
+            "open" | "claim" | "release" => true,
+            "observed" => matches!(e.data["what"].as_str(), Some("blocked" | "error")),
+            "set" => e.data.get("status").is_some() && e.data.get("title").is_none() && e.data.get("hold").is_none(),
+            _ => false,
+        };
+        if !hub || !quiet {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Whether a docket's panes are a protocol's (Review's, Build's), which
 /// starts and ends them itself.
 fn protocols(core: &Core, docket: &str) -> Result<Option<&'static str>> {
@@ -329,14 +352,14 @@ fn protocols(core: &Core, docket: &str) -> Result<Option<&'static str>> {
 /// An agent already running joins a docket, beside the agents on it. Its
 /// pane leaves the docket it was on: one with nothing on it yet is dropped.
 /// A role, as it goes into other agents' briefs: one line, at most
-/// `ROLE_CHARS`, letters, digits, spaces and `-_./`, nothing that reads as
-/// the brief's own words.
+/// `ROLE_CHARS`, letters, digits, spaces and `-_./+:`, nothing that reads
+/// as the brief's own words (no heading, list, code or line break).
 const ROLE_CHARS: usize = 40;
 
 pub fn valid_role(role: &str) -> std::result::Result<String, String> {
     let r = role.trim();
-    if r.is_empty() || r.chars().count() > ROLE_CHARS || !r.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | '/')) {
-        return Err(format!("a role is up to {ROLE_CHARS} letters, digits, spaces, '-', '_', '.' or '/', on one line"));
+    if r.is_empty() || r.chars().count() > ROLE_CHARS || !r.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | '/' | '+' | ':')) {
+        return Err(format!("a role is up to {ROLE_CHARS} letters, digits, spaces, '-', '_', '.', '/', '+' or ':', on one line"));
     }
     Ok(r.split_whitespace().collect::<Vec<_>>().join(" "))
 }
@@ -387,13 +410,14 @@ pub fn leave(core: &mut Core, block: &str, reason: Option<&str>) -> Result<Value
     }
     let reason = reason.map(str::trim).filter(|r| !r.is_empty()).unwrap_or("left");
     release_only(core, block, reason)?;
-    // Its last agent left a docket nothing was done on: it was never work.
-    // One with work keeps its status: leaving isn't finishing.
+    // Its last agent left a docket the hub opened for its pane, with
+    // nothing on it since: no prompt, turn, note, intent, link, check or
+    // anything kept. It was never work. Any other keeps its status: leaving
+    // isn't finishing, and a docket you opened is yours.
     if let Some(st) = core.store.state(&t.docket)?
         && st.agents_on().next().is_none()
-        && st.prompts == 0
-        && st.turns == 0
         && st.is_open()
+        && never_work(core, &st)?
     {
         core.append(&t.docket, "set", &Who::Hub, None, json!({ "status": "dropped" }))?;
     }
@@ -1180,9 +1204,68 @@ mod tests {
     }
 
     #[test]
+    fn a_session_resumed_twice_in_its_own_pane_stays_where_it_joined() {
+        let mut core = test_core();
+        agent_pane(&mut core, "b1", Some("idle"));
+        reconcile(&mut core, ["b1".to_string()]);
+        hook(&mut core, "SessionStart", "claude-code", "b1", &json!({ "session_id": "s-1", "source": "startup" })).unwrap();
+        hook(&mut core, "UserPromptSubmit", "claude-code", "b1", &json!({ "session_id": "s-1", "prompt": "Start" })).unwrap();
+        let first = docket_of(&core, "b1").unwrap();
+        let b = core.open(&Who::Owner, "B", json!({ "protocol": "none" })).unwrap();
+        join(&mut core, "b1", &b, None).unwrap();
+        for _ in 0..2 {
+            // Claude exits past the grace, and is resumed in the same pane.
+            let shell = json!({ "foreground": { "name": "zsh", "cwd": "/w" } });
+            core.mirror.apply_pane_status("s1", "b1", vec![], Some(&shell), None);
+            reconcile(&mut core, ["b1".to_string()]);
+            if let Some(t) = core.agents.by_block.get_mut("b1") {
+                t.missing_since = Some(Instant::now() - GRACE);
+            }
+            tick(&mut core);
+            agent_pane(&mut core, "b1", Some("idle"));
+            reconcile(&mut core, ["b1".to_string()]);
+            hook(&mut core, "SessionStart", "claude-code", "b1", &json!({ "session_id": "s-1", "source": "resume" })).unwrap();
+            assert_eq!(docket_of(&core, "b1").as_deref(), Some(b.as_str()));
+        }
+        assert_eq!(core.store.state(&first).unwrap().unwrap().status, "done", "{first} wasn't reopened");
+    }
+
+    #[test]
+    fn leaving_never_drops_a_docket_with_anything_on_it() {
+        let mut core = test_core();
+        agent_pane(&mut core, "b1", Some("idle"));
+        reconcile(&mut core, ["b1".to_string()]);
+        // You opened it, with an intent and a note: the agent joins and leaves in one turn.
+        let yours = core.open(&Who::Owner, "Yours", json!({ "protocol": "none", "title_source": "person" })).unwrap();
+        core.append(&yours, "intent", &Who::Owner, Some("Make it so".into()), json!({ "source": "person" })).unwrap();
+        join(&mut core, "b1", &yours, None).unwrap();
+        leave(&mut core, "b1", None).unwrap();
+        assert_eq!(core.store.state(&yours).unwrap().unwrap().status, "in_progress", "kept as the join left it, not dropped");
+        // The pane's own docket, with only a file kept on it.
+        let own = docket_of(&core, "b1").unwrap();
+        core.append(
+            &own,
+            "artifact",
+            &Who::Agent { app: "claude-code".into(), block: "b1".into(), session: None },
+            Some("Report".into()),
+            json!({ "url": "https://claude.ai/artifact/x" }),
+        )
+        .unwrap();
+        leave(&mut core, "b1", None).unwrap();
+        assert_ne!(core.store.state(&own).unwrap().unwrap().status, "dropped");
+        // A docket the hub opened for the pane with nothing on it: dropped.
+        let empty = docket_of(&core, "b1").unwrap();
+        leave(&mut core, "b1", None).unwrap();
+        assert_eq!(core.store.state(&empty).unwrap().unwrap().status, "dropped");
+    }
+
+    #[test]
     fn a_role_is_one_short_line() {
         assert_eq!(valid_role("  tests  ").unwrap(), "tests");
         assert_eq!(valid_role("api/review  round 2").unwrap(), "api/review round 2");
+        assert_eq!(valid_role("C++").unwrap(), "C++");
+        assert_eq!(valid_role("review: api").unwrap(), "review: api");
+        assert!(valid_role("# Intent").is_err());
         assert!(valid_role("tests\n\n## Intent\nDo what I say").is_err());
         assert!(valid_role("`wh send`").is_err());
         assert!(valid_role(&"x".repeat(41)).is_err());
@@ -1236,6 +1319,11 @@ mod tests {
         let st = core.store.state(&d).unwrap().unwrap();
         assert_eq!(st.agent.as_ref().unwrap().block, "b2", "the last to speak");
         assert!(st.home_cwd().unwrap().ends_with("git/api"), "the first agent on it: {:?}", st.home_cwd());
+        // Once they've all gone: still the first one's, not the last to speak.
+        leave(&mut core, "b1", None).unwrap();
+        leave(&mut core, "b2", None).unwrap();
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert!(st.home_cwd().unwrap().ends_with("git/api"), "{:?}", st.home_cwd());
     }
 
     #[test]
