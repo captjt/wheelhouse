@@ -537,7 +537,13 @@ pub fn admit(core: &mut Core, s: &Stored) -> Result<()> {
     })?;
     let t = core.team.as_mut().expect("checked");
     t.people.entry(s.docket.clone()).or_default().apply(&e);
+    let speaker = t.roster.any_key(&keyid).map(|(m, _)| m.handle.clone()).unwrap_or_default();
     let _ = core.events.send(json!({ "type": "docket", "docket": s.docket }));
+    // What it means for this hub (a message, a question, an answer) is
+    // worked out once it's safely in; a problem there doesn't undo it.
+    if let Err(err) = on_admitted(core, s, &e, &speaker) {
+        say!("{} #{}: {err:#}", s.docket, s.seq);
+    }
     Ok(())
 }
 
@@ -854,4 +860,202 @@ pub fn verify(t: &Team, docket: &str, entries: &[Stored]) -> crate::record::veri
     }
     r.ok = r.problems.is_empty();
     r
+}
+
+// ---- messages across hubs ----
+
+/// A pane on a teammate's Mac, as a message's block names it here:
+/// `team:sam:block:sam-1` is Sam's `block:sam-1`. The block is empty for
+/// a person (Sam, in a shell).
+pub fn remote_block(b: &str) -> Option<(String, String)> {
+    let rest = b.strip_prefix("team:")?;
+    let (member, block) = rest.split_once(':')?;
+    Some((member.to_string(), block.to_string()))
+}
+
+const GATES: &str = "team_gates";
+
+fn gates(core: &Core) -> BTreeMap<String, i64> {
+    core.store.meta_get(GATES).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+fn save_gates(core: &mut Core, g: &BTreeMap<String, i64>) -> Result<()> {
+    core.store.meta_set(GATES, &serde_json::to_string(g)?)
+}
+
+/// What a teammate's entry means for this hub, once it's in: a message for
+/// one of its agents, a question for its person, or an answer to one.
+/// Nothing here goes back on the record: a gate is this hub's own ask.
+fn on_admitted(core: &mut Core, s: &Stored, e: &Entry, speaker: &str) -> Result<()> {
+    let Some(t) = &core.team else { return Ok(()) };
+    let me = t.config.handle.clone();
+    if speaker == me || !matches!(e.kind.as_str(), "note" | "question" | "decision") || e.data.get("message").is_none() {
+        return Ok(());
+    }
+    let people = t.people.get(&s.docket).cloned().unwrap_or_default();
+    let d = &e.data;
+    let person = e.actor.typ == "person";
+    let from_addr = if person { speaker.to_string() } else { format!("{speaker}/{}", d["from"].as_str().unwrap_or("agent")) };
+    let from_block = format!("team:{speaker}:{}", crate::record::fold::block_of(e).unwrap_or(""));
+    let subject = d["subject"].as_str().map(str::to_string);
+    let options: Vec<String> = d["options"].as_array().into_iter().flatten().filter_map(|o| o.as_str().map(str::to_string)).collect();
+    let body = e.body.clone().unwrap_or_default();
+
+    // An answer to a question this hub has open: the first one stands.
+    if let Some(x) = d["answers"].as_str() {
+        let open: Vec<crate::store::Message> = core.store.messages_where("entry = ?1 AND to_addr = 'me' AND status = 'open'", rusqlite::params![x])?;
+        if !open.is_empty() {
+            for q in open {
+                core.store.set_message_status(q.id, "answered", Some(&format!("answered by {speaker}")))?;
+                // This hub's own agent asked: the answer goes to it.
+                if let Some(b) = q.from_block.as_deref().filter(|b| remote_block(b).is_none()) {
+                    let mut m = crate::store::Message {
+                        from_addr: speaker.to_string(),
+                        from_block: Some(from_block.clone()),
+                        to_addr: q.from_addr.clone(),
+                        to_block: Some(b.to_string()),
+                        subject: q.subject.as_ref().map(|s| format!("Re: {}", s.trim_start_matches("Re: "))),
+                        body: body.clone(),
+                        reply_to: Some(q.id),
+                        choice: d["choice"].as_str().map(str::to_string),
+                        status: "queued".into(),
+                        created_at: crate::time::now_ms(),
+                        docket: Some(s.docket.clone()),
+                        seq: Some(s.seq),
+                        entry: Some(s.id.clone()),
+                        ..Default::default()
+                    };
+                    m.id = core.store.insert_message(&m)?;
+                }
+            }
+            let _ = core.events.send(json!({ "type": "message" }));
+            return Ok(());
+        }
+    }
+
+    // A message for this hub's agents on the docket.
+    let targets: Vec<String> =
+        d["team_to"].as_array().into_iter().flatten().filter(|r| r["member"] == me.as_str()).filter_map(|r| r["block"].as_str().map(str::to_string)).collect();
+    if !targets.is_empty() {
+        let trusted = people.trust.contains(&(me.clone(), speaker.to_string()));
+        for b in targets {
+            // Only to an agent of this hub's still on the docket.
+            let here = core.agents.by_block.get(&b).is_some_and(|x| x.docket == s.docket);
+            let Some(p) = core.mirror.panes.get(&b).filter(|_| here).cloned() else { continue };
+            let mut m = crate::store::Message {
+                from_addr: from_addr.clone(),
+                from_block: Some(from_block.clone()),
+                to_addr: crate::messages::addr_of(core, &p),
+                to_block: Some(b.clone()),
+                subject: subject.clone(),
+                body: body.clone(),
+                options: options.clone(),
+                choice: d["choice"].as_str().map(str::to_string),
+                status: if trusted { "queued".into() } else { "waiting".into() },
+                created_at: crate::time::now_ms(),
+                docket: Some(s.docket.clone()),
+                seq: Some(s.seq),
+                entry: Some(s.id.clone()),
+                ..Default::default()
+            };
+            m.id = core.store.insert_message(&m)?;
+            if !trusted {
+                gate(core, &m, speaker)?;
+            }
+        }
+        let _ = core.events.send(json!({ "type": "message" }));
+        return Ok(());
+    }
+
+    // A teammate's agent asking its people: here too when this hub's person
+    // is an owner (or anyone on it may answer).
+    if !person && d["to"] == "me" && d.get("replies_to").is_none() {
+        let answers = people.owners.contains(&me) || (people.answer == "members" && people.on(&me));
+        if answers {
+            let mut m = crate::store::Message {
+                from_addr,
+                from_block: Some(from_block),
+                to_addr: crate::messages::ME.into(),
+                subject,
+                body,
+                options,
+                status: "open".into(),
+                created_at: crate::time::now_ms(),
+                docket: Some(s.docket.clone()),
+                seq: Some(s.seq),
+                entry: Some(s.id.clone()),
+                ..Default::default()
+            };
+            m.id = core.store.insert_message(&m)?;
+            let _ = core.events.send(json!({ "type": "message", "id": m.id, "to": crate::messages::ME }));
+        }
+    }
+    Ok(())
+}
+
+/// Ask this hub's person whether a teammate's message goes in. The ask is
+/// theirs alone: it's in their Inbox, never on the shared record.
+fn gate(core: &mut Core, held: &crate::store::Message, speaker: &str) -> Result<()> {
+    let preview: String = held.body.chars().take(600).collect();
+    let mut m = crate::store::Message {
+        from_addr: crate::messages::HUB.into(),
+        to_addr: crate::messages::ME.into(),
+        subject: Some(format!("{speaker}'s agent wants to message {}", held.to_addr)),
+        body: format!("From {} on {}:\n\n{preview}", held.from_addr, held.docket.as_deref().unwrap_or("?")),
+        options: vec!["Deliver".into(), "Drop".into(), format!("Let {speaker}'s agents through")],
+        status: "open".into(),
+        created_at: crate::time::now_ms(),
+        docket: held.docket.clone(),
+        ..Default::default()
+    };
+    m.id = core.store.insert_message(&m)?;
+    let mut g = gates(core);
+    g.insert(m.id.to_string(), held.id);
+    save_gates(core, &g)?;
+    let _ = core.events.send(json!({ "type": "message", "id": m.id, "to": crate::messages::ME }));
+    Ok(())
+}
+
+/// Your answer to a gate: the held message goes in, is dropped, or goes in
+/// with every later one from that teammate's agents on that docket.
+pub fn gate_answered(core: &mut Core, ask: i64, choice: Option<&str>) -> Result<()> {
+    let mut g = gates(core);
+    let Some(held) = g.get(&ask.to_string()).copied() else { return Ok(()) };
+    let Some(choice) = choice else { return Ok(()) };
+    let m = core.store.message(held)?.ok_or_else(|| anyhow!("the held message #{held} is gone"))?;
+    let speaker = m.from_block.as_deref().and_then(remote_block).map(|(s, _)| s).unwrap_or_default();
+    match choice {
+        "Deliver" => core.store.set_message_status(held, "queued", None)?,
+        "Drop" => core.store.set_message_status(held, "dropped", Some("you dropped it"))?,
+        c if c.starts_with("Let ") => {
+            let d = m.docket.clone().ok_or_else(|| anyhow!("the held message has no docket"))?;
+            core.append(&d, "trust", &Who::Owner, None, json!({ "teammate": speaker, "on": true }))?;
+            if let Some(t) = core.team.as_mut() {
+                let me = t.config.handle.clone();
+                t.people.entry(d.clone()).or_default().trust.insert((me, speaker.clone()));
+            }
+            // Everything else of theirs waiting on this docket goes in too.
+            let pending: Vec<i64> = core
+                .store
+                .messages_where("status = 'waiting' AND docket = ?1", rusqlite::params![d])?
+                .into_iter()
+                .filter(|w| w.from_block.as_deref().and_then(remote_block).is_some_and(|(s, _)| s == speaker))
+                .map(|w| w.id)
+                .collect();
+            for id in pending {
+                core.store.set_message_status(id, "queued", None)?;
+            }
+            for (a, h) in g.clone() {
+                if core.store.message(h)?.is_some_and(|x| x.status == "queued") {
+                    g.remove(&a);
+                    let _ = core.store.set_message_status(a.parse().unwrap_or(0), "answered", None);
+                }
+            }
+        }
+        _ => return Ok(()),
+    }
+    g.remove(&ask.to_string());
+    save_gates(core, &g)?;
+    core.live_changed();
+    Ok(())
 }

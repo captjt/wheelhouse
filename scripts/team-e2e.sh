@@ -74,15 +74,15 @@ hub_env() { # who
 as() { # who wh-args...  (as that member, in a shell on their Mac)
   local who=$1
   shift
-  env WH_SOCKET="$(sock "$who")" HOME="$t/$who/home" "$wh" "$@"
+  env WH_SOCKET="$(sock "$who")" HOME="$t/$who/home" "$wh" "$@" </dev/null
 }
 in_pane() { # who wh-args...  (as that member's agent, in its Rex pane)
   local who=$1
   shift
-  env WH_SOCKET="$(sock "$who")" HOME="$t/$who/home" REX_BLOCK="block:$who-1" "$wh" "$@"
+  env WH_SOCKET="$(sock "$who")" HOME="$t/$who/home" REX_BLOCK="block:$who-1" "$wh" "$@" </dev/null
 }
 api() { # who path
-  curl -fsS -H 'x-wheelhouse: 1' "http://127.0.0.1:$(port_of "$1")$2"
+  curl -fsS --max-time 20 -H 'x-wheelhouse: 1' "http://127.0.0.1:$(port_of "$1")$2"
 }
 start_ws() {
   env "${base_env[@]}" HOME="$t/ws" WH_STATE="$t/ws/state" WH_WORKSPACE_HTTP="127.0.0.1:$wsport" WH_WORKSPACE_LOGIN=off "$wh" serve --workspace >>"$t/ws.log" 2>&1 &
@@ -100,7 +100,10 @@ start_hub() { # who
   pids+=("$!")
   until_ "$1's hub didn't start" api "$1" /api/state
 }
-sync() { as "$1" team sync >/dev/null; }
+sync() {
+  local out
+  out=$(as "$1" team sync 2>&1) || fail "$1's sync: $out"
+}
 refused() { # pattern command...  (fails, and says pattern)
   local pat=$1 out
   shift
@@ -185,6 +188,43 @@ api jordan "/api/dockets/$S" | jq -e '[.docket.agents[] | select(.on and .member
 api jordan /api/state | jq -e '[.agents[] | select(.block == "block:sam-1")] | length == 0' >/dev/null || fail "Jordan's hub tracks Sam's pane"
 api jordan "/api/dockets/$S" | jq -e '[.entries[] | select(.kind == "release")] | length == 0' >/dev/null || fail "something released Sam's agent"
 ok "Sam's agent is on $S as Sam's; Jordan's hub doesn't follow or release it"
+
+step "Agents message each other across Macs: held until Jordan lets Sam's in"
+in_pane jordan join "$S" --role api >/dev/null || fail "Jordan's agent didn't join"
+sync jordan
+sync sam
+in_pane sam brief | grep "jordan/" >/dev/null || fail "Sam's agent's brief doesn't list Jordan's agent"
+in_pane sam send --to "@$S" "Header names: X-RateLimit-Limit and X-RateLimit-Remaining" >/dev/null || fail "Sam's agent couldn't message the docket"
+sync sam
+sync jordan
+msgs() { sqlite3 "$t/$1/state/wheelhouse.db" "$2"; }
+[ "$(msgs jordan "SELECT COUNT(*) FROM messages WHERE status = 'waiting' AND to_block = 'block:jordan-1'")" = 1 ] || fail "the message isn't waiting for Jordan: $(msgs jordan "SELECT id, status, from_addr, to_addr FROM messages")"
+gate=$(api jordan /api/messages | jq -r '[.[] | select(.from == "wheelhouse" and .status == "open" and (.subject | contains("sam")))][0].id')
+[ -n "$gate" ] && [ "$gate" != null ] || fail "no gate in Jordan's Inbox"
+sleep 3
+jq -e '[.pasted[] | select(.text | contains("X-RateLimit"))] | length == 0' "$t/jordan/rex.json" >/dev/null || fail "the message went into Jordan's pane before Jordan let it in"
+as jordan reply "$gate" --choice 3 >/dev/null || fail "Jordan couldn't answer the gate"
+until_ "the message didn't reach Jordan's agent" jq -e '[.pasted[] | select(.block == "block:jordan-1" and (.text | contains("X-RateLimit")) and (.text | contains("teammate")))] | length == 1' "$t/jordan/rex.json"
+sync jordan
+sync sam
+in_pane sam send --to "@$S" "Retry-After in seconds, please" >/dev/null || fail "Sam's agent's second message"
+sync sam
+sync jordan
+until_ "a trusted teammate's next message waited" jq -e '[.pasted[] | select(.block == "block:jordan-1" and (.text | contains("Retry-After in seconds")))] | length == 1' "$t/jordan/rex.json"
+ok "held as a gate in Jordan's Inbox, delivered (marked a teammate's) once let in, and the next went straight in"
+
+step "Sam's agent asks a question; Jordan, an owner, answers it; first answer stands"
+in_pane sam send --to me --subject "Empty bucket" --option 429 --option 503 "429 or 503 when the bucket is empty?" >/dev/null || fail "Sam's agent's question"
+sync sam
+sync jordan
+q=$(api jordan /api/messages | jq -r '[.[] | select(.status == "open" and .subject == "Empty bucket")][0].id')
+[ -n "$q" ] && [ "$q" != null ] || fail "Jordan, an owner, didn't get Sam's agent's question"
+as jordan reply "$q" --choice 429 >/dev/null || fail "Jordan couldn't answer"
+sync jordan
+sync sam
+until_ "the answer didn't reach Sam's agent" jq -e '[.pasted[] | select(.block == "block:sam-1" and (.text | contains("Re: Empty bucket")) and (.text | contains("429")) and (.text | contains("from jordan")))] | length == 1' "$t/sam/rex.json"
+[ "$(msgs sam "SELECT status FROM messages WHERE subject = 'Empty bucket' AND to_addr = 'me'")" = answered ] || fail "Sam's own copy of the question is still open"
+ok "the question reached Jordan as an owner; his answer went to Sam's agent, and Sam's copy was withdrawn"
 
 step "Sam's hub writes offline and catches up"
 stop_ws
