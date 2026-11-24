@@ -32,7 +32,7 @@ fn expand(cwd: &str) -> String {
 }
 
 /// `docket`: an existing docket to work on, instead of a new one. It must be
-/// open, and not already held by an agent in a live pane.
+/// open; agents already on it stay, and this one joins them.
 pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, title: Option<&str>, docket: Option<&str>) -> Result<Value> {
     let (bin, app) = program(app)?;
     let cwd = expand(cwd);
@@ -41,7 +41,7 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
     }
     let prompt = prompt.map(str::trim).filter(|p| !p.is_empty());
     let shown = crate::paths::tilde(&cwd);
-    let (docket, session) = {
+    let (docket, session, others, name) = {
         let mut core = shared.lock();
         let (t, src) = match (title.map(str::trim).filter(|t| !t.is_empty()), prompt.and_then(agents::title_from)) {
             (Some(t), _) => (t.to_string(), "person"),
@@ -54,8 +54,8 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
                 if !st.is_open() {
                     bail!("{d} is {}: reopen it first", st.status.replace('_', " "));
                 }
-                if st.agent.as_ref().is_some_and(|a| agents::live(&core, &a.block).is_some()) {
-                    bail!("{d} already has an agent in a live pane: open it there, or end that session first");
+                if let Some(h) = &st.hold {
+                    bail!("{d} is on hold ({h}): resume it first");
                 }
                 d.to_string()
             }
@@ -63,7 +63,9 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
         };
         let kind = crate::runtime::spawn_kind();
         let session = core.mirror.sessions.values().find(|s| s.runtime == kind && s.label == SESSION).map(|s| s.session_id.clone());
-        (id, session)
+        let others = core.store.state(&id)?.map_or(0, |st| st.agents_on().filter(|a| agents::live(&core, &a.agent.block).is_some()).count());
+        let name = pane_name(&core, &id);
+        (id, session, others, name)
     };
     // A runtime starts the agent from its own server, with its short login
     // PATH (`rex run` from Rex Server, `hc run` from herdr-core): no nvm,
@@ -82,9 +84,9 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
     }
     let rt = crate::runtime::spawn_kind().get();
     let created =
-        rt.open(session.as_deref(), SESSION, &docket, &cwd, &argv, crate::runtime::Place::Tab).await.with_context(|| format!("starting {bin} in {}", rt.kind().title()))?;
+        rt.open(session.as_deref(), SESSION, &name, &cwd, &argv, crate::runtime::Place::Tab).await.with_context(|| format!("starting {bin} in {}", rt.kind().title()))?;
     let mut core = shared.lock();
-    let agent = AgentRef { app: app.into(), host: "local".into(), block: created.block_id.clone(), rex_session: SESSION.into(), pane: docket.clone(), cwd: Some(shown) };
+    let agent = AgentRef { app: app.into(), host: "local".into(), block: created.block_id.clone(), rex_session: SESSION.into(), pane: name.clone(), cwd: Some(shown) };
     // The runtime may have shown the new pane to the mirror first, and it got a
     // docket of its own: that one goes, and the pane is this docket's.
     if let Some(other) = core.agents.by_block.get(&created.block_id).map(|t| t.docket.clone()).filter(|d| *d != docket) {
@@ -99,7 +101,17 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
     if let Some(p) = prompt {
         core.append(&docket, "note", &Who::Owner, Some(p.to_string()), json!({ "via": "prompt", "from": "wheelhouse" }))?;
     }
-    Ok(json!({ "docket": docket, "block": created.block_id }))
+    Ok(json!({ "docket": docket, "block": created.block_id, "pane": format!("{SESSION}/{name}"), "others": others }))
+}
+
+/// The new pane's name: the docket's (`D-12`), or with agents on it already,
+/// the first of `D-12-2`, `D-12-3`, … that no pane in the session has.
+fn pane_name(core: &crate::hub::Core, docket: &str) -> String {
+    let taken = |n: &str| core.mirror.panes.values().any(|p| p.label == n && core.mirror.session_label(&p.session_id) == SESSION);
+    if !taken(docket) {
+        return docket.to_string();
+    }
+    (2..).map(|i| format!("{docket}-{i}")).find(|n| !taken(n)).unwrap_or_else(|| docket.to_string())
 }
 
 /// Folders an agent could start in: where agents have worked, Build's and

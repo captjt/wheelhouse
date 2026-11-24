@@ -136,6 +136,21 @@ enum Cmd {
     Name { name: String },
     /// This pane's address and docket.
     Whoami,
+    /// Put the agent in this pane on a docket, beside the agents already on
+    /// it. It leaves the docket it was on.
+    Join {
+        #[arg(add = complete::dockets())]
+        docket: String,
+        /// What it's there for, shown beside it: reviewer, tests, docs.
+        #[arg(long)]
+        role: Option<String>,
+    },
+    /// Take this pane off its docket. The agents still on it keep it; this
+    /// pane gets a docket of its own.
+    Leave {
+        #[arg(long)]
+        reason: Option<String>,
+    },
     /// Start Claude Code, Codex or Antigravity on a new docket, in a folder,
     /// with a prompt; --docket D-12 works on that docket instead.
     Start {
@@ -358,7 +373,14 @@ fn main() {
                 ("claude-code", "Claude Code")
             };
             client::json("POST", "/api/agents/start", Some(&json!({ "app": app, "cwd": cwd, "prompt": prompt, "title": title, "docket": docket.as_deref().map(normalize) })))
-                .map(|v| println!("{label} started in {}: wheelhouse/{}", v["docket"].as_str().unwrap_or("?"), v["docket"].as_str().unwrap_or("?")))
+                .map(|v| {
+                    let beside = match v["others"].as_u64().unwrap_or(0) {
+                        0 => String::new(),
+                        1 => ", beside 1 other agent".into(),
+                        n => format!(", beside {n} other agents"),
+                    };
+                    println!("{label} started in {}: {}{beside}", v["docket"].as_str().unwrap_or("?"), v["pane"].as_str().unwrap_or("?"))
+                })
         }
         Some(Cmd::Skill { action }) => skill(action.as_deref()),
         Some(Cmd::Import { from, force }) => match from.as_str() {
@@ -397,6 +419,29 @@ fn main() {
             let block = crate::runtime::pane_from_env().ok_or_else(|| anyhow::anyhow!("run this in a Rex pane or a Herdr terminal"));
             block.and_then(|b| client::json("POST", "/api/panes/name", Some(&json!({ "block": b, "name": name })))).map(|v| {
                 println!("this pane is {}", v["addr"].as_str().unwrap_or("?"));
+            })
+        }
+        Some(Cmd::Join { docket, role }) => {
+            let d = normalize(&docket);
+            let block = crate::runtime::pane_from_env().ok_or_else(|| anyhow::anyhow!("run this in an agent's Rex pane or Herdr terminal"));
+            block.and_then(|b| client::json("POST", "/api/join", Some(&json!({ "block": b, "docket": d, "role": role })))).map(|v| {
+                let n = v["others"].as_u64().unwrap_or(0);
+                let beside = match n {
+                    0 => String::new(),
+                    1 => " beside 1 other agent".into(),
+                    n => format!(" beside {n} other agents"),
+                };
+                if v["already"] == true {
+                    println!("already on {d}{beside}");
+                } else {
+                    println!("on {d}{beside}. `wh brief` says who they are");
+                }
+            })
+        }
+        Some(Cmd::Leave { reason }) => {
+            let block = crate::runtime::pane_from_env().ok_or_else(|| anyhow::anyhow!("run this in an agent's Rex pane or Herdr terminal"));
+            block.and_then(|b| client::json("POST", "/api/leave", Some(&json!({ "block": b, "reason": reason })))).map(|v| {
+                println!("left {}{}", v["left"].as_str().unwrap_or("?"), v["docket"].as_str().map(|d| format!("; this pane is on {d} now")).unwrap_or_default());
             })
         }
         Some(Cmd::Whoami) => client::json("GET", &format!("/api/whoami{}", block_q("?")), None).map(|v| {

@@ -72,6 +72,8 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/messages/{n}/done", post(messages_done))
         .route("/api/panes/name", post(pane_name))
         .route("/api/whoami", get(whoami))
+        .route("/api/join", post(join_docket))
+        .route("/api/leave", post(leave_docket))
         .route("/api/agents/start", post(start_agent))
         .route("/api/folders", get(folders_list))
         .route("/api/hub/stop", post(hub_stop))
@@ -906,6 +908,34 @@ async fn messages_wait(State(shared): State<Shared>, axum::extract::Query(q): ax
 struct NameReq {
     block: String,
     name: String,
+}
+
+#[derive(Deserialize)]
+struct JoinReq {
+    block: String,
+    docket: String,
+    #[serde(default)]
+    role: Option<String>,
+}
+
+/// An agent already running joins a docket, beside the agents on it.
+async fn join_docket(State(shared): State<Shared>, Json(req): Json<JoinReq>) -> ApiResult {
+    let mut core = shared.lock();
+    let role = req.role.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    agents::join(&mut core, &req.block, req.docket.trim(), role).map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
+}
+
+#[derive(Deserialize)]
+struct LeaveReq {
+    block: String,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// The pane leaves its docket; the agents still on it keep it.
+async fn leave_docket(State(shared): State<Shared>, Json(req): Json<LeaveReq>) -> ApiResult {
+    let mut core = shared.lock();
+    agents::leave(&mut core, &req.block, req.reason.as_deref()).map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
 }
 
 /// Name a pane, so others can reach it by that name.

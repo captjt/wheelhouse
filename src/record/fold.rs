@@ -18,9 +18,16 @@ pub struct DocketState {
     pub status: String,
     /// `agent` or `none`, for now.
     pub protocol: String,
+    /// The agent the apps show when they show one: the most recently active
+    /// of `agents` still on the docket, or else the last one. Kept beside
+    /// `agents` so a reader of one agent still reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<AgentRef>,
-    /// The agent session that holds the docket, from its hooks.
+    /// Every agent that has been on the docket, by pane, in the order they
+    /// joined: those on it now have no `left_at`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<DocketAgent>,
+    /// The session of `agent`, from its hooks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     pub prompts: u32,
@@ -165,6 +172,40 @@ pub struct AgentRef {
     pub cwd: Option<String>,
 }
 
+/// One agent on a docket: a pane, from its first claim (or the `open` that
+/// named it) to its release.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct DocketAgent {
+    #[serde(flatten)]
+    pub agent: AgentRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// What it's for, when a protocol says: `Build builder`, `claude reviewer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<i64>,
+    pub joined_at: String,
+    /// When it last did something the record names it for.
+    pub active_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<String>,
+}
+
+impl DocketAgent {
+    pub fn on(&self) -> bool {
+        self.left_at.is_none()
+    }
+}
+
+/// The pane an entry names as its agent's: an agent's own entries carry it
+/// in the actor, the hub's in `data.block`.
+pub fn block_of(e: &Entry) -> Option<&str> {
+    e.data["block"].as_str().or_else(|| e.actor.extra.get("block").and_then(Value::as_str)).filter(|b| !b.is_empty())
+}
+
 fn s(v: &Value) -> Option<String> {
     v.as_str().map(str::to_string)
 }
@@ -186,7 +227,7 @@ impl DocketState {
                 self.status = if matches!(self.protocol.as_str(), "agent" | "review") { "in_progress".into() } else { "todo".into() };
                 self.created_at = e.at.clone();
                 if let Ok(a) = serde_json::from_value::<AgentRef>(d["agent"].clone()) {
-                    self.agent = Some(a);
+                    self.join(a, s(&d["session"]), None, None, &e.at);
                 }
                 if let Some(sess) = s(&d["session"]) {
                     self.session = Some(sess);
@@ -223,12 +264,35 @@ impl DocketState {
             "claim" => {
                 self.session = s(&d["session"]);
                 self.released = None;
-                if let Ok(a) = serde_json::from_value::<AgentRef>(d["agent"].clone()) {
-                    self.agent = Some(a);
+                match serde_json::from_value::<AgentRef>(d["agent"].clone()) {
+                    Ok(a) => self.join(a, s(&d["session"]), s(&d["role"]), d["round"].as_i64(), &e.at),
+                    // A claim that names no pane is the docket's agent's.
+                    Err(_) => {
+                        let sess = s(&d["session"]);
+                        if let Some(b) = self.agent.as_ref().map(|a| a.block.clone())
+                            && let Some(x) = self.agents.iter_mut().rev().find(|x| x.agent.block == b)
+                        {
+                            x.session = sess;
+                            x.active_at = e.at.clone();
+                            x.left_at = None;
+                            x.left = None;
+                        }
+                    }
                 }
             }
             "release" => {
-                self.released = Some(s(&d["reason"]).unwrap_or_else(|| "released".into()));
+                let reason = s(&d["reason"]).unwrap_or_else(|| "released".into());
+                // A release names its pane; an old one that doesn't is everyone's.
+                let block = s(&d["block"]);
+                for x in self.agents.iter_mut().filter(|x| x.on() && block.as_ref().is_none_or(|b| *b == x.agent.block)) {
+                    x.left_at = Some(e.at.clone());
+                    x.left = Some(reason.clone());
+                }
+                // The docket is released when its last agent leaves.
+                if !self.agents.iter().any(DocketAgent::on) {
+                    self.released = Some(reason);
+                }
+                self.pick_agent();
             }
             "note" => {
                 if d["via"].as_str() == Some("prompt") {
@@ -300,9 +364,55 @@ impl DocketState {
             }
             _ => {}
         }
+        // What an agent did moves it to the front.
+        if !matches!(e.kind.as_str(), "claim" | "release" | "open")
+            && let Some(b) = block_of(e)
+            && let Some(x) = self.agents.iter_mut().rev().find(|x| x.agent.block == b && x.on())
+        {
+            x.active_at = e.at.clone();
+            self.pick_agent();
+        }
         self.updated_at = e.at.clone();
         self.entries = seq;
         self.head = chain.to_string();
+    }
+
+    /// An agent joins, or one already on the docket claims again (a new
+    /// session, a resume). A claim that doesn't say its role keeps the one
+    /// it had.
+    fn join(&mut self, a: AgentRef, session: Option<String>, role: Option<String>, round: Option<i64>, at: &str) {
+        match self.agents.iter_mut().rev().find(|x| x.agent.block == a.block) {
+            Some(x) => {
+                x.agent = a;
+                x.session = session;
+                x.role = role.or(x.role.take());
+                x.round = round.or(x.round);
+                x.active_at = at.to_string();
+                if x.left_at.is_some() {
+                    x.left_at = None;
+                    x.left = None;
+                    x.joined_at = at.to_string();
+                }
+            }
+            None => self.agents.push(DocketAgent { agent: a, session, role, round, joined_at: at.into(), active_at: at.into(), left_at: None, left: None }),
+        }
+        self.pick_agent();
+    }
+
+    /// `agent` and `session`: the most recently active agent still on the
+    /// docket, or, with none on it, the last to be active.
+    fn pick_agent(&mut self) {
+        let on = self.agents.iter().filter(|x| x.on()).max_by(|a, b| a.active_at.cmp(&b.active_at));
+        let pick = on.or_else(|| self.agents.iter().max_by(|a, b| a.active_at.cmp(&b.active_at)));
+        if let Some(x) = pick {
+            self.agent = Some(x.agent.clone());
+            self.session = x.session.clone();
+        }
+    }
+
+    /// The agents on the docket now.
+    pub fn agents_on(&self) -> impl Iterator<Item = &DocketAgent> {
+        self.agents.iter().filter(|x| x.on())
     }
 
     pub fn short_head(&self) -> &str {
@@ -314,12 +424,124 @@ impl DocketState {
     }
 }
 
+/// The fold's version. When it changes (a field the state didn't have), the
+/// hub folds every docket again once, at start, so the saved copies match.
+pub const VERSION: &str = "2";
+
 /// Fold a whole docket from its entries.
-#[cfg(test)]
 pub fn fold<'a>(id: &str, entries: impl IntoIterator<Item = (i64, &'a str, &'a Entry)>) -> DocketState {
     let mut st = DocketState::new(id);
     for (seq, chain, e) in entries {
         st.apply(seq, chain, e);
     }
     st
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::record::entry::Actor;
+    use serde_json::json;
+
+    fn e(kind: &str, at: &str, data: Value) -> Entry {
+        let mut e = Entry::new("D-1", kind, at, Actor::new("hub", "hub@local"));
+        e.data = data;
+        e
+    }
+
+    fn agent(block: &str) -> Value {
+        json!({ "app": "claude-code", "host": "local", "block": block, "rex_session": "wheelhouse", "pane": block })
+    }
+
+    fn run(entries: &[Entry]) -> DocketState {
+        let chain = "00".repeat(32);
+        fold("D-1", entries.iter().enumerate().map(|(i, e)| (i as i64 + 1, chain.as_str(), e)))
+    }
+
+    fn on(st: &DocketState) -> Vec<&str> {
+        st.agents_on().map(|a| a.agent.block.as_str()).collect()
+    }
+
+    #[test]
+    fn an_old_single_agent_record_folds_as_before() {
+        let st = run(&[
+            e("open", "t1", json!({ "protocol": "agent", "title_source": "pane", "agent": agent("b1") })),
+            e("claim", "t2", json!({ "session": "s-1", "source": "startup", "agent": agent("b1") })),
+            e("turn", "t3", json!({ "state": "done" })),
+            e("release", "t4", json!({ "reason": "pane closed", "block": "b1" })),
+        ]);
+        assert_eq!(st.agent.as_ref().unwrap().block, "b1");
+        assert_eq!(st.session.as_deref(), Some("s-1"));
+        assert_eq!(st.released.as_deref(), Some("pane closed"));
+        assert_eq!(st.agents.len(), 1);
+        assert_eq!(st.agents[0].left.as_deref(), Some("pane closed"));
+        assert!(on(&st).is_empty());
+
+        // An older release named no pane: everyone left.
+        let st = run(&[e("claim", "t1", json!({ "session": "s-1", "agent": agent("b1") })), e("release", "t2", json!({ "reason": "agent exited" }))]);
+        assert_eq!(st.released.as_deref(), Some("agent exited"));
+
+        // A resume in a new pane: the new pane is the agent, and it holds the docket.
+        let st = run(&[
+            e("claim", "t1", json!({ "session": "s-1", "agent": agent("b1") })),
+            e("release", "t2", json!({ "reason": "pane closed", "block": "b1" })),
+            e("claim", "t3", json!({ "session": "s-1", "source": "resume", "agent": agent("b2") })),
+        ]);
+        assert_eq!(st.agent.as_ref().unwrap().block, "b2");
+        assert!(st.released.is_none());
+        assert_eq!(on(&st), ["b2"]);
+    }
+
+    #[test]
+    fn agents_join_and_leave_and_the_last_to_leave_releases() {
+        let st = run(&[
+            e("open", "t1", json!({ "protocol": "agent", "title_source": "person" })),
+            e("claim", "t2", json!({ "source": "wheelhouse", "agent": agent("block:1") })),
+            e("claim", "t3", json!({ "source": "join", "agent": agent("herdr:t2") })),
+            e("claim", "t4", json!({ "session": "s-1", "source": "startup", "agent": agent("block:1") })),
+        ]);
+        assert_eq!(on(&st), ["block:1", "herdr:t2"]);
+        assert_eq!(st.agent.as_ref().unwrap().block, "block:1", "the most recently active");
+        assert_eq!(st.session.as_deref(), Some("s-1"));
+
+        let mut later = vec![
+            e("claim", "t2", json!({ "source": "wheelhouse", "agent": agent("block:1") })),
+            e("claim", "t3", json!({ "source": "join", "agent": agent("herdr:t2") })),
+            e("turn", "t5", json!({ "state": "done", "block": "herdr:t2" })),
+        ];
+        let st = run(&later);
+        assert_eq!(st.agent.as_ref().unwrap().block, "herdr:t2", "a turn moves its agent to the front");
+
+        later.push(e("release", "t6", json!({ "reason": "left", "block": "herdr:t2" })));
+        let st = run(&later);
+        assert_eq!(on(&st), ["block:1"]);
+        assert!(st.released.is_none(), "one agent is still on it");
+        assert_eq!(st.agent.as_ref().unwrap().block, "block:1");
+
+        later.push(e("release", "t7", json!({ "reason": "pane closed", "block": "block:1" })));
+        let st = run(&later);
+        assert!(on(&st).is_empty());
+        assert_eq!(st.released.as_deref(), Some("pane closed"));
+        assert_eq!(st.agents.len(), 2, "both stay on the record, as having left");
+
+        // One joins again: the docket is held again.
+        later.push(e("claim", "t8", json!({ "source": "join", "agent": agent("herdr:t2") })));
+        let st = run(&later);
+        assert_eq!(on(&st), ["herdr:t2"]);
+        assert!(st.released.is_none());
+        assert_eq!(st.agents.iter().find(|a| a.agent.block == "herdr:t2").unwrap().joined_at, "t8");
+    }
+
+    #[test]
+    fn a_role_outlives_a_claim_that_doesnt_say_it() {
+        let st = run(&[
+            e("claim", "t1", json!({ "source": "wheelhouse", "role": "Build builder", "agent": agent("b1") })),
+            e("claim", "t2", json!({ "source": "wheelhouse", "role": "Build checker", "round": 2, "agent": agent("b2") })),
+            e("claim", "t3", json!({ "session": "s-1", "source": "startup", "agent": agent("b1") })),
+        ]);
+        let role = |b: &str| st.agents.iter().find(|a| a.agent.block == b).and_then(|a| a.role.clone());
+        assert_eq!(role("b1").as_deref(), Some("Build builder"));
+        assert_eq!(role("b2").as_deref(), Some("Build checker"));
+        assert_eq!(st.agents[1].round, Some(2));
+    }
 }
