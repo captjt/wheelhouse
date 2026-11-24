@@ -442,6 +442,9 @@ enum TeamCmd {
     Drop { n: i64 },
     /// Send the outbox and take in what's new, now.
     Sync,
+    /// Follow a shared docket again that this hub stopped following (it
+    /// refused something the workspace served): from where it stopped.
+    Follow { docket: String },
 }
 
 fn main() {
@@ -698,6 +701,11 @@ fn team_cmd(cmd: Option<TeamCmd>) -> Result<()> {
         Some(TeamCmd::Drop { n }) => {
             call(&format!("/api/team/outbox/{n}"), json!({ "action": "drop" }))?;
             println!("#{n} dropped");
+        }
+        Some(TeamCmd::Follow { docket }) => {
+            let d = enc(docket.trim());
+            call(&format!("/api/team/dockets/{d}/follow"), json!({}))?;
+            println!("{d}: following again; wh team sync to try now");
         }
         Some(TeamCmd::Sync) => {
             let v = call("/api/team/sync", json!({}))?;

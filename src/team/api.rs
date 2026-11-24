@@ -34,6 +34,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/team/remove", post(remove))
         .route("/api/team/outbox/{n}", post(outbox))
         .route("/api/team/sync", post(sync))
+        .route("/api/team/dockets/{id}/follow", post(follow))
         .route("/api/team/dockets/{id}/people", post(people))
         .route("/api/team/dockets/{id}/trust", post(trust))
 }
@@ -144,6 +145,12 @@ async fn sync(State(shared): State<Shared>) -> ApiResult {
     member::send(&shared).await.map_err(fail)?;
     member::pull(&shared, 0).await.map_err(fail)?;
     Ok(Json(member::status(&shared.lock())))
+}
+
+async fn follow(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let mut core = shared.lock();
+    member::follow_again(&mut core, &id).map_err(fail)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]

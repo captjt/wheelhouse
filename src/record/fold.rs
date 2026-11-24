@@ -231,6 +231,11 @@ impl DocketAgent {
 /// The member an entry's hub or agent belongs to, on a shared docket:
 /// `hub@sam` and `codex@sam` are Sam's. None for your own hub's (`@local`).
 pub fn member_of(e: &Entry) -> Option<String> {
+    // On a shared docket, anything a person wrote is theirs too: never
+    // read as this hub's own (the rules refuse a person's claim anyway).
+    if e.actor.typ == "person" {
+        return (!e.docket.starts_with("D-")).then(|| e.actor.id.clone());
+    }
     if !matches!(e.actor.typ.as_str(), "hub" | "agent") {
         return None;
     }

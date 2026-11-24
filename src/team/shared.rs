@@ -19,6 +19,12 @@ pub const KINDS: &[&str] = &[
     "approval",
 ];
 
+/// Whether `id` is `PREFIX-n` in its one spelling: n a number from 1, with
+/// no sign or leading zero.
+pub fn docket_ok(prefix: &str, id: &str) -> bool {
+    id.strip_prefix(prefix).and_then(|r| r.strip_prefix('-')).is_some_and(|n| !n.is_empty() && n.len() <= 9 && n.bytes().all(|b| b.is_ascii_digit()) && !n.starts_with('0'))
+}
+
 /// How far ahead of the workspace hub's clock an entry's time may be.
 pub const SKEW_MS: i64 = 5 * 60 * 1000;
 
@@ -147,11 +153,10 @@ pub fn check(roster: &Roster, people: &People, docket: &str, seq: i64, e: &Entry
     match e.kind.as_str() {
         "share" => {
             ensure!(e.actor.typ == "person", "a person shares a docket");
+            // Others become owners when an owner adds them, not by being named.
             let owners: Vec<&str> = d["owners"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
-            ensure!(owners.contains(&h), "the sharer is its first owner");
-            for o in owners {
-                ensure!(roster.members.get(o).is_some_and(|m| m.active()), "{o} isn't an active member");
-            }
+            ensure!(owners == [h], "the sharer is its one first owner");
+            ensure!(d.get("history").is_none() && e.blobs.is_empty(), "a share names its local history by head, and doesn't carry it");
         }
         "people" => {
             ensure!(e.actor.typ == "person", "a person changes who's on a docket");
@@ -168,6 +173,7 @@ pub fn check(roster: &Roster, people: &People, docket: &str, seq: i64, e: &Entry
                 }
             }
             if let Some(a) = d["answer"].as_str() {
+                ensure!(owner, "only an owner says who answers");
                 ensure!(matches!(a, "owners" | "members"), "who answers is owners or members");
             }
         }
@@ -175,9 +181,12 @@ pub fn check(roster: &Roster, people: &People, docket: &str, seq: i64, e: &Entry
             ensure!(e.actor.typ == "person", "a person trusts a teammate's agents");
             ensure!(people.on(h), "{h} isn't on this docket");
             if let Some(t) = d["teammate"].as_str() {
-                ensure!(roster.members.contains_key(t), "{t} isn't a member");
+                ensure!(roster.members.get(t).is_some_and(|m| m.active()), "{t} isn't an active member");
             }
         }
+        // What a hub saw: never a person's (or an agent's) to say. A person's
+        // claim would read as every hub's own agent.
+        "claim" | "release" | "turn" | "observed" | "check" => ensure!(e.actor.typ == "hub", "only a hub writes `{}`", e.kind),
         "intent" | "set" => ensure!(owner, "only an owner (or their agents) changes a shared docket's {}", if e.kind == "intent" { "intent" } else { "title or status" }),
         "approval" => {
             // Redacted at writing: who answered, not what.
@@ -197,7 +206,8 @@ pub fn check(roster: &Roster, people: &People, docket: &str, seq: i64, e: &Entry
 /// keeps them private.
 pub fn redact(kind: &str, body: Option<String>, data: Value, private_prompts: bool) -> (Option<String>, Value, Option<Vec<u8>>) {
     let prompt = kind == "note" && data["via"] == "prompt";
-    let blocked = kind == "observed" && matches!(data["what"].as_str(), Some("blocked"));
+    // A blocked prompt's text, and an error's (it can quote what the agent ran).
+    let blocked = kind == "observed" && matches!(data["what"].as_str(), Some("blocked" | "error"));
     if !(kind == "approval" || blocked || (prompt && private_prompts)) {
         return (body, data, None);
     }
@@ -286,7 +296,7 @@ mod tests {
     use super::*;
     use crate::record::Key;
     use crate::record::entry::Actor;
-    use crate::team::roster::tests::{T0, create, entry as log_entry, invite_and_join};
+    use crate::team::roster::tests::{T0, create, invite_and_join, key_entry};
 
     struct World {
         roster: Roster,
@@ -303,8 +313,8 @@ mod tests {
         let sam_agent = Key::generate("agent-codex@local");
         let mut l = create(&jordan);
         invite_and_join(&mut l, ("jordan", &jordan), "sam", "member", &sam).unwrap();
-        l.push(log_entry("ACME-0", "key", "sam", json!({ "keyid": sam_hub.keyid(), "use": "hub", "name": "hub" })), &sam).unwrap();
-        l.push(log_entry("ACME-0", "key", "sam", json!({ "keyid": sam_agent.keyid(), "use": "agent", "name": "agent-codex@local" })), &sam).unwrap();
+        l.push(key_entry(&l, "sam", &sam_hub, "hub", "hub"), &sam).unwrap();
+        l.push(key_entry(&l, "sam", &sam_agent, "agent", "agent-codex@local"), &sam).unwrap();
         World { roster: l.roster, jordan, sam, sam_hub, sam_agent }
     }
 
@@ -330,6 +340,9 @@ mod tests {
         assert!(check(&w.roster, &p, "ACME-1", 2, &share, &w.jordan.keyid(), None).is_err());
         let note = e("note", "person", "jordan", json!({}));
         assert!(check(&w.roster, &p, "ACME-1", 1, &note, &w.jordan.keyid(), None).is_err());
+        // Nor name others as owners: they're added by an owner, later.
+        let two = e("share", "person", "jordan", json!({ "owners": ["jordan", "sam"] }));
+        assert!(check(&w.roster, &p, "ACME-1", 1, &two, &w.jordan.keyid(), None).is_err());
         // Sam can't share in Jordan's name, nor without being an owner.
         let other = e("share", "person", "sam", json!({ "owners": ["jordan"] }));
         assert!(check(&w.roster, &p, "ACME-1", 1, &other, &w.sam.keyid(), None).is_err());
@@ -451,6 +464,18 @@ mod tests {
         assert_eq!(st.own_agents_on(Some("jordan")).count(), 1);
         assert_eq!(st.own_agents_on(Some("sam")).count(), 0);
         assert!(st.released.is_none());
+    }
+
+    #[test]
+    fn people_cant_write_what_hubs_saw_or_say_who_answers() {
+        let w = world();
+        let p = shared(&w);
+        let c = |entry: Entry, k: &Key| check(&w.roster, &p, "ACME-1", 2, &entry, &k.keyid(), None);
+        assert!(c(e("claim", "person", "sam", json!({ "agent": { "block": "herdr:t1" } })), &w.sam).is_err());
+        assert!(c(e("release", "person", "sam", json!({ "block": "herdr:t1" })), &w.sam).is_err());
+        c(e("claim", "hub", "hub@sam", json!({ "agent": { "block": "herdr:t1" } })), &w.sam_hub).unwrap();
+        assert!(c(e("people", "person", "sam", json!({ "handle": "sam", "answer": "members" })), &w.sam).is_err());
+        assert!(docket_ok("ACME", "ACME-12") && !docket_ok("ACME", "ACME-012") && !docket_ok("ACME", "ACME-+5") && !docket_ok("ACME", "ACME-0") && !docket_ok("ACME", "ACMEX-1"));
     }
 
     #[test]

@@ -67,7 +67,7 @@ impl Team {
 
     /// Whether a docket id is one of this workspace's shared dockets.
     pub fn shares(&self, docket: &str) -> bool {
-        docket.strip_prefix(&self.config.prefix).and_then(|r| r.strip_prefix('-')).is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n > 0))
+        shared::docket_ok(&self.config.prefix, docket)
     }
 
     /// Whether a docket id is a shared docket or the member log.
@@ -85,6 +85,14 @@ const HALTED: &str = "team_halted";
 pub fn load(core: &mut Core) -> Result<()> {
     let Some(c) = core.store.meta_get(META)? else { return Ok(()) };
     let config: Config = serde_json::from_str(&c).context("the team config doesn't read")?;
+    core.team = Some(team_of(core, config)?);
+    Ok(())
+}
+
+/// A workspace's view from this hub's store, checking its copy of the
+/// member log as it folds it.
+fn team_of(core: &Core, config: Config) -> Result<Team> {
+    ensure!(roster::prefix_ok(&config.prefix), "the workspace's prefix {} isn't one", config.prefix);
     let log = format!("{}-0", config.prefix);
     let roster = Roster::fold(&core.store.entries(&log)?).with_context(|| format!("this hub's copy of {log} doesn't check"))?;
     let mut people = BTreeMap::new();
@@ -100,7 +108,7 @@ pub fn load(core: &mut Core) -> Result<()> {
     }
     let aliases = core.store.meta_get(ALIASES)?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
     let halted = core.store.meta_get(HALTED)?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
-    core.team = Some(Team {
+    Ok(Team {
         config,
         roster,
         people,
@@ -111,8 +119,7 @@ pub fn load(core: &mut Core) -> Result<()> {
         cursor: 0,
         wake: Arc::new(tokio::sync::Notify::new()),
         busy: Arc::new(tokio::sync::Mutex::new(())),
-    });
-    Ok(())
+    })
 }
 
 fn save(core: &mut Core) -> Result<()> {
@@ -160,20 +167,37 @@ fn id_of(envelope: &str) -> String {
 /// outbox ahead of it.
 fn register_key(core: &mut Core, key_name: &str, keyid: &str) -> Result<()> {
     let t = core.team.as_ref().ok_or_else(|| anyhow!("not in a workspace"))?;
-    if key_name == "owner" || t.roster.keys.contains_key(keyid) {
+    let handle = t.config.handle.clone();
+    if let Some(k) = t.roster.keys.get(keyid) {
+        // Named already: by this member, or else something's wrong.
+        ensure!(k.handle == handle, "this hub's key {} is in the workspace as {}'s: tell the workspace's admin", roster::short(keyid), k.handle);
+        return Ok(());
+    }
+    if key_name == "owner" {
         return Ok(());
     }
     let log = t.log_id();
-    let handle = t.config.handle.clone();
-    let queued = core.store.outbox()?.iter().any(|o| o.docket == log && o.envelope.contains(keyid));
+    let queued = core.store.outbox()?.iter().any(|o| o.docket == log && open_envelope(&o.envelope).is_ok_and(|(e, _)| e.kind == "key" && e.data["keyid"] == keyid));
     if queued {
         return Ok(());
     }
-    let mut e = Entry::new(&log, "key", &crate::time::now_ms(), Actor::new("person", &handle));
-    e.data = json!({ "keyid": keyid, "use": key_use(key_name), "name": key_name });
+    let wid = t.config.id.clone();
+    let e = key_entry(core, &log, &wid, &handle, key_name)?;
     let (env, _, _) = sign(core, "owner", &e)?;
     core.store.outbox_push(&log, &id_of(&env), &env, "queued", None)?;
     Ok(())
+}
+
+/// A `key` entry naming this hub's key `key_name`, with the key's own
+/// signature to show this member holds it.
+fn key_entry(core: &mut Core, log: &str, workspace: &str, handle: &str, key_name: &str) -> Result<Entry> {
+    let (keyid, proof) = {
+        let k = core.keys.get_or_create(key_name)?.0;
+        (k.keyid(), B64.encode(k.sign(&roster::key_message(workspace, handle, &k.keyid()))))
+    };
+    let mut e = Entry::new(log, "key", &crate::time::now_ms(), Actor::new("person", handle));
+    e.data = json!({ "keyid": keyid, "use": key_use(key_name), "name": key_name, "proof": proof });
+    Ok(e)
 }
 
 /// Write an entry on a shared docket: redact what never leaves, check it
@@ -204,7 +228,10 @@ pub fn append(core: &mut Core, docket: &str, kind: &str, who: &Who, body: Option
         let mut roster = t.roster.clone();
         if !roster.keys.contains_key(&keyid) {
             // Its `key` entry goes first; check as if it were in.
-            roster.keys.insert(keyid.clone(), roster::KeyInfo { handle: handle.clone(), use_: key_use(&key_name).into(), name: key_name.clone(), since: roster.seq + 1 });
+            roster.keys.insert(
+                keyid.clone(),
+                roster::KeyInfo { handle: handle.clone(), use_: key_use(&key_name).into(), name: key_name.clone(), since: roster.seq + 1, revoked_at: None },
+            );
         }
         let next = core.store.entries_len(docket)? + core.store.outbox()?.iter().filter(|o| o.docket == docket).count() as i64 + 1;
         shared::check(&roster, &people, docket, next, &e, &keyid, None)?;
@@ -260,9 +287,26 @@ async fn call(shared: &Shared, method: &str, path: &str, body: Option<&Value>) -
     answer(req.send().await.with_context(|| format!("reaching the workspace at {url}"))?).await
 }
 
+/// A response's body, read only up to `cap` bytes: a workspace hub can't
+/// make this hub hold more than that in memory.
+async fn read_capped(mut resp: reqwest::Response, cap: usize) -> Result<Vec<u8>> {
+    if resp.content_length().is_some_and(|n| n as usize > cap) {
+        bail!("the workspace sent more than {} MB", cap >> 20);
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        out.extend_from_slice(&chunk);
+        ensure!(out.len() <= cap, "the workspace sent more than {} MB", cap >> 20);
+    }
+    Ok(out)
+}
+
+/// The most a JSON answer from the workspace may be: a page is at most 4 MB.
+const MAX_ANSWER: usize = 16 << 20;
+
 async fn answer(resp: reqwest::Response) -> Result<Value> {
     let status = resp.status();
-    let bytes = resp.bytes().await?;
+    let bytes = read_capped(resp, MAX_ANSWER).await?;
     let v: Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
     if !status.is_success() {
         let msg = v["error"].as_str().map(str::to_string).unwrap_or_else(|| v.to_string());
@@ -328,8 +372,7 @@ async fn get_blob(shared: &Shared, digest_hex: &str) -> Result<()> {
     }
     let resp = req.send().await?;
     ensure!(resp.status().is_success(), "the workspace doesn't have the file {digest_hex}");
-    let bytes = resp.bytes().await?;
-    ensure!(bytes.len() <= crate::artifacts::MAX, "a file over 25 MB");
+    let bytes = read_capped(resp, crate::artifacts::MAX).await?;
     ensure!(hex::encode(&sha2::Sha256::digest(&bytes)) == digest_hex, "the workspace's file {digest_hex} doesn't match its hash");
     shared.lock().store.put_blob(digest_hex, &bytes, &crate::time::now_ms())
 }
@@ -405,8 +448,19 @@ pub async fn send(shared: &Shared) -> Result<()> {
         };
         let Some(o) = next else { return Ok(()) };
         let (e, _) = open_envelope(&o.envelope)?;
+        let mut missing = None;
         for b in &e.blobs {
-            put_blob(shared, b.strip_prefix("sha256:").unwrap_or(b)).await?;
+            let h = b.strip_prefix("sha256:").unwrap_or(b);
+            if !shared.lock().store.has_blob(h)? {
+                missing = Some(h.to_string());
+                break;
+            }
+            put_blob(shared, h).await?;
+        }
+        if let Some(h) = missing {
+            // Never sendable: set aside, so the rest of the outbox goes on.
+            shared.lock().store.outbox_set(o.n, "refused", Some(&format!("it names a file this hub doesn't have ({})", &h[..h.len().min(12)])))?;
+            continue;
         }
         let path = if o.docket == log { "/team/v1/log".to_string() } else { format!("/team/v1/dockets/{}", o.docket) };
         match call(shared, "POST", &path, Some(&json!({ "envelope": o.envelope }))).await {
@@ -423,7 +477,9 @@ pub async fn send(shared: &Shared) -> Result<()> {
                     }
                 }
             }
-            Err(err) if err.downcast_ref::<Refused>().is_some_and(|r| (400..500).contains(&r.status)) => {
+            // The workspace refused the entry itself; a refusal of who's
+            // asking (401, 403) or a slow-down (429) is tried again later.
+            Err(err) if err.downcast_ref::<Refused>().is_some_and(|r| (400..500).contains(&r.status) && !matches!(r.status, 401 | 403 | 408 | 429)) => {
                 let msg = err.downcast_ref::<Refused>().map(|r| r.msg.clone()).unwrap_or_default();
                 say!("{}: the workspace refused an entry: {msg}", o.docket);
                 shared.lock().store.outbox_set(o.n, "refused", Some(&msg))?;
@@ -486,6 +542,10 @@ async fn follow_one(shared: &Shared, docket: &str, remote: i64) -> Result<()> {
         let page = call(shared, "GET", &path, None).await?;
         let entries: Vec<Stored> = serde_json::from_value(page["entries"].clone()).context("the workspace's entries don't read")?;
         ensure!(!entries.is_empty(), "{docket}: the workspace said there's more and sent nothing");
+        // Only what was there when it said how many: a later entry may be
+        // signed by a key whose `key` entry this pull hasn't taken in yet.
+        let entries: Vec<Stored> = entries.into_iter().filter(|s| s.seq <= remote).collect();
+        ensure!(entries.iter().any(|s| s.seq > local), "{docket}: the workspace sent nothing new");
         for s in entries {
             ensure!(s.docket == docket, "the workspace sent an entry of {} for {docket}", s.docket);
             let blobs = s.entry().map(|e| e.blobs).unwrap_or_default();
@@ -525,10 +585,14 @@ pub fn admit(core: &mut Core, s: &Stored) -> Result<()> {
         return Ok(());
     }
     ensure!(t.shares(&s.docket), "{} isn't one of this workspace's dockets", s.docket);
+    // An entry is on a docket once: an old one ordered again (a revoked
+    // trust, a past promotion) is refused.
+    ensure!(!core.store.has_entry(&s.docket, &s.id)?, "#{}: that entry is on {} already: it was sent again", s.seq, s.docket);
+    let t = core.team.as_mut().expect("checked");
     let people = t.people.get(&s.docket).cloned().unwrap_or_default();
-    // Signed by a key the log names, active when it was ordered as far as
-    // this hub can tell: a removed member's later entries are refused.
-    shared::check(&t.roster, &people, &s.docket, s.seq, &e, &keyid, None)?;
+    // Signed by a key the log names, valid when it was written: a member
+    // removed since still wrote what they wrote before, and nothing after.
+    shared::check(&t.roster.as_of(&e.at), &people, &s.docket, s.seq, &e, &keyid, None)?;
     let d = s.docket.clone();
     core.store.insert_ordered(s, &e.kind, &e.at, &keyid, |st, was| {
         let mut x = was.unwrap_or_else(|| crate::record::DocketState::new(&d));
@@ -565,7 +629,7 @@ pub async fn create(shared: &Shared, url: &str, setup: &str, name: &str, prefix:
         let mut e = Entry::new(&log, "workspace", &crate::time::now_ms(), Actor::new("person", handle));
         e.data = json!({ "id": wid, "name": name, "prefix": prefix, "handle": handle, "key": owner, "login": login });
         let mut out = vec![sign(&mut core, "owner", &e)?.0];
-        out.extend(key_entries(&mut core, &log, handle)?);
+        out.extend(key_entries(&mut core, &log, &wid, handle)?);
         out
     };
     let v = call_open(url, "POST", "/team/v1/create", Some(&json!({ "setup": setup, "entries": entries }))).await?;
@@ -574,13 +638,12 @@ pub async fn create(shared: &Shared, url: &str, setup: &str, name: &str, prefix:
 }
 
 /// `key` entries for every key this hub has besides its owner's.
-fn key_entries(core: &mut Core, log: &str, handle: &str) -> Result<Vec<String>> {
+fn key_entries(core: &mut Core, log: &str, workspace: &str, handle: &str) -> Result<Vec<String>> {
     core.keys.get_or_create("hub")?;
-    let keys: Vec<(String, String)> = core.keys.iter().filter(|k| k.name != "owner").map(|k| (k.name.clone(), k.keyid())).collect();
+    let names: Vec<String> = core.keys.iter().filter(|k| k.name != "owner").map(|k| k.name.clone()).collect();
     let mut out = Vec::new();
-    for (name, keyid) in keys {
-        let mut e = Entry::new(log, "key", &crate::time::now_ms(), Actor::new("person", handle));
-        e.data = json!({ "keyid": keyid, "use": key_use(&name), "name": name });
+    for name in names {
+        let e = key_entry(core, log, workspace, handle, &name)?;
         out.push(sign(core, "owner", &e)?.0);
     }
     Ok(out)
@@ -590,15 +653,29 @@ fn key_entries(core: &mut Core, log: &str, handle: &str) -> Result<Vec<String>> 
 async fn become_member(shared: &Shared, config: Config) -> Result<()> {
     {
         let mut core = shared.lock();
-        core.store.meta_set(META, &serde_json::to_string(&config)?)?;
-        load(&mut core)?;
+        let t = team_of(&core, config.clone())?;
+        core.team = Some(t);
     }
-    pull(shared, 0).await?;
-    let core = shared.lock();
-    let t = core.team.as_ref().expect("loaded");
-    ensure!(t.roster.id == t.config.id, "the workspace's member log is for another workspace");
-    ensure!(t.roster.members.get(&t.config.handle).is_some_and(|m| m.active()), "the member log doesn't have {} in it", t.config.handle);
-    Ok(())
+    // Nothing's kept until the member log checks and has this hub's member
+    // in it: a workspace that answers wrongly leaves this hub as it was.
+    let checked = async {
+        pull(shared, 0).await?;
+        let core = shared.lock();
+        let t = core.team.as_ref().ok_or_else(|| anyhow!("not in a workspace"))?;
+        ensure!(t.roster.id == config.id, "the workspace's member log is for another workspace");
+        ensure!(t.roster.prefix == config.prefix, "the workspace's member log has another prefix");
+        ensure!(t.roster.members.get(&config.handle).is_some_and(|m| m.active()), "the member log doesn't have {} in it", config.handle);
+        Ok(())
+    }
+    .await;
+    let mut core = shared.lock();
+    match checked {
+        Ok(()) => save(&mut core),
+        Err(e) => {
+            core.team = None;
+            Err(e)
+        }
+    }
 }
 
 /// An invite code: everything `wh team join` needs, in one paste.
@@ -657,6 +734,7 @@ pub async fn join(shared: &Shared, code: &str, login: Option<String>, name: Opti
     let hello = call_open(&c.u, "GET", "/team/v1/hello", None).await?;
     ensure!(hello["id"].as_str() == Some(c.w.as_str()), "{} is another workspace than the invite's", c.u);
     let prefix = hello["prefix"].as_str().ok_or_else(|| anyhow!("the workspace didn't say its prefix"))?.to_string();
+    ensure!(roster::prefix_ok(&prefix), "the workspace's prefix {prefix:?} isn't one");
     let log = format!("{prefix}-0");
     let entries = {
         let mut core = shared.lock();
@@ -666,7 +744,7 @@ pub async fn join(shared: &Shared, code: &str, login: Option<String>, name: Opti
         let mut e = Entry::new(&log, "join", &crate::time::now_ms(), Actor::new("person", &c.h));
         e.data = json!({ "invite": c.i, "handle": c.h, "key": me, "login": login, "name": name.unwrap_or_else(|| c.h.clone()), "proof": proof });
         let mut out = vec![sign(&mut core, "owner", &e)?.0];
-        out.extend(key_entries(&mut core, &log, &c.h)?);
+        out.extend(key_entries(&mut core, &log, &c.w, &c.h)?);
         out
     };
     let v = call_open(&c.u, "POST", "/team/v1/join", Some(&json!({ "entries": entries }))).await?;
@@ -678,7 +756,7 @@ pub async fn join(shared: &Shared, code: &str, login: Option<String>, name: Opti
 /// `wh team share D-12`: put a local docket on the workspace, its history
 /// with it. The local docket ends at the share and stays an alias.
 pub async fn share(shared: &Shared, local: &str) -> Result<Value> {
-    let (export, st) = {
+    let st = {
         let core = shared.lock();
         let t = core.team.as_ref().ok_or_else(|| anyhow!("this hub isn't in a workspace: wh team join"))?;
         ensure!(!t.owns_id(local), "{local} is shared already");
@@ -688,12 +766,11 @@ pub async fn share(shared: &Shared, local: &str) -> Result<Value> {
             bail!("{local} was shared as {to}");
         }
         ensure!(!matches!(st.protocol.as_str(), "review" | "build"), "{local} is {}'s; sharing protocol dockets comes later", st.protocol);
-        (crate::server::export_lines(&core, local)?, st)
+        st
     };
-    let digest = hex::encode(&sha2::Sha256::digest(export.as_bytes()));
-    shared.lock().store.put_blob(&digest, export.as_bytes(), &crate::time::now_ms())?;
-    put_blob(shared, &digest).await?;
-    let id = open_shared(shared, json!({ "local": local, "head": st.head, "entries": st.entries, "history": format!("sha256:{digest}"), "title": st.title, "status": st.status, "protocol": st.protocol, "intent": st.intent.as_ref().map(|i| i.body.clone()) }), vec![format!("sha256:{digest}")]).await?;
+    // The local history stays here: it has your approvals and prompts in it,
+    // unredacted. The share names it by its head, so you can show it later.
+    let id = open_shared(shared, json!({ "local": local, "head": st.head, "entries": st.entries, "title": st.title, "status": st.status, "protocol": st.protocol, "intent": st.intent.as_ref().map(|i| i.body.clone()) }), vec![]).await?;
     {
         let mut core = shared.lock();
         core.append(local, "set", &Who::Owner, None, json!({ "shared_as": id }))?;
@@ -808,6 +885,16 @@ pub fn attention(core: &Core) -> Vec<Value> {
     out
 }
 
+/// `wh team follow ACME-12`: try a docket this hub stopped following again,
+/// from the entry it last took in. What made it stop is refused again if
+/// the workspace still serves it.
+pub fn follow_again(core: &mut Core, docket: &str) -> Result<()> {
+    let t = core.team.as_mut().ok_or_else(|| anyhow!("this hub isn't in a workspace"))?;
+    ensure!(t.halted.remove(docket).is_some(), "{docket} is followed already");
+    t.wake.notify_one();
+    save(core)
+}
+
 /// `wh team send N` (a held entry goes after all) or `wh team drop N`.
 pub fn release_held(core: &mut Core, n: i64, send: bool) -> Result<()> {
     let row = core.store.outbox()?.into_iter().find(|o| o.n == n).ok_or_else(|| anyhow!("nothing in the outbox numbered {n}"))?;
@@ -835,21 +922,15 @@ pub fn verify(t: &Team, docket: &str, entries: &[Stored]) -> crate::record::veri
         }
     } else {
         let mut people = People::default();
+        let mut seen = std::collections::BTreeSet::new();
         for s in entries {
             let Ok((e, keyid)) = open_envelope(&s.envelope) else { continue };
-            // A member removed since wrote this while they were in: check
-            // it with their key as it was.
-            let roster = match t.roster.any_key(&keyid) {
-                Some((m, _)) if !m.active() => {
-                    let mut r = t.roster.clone();
-                    if let Some(m) = r.members.get_mut(&m.handle) {
-                        m.removed_at = None;
-                    }
-                    r
-                }
-                _ => t.roster.clone(),
-            };
-            if let Err(err) = shared::check(&roster, &people, docket, s.seq, &e, &keyid, None) {
+            if !seen.insert(s.id.clone()) {
+                r.problems.push(format!("#{}: the same entry as an earlier one: it was sent again", s.seq));
+            }
+            // Checked with the roster as it stood when it was written: a
+            // member removed since wrote this while they were in.
+            if let Err(err) = shared::check(&t.roster.as_of(&e.at), &people, docket, s.seq, &e, &keyid, None) {
                 r.problems.push(format!("#{}: {err:#}", s.seq));
             }
             people.apply(&e);
@@ -901,9 +982,20 @@ fn on_admitted(core: &mut Core, s: &Stored, e: &Entry, speaker: &str) -> Result<
     let options: Vec<String> = d["options"].as_array().into_iter().flatten().filter_map(|o| o.as_str().map(str::to_string)).collect();
     let body = e.body.clone().unwrap_or_default();
 
-    // An answer to a question this hub has open: the first one stands.
+    // An answer to a question this hub has open: the first one stands. Only
+    // from a person who may answer on this docket: an owner, or anyone on
+    // it when the owners said members answer. Never an agent's.
     if let Some(x) = d["answers"].as_str() {
-        let open: Vec<crate::store::Message> = core.store.messages_where("entry = ?1 AND to_addr = 'me' AND status = 'open'", rusqlite::params![x])?;
+        let may = person && (people.owners.contains(speaker) || (people.answer == "members" && people.on(speaker)));
+        // Or the asking agent's own person, answering on their Mac: this
+        // hub's copy of their agent's question is withdrawn.
+        let own_asker = |q: &crate::store::Message| person && q.from_block.as_deref().and_then(remote_block).is_some_and(|(m, _)| m == speaker);
+        let open: Vec<crate::store::Message> = core
+            .store
+            .messages_where("entry = ?1 AND docket = ?2 AND to_addr = 'me' AND status = 'open'", rusqlite::params![x, s.docket])?
+            .into_iter()
+            .filter(|q| may || own_asker(q))
+            .collect();
         if !open.is_empty() {
             for q in open {
                 core.store.set_message_status(q.id, "answered", Some(&format!("answered by {speaker}")))?;

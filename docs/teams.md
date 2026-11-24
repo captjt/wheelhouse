@@ -66,7 +66,7 @@ open invites.
 | `workspace` | the creator | `id` (random, 16 bytes hex), `name`, `prefix` (`ACME`), `handle` and `login` of the creator, the first admin |
 | `invite` | an admin | `handle`, `role` (`member` or `admin`), `pub` (an invite key's id), `expires` |
 | `join` | the joiner | `invite` (the invite entry's id), `handle`, `key` (their member key, which signs this entry), `login`, `name`, `proof` |
-| `key` | a member | `keyid`, `use` (`hub` or `agent`), `name` (`hub`, `agent-codex`) |
+| `key` | a member | `keyid`, `use` (`hub` or `agent`), `name` (`hub`, `agent-codex`), `proof`: the named key's signature over `wh-key/v1\n<workspace id>\n<handle>\n<keyid>`, so nobody names a key they don't hold |
 | `role` | an admin | `handle`, `role` |
 | `remove` | an admin, or the member themselves | `handle`, `reason` |
 
@@ -83,8 +83,15 @@ The rules every hub checks, in order:
   can't hand the invite to a key of its own.
 - A `key` is signed by an active member's key, and the key it names is
   new.
-- A removed member's keys are refused from the removal on. What they
-  signed before it still verifies.
+- A removed member's keys are revoked at the removal: refused from then
+  on, even if the same handle is invited again (that joins with new keys).
+  What they signed before it still verifies, against the roster as it
+  stood when they signed.
+- An entry is taken once: an old one ordered again (a past promotion) is
+  refused.
+- The workspace hub holds every entry but a `key` to its own clock (within
+  5 minutes either way), so a join can't be backdated into an invite's
+  life; a `key` may have waited in an offline outbox.
 - There's always at least one admin: the last one can't be removed or
   made a member.
 
@@ -110,11 +117,12 @@ workspace refuses another.
 
 - **Sharing.** `wh team share D-12` asks the workspace hub for a number
   (`ACME-31`), then sends the docket's first entry, `share`, signed by the
-  sharer. It carries the title, status, intent and protocol as they were,
-  and the local docket's history: its export as a blob, its `head` and
-  its entry count. That history keeps its own signatures, by keys the
-  sharer's `key` entries name. The local docket gets a `set` with
-  `shared_as`, and `D-12` stays an alias for `ACME-31` on the sharer's hub.
+  sharer, its one first owner. It carries the title, status, intent and
+  protocol as they were, and names the local docket's history by its
+  `head` and entry count. The history itself stays on the sharer's hub:
+  it holds their approvals and prompts unredacted. The head lets them show
+  it later, checkable. The local docket gets a `set` with `shared_as`, and
+  `D-12` stays an alias for `ACME-31` on the sharer's hub.
 - **Opening shared.** `wh new --team` opens a docket straight on the
   workspace.
 - **Ordering.** The workspace hub orders every entry, from every member,
@@ -126,6 +134,9 @@ workspace refuses another.
   until the workspace hub has ordered it, and the apps show what's still
   in the outbox. A hub that's offline keeps sending until it can. Entries
   are signed before they're ordered, so nothing is signed again.
+- **Once.** The workspace hub and every member's hub refuse an entry
+  that's on the docket already, so an old one (a revoked `trust`) can't
+  be sent again to bring it back.
 - **Following.** Each member's hub keeps a copy of every shared docket in
   its store, under the workspace's id, with the workspace's `seq` and
   `chain`. It long-polls the workspace hub for changes, takes each new
@@ -147,8 +158,10 @@ hub checks them again as it follows the docket:
 - `entry.docket` is the docket.
 - The kind is one Wheelhouse knows, and the envelope is at most 256 KB.
 - `share` is entry 1, and only entry 1.
-- `intent`, `set`, and `people` that changes owners or removes someone
-  come from an owner, or their hub or agents.
+- `intent`, `set`, and `people` that changes owners, removes someone or
+  says who answers come from an owner, or their hub or agents.
+- `claim`, `release`, `turn`, `observed` and `check` come from a hub: a
+  person's claim would read as every hub's own agent.
 - `at` isn't more than 5 minutes ahead of the workspace hub's clock.
 
 ### What a shared docket carries
@@ -192,7 +205,9 @@ hub checks them again as it follows the docket:
 An agent's question (`wh send --to me` from an agent on a shared docket)
 goes to its own person and to every owner. The first answer is an entry
 signed by whoever gave it; every hub withdraws its own ask when it sees
-it. An owner can let members answer too (`people` with `answer: members`).
+it. Only a person answers: an owner, someone on the docket when owners let
+members answer, or the asking agent's own person. An answer from anyone
+else, or from an agent, is never delivered. An owner can let members answer too (`people` with `answer: members`).
 Permission prompts go only to the agent's own person.
 
 ## Checking
@@ -205,8 +220,8 @@ Permission prompts go only to the agent's own person.
   or shows two members different histories, can't extend the chain a hub
   already has. The hub stops following that docket and says so in
   Attention.
-- A shared docket's history from before its share verifies from its blob,
-  with the sharer's keys as the roster names them.
+- A hub that stopped following a docket says why; `wh team follow ACME-31`
+  tries again from where it stopped.
 
 ## The workspace hub's API
 
