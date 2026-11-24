@@ -48,7 +48,9 @@ keys into another. Pane names are letters, digits, `.`, `_` and `-`.
 Messages go in only between an agent's turns, only into an agent, and
 only while the hub can see the pane's runtime (Rex or Herdr): the pane is
 read from its runtime just before, so text never goes into a shell an
-agent left behind. One text goes into a pane at a time, and one whose
+agent left behind. The one exception is yours: **Send now** in Chat types
+into Claude Code or Codex while it works (it reads it at its next step),
+and never while it, or a subagent of it, waits on a prompt. One text goes into a pane at a time, and one whose
 Enter didn't go in is never pasted again. A message can't pass for
 another or for you (a line in it that starts like Wheelhouse's own headers
 is quoted), its options are picked by number (an option's words never go

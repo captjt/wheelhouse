@@ -448,11 +448,14 @@ final class Store {
     }
 
     /// Message an agent on the docket: that block's, or the lead.
-    func send(_ id: String, _ text: String, block: String? = nil) async -> Bool {
-        var body: [String: Any] = ["text": text, "queue": true]
+    /// `steer`: while it works, send it now, for it to read at its next
+    /// step, instead of queuing it for the turn's end.
+    func send(_ id: String, _ text: String, block: String? = nil, steer: Bool = false) async -> Bool {
+        var body: [String: Any] = ["text": text, "queue": true, "steer": steer]
         if let block, !block.isEmpty { body["block"] = block }
         guard let r = await act("/api/dockets/\(id)/send", body) else { return false }
-        if r["queued"].int != nil { toast("Queued: it goes in when the turn ends") }
+        if r["steered"].bool { toast("Sent: it reads it at its next step") }
+        else if r["queued"].int != nil { toast("Queued: everything queued goes in together when the turn ends") }
         return true
     }
 

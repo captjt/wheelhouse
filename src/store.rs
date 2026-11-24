@@ -186,6 +186,13 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// The bodies of these prompts that are `sending` now, in order.
+    pub fn prompts_sending(&self, docket: &str, ids: &[i64]) -> Result<Vec<String>> {
+        let mut st = self.conn.prepare("SELECT id, body FROM prompt_queue WHERE docket = ?1 AND status = 'sending' ORDER BY id")?;
+        let rows = st.query_map(params![docket], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.filter_map(|r| r.ok()).filter(|(id, _)| ids.contains(id)).map(|(_, b)| b).collect())
+    }
+
     pub fn set_prompt_status(&mut self, id: i64, docket: &str, status: &str) -> Result<bool> {
         let n = self.conn.execute(
             "UPDATE prompt_queue SET status = ?3, sent_at = CASE WHEN ?3 = 'sent' THEN ?4 ELSE sent_at END WHERE id = ?1 AND docket = ?2 AND status = 'queued'",

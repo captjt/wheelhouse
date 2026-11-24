@@ -42,9 +42,9 @@ pub struct Tracked {
     /// The blocked record already written, by its report time.
     blocked_seen: Option<String>,
     missing_since: Option<Instant>,
-    /// A prompt Wheelhouse already recorded (one it started the agent with):
-    /// the agent's own hook reports it again, once.
-    pending_prompt: Option<String>,
+    /// A prompt Wheelhouse already recorded (one it started the agent with,
+    /// or sent mid-turn): the agent's own hook reports it again, once.
+    pub pending_prompt: Option<String>,
 }
 
 impl Tracked {
@@ -734,6 +734,8 @@ pub struct Live {
     /// Whether it can be answered where it's shown cut short (a banner, a
     /// menu): `approve::short`.
     pub short: bool,
+    /// Whether it takes a message mid-turn (steering): Claude Code, Codex.
+    pub steer: bool,
     pub app: String,
     pub state: String,
     pub kind: Option<String>,
@@ -758,6 +760,7 @@ pub fn live(core: &Core, block: &str) -> Option<Live> {
         record: h.map(|r| r.id.clone()),
         answerable,
         short,
+        steer: p.app().is_some_and(crate::runtime::steers),
         app: p.app().unwrap_or("agent").to_string(),
         state: h.map_or("starting".into(), |r| r.state.clone()),
         kind: h.and_then(|r| r.kind.clone()),

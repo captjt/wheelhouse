@@ -101,6 +101,10 @@ struct ChatView: View {
         let state = tlive?.state
         let canSend = tlive != nil && state != .error
         let willQueue = state == .working || state == .starting || state == .blocked
+        // While it works: ↩ queues it for the turn's end; Send now (⌘⇧↩)
+        // steers the running turn, for an agent that reads it at its next step.
+        let canSteer = (state == .working || state == .starting) && tlive?.steer == true
+        let empty = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let app = target.map { d.several ? $0.label : appName($0.app) } ?? appName(d.agent?.app)
         let now = d.lives.filter { only == nil || $0.agent?.block == only }
 
@@ -165,12 +169,21 @@ struct ChatView: View {
                     .padding(.bottom, 8)
                     .help("Who it goes to: one of the \(on.count) agents on \(d.id)")
                 }
-                Editor(text: $text, placeholder: !canSend ? (tlive != nil ? "\(app) stopped with an error" : "\(app) isn't running") : willQueue ? "Queue a message for \(app)…" : "Message \(app)…", returnSends: true, minHeight: 20, maxHeight: 180, onSubmit: send)
+                Editor(text: $text, placeholder: !canSend ? (tlive != nil ? "\(app) stopped with an error" : "\(app) isn't running") : willQueue ? "Queue a message for \(app)…" : "Message \(app)…", returnSends: true, minHeight: 20, maxHeight: 180, onSubmit: { send() })
                     .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(K.elev, in: RoundedRectangle(cornerRadius: 10))
                     .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(K.line))
                     .disabled(!canSend)
-                Button(action: send) {
+                if canSteer {
+                    Button("Send now") { send(steer: true) }
+                        .buttonStyle(ChipButton())
+                        .font(.system(size: 12, weight: .semibold))
+                        .keyboardShortcut(.return, modifiers: [.command, .shift])
+                        .disabled(empty || busy)
+                        .padding(.bottom, 4)
+                        .help("Send now: \(app) reads it at its next step, without waiting for the turn to end (⌘⇧↩)")
+                }
+                Button(action: { send() }) {
                     Image(systemName: willQueue ? "clock.arrow.circlepath" : "arrow.up")
                         .font(.system(size: 13, weight: .bold))
                         .frame(width: 30, height: 30)
@@ -179,7 +192,7 @@ struct ChatView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy || !canSend)
-                .help(willQueue ? "Queue it: it goes in when \(app)'s turn ends" : "Send to \(app) (↩; ⇧↩ for a new line)")
+                .help(willQueue ? "Queue it: everything queued goes in together when \(app)'s turn ends (↩)" : "Send to \(app) (↩; ⇧↩ for a new line)")
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
@@ -242,7 +255,7 @@ struct ChatView: View {
         }
     }
 
-    private func send() {
+    private func send(steer: Bool = false) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // The one picked, if it's still on; else the lead (no block).
         let target = d.member(block: to).flatMap { $0.on ? $0 : nil }
@@ -250,7 +263,7 @@ struct ChatView: View {
         guard !t.isEmpty, !busy, live != nil else { return }
         busy = true
         Task {
-            if await store.send(d.id, t, block: d.blockFor(target)) {
+            if await store.send(d.id, t, block: d.blockFor(target), steer: steer) {
                 text = ""
                 sent.append(t)
             }

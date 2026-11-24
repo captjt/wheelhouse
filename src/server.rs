@@ -77,6 +77,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/agents/start", post(start_agent))
         .route("/api/folders", get(folders_list))
         .route("/api/hub/stop", post(hub_stop))
+        .route("/api/diag/viewport", post(viewport_diag))
         .route("/api/push/key", get(push_key))
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/push/unsubscribe", post(push_unsubscribe))
@@ -630,6 +631,10 @@ struct SendReq {
     /// Which of the docket's agents: its lead when not given.
     #[serde(default)]
     block: Option<String>,
+    /// While it works: send it now, for it to read at its next step
+    /// (Claude Code, Codex), instead of when the turn ends.
+    #[serde(default)]
+    steer: bool,
 }
 
 /// Take back a prompt queued for the agent, before it goes in.
@@ -653,27 +658,54 @@ async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
     if text.len() > 16_000 {
         return Err(fail(StatusCode::BAD_REQUEST, "that's too long to paste into a pane"));
     }
-    let (session, block, app, agent_session) = {
+    let (session, block, app, agent_session, steer) = {
         let mut core = shared.lock();
         let (s, b) = pane_of(&core, &id, req.block.as_deref())?;
         let pane = core.mirror.panes.get(&b).ok_or_else(|| fail(StatusCode::CONFLICT, "the pane closed"))?;
-        if let Err(why) = agents::can_send(pane) {
-            // Busy, or waiting on a prompt: it goes in when the turn ends.
-            if req.queue && matches!(pane.root().map(|r| r.state.as_str()), Some("working" | "blocked")) {
-                let q = core.store.queue_prompt(&id, &b, &text).map_err(internal)?;
-                core.live_changed();
-                let _ = core.events.send(json!({ "type": "docket", "docket": id }));
-                return Ok(Json(json!({ "ok": true, "queued": q })));
+        // Steering an agent at work: it reads it at its next step.
+        if req.steer && matches!(pane.root().map(|r| r.state.as_str()), Some("working" | "starting")) {
+            let app = pane.app().unwrap_or("agent").to_string();
+            if !crate::runtime::steers(&app) {
+                return Err(fail(StatusCode::CONFLICT, format!("{} takes messages when its turn ends: queue it", crate::mirror::app_name(&app))));
             }
-            return Err(fail(StatusCode::CONFLICT, why));
+            if !core.mirror.connected_for(&b) {
+                return Err(fail(StatusCode::CONFLICT, format!("Wheelhouse can't see {} right now, so it won't type into the pane", crate::runtime::of(&b).title())));
+            }
+            let agent_session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
+            (s, b, app, agent_session, true)
+        } else {
+            if let Err(why) = agents::can_send(pane) {
+                // Busy, or waiting on a prompt: it goes in when the turn ends.
+                if req.queue && matches!(pane.root().map(|r| r.state.as_str()), Some("working" | "blocked")) {
+                    let q = core.store.queue_prompt(&id, &b, &text).map_err(internal)?;
+                    core.live_changed();
+                    let _ = core.events.send(json!({ "type": "docket", "docket": id }));
+                    return Ok(Json(json!({ "ok": true, "queued": q })));
+                }
+                return Err(fail(StatusCode::CONFLICT, why));
+            }
+            // A mirror that lost the pane's runtime may be stale.
+            if !core.mirror.connected_for(&b) {
+                return Err(fail(StatusCode::CONFLICT, format!("Wheelhouse can't see {} right now, so it won't type into the pane", crate::runtime::of(&b).title())));
+            }
+            let session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
+            (s, b, pane.app().unwrap_or("agent").to_string(), session, false)
         }
-        // A mirror that lost the pane's runtime may be stale.
-        if !core.mirror.connected_for(&b) {
-            return Err(fail(StatusCode::CONFLICT, format!("Wheelhouse can't see {} right now, so it won't type into the pane", crate::runtime::of(&b).title())));
-        }
-        let session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
-        (s, b, pane.app().unwrap_or("agent").to_string(), session)
     };
+    if steer {
+        crate::runtime::for_id(&block).steer(&session, &block, &text).await.map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))?;
+        let mut core = shared.lock();
+        // On the record as yours, sent mid-turn; the agent's own hook, if it
+        // reports it too, is told it's already there.
+        core.append(&id, "note", &Who::Owner, Some(text.clone()), json!({ "via": "prompt", "session": agent_session, "block": block, "from": "wheelhouse", "steer": true }))
+            .map_err(internal)?;
+        if let Some(t) = core.agents.by_block.get_mut(&block) {
+            t.pending_prompt = Some(text.clone());
+        }
+        core.agents.remote.insert(block.clone());
+        core.live_changed();
+        return Ok(Json(json!({ "ok": true, "steered": true })));
+    }
     crate::runtime::for_id(&block).submit(&session, &block, &text).await.map_err(internal)?;
     // The agent's prompt hook records it when installed; otherwise the hub does.
     if !crate::hooks::installed_for(&app) {
@@ -1025,6 +1057,29 @@ struct FoldersQ {
 /// Where an agent could start, and where this docket's should.
 async fn folders_list(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<FoldersQ>) -> ApiResult {
     crate::start::folders(&shared, q.docket.as_deref()).await.map(Json).map_err(internal)
+}
+
+/// What the phone's Home Screen app measured of its screen (the top bar
+/// out of place, the keyboard, a return to the app): kept in
+/// `viewport.jsonl` in the hub's state, for fixing the layout on a device
+/// the Mac can't run. At most 64 KB a report and 1 MB in all; the oldest
+/// half goes when it's full. Nothing leaves this Mac.
+async fn viewport_diag(Json(v): Json<Value>) -> ApiResult {
+    use std::io::Write;
+    let line = serde_json::to_string(&json!({ "at": crate::time::now_ms(), "report": v })).map_err(|e| internal(e.into()))?;
+    if line.len() > 64 * 1024 {
+        return Err(fail(StatusCode::PAYLOAD_TOO_LARGE, "a report is at most 64 KB"));
+    }
+    let path = crate::paths::state_dir().join("viewport.jsonl");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 1 << 20)
+        && let Ok(old) = std::fs::read_to_string(&path)
+    {
+        let lines: Vec<&str> = old.lines().collect();
+        let _ = std::fs::write(&path, lines[lines.len() / 2..].join("\n") + "\n");
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| internal(e.into()))?;
+    writeln!(f, "{line}").map_err(|e| internal(e.into()))?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Stop this hub, so `wh up` can hand over to launchd. Not on the tailnet.

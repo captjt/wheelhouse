@@ -244,17 +244,21 @@ export function ChatView({
     setBelow(false);
   };
 
-  const send = () => {
+  // While it works: Enter queues it for the turn's end; Send now (⌘⇧↩)
+  // steers the running turn, for an agent that reads it at its next step.
+  const canSteer = willQueue && state !== "blocked" && !!tl?.steer;
+  const send = (steer = false) => {
     const t = text.trim();
-    if (!t || busy || !canSend) return;
+    if (!t || busy || !canSend || (steer && !canSteer)) return;
     setBusy(true);
-    post<{ ok: boolean; queued?: number }>(`/api/dockets/${d.id}/send`, { text: t, queue: true, block: target?.block }).then(
+    post<{ ok: boolean; queued?: number; steered?: boolean }>(`/api/dockets/${d.id}/send`, { text: t, queue: true, steer, block: target?.block }).then(
       (r) => {
         setBusy(false);
         setText("");
         setSent((s) => [...s, t]);
         stick.current = true;
-        if (r.queued) toast(`Queued: it goes in when ${app}'s turn ends`);
+        if (r.steered) toast(`Sent: ${app} reads it at its next step`);
+        else if (r.queued) toast(queued.length ? `Queued with ${queued.length} more: they go in together when ${app}'s turn ends` : `Queued: it goes in when ${app}'s turn ends`);
         reload();
         hub.reload();
       },
@@ -344,7 +348,7 @@ export function ChatView({
           <div key={`q${q.id}`} className="chat-you queued">
             <Prose text={q.body} />
             <div className="chat-queued">
-              Queued · goes in when the turn ends ·{" "}
+              Queued · {queued.length > 1 ? "they go in together when the turn ends" : "goes in when the turn ends"} ·{" "}
               <button className="link" onClick={() => unqueue(q.id)}>
                 Take back
               </button>
@@ -386,14 +390,23 @@ export function ChatView({
             el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
           }}
           onKeyDown={(e) => {
-            // A keyboard: Enter sends, Shift+Enter is a new line. A phone: the button sends.
-            if (e.key === "Enter" && ((e.metaKey || e.ctrlKey) || (!e.shiftKey && !isPhone() && !e.nativeEvent.isComposing))) {
+            // A keyboard: Enter sends (queues, while it works), Shift+Enter is a
+            // new line, ⌘⇧↩ sends now (steers). A phone: the buttons send.
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+              e.preventDefault();
+              send(true);
+            } else if (e.key === "Enter" && ((e.metaKey || e.ctrlKey) || (!e.shiftKey && !isPhone() && !e.nativeEvent.isComposing))) {
               e.preventDefault();
               send();
             }
           }}
         />
-        <button className="chat-send" disabled={!text.trim() || busy || !canSend} onClick={send} aria-label={willQueue ? "Queue it" : "Send"} title={willQueue ? `Queue it: it goes in when ${app}'s turn ends` : `Send to ${app}`}>
+        {canSteer && (
+          <button className="chat-steer" disabled={!text.trim() || busy} onClick={() => send(true)} title={`Send now: ${app} reads it at its next step, without waiting for the turn to end (⌘⇧↩)`}>
+            Send now
+          </button>
+        )}
+        <button className="chat-send" disabled={!text.trim() || busy || !canSend} onClick={() => send()} aria-label={willQueue ? "Queue it" : "Send"} title={willQueue ? `Queue it: it goes in when ${app}'s turn ends (↩)` : `Send to ${app}`}>
           <IconSend size={18} />
         </button>
       </div>
