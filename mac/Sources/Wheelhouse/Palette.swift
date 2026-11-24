@@ -50,7 +50,7 @@ struct PaletteOverlay: View {
         var out: [Command] = []
         // What needs you, answerable right here.
         for it in store.inbox {
-            if it.kind == .blocked, let d = it.docket, let l = it.live ?? d.live, l.answerable {
+            if it.kind == .blocked, let d = it.docket, let l = it.live ?? d.live, l.short {
                 // Each asking agent: by name, on a docket with several.
                 let whose = it.who.map { "\(d.id) · \($0)" } ?? d.id
                 out.append(Command(id: "ap-\(it.id)", group: "Needs you", label: "Approve \(whose): \(l.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "approve permission yes \(d.title) \(it.who ?? "")") { Task { await store.answer(it, approve: true) } })
@@ -71,7 +71,7 @@ struct PaletteOverlay: View {
                     let b = d.blockFor(a)
                     out.append(Command(id: "rex-\(a.block)", group: d.id, label: "Show \(a.label)'s pane in \(a.runtime)", symbol: "terminal", keywords: "\(appName(a.app)) \(a.pane)") { store.openInRex(d.id, block: b) })
                     out.append(Command(id: "peek-\(a.block)", group: d.id, label: "Peek at \(a.label)'s pane", symbol: "eye", keywords: "screen terminal message send \(appName(a.app)) \(a.pane)") { reveal(); nav.peek(d.id, block: b) })
-                    if l.state == .blocked, l.answerable {
+                    if l.state == .blocked, l.short {
                         out.append(Command(id: "approve-\(a.block)", group: d.id, label: "Approve \(a.label): \(l.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "permission yes allow") { Task { await store.answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: true, block: b) } })
                         out.append(Command(id: "deny-\(a.block)", group: d.id, label: "Deny \(a.label)'s prompt", symbol: "xmark.circle", keywords: "permission no reject") { Task { await store.answer(d.id, record: l.record ?? "", since: l.since, msg: l.msg, approve: false, block: b) } })
                     }
@@ -81,7 +81,7 @@ struct PaletteOverlay: View {
                     out.append(Command(id: "rex", group: d.id, label: "Show pane in \(d.runtime)", symbol: "terminal", hint: "O") { store.openInRex(d.id) })
                     out.append(Command(id: "peek", group: d.id, label: "Peek at pane", symbol: "eye", keywords: "screen terminal message send") { reveal(); nav.peek(d.id) })
                 }
-                if d.live?.answerable == true {
+                if d.live?.short == true {
                     out.append(Command(id: "approve", group: d.id, label: "Approve: \(d.live?.msg ?? "the prompt")", symbol: "checkmark.circle", keywords: "permission yes allow") { Task { await store.answer(d, approve: true) } })
                     out.append(Command(id: "deny", group: d.id, label: "Deny the prompt", symbol: "xmark.circle", keywords: "permission no reject") { Task { await store.answer(d, approve: false) } })
                 }

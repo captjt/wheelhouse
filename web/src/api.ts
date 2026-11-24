@@ -29,15 +29,21 @@ export const liveAgents = (d?: Docket | null): DocketAgent[] => {
 /** An agent, for people, beside others on its docket: its role, else its pane, else its app. */
 export const agentLabel = (a?: { role?: string | null; pane?: string; app: string } | null): string => (a ? a.role || a.pane || appName(a.app) : "the agent");
 
-/** The agent an entry names (`data.block`, or an agent actor's `block`), on a docket that may have several. */
+/** The agent an entry names (`data.block`, or an agent actor's `block`), on a docket that may have several.
+ * An entry from before agents were named (no pane) is the docket's agent's only when it has had one:
+ * with several, it's no one's in particular, never the agent that happens to lead now. */
 export const agentOfEntry = (d: Docket, e: { actor?: Record<string, unknown>; data?: Record<string, unknown> }): DocketAgent | AgentRef | undefined => {
   const block = entryBlock(e);
-  return (block && d.agents?.slice().reverse().find((a) => a.block === block)) || d.agent;
+  if (block) return d.agents?.slice().reverse().find((a) => a.block === block) ?? ((d.agents?.length ?? 0) > 1 ? undefined : d.agent);
+  return (d.agents?.length ?? 0) > 1 ? undefined : d.agent;
 };
 
 /** The pane an entry names as its agent's, if any. */
 export const entryBlock = (e: { actor?: Record<string, unknown>; data?: Record<string, unknown> }): string | undefined =>
   (e.data?.block as string | undefined) || ((e.data?.agent as { block?: string } | undefined)?.block) || (e.actor?.block as string | undefined) || undefined;
+
+/** Whether a prompt can be answered where it's shown cut short: an older hub doesn't say, so answerable. */
+export const quick = (l?: Live | null): boolean => !!l?.answerable && (l.short ?? true);
 
 /** The runtimes the hub follows now, for people: "Rex and Herdr". */
 export const followedRuntimes = (s?: { runtimes?: RuntimeLink[] } | null): string => {
@@ -55,6 +61,8 @@ export type Live = {
   record?: string | null;
   /** Wheelhouse can answer this prompt with a key (a Claude Code permission). */
   answerable?: boolean;
+  /** It can also be answered where it's shown cut short (a menu, a row, the palette): one short line. */
+  short?: boolean;
   app: string;
   state: string;
   kind?: string | null;

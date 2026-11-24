@@ -75,7 +75,9 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
     if let Some(p) = prompt {
         if app == "agy" {
             argv.push("-i".into());
-            argv.push(p.to_string());
+            // agy's `-i` takes the next word: a prompt that starts with `-`
+            // gets a space first, so it's never read as a flag.
+            argv.push(if p.starts_with('-') { format!(" {p}") } else { p.to_string() });
         } else {
             // After `--`, a prompt that starts with `-` is a prompt, never a flag.
             argv.push("--".into());

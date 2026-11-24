@@ -69,6 +69,62 @@ fn base_args(cfg: &Config, agent: &str, extra: &[String]) -> Vec<String> {
     args
 }
 
+static CODEX_MCP: std::sync::Mutex<Option<(std::time::Instant, String, Vec<String>)>> = std::sync::Mutex::new(None);
+
+/// Codex's MCP servers, each switched off (`-c mcp_servers."NAME".enabled=
+/// false`): Codex merges `-c mcp_servers={}` with your config and plugins,
+/// so an empty list switches nothing off, and your servers (a tracker, a
+/// cluster) would route around the wall. The names come from `codex mcp
+/// list --json`, or, when that can't run, the `[mcp_servers.NAME]` tables
+/// of `~/.codex/config.toml`. Kept ten minutes.
+pub fn codex_mcp_off(program: &str) -> Vec<String> {
+    if let Ok(g) = CODEX_MCP.lock()
+        && let Some((at, p, names)) = g.as_ref()
+        && p == program
+        && at.elapsed() < std::time::Duration::from_secs(600)
+    {
+        return off_args(names);
+    }
+    // Tests never run your Codex or read your config.
+    let names = if cfg!(test) { Vec::new() } else { codex_mcp_listed(program).unwrap_or_else(codex_mcp_configured) };
+    if let Ok(mut g) = CODEX_MCP.lock() {
+        *g = Some((std::time::Instant::now(), program.to_string(), names.clone()));
+    }
+    off_args(&names)
+}
+
+/// Codex splits a `-c` key on `.` and takes no quotes (a quoted name is a
+/// new server with no command, and Codex won't start), and its server names
+/// are letters, digits, `_` and `-`: only those are named.
+pub(crate) fn off_args(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        .flat_map(|n| ["-c".to_string(), format!("mcp_servers.{n}.enabled=false")])
+        .collect()
+}
+
+fn codex_mcp_listed(program: &str) -> Option<Vec<String>> {
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(["mcp", "list", "--json"]).env("PATH", agent_path(&[])).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(cmd.output());
+    });
+    let out = rx.recv_timeout(std::time::Duration::from_secs(10)).ok()?.ok()?;
+    let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+    Some(v.as_array()?.iter().filter_map(|s| s["name"].as_str().map(str::to_string)).collect())
+}
+
+fn codex_mcp_configured() -> Vec<String> {
+    let home = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| crate::paths::home().join(".codex"));
+    let text = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
+    let mut names: Vec<String> =
+        text.lines().filter_map(|l| l.trim().strip_prefix("[mcp_servers.")?.strip_suffix(']').map(|n| n.split('.').next().unwrap_or(n).trim_matches('"').to_string())).collect();
+    names.dedup();
+    names
+}
+
 static SHELL_PATH: std::sync::Mutex<Option<(std::time::Instant, String)>> = std::sync::Mutex::new(None);
 
 /// Your interactive shell's PATH (what a terminal of yours has: nvm, Nix,
@@ -150,14 +206,21 @@ fn agent_gitignore() -> std::path::PathBuf {
     p
 }
 
+/// What the wall sets `GH_TOKEN` to: not a token, so `gh` and GitHub refuse
+/// it, and `gh` never looks for yours.
+pub const NO_TOKEN: &str = "wheelhouse-wall-no-token";
+
 /// The pane's program for any agent Wheelhouse starts: `env` with the wall
 /// up. No GitHub or tracker tokens, no SSH agent, `gh` signed out, and every
 /// git push rewritten to fail, so an agent's mistake can't reach GitHub;
 /// only the hub writes there, with what you approved. This stops mistakes,
 /// not a determined agent running as you: see docs/security.md.
 pub fn env_wrapper(wt: &Path, path: &[String]) -> Vec<String> {
-    let mut v: Vec<String> =
-        ["env", "-u", "GH_TOKEN", "-u", "GITHUB_TOKEN", "-u", "LINEAR_API_KEY", "-u", "WH_LINEAR_KEY", "-u", "SSH_AUTH_SOCK"].iter().map(|s| s.to_string()).collect();
+    let mut v: Vec<String> = ["env", "-u", "LINEAR_API_KEY", "-u", "WH_LINEAR_KEY", "-u", "SSH_AUTH_SOCK"].iter().map(|s| s.to_string()).collect();
+    // A token that works nowhere, rather than none: with none, `gh auth
+    // token` reads yours from the Keychain and hands it out.
+    v.push(format!("GH_TOKEN={NO_TOKEN}"));
+    v.push(format!("GITHUB_TOKEN={NO_TOKEN}"));
     let instead = format!("url.{NEVER}.pushInsteadOf");
     let git: Vec<(String, String)> = vec![
         ("remote.origin.pushurl".into(), NEVER.into()),
@@ -217,6 +280,9 @@ pub fn reviewer(cfg: &Config, l: &ReviewerLaunch) -> Launch {
         if !caches.is_empty() {
             argv.extend(["--settings".to_string(), json!({ "permissions": { "additionalDirectories": caches } }).to_string()]);
         }
+        // No MCP servers: a reviewer reads the PR, and a tracker's or a
+        // cluster's tools would route around the wall.
+        argv.push("--strict-mcp-config".into());
         argv.extend(["-n".to_string(), l.title.to_string()]);
         Launch { argv, session: Some(session) }
     } else if l.agent == "agy" {
@@ -227,12 +293,14 @@ pub fn reviewer(cfg: &Config, l: &ReviewerLaunch) -> Launch {
         for d in l.dirs.iter().chain(l.caches) {
             argv.extend(["--add-dir".to_string(), d.display().to_string()]);
         }
+        argv.extend(["--settings".to_string(), json!({ "permissions": { "deny": ["mcp(*)"] } }).to_string()]);
         Launch { argv, session: l.resume.map(str::to_string) }
     } else {
         if let Some(t) = l.resume {
             argv.extend(["resume".to_string(), t.to_string()]);
         }
         argv.extend(args);
+        argv.extend(codex_mcp_off(&program(cfg, l.agent)));
         for d in l.dirs.iter().chain(l.caches) {
             argv.extend(["--add-dir".to_string(), d.display().to_string()]);
         }
@@ -271,6 +339,7 @@ pub fn checker(cfg: &Config, worktree: &Path, others: &[PathBuf], effort: Option
         if !auto {
             argv.push("Bash(wh review post:*)".into());
         }
+        argv.push("--strict-mcp-config".into());
         argv.extend(["-n".to_string(), title.to_string()]);
         Launch { argv, session: Some(session) }
     } else if agent == "agy" {
@@ -280,7 +349,7 @@ pub fn checker(cfg: &Config, worktree: &Path, others: &[PathBuf], effort: Option
         }
         // Whole-word prefixes: agy takes no glob in `command(…)`.
         let mut allow = vec!["command(wh review preview)"];
-        let mut deny = vec!["command(wh review dismiss)"];
+        let mut deny = vec!["command(wh review dismiss)", "mcp(*)"];
         if auto {
             allow.push("command(wh review post)");
         } else {
@@ -290,6 +359,7 @@ pub fn checker(cfg: &Config, worktree: &Path, others: &[PathBuf], effort: Option
         Launch { argv, session: None }
     } else {
         argv.extend(args);
+        argv.extend(codex_mcp_off(&program(cfg, agent)));
         for d in others {
             argv.extend(["--add-dir".to_string(), d.display().to_string()]);
         }
@@ -834,15 +904,15 @@ mod tests {
             },
         );
         let a = l.argv.join(" ");
-        assert!(a.starts_with("env -u GH_TOKEN -u GITHUB_TOKEN -u LINEAR_API_KEY -u WH_LINEAR_KEY -u SSH_AUTH_SOCK PATH="), "{a}");
+        assert!(a.starts_with("env -u LINEAR_API_KEY -u WH_LINEAR_KEY -u SSH_AUTH_SOCK GH_TOKEN=wheelhouse-wall-no-token GITHUB_TOKEN=wheelhouse-wall-no-token PATH="), "{a}");
         assert!(a.contains("GIT_CONFIG_KEY_2=url.wheelhouse-agents-never-push:///.pushInsteadOf GIT_CONFIG_VALUE_2=https://"), "{a}");
         assert!(a.contains(" GH_CONFIG_DIR=/w/pr-7/.tmp/gh-empty GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND=false"), "{a}");
-        assert!(a.contains(&format!("/bin/claude --session-id {} --permission-mode auto --model claude-opus-5-5 --effort xhigh --add-dir /r/.git/worktrees --settings {{\"permissions\":{{\"additionalDirectories\":[\"/c/npm\"]}}}} -n", l.session.as_deref().unwrap())), "{a}");
+        assert!(a.contains(&format!("/bin/claude --session-id {} --permission-mode auto --model claude-opus-5-5 --effort xhigh --add-dir /r/.git/worktrees --settings {{\"permissions\":{{\"additionalDirectories\":[\"/c/npm\"]}}}} --strict-mcp-config -n", l.session.as_deref().unwrap())), "{a}");
         let c = checker(&cfg, &wt, &[], Some("high"), false, "t");
         let a = c.argv.join(" ");
-        assert!(a.contains("--allowedTools Bash(wh review preview:*) --disallowedTools Bash(wh review dismiss:*) Bash(wh review post:*) -n t"), "{a}");
+        assert!(a.contains("--allowedTools Bash(wh review preview:*) --disallowedTools Bash(wh review dismiss:*) Bash(wh review post:*) --strict-mcp-config -n t"), "{a}");
         let c = checker(&cfg, &wt, &[], None, true, "t");
-        assert!(c.argv.join(" ").contains("--allowedTools Bash(wh review preview:*) Bash(wh review post:*) --disallowedTools Bash(wh review dismiss:*) -n"));
+        assert!(c.argv.join(" ").contains("--allowedTools Bash(wh review preview:*) Bash(wh review post:*) --disallowedTools Bash(wh review dismiss:*) --strict-mcp-config -n"));
     }
 
     #[test]
@@ -873,8 +943,17 @@ mod tests {
         let c = checker(&cfg, &wt, &[], Some("high"), false, "t");
         let a = c.argv.join(" ");
         assert!(a.contains("--mode auto --model gemini-4-neon --effort high --settings"), "{a}");
-        assert!(a.contains("command(wh review preview)") && a.contains("command(wh review dismiss)") && a.contains("command(wh review post)") && !a.contains("*)\""), "{a}");
+        assert!(a.contains("command(wh review preview)") && a.contains("command(wh review dismiss)") && a.contains("command(wh review post)"), "{a}");
+        // agy takes no glob in a command: none has one. MCP is denied whole.
+        assert!(!a.split("command(").skip(1).any(|c| c.split(')').next().unwrap_or("").contains('*')), "{a}");
+        assert!(a.contains("\"mcp(*)\""), "{a}");
     }
+    #[test]
+    fn codex_gets_each_mcp_server_switched_off_by_name() {
+        let a = off_args(&["linear".into(), "k8s-prod".into(), "odd\"name".into(), "a.b".into()]);
+        assert_eq!(a, ["-c", "mcp_servers.linear.enabled=false", "-c", "mcp_servers.k8s-prod.enabled=false"], "unquoted; nothing Codex couldn't name");
+    }
+
     #[test]
     fn agy_conversations_are_found_by_folder_and_read_from_their_transcripts() {
         assert_eq!(file_uri(Path::new("/w/My Code")), b"file:///w/My%20Code".to_vec());

@@ -211,10 +211,11 @@ private func docket(_ json: String) throws -> Docket { Docket(j: try JSON.parse(
     #expect(d.agentName(d.member(for: turn)) == "checker")
     let note = try entry(#"{"seq": 4, "kind": "note", "actor": {"type": "agent", "id": "codex@b2", "block": "b2"}}"#)
     #expect(d.member(for: note)?.block == "b2")
-    // An older entry has neither: the docket's agent.
+    // An older entry has neither: on a docket that's had several agents,
+    // it's no one's in particular, never the one that leads now.
     let old = try entry(#"{"seq": 1, "kind": "turn", "actor": {"type": "hub", "id": "wheelhouse"}, "data": {}}"#)
-    #expect(d.member(for: old)?.block == "b1")
-    #expect(d.blockOf(old) == "b1")
+    #expect(d.member(for: old) == nil)
+    #expect(d.blockOf(old) == nil)
     // Your note is no agent's.
     let mine = try entry(#"{"seq": 2, "kind": "note", "actor": {"type": "person", "id": "jordan"}, "data": {}}"#)
     #expect(d.blockOf(mine) == nil)

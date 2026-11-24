@@ -69,6 +69,9 @@ struct Live: Hashable {
     var block: String { j["block"].str ?? "" }
     var record: String? { j["record"].str }
     var answerable: Bool { j["answerable"].bool }
+    /// Answerable where it's shown cut short (a banner, a menu, a row): its
+    /// text is short and on one line. An older hub doesn't say: answerable.
+    var short: Bool { j["short"].exists ? j["short"].bool : answerable }
     var app: String { j["app"].str ?? "" }
     var state: LiveState { LiveState(rawValue: j["state"].str ?? "") ?? .idle }
     var kind: String? { j["kind"].text }
@@ -260,7 +263,9 @@ struct Docket: Hashable, Identifiable {
     }
 
     /// The agent an entry is by or about: its block's, else (an older
-    /// entry, with none) the docket's agent.
+    /// entry, with none) the docket's agent, when it has only had one. On a
+    /// docket that's had several, an entry with no block is no one's in
+    /// particular, never whichever agent leads now.
     func member(for e: Entry) -> DocketAgent? {
         if let a = member(block: e.block ?? e.actorBlock) { return a }
         if let b = e.block, e.actorType == "agent" {
@@ -271,12 +276,14 @@ struct Docket: Hashable, Identifiable {
             // Another app than the docket's agent wrote it: say that app.
             return DocketAgent(j: .object(["app": .string(e.actorApp)]))
         }
+        if crew.count > 1 { return nil }
         return agent.flatMap { a in crew.first { $0.block == a.block } } ?? agent.map { DocketAgent(j: $0.j) }
     }
 
     /// The block of the agent an entry is by or about, or nil when it's no
     /// agent's in particular (your notes, Linear, checks). An older entry
-    /// about an agent, with no block, is the docket's agent's.
+    /// about an agent, with no block, is the docket's agent's, when it has
+    /// only had one.
     func blockOf(_ e: Entry) -> String? {
         if let b = e.block ?? member(block: e.actorBlock)?.block { return b }
         let x = e.data
@@ -289,7 +296,7 @@ struct Docket: Hashable, Identifiable {
         case "claim": about = x["source"].str != "rex-reviewer" && x["role"].str == nil
         default: about = false
         }
-        return about || e.actorType == "agent" ? agent?.block : nil
+        return (about || e.actorType == "agent") && crew.count <= 1 ? agent?.block : nil
     }
 
     /// What to call the agent an entry is by: its label among several,

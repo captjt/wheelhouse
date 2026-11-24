@@ -153,7 +153,7 @@ private struct PanelItem: View {
                     ReviewActions(p: p, small: true)
                 } else if let m = it.msg, !m.options.isEmpty {
                     OptionButtons(m: m)
-                } else if it.kind == .blocked, let d = it.docket, (it.live ?? d.live)?.answerable == true {
+                } else if it.kind == .blocked, let d = it.docket, (it.live ?? d.live)?.short == true {
                     AnswerButtons(d: d, block: d.blockFor(it.agent), live: it.live, small: true)
                 }
             }

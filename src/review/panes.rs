@@ -121,7 +121,12 @@ pub async fn deliver(shared: &Shared, session: &str, block: &str, prompt: &str) 
             }
             Some(_) => {}
         }
-        rt.submit(session, block, prompt).await?;
+        if !shared.lock().mirror.connected_for(block) {
+            bail!("Wheelhouse can't see {} right now", runtime::of(block).title());
+        }
+        // A task goes to an agent just started, which may not have said
+        // it's idle yet: no live check, but one text at a time.
+        rt.submit_checked(session, block, prompt, false).await?;
         return Ok(());
     }
     Err(anyhow!("it stayed busy and never took its task"))

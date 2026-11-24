@@ -58,6 +58,26 @@ pub(crate) const SAFE_GIT: [&str; 12] = [
     "http.lowSpeedTime=60",
 ];
 
+/// `-c core.sshCommand=…`: yours, from your global git config, or plain
+/// `ssh`; never a repo's own (agents can write its .git/config, and it
+/// would run with the hub's SSH agent). A second account's key belongs in
+/// a `Host` alias in ~/.ssh/config, which still applies.
+pub(crate) fn ssh_command() -> [String; 2] {
+    static GLOBAL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let cmd = GLOBAL.get_or_init(|| {
+        std::process::Command::new("git")
+            .args(["config", "--global", "--get", "core.sshCommand"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "ssh".into())
+    });
+    ["-c".into(), format!("core.sshCommand={cmd}")]
+}
+
 /// How long one git command may take: a fetch of a big repo, at most.
 const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
@@ -66,6 +86,7 @@ pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String> {
         .arg("-C")
         .arg(dir)
         .args(SAFE_GIT)
+        .args(ssh_command())
         .args(args)
         .env("PATH", github::command_path())
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -406,14 +427,14 @@ pub async fn prep(shared: &Shared, key: &str) -> Result<()> {
         && let Some(prev) = existing_ref(&checkout, e.pr, round - 1).await
     {
         let range = format!("{prev}..{rf}");
-        super::write_atomic(&ctx.join("delta.diff"), &git(&checkout, &["diff", &prev, &rf]).await.unwrap_or_default())?;
+        super::write_atomic(&ctx.join("delta.diff"), &git(&checkout, &["diff", "--no-ext-diff", "--no-textconv", &prev, &rf]).await.unwrap_or_default())?;
         super::write_atomic(&ctx.join("delta-commits.txt"), &git(&checkout, &["log", "--oneline", &range]).await.unwrap_or_default())?;
     }
     if e.state == "reviewing"
         && let Some(from) = e.round_head.clone().filter(|h| *h != head)
     {
         let range = format!("{from}..{head}");
-        super::write_atomic(&ctx.join("delta-head.diff"), &git(&checkout, &["diff", &from, &head]).await.unwrap_or_default())?;
+        super::write_atomic(&ctx.join("delta-head.diff"), &git(&checkout, &["diff", "--no-ext-diff", "--no-textconv", &from, &head]).await.unwrap_or_default())?;
         super::write_atomic(&ctx.join("delta-head-commits.txt"), &git(&checkout, &["log", "--oneline", &range]).await.unwrap_or_default())?;
     }
     for r in rs.iter().skip(1) {
@@ -900,7 +921,7 @@ pub async fn moved_head(shared: &Shared, e: &Pr, confirm: bool) -> Result<Option
 /// index lines, so a merge of the base into it compares equal.
 async fn pr_diff(checkout: &Path, base: &str, sha: &str) -> Result<String> {
     let mb = git(checkout, &["merge-base", &format!("origin/{base}"), sha]).await?;
-    let d = git(checkout, &["diff", mb.trim(), sha]).await?;
+    let d = git(checkout, &["diff", "--no-ext-diff", "--no-textconv", mb.trim(), sha]).await?;
     Ok(d.lines().filter(|l| !l.starts_with("index ")).collect::<Vec<_>>().join("\n"))
 }
 
@@ -1086,10 +1107,27 @@ async fn post_as(shared: &Shared, key: &str, dry: bool, asker: Asker, seen: Opti
         }
     }
     let path = draft_path(&e, "review.verified.json").ok_or_else(|| anyhow!("{key} has no worktree"))?;
+    super::no_link(&path)?;
     let text = std::fs::read_to_string(&path).map_err(|_| anyhow!("write {} first: the checked review, in the format of {}", path.display(), super::draft_schema().display()))?;
     let draft: Value = serde_json::from_str(&text).map_err(|err| anyhow!("{} isn't valid JSON: {err}", path.display()))?;
     let digest = draft_digest(&text);
-    if !dry && let Some(s) = seen.filter(|s| !s.is_empty() && **s != digest) {
+    // A preview is what a post without its own digest is held to.
+    // Kept in the store, so a post after the hub restarts still knows it.
+    let previewed = {
+        let mut core = shared.lock();
+        let k = format!("review.previewed.{key}");
+        if dry {
+            core.store.meta_set(&k, &digest)?;
+        }
+        core.store.meta_get(&k)?
+    };
+    let seen = match seen.filter(|s| !s.is_empty()) {
+        Some(s) => Some(s.to_string()),
+        // Only recording what's on GitHub already: nothing posts.
+        None if dry || !approve => None,
+        None => Some(previewed.ok_or_else(|| anyhow!("preview the checked review first (wh review preview), then post it; nothing was posted"))?),
+    };
+    if !dry && let Some(s) = seen.as_deref().filter(|s| **s != digest) {
         bail!("the checked review changed since you looked at it ({s} then, {digest} now); look again before posting");
     }
     let primary = PathBuf::from(e.worktree.clone().unwrap_or_default());
@@ -1221,6 +1259,9 @@ pub async fn decide(shared: &Shared, key: &str) -> Result<Decided> {
         return Ok(Decided::NotRule);
     }
     let Some(path) = draft_path(&e, "review.verified.json") else { return Ok(Decided::NotRule) };
+    if super::through_link(&path).is_some() {
+        return Ok(Decided::Waits("the checked review is a link out of the worktree; Wheelhouse won't follow it".into()));
+    }
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(Decided::Waits("there's no checked review for your rule to look at".into()));
     };
@@ -1628,6 +1669,10 @@ esac
         let mut e = now(&shared);
         e.head = Some("532aff7".into());
         super::super::save(&mut shared.lock(), &mut e).unwrap();
+        // A post that names no digest is held to the last preview: none yet.
+        let err = format!("{:#}", post(&shared, key, false, Asker::Owner, None).await.unwrap_err());
+        assert!(err.contains("preview the checked review first"), "{err}");
+        let _ = post(&shared, key, true, Asker::Owner, None).await;
         let err = format!("{:#}", post(&shared, key, false, Asker::Owner, None).await.unwrap_err());
         assert!(err.contains("moved to fa3f931 after this review was checked at 532aff7") && err.contains("following it now"), "{err}");
         assert_eq!(now(&shared).head.as_deref(), Some("fa3f931"));
