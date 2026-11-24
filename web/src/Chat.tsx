@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { appName, get, post, type Docket, type EntryView, type Live } from "./api";
+import { appName, get, paneRuntime, post, type Docket, type EntryView, type Live } from "./api";
 import { AppAvatar, IconDown, IconFile, IconSend, IconTerminal, LiveIcon, liveWord } from "./icons";
 import { agoLong, stamp, useHub } from "./live";
 import { MessageCard } from "./Messages";
@@ -129,7 +129,7 @@ function NowLine({ d, onTerminal }: { d: Docket; onTerminal: () => void }) {
   if (!l)
     return (
       <div className="chat-now off">
-        {d.released ? `The session ended (${d.released}).` : `${app} isn't running in Rex.`} Start it again on the Mac to keep going.
+        {d.released ? `The session ended (${d.released}).` : `${app} isn't running in ${paneRuntime(d)}.`} Start it again on the Mac to keep going.
       </div>
     );
   if (l.state === "blocked")

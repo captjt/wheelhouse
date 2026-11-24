@@ -1,11 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { appName, get, post, type Live } from "./api";
+import { appName, get, paneRuntime, post, type Live } from "./api";
 import { AppAvatar, IconEye, IconTerminal, IconX, LiveIcon, TitleText, liveWord } from "./icons";
 import { useHub } from "./live";
 import { Kbd, Modal, useToast } from "./ui";
 
-/** Whether this page is open on the Mac the hub (and Rex) runs on. From a
- * phone, "Open in Rex" would only move a window on a Mac across the room. */
+/** Whether this page is open on the Mac the hub (and Rex or Herdr) runs on.
+ * From a phone, "Open in Rex" would only move a window on a Mac across the room. */
 export const onThisMac = () => ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
 
 type PaneCtx = { view: (id: string) => void; act: (id: string) => void };
@@ -16,7 +16,7 @@ export function PaneProvider({ children }: { children: ReactNode }) {
   const hub = useHub();
   const [open, setOpen] = useState<string | null>(null);
   const view = useCallback((id: string) => setOpen(id), []);
-  // The one action for "show me this agent": Rex on the Mac, the sheet elsewhere.
+  // The one action for "show me this agent": its runtime's app on the Mac, the sheet elsewhere.
   const act = useCallback((id: string) => (onThisMac() ? hub.openInRex(id) : setOpen(id)), [hub]);
   return (
     <Ctx.Provider value={{ view, act }}>
@@ -28,21 +28,22 @@ export function PaneProvider({ children }: { children: ReactNode }) {
 
 export const usePane = () => useContext(Ctx);
 
-/** The pane button: Open in Rex (and a peek) on the Mac, View pane anywhere else. */
+/** The pane button: Open in Rex or Herdr (and a peek) on the Mac, View pane anywhere else. */
 export function PaneButton({ id, small, label }: { id: string; small?: boolean; label?: string }) {
   const hub = useHub();
   const pane = usePane();
   const cls = small ? "btn btn-small" : "btn";
+  const rt = paneRuntime(hub.byId.get(id));
   if (!onThisMac())
     return (
       <button className={cls} onClick={() => pane.view(id)} title="See the agent's terminal, and message it">
-        <IconEye size={small ? 13 : 14} /> {label ? label.replace(/in Rex$/, "").trim() || "View pane" : "View pane"}
+        <IconEye size={small ? 13 : 14} /> {label ? label.replace(/in (Rex|Herdr)$/, "").trim() || "View pane" : "View pane"}
       </button>
     );
   return (
     <span className="btn-pair">
-      <button className={cls} onClick={() => hub.openInRex(id)} title="Bring the pane to the front in Rex (O)">
-        <IconTerminal size={small ? 13 : 14} /> {label || "Open in Rex"}
+      <button className={cls} onClick={() => hub.openInRex(id)} title={`Bring the pane to the front in ${rt} (O)`}>
+        <IconTerminal size={small ? 13 : 14} /> {label || `Open in ${rt}`}
       </button>
       <button className={`${cls} btn-icon`} onClick={() => pane.view(id)} title="Peek at the pane here">
         <IconEye size={small ? 13 : 14} />
@@ -52,7 +53,7 @@ export function PaneButton({ id, small, label }: { id: string; small?: boolean; 
 }
 
 /** Approve and Deny for a permission prompt Wheelhouse can answer. The hub
- * re-reads the prompt from Rex first and refuses if it isn't the one shown. */
+ * re-reads the prompt from the pane's runtime first and refuses if it isn't the one shown. */
 export function AnswerButtons({ d, small }: { d: import("./api").Docket; small?: boolean }) {
   const hub = useHub();
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
@@ -120,7 +121,7 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
 
   const state = screen?.live?.state ?? d?.live?.state;
   const app = appName(d?.agent?.app);
-  const why = state === "error" ? `${app} stopped with an error.` : !state ? "The pane isn't open in Rex." : null;
+  const why = state === "error" ? `${app} stopped with an error.` : !state ? `The pane isn't open in ${paneRuntime(d)}.` : null;
   const queues = state === "working" || state === "starting" || state === "blocked";
   const send = () => {
     const t = text.trim();
@@ -162,8 +163,8 @@ function PaneSheet({ id, onClose }: { id: string; onClose: () => void }) {
           </div>
         </div>
         <span className="spacer" />
-        <button className="btn btn-small" onClick={() => hub.openInRex(id)} title={onThisMac() ? "Bring the pane to the front in Rex" : "Bring the pane to the front in Rex, on the Mac"}>
-          <IconTerminal size={13} /> {onThisMac() ? "Open in Rex" : "Show on Mac"}
+        <button className="btn btn-small" onClick={() => hub.openInRex(id)} title={onThisMac() ? `Bring the pane to the front in ${paneRuntime(d)}` : `Bring the pane to the front in ${paneRuntime(d)}, on the Mac`}>
+          <IconTerminal size={13} /> {onThisMac() ? `Open in ${paneRuntime(d)}` : "Show on Mac"}
         </button>
         <button className="icon-btn" onClick={onClose} aria-label="Close">
           <IconX size={15} />

@@ -134,7 +134,7 @@ struct ActivityRow: View {
             let src = data["source"].str
             if src == "rex-reviewer" { return sys(.hub, [.b("rex-reviewer"), .t(" started its \(data["role"].str ?? "")\(data["round"].int.map { " for round \($0)" } ?? "")")]) }
             if src == "wheelhouse", let role = data["role"].str { return sys(.hub, [.b("Wheelhouse"), .t(" \(data["round"].int != nil ? "started" : "found") the \(role)\(data["round"].int.map { " for round \($0)" } ?? "")")]) }
-            if src == "wheelhouse" { return sys(.hub, [.b("Wheelhouse"), .t(" started \(agent) in Rex's wheelhouse session")]) }
+            if src == "wheelhouse" { return sys(.hub, [.b("Wheelhouse"), .t(" started \(agent) in \(runtimeTitle(block: data["agent"]["block"].str))'s wheelhouse session")]) }
             let s = String((data["session"].str ?? "").prefix(8))
             return sys(.hub, [.b(agent), .t(src == "resume" ? " resumed session " : src == "clear" ? " cleared into session " : " started session "), .mono(s)])
         case "question":

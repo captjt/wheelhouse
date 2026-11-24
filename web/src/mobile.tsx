@@ -72,7 +72,7 @@ export function TabBar({ here, items, onMore }: { here: string; items: Tab[]; on
 
 export type MoreLink = { path: string; label: string; icon: ReactNode; count?: number };
 
-/** More: the other views, the Rex sessions, search, a new docket, and the hub's state. */
+/** More: the other views, the sessions, search, a new docket, and the hub's state. */
 export function MoreSheet({
   here,
   links,
@@ -111,7 +111,7 @@ export function MoreSheet({
           </div>
           {sessions.length > 0 && (
             <>
-              <div className="sheet-section">Rex sessions</div>
+              <div className="sheet-section">Sessions</div>
               <div className="sheet-group">
                 {sessions.map((l) => (
                   <a key={l.path} className={`sheet-item${here === l.path.slice(1) ? " on" : ""}`} href={`#${l.path}`} onClick={close}>

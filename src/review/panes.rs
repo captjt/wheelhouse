@@ -1,23 +1,27 @@
-//! Review panes in Rex: opened in their own session (a tab per PR), handed
-//! their prompt once the agent is ready, and closed when the round is done.
-//! (What rex-agent did for rex-reviewer.)
+//! Panes for the agents Wheelhouse runs itself (Review's, Build's): opened
+//! in their own session on the spawn runtime (a tab per PR or task), handed
+//! their prompt once the agent is ready, and closed when the work is done.
+//! A pane already open is driven by its own runtime, whatever the setting
+//! says now. (What rex-agent did for rex-reviewer.)
 
 use anyhow::{Result, anyhow, bail};
 use std::time::{Duration, Instant};
 
 use super::session_name;
 use crate::hub::Shared;
-use crate::rex::{Created, Rex};
+use crate::runtime;
+pub use crate::runtime::{Created, Place};
 
 /// The review session's id, if it's open.
 pub fn session(shared: &Shared) -> Option<String> {
     session_named(shared, &session_name())
 }
 
-/// A Rex session's id by its label, if it's open.
+/// The id of the session labelled `name` on the spawn runtime, if it's open.
 pub fn session_named(shared: &Shared, name: &str) -> Option<String> {
+    let kind = runtime::spawn_kind();
     let core = shared.lock();
-    core.mirror.sessions.values().find(|s| s.label == name).map(|s| s.session_id.clone())
+    core.mirror.sessions.values().find(|s| s.runtime == kind && s.label == name).map(|s| s.session_id.clone())
 }
 
 /// A pane's root state and when it last changed, or `None` if it's gone.
@@ -40,14 +44,12 @@ pub fn find_in(shared: &Shared, session: Option<&str>, name: &str, label: &str) 
     let core = shared.lock();
     let sid = match session {
         Some(s) => s.to_string(),
-        None => core.mirror.sessions.values().find(|s| s.label == name)?.session_id.clone(),
+        None => {
+            let kind = runtime::spawn_kind();
+            core.mirror.sessions.values().find(|s| s.runtime == kind && s.label == name)?.session_id.clone()
+        }
     };
     core.mirror.panes.values().find(|p| p.session_id == sid && p.label == label).map(|p| p.block_id.clone())
-}
-
-pub enum Place<'a> {
-    Tab,
-    Beside { anchor: &'a str, dir: &'a str },
 }
 
 /// Open `argv` in a pane labelled `label`, in the review session (made
@@ -56,29 +58,22 @@ pub async fn open(shared: &Shared, label: &str, cwd: &str, argv: &[String], plac
     open_in(shared, &session_name(), label, cwd, argv, place).await
 }
 
-/// Open a pane in the session named `name` (made with it if it isn't open).
+/// Open a pane in the session named `name` on the spawn runtime (made with
+/// it if it isn't open).
 pub async fn open_in(shared: &Shared, name: &str, label: &str, cwd: &str, argv: &[String], place: Place<'_>) -> Result<Created> {
-    let rex = Rex;
-    match session_named(shared, name) {
-        Some(sid) => {
-            let split = match place {
-                Place::Tab => None,
-                Place::Beside { anchor, dir } => Some((dir, anchor)),
-            };
-            rex.run_in(&sid, label, cwd, argv, split).await
-        }
-        None => {
-            let a: Vec<&str> = argv.iter().map(String::as_str).collect();
-            let c = rex.start(None, name, label, cwd, &a).await?;
-            // Wait for the mirror to see the new session, so the next pane
-            // goes in it.
-            let t = Instant::now();
-            while session_named(shared, name).is_none() && t.elapsed() < Duration::from_secs(10) {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
-            Ok(c)
+    let rt = runtime::spawn_kind().get();
+    let session = session_named(shared, name);
+    let fresh = session.is_none();
+    let c = rt.open(session.as_deref(), name, label, cwd, argv, place).await?;
+    if fresh {
+        // Wait for the mirror to see the new session, so the next pane
+        // goes in it.
+        let t = Instant::now();
+        while session_named(shared, name).is_none() && t.elapsed() < Duration::from_secs(10) {
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
+    Ok(c)
 }
 
 /// Wait until the agent in `block` settles (idle, done, blocked or error).
@@ -107,7 +102,7 @@ pub async fn settled(shared: &Shared, block: &str, timeout: Duration) -> Result<
 /// Agents report idle at start and then go busy while their hooks run, so
 /// a busy agent is tried again, up to eight times.
 pub async fn deliver(shared: &Shared, session: &str, block: &str, prompt: &str) -> Result<()> {
-    let rex = Rex;
+    let rt = runtime::for_id(block);
     for _ in 0..8 {
         let t = Instant::now();
         while t.elapsed() < Duration::from_secs(60) {
@@ -126,9 +121,7 @@ pub async fn deliver(shared: &Shared, session: &str, block: &str, prompt: &str) 
             }
             Some(_) => {}
         }
-        rex.paste(session, block, prompt).await?;
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        rex.send_keys(session, block, &["enter"]).await?;
+        rt.submit(session, block, prompt).await?;
         return Ok(());
     }
     Err(anyhow!("it stayed busy and never took its task"))
@@ -149,12 +142,12 @@ pub async fn agy_session(shared: &Shared, block: &str, cwd: &std::path::Path, si
 }
 
 pub async fn close(session: &str, block: &str) {
-    if let Err(e) = Rex.close_block(session, block).await {
+    if let Err(e) = runtime::for_id(block).close(session, block).await {
         say!("review: closing {block}: {e:#}");
     }
 }
 
 /// The last lines of a pane, to say why an agent didn't start.
 pub async fn tail(session: &str, block: &str) -> String {
-    Rex.capture(session, block, 15).await.unwrap_or_default()
+    runtime::for_id(block).capture(session, block, 15).await.unwrap_or_default()
 }

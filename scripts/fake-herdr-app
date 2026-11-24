@@ -1,0 +1,13 @@
+#!/bin/bash
+# A made-up Herdr app, for tests: `herdr-app do agent.focus {"terminal": T}`
+# is kept in the fake-hc world's "focused"; every other call does nothing.
+# Point the hub at it with WH_HERDR_APP. See scripts/fake-hc.
+set -euo pipefail
+world=${WH_HC_WORLD:?set WH_HC_WORLD to a world file}
+if [ "${1:-}" = do ] && [ "${2:-}" = agent.focus ]; then
+  t=$(jq -r .terminal <<<"$3")
+  until mkdir "$world.lock" 2>/dev/null; do sleep 0.05; done
+  jq --arg t "$t" '.focused += [$t]' "$world" >"$world.tmp" && mv "$world.tmp" "$world"
+  rmdir "$world.lock"
+fi
+echo '{}'

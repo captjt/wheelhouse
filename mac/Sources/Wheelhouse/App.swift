@@ -153,7 +153,7 @@ struct AppCommands: Commands {
             // The docket in the window you're in (the main one, or its own).
             let here = focused?.nav ?? nav
             let d = store.docket(focused?.id ?? nav.current)
-            Button("Open in Rex") { if let d { store.openInRex(d.id) } }.keyboardShortcut("o", modifiers: [.command, .shift]).disabled(d?.live == nil)
+            Button(d.map { "Open in \($0.runtime)" } ?? "Open in Rex") { if let d { store.openInRex(d.id) } }.keyboardShortcut("o", modifiers: [.command, .shift]).disabled(d?.live == nil)
             Button("Peek at Pane") { if let d { here.pane = d.id } }.keyboardShortcut("p", modifiers: [.command, .shift]).disabled(d?.live == nil)
             Button("Read the Record") { if let d { here.record = d.id } }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(d == nil)
             Button("Link a Linear Issue…") { if let d { here.linking = d.id } }.disabled(d == nil)

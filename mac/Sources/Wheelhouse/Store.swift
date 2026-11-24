@@ -388,10 +388,10 @@ final class Store {
     }
 
     func openInRex(_ id: String) {
-        Task { await act("/api/dockets/\(id)/open", done: "Showing \(id)'s pane in Rex") }
+        Task { await act("/api/dockets/\(id)/open", done: "Showing \(id)'s pane in \(docket(id)?.runtime ?? "Rex")") }
     }
 
-    /// Approve or deny an agent's prompt. The hub reads the prompt from Rex
+    /// Approve or deny an agent's prompt. The hub reads the prompt from its runtime
     /// again and answers only if it's the one shown here.
     func answer(_ d: Docket, approve: Bool) async {
         guard let l = d.live else { return }
@@ -450,7 +450,7 @@ final class Store {
         if let title, !title.isEmpty { body["title"] = title }
         if let docket { body["docket"] = docket }
         guard let r = await act("/api/agents/start", body), let id = r["docket"].str else { return nil }
-        toast(docket == nil ? "\(id): \(appName(app)) started in Rex's wheelhouse session" : "\(appName(app)) is on \(id), in wheelhouse/\(id)")
+        toast(docket == nil ? "\(id): \(appName(app)) started in \(state?.spawnRuntime ?? "Rex")'s wheelhouse session" : "\(appName(app)) is on \(id), in wheelhouse/\(id)")
         return id
     }
 

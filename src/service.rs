@@ -100,17 +100,18 @@ pub fn up() -> Result<()> {
         }
         println!("stopped the hub that was running by hand");
     }
-    // A LaunchAgent's PATH is short: add rex, Homebrew, cargo, Tailscale.
-    let rex_dir = crate::rex::rex_bin().parent().map(|p| p.display().to_string()).unwrap_or_default();
+    // A LaunchAgent's PATH is short: add rex, hc, Homebrew, cargo, Tailscale.
+    let rex_dir = crate::runtime::rex::rex_bin().parent().map(|p| p.display().to_string()).unwrap_or_default();
+    let hc_dir = crate::runtime::herdr::hc_bin().parent().map(|p| p.display().to_string()).unwrap_or_default();
     let cargo = home().join(".cargo/bin").display().to_string();
-    let path = [rex_dir.as_str(), "/opt/homebrew/bin", "/usr/local/bin", &cargo, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
+    let path = [rex_dir.as_str(), hc_dir.as_str(), "/opt/homebrew/bin", "/usr/local/bin", &cargo, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
     let mut env = format!("    <key>PATH</key><string>{}</string>\n", xml(&path));
     // SHELL too: agents get your interactive shell's PATH, from the shell you use.
     // And what makes a second hub one: its label, config and what it leaves alone.
     for var in [
-        "WH_STATE", "WH_SOCKET", "WH_HTTP", "WH_TAILNET", "WH_REX", "WH_OWNER", "WH_LABEL", "WH_FLAVOR", "WH_CONFIG", "WH_SETTINGS", "WH_NOTIFY", "WH_LINEAR_OFF",
-        "WH_REVIEW_CONFIG", "WH_BUILD_CONFIG", "WH_REVIEW_DATA", "WH_BUILD_DATA", "WH_REVIEW_CACHE", "WH_REVIEW_SESSION", "WH_BUILD_SESSION", "WH_GH", "WH_TAILSCALE", "USER",
-        "HOME", "SHELL",
+        "WH_STATE", "WH_SOCKET", "WH_HTTP", "WH_TAILNET", "WH_REX", "WH_HC", "WH_HERDR_APP", "WH_RUNTIME", "WH_OWNER", "WH_LABEL", "WH_FLAVOR", "WH_CONFIG", "WH_SETTINGS",
+        "WH_NOTIFY", "WH_LINEAR_OFF", "WH_REVIEW_CONFIG", "WH_BUILD_CONFIG", "WH_REVIEW_DATA", "WH_BUILD_DATA", "WH_REVIEW_CACHE", "WH_REVIEW_SESSION", "WH_BUILD_SESSION",
+        "WH_GH", "WH_TAILSCALE", "USER", "HOME", "SHELL",
     ] {
         if let Ok(v) = std::env::var(var) {
             env.push_str(&format!("    <key>{var}</key><string>{}</string>\n", xml(&v)));

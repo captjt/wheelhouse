@@ -3,7 +3,7 @@
 Build turns a docket into a pull request. The docket's **intent** is the
 spec: what must be true when it's done, and what's out of scope. A Linear or
 GitHub issue seeds it, or you write it yourself on any docket. Two agents
-work it in Rex: a **builder** plans and builds, and a **checker** checks the
+work it in Rex or Herdr: a **builder** plans and builds, and a **checker** checks the
 work against the plan. You approve the plan, answer the decisions, and
 approve the PR before it opens. The PR opens from your GitHub account.
 
@@ -245,7 +245,7 @@ costs a review's worth of tokens per look, so it's off until you name them.
 ## Trying it
 
 `scripts/build-e2e.sh` (`just e2e`) runs a Build end to end on a scratch
-hub, with a made-up Rex and gh and a local origin: the plan, the check,
+hub, with a made-up Rex (or Herdr: `scripts/build-e2e.sh herdr`) and gh and a local origin: the plan, the check,
 opening the PR, a round on review feedback and a failing check (a reply in
 the first person is refused first), a round on a base that moved, and the
 merge; then Linear intake against a stand-in Linear. It plays the agents

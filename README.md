@@ -4,8 +4,9 @@
 
 Every piece of agent work as a docket, on a record you can check.
 
-Wheelhouse follows [Rex](https://www.superlogical.com/rex). Every Claude
-Code, Codex or Antigravity agent running in a Rex pane gets a **docket**: what you asked,
+Wheelhouse follows [Rex](https://www.superlogical.com/rex) and [Herdr](https://herdr.dev), side
+by side. Every Claude Code, Codex or Antigravity agent running in a Rex pane
+or a Herdr terminal gets a **docket**: what you asked,
 what the agent answered, when it waited on you, the files it made, and how
 it ended. Each entry is signed and chained, so `wh verify` shows that
 nothing in a docket's record was changed, removed or reordered.
@@ -43,9 +44,49 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
   <img src="docs/images/phone-artifact-light.png" width="250" alt="A kept file open on the phone, pinned by its entry's hash">
 </p>
 
-> Rex is in private beta. Wheelhouse needs a Rex build whose agents report
-> program status (OSC 7501): Claude Code, Codex and Antigravity do on their
-> own.
+> Rex is in private beta. Wheelhouse needs a Rex build, or
+> [herdr-core](https://herdr.dev/core/) 0.1.20 or later, whose agents report program status (OSC 7501): Claude
+> Code, Codex and Antigravity do on their own. With both installed,
+> Wheelhouse follows both.
+
+## Rex and Herdr, together
+
+Wheelhouse isn't tied to one terminal. It follows
+[Rex](https://www.superlogical.com/rex) and [Herdr](https://herdr.dev)
+([herdr-core](https://herdr.dev/core/), with the Herdr app and its
+[phone app](https://herdr.dev/mobile/)) at the same time, through one interface, so
+it doesn't matter which one an agent runs in:
+
+- **One list of agents.** Every agent in a Rex pane or a Herdr terminal
+  gets a docket, in the same Inbox, Active list, Agents view and sessions.
+- **Agents talk across runtimes.** A Claude Code in Rex can `wh send` to a
+  Codex in Herdr and get its reply. A message goes in through the
+  receiving pane's own runtime, between its turns. When both runtimes have
+  a session of the same name, addresses say which: `herdr:wheelhouse/D-12`.
+- **Answer either the same way.** Approve a prompt, queue a prompt, read
+  the screen, or **Open in Rex** / **Open in Herdr**, from the Mac, the
+  menu bar or your phone. The prompt is read again from its own runtime
+  before a key goes in.
+- **New agents open where you say.** `wh start`, Build and Review open
+  their panes in Rex or Herdr: Settings → Runtimes.
+- **More to come.** Each runtime is an adapter behind the same verbs
+  (identify, observe, deliver, lay out), so another multiplexer is one
+  more adapter: [docs/runtimes.md](docs/runtimes.md).
+
+<table>
+  <tr>
+    <td><img src="docs/images/agents-light.png" alt="The Agents view: agents in Rex's acme-api and storefront sessions and in Herdr's acme-web space, side by side, each with its state and docket"></td>
+    <td><img src="docs/images/docket-herdr-dark.png" alt="A docket whose agent runs in Herdr, in dark mode: its Herdr pane in the properties, and Open in Herdr"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/runtimes-light.png" alt="Settings, Runtimes: new agents open in Rex or Herdr, and both are followed, each with its agents"></td>
+    <td><img src="docs/images/mac-settings-agents-dark.png" alt="Wheelhouse.app's Settings in dark mode: Runtimes, where new agents open and each runtime's state, above Build's and Review's agents"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/mac-agents-light.png" alt="Wheelhouse.app's Agents: Rex's acme-api and storefront and Herdr's acme-web, each tagged with its runtime, and a Herdr agent's docket beside them"></td>
+    <td><img src="docs/images/inbox-dark.png" alt="The Inbox in dark mode: a Herdr agent asking to run the a11y tests, with Approve, Deny and Open in Herdr, above a Rex agent's prompt"></td>
+  </tr>
+</table>
 
 ## Wheelhouse.app
 
@@ -110,7 +151,10 @@ phone over Tailscale.
 
 ## Requirements
 
-- macOS and [Rex](https://www.superlogical.com/rex), with the `rex` CLI
+- macOS and [Rex](https://www.superlogical.com/rex), with the `rex` CLI, or
+  [Herdr](https://herdr.dev) ([herdr-core](https://herdr.dev/core/) 0.1.20
+  or later, with the `hc` CLI), or both: see
+  [docs/runtimes.md](docs/runtimes.md)
 - [Rust](https://rustup.rs) 1.88 or later, [Node](https://nodejs.org) 22.18
   or later, and [just](https://github.com/casey/just) (`brew install just`)
 - Xcode 26 (Swift 6.2), for Wheelhouse.app
@@ -142,7 +186,7 @@ after pulling to update (`just app` rebuilds only the Mac app).
 Then:
 
 1. Open Wheelhouse.app, and allow its notifications. Every agent pane in
-   Rex is already a docket. (Or open http://127.0.0.1:7500.)
+   Rex and every agent terminal in Herdr is already a docket. (Or open http://127.0.0.1:7500.)
 2. Tell your agents about Wheelhouse: paste the block in
    [docs/agent-instructions.md](docs/agent-instructions.md) into
    `~/.claude/CLAUDE.md` (and `~/.codex/AGENTS.md`,
@@ -201,7 +245,8 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh intent D-4 [TEXT\|-]` | Print a docket's intent, or set it |
 | `wh link D-4 ENG-142` | Link a Linear issue |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or a link with a docket |
-| `wh start [--codex\|--agy] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have, in Rex |
+| `wh start [--codex\|--agy] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have, in Rex (or Herdr, with `runtime` set) |
+| `wh send --to ADDR "text"`, `wh reply N "text"`, `wh whoami`, `wh name NAME` | From an agent's pane, in either runtime: message another agent (`api/builder`, `reviewer`, `herdr:wheelhouse/D-12`, `herdr:t2h`) or you (`--to me`); answer; where you are; name your pane |
 | `wh open [D-4]` | Open a docket (or the Inbox) in Wheelhouse.app, or the web app without it |
 | `wh verify [D-4]`, `wh export D-4 > D-4.jsonl`, `wh verify --file D-4.jsonl` | Check a record, every kept file included; one that checks without the hub |
 | `wh review`, `on`, `off`, `pause`, `resume`, `check` | The Review protocol, and its switches |
@@ -209,7 +254,7 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh review pickup\|preview\|post\|dismiss OWNER/NAME N` | Review a PR that didn't ask; a round's checked review |
 | `wh build`, `wh build start D-12\|owner/name#45\|ENG-142`, `discard`, `pause`, `resume` | The Build protocol |
 | `wh recap [today\|week\|30d]` | What happened, as Markdown |
-| `wh up`, `down`, `logs`, `status` | The hub at login; its log; what it sees |
+| `wh up`, `down`, `logs`, `status` | The hub at login; its log; what it sees, Rex and Herdr each |
 | `wh web [--publish]` | The app's address on your tailnet |
 | `wh hooks [install\|remove]`, `wh skill [install\|remove]` | Claude Code's and Antigravity's hooks; the agents' skill |
 | `wh setup-linear` | Store a Linear API key in the Keychain |
@@ -265,8 +310,9 @@ odd setups.
 
 ## How it works
 
-- **The hub** (`wh serve`) follows Rex's events and mirrors its sessions,
-  panes and each agent's program status. An agent pane gets a docket;
+- **The hub** (`wh serve`) follows Rex's and Herdr's events and mirrors
+  their sessions, panes and each agent's program status
+  ([docs/runtimes.md](docs/runtimes.md)). An agent pane gets a docket;
   Claude Code's and Antigravity's hooks add your prompts and their turns.
 - **The record** is SQLite: one signed, chained entry per thing that
   happened, and each docket's state folded from its entries. Files are kept
@@ -276,7 +322,7 @@ odd setups.
   and, through Tailscale, on your phone. Both follow the hub's API and its
   server-sent events. While Wheelhouse.app listens, it posts the Mac's
   notifications, with their actions; the hub posts none of its own.
-- **Review and Build** run agents in Rex panes of their own, with a wall
+- **Review and Build** run agents in panes of their own, in Rex or Herdr, with a wall
   around them, and keep their working state per PR or docket.
 
 [DESIGN.md](DESIGN.md) has the why. [docs/roadmap.md](docs/roadmap.md) has
@@ -293,7 +339,7 @@ doesn't.
 
 ```sh
 just check          # what a pull request needs to pass (there's no CI: run it)
-just e2e            # a Build end to end, with stand-ins for Rex, gh, GitHub and Linear
+just e2e            # a Build end to end, in Rex and in Herdr, with stand-ins for both, gh, GitHub and Linear
 just app            # build Wheelhouse.app into ~/Applications
 just dev-install    # Wheelhouse Dev: this checkout beside your everyday one, never meeting it
 just dev            # the web app with hot reload on :5180, against a running hub

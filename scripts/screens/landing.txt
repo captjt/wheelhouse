@@ -1,0 +1,15 @@
+› The landing page's hero still shows last year's prices. Rebuild it from
+  the pricing API, and keep the layout.
+
+• Explored
+  └ Read src/landing/Hero.tsx, src/pricing/client.ts
+
+• The hero hard-codes three plans. I'll read them from
+  GET /v2/plans at build time, with the old values as the fallback.
+
+• Edited src/landing/Hero.tsx (+38 -21)
+• Edited src/landing/plans.ts (+24 -0)
+
+• Running pnpm build --filter landing
+
+  ⠋ Working (42s • esc to interrupt)

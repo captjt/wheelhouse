@@ -229,7 +229,7 @@ struct DevBadge: View {
     }
 }
 
-/// A Rex session: its first letter, in a hue of its own.
+/// A session (a Rex session, a Herdr space): its first letter, in a hue of its own.
 struct SessionIcon: View {
     let name: String
     var size: CGFloat = 16

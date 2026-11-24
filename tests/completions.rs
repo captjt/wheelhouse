@@ -66,7 +66,18 @@ fn tab(shell: &str, sock: &Path, line: &[&str]) -> (Vec<String>, String) {
     } else {
         cmd.args(["--noprofile", "--norc"]);
     }
-    let out = cmd.arg("-c").arg(harness).arg(&*name).args(line).env("WH", WH).env("WH_SOCKET", sock).env_remove("REX_BLOCK").env_remove("WH_COMPLETE").output().unwrap();
+    let out = cmd
+        .arg("-c")
+        .arg(harness)
+        .arg(&*name)
+        .args(line)
+        .env("WH", WH)
+        .env("WH_SOCKET", sock)
+        .env_remove("REX_BLOCK")
+        .env_remove("HC_TERMINAL_ID")
+        .env_remove("WH_COMPLETE")
+        .output()
+        .unwrap();
     assert!(out.status.success(), "{shell} {line:?}: {}", String::from_utf8_lossy(&out.stderr));
     let got = String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.is_empty()).map(str::to_string).collect();
     (got, String::from_utf8_lossy(&out.stderr).into_owned())

@@ -5,7 +5,15 @@ use time::format_description::well_known::Rfc3339;
 
 /// Now, to the millisecond, for entries.
 pub fn now_ms() -> String {
-    let t = OffsetDateTime::now_utc();
+    at_ms(OffsetDateTime::now_utc())
+}
+
+/// A Unix time in milliseconds, as `now_ms` writes one.
+pub fn from_unix_ms(ms: i64) -> Option<String> {
+    OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000).ok().map(at_ms)
+}
+
+fn at_ms(t: OffsetDateTime) -> String {
     let ms = t.millisecond();
     let t = t.replace_nanosecond(0).expect("zero is valid");
     let s = t.format(&Rfc3339).expect("format time");

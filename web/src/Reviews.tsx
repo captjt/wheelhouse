@@ -388,7 +388,7 @@ export function ReviewsView() {
         <div className="view-empty rv-off">
           <IconPR size={22} />
           <p>
-            <strong>Reviews run in Wheelhouse.</strong> Each PR that asks you for a review becomes a Review docket: blind reviewers in Rex, a checker that merges their drafts and rates the merge risk, and a post you approve (or let the checker make).
+            <strong>Reviews run in Wheelhouse.</strong> Each PR that asks you for a review becomes a Review docket: blind reviewers in panes of their own, a checker that merges their drafts and rates the merge risk, and a post you approve (or let the checker make).
           </p>
           <p className="muted small">
             {cfg ? <>Its settings are in {cfg.path}: repos, reviewers, the checker, and your effort policy.</> : <>Set it up in ~/.config/wheelhouse/review.lua (docs/review.md). Moving from rex-reviewer? <code>wh import rex-reviewer</code> brings its config and history over.</>}

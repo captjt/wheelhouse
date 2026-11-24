@@ -34,7 +34,7 @@ don't ask questions. Decide, and record why.
    Wheelhouse tells {{LOGIN}}.
 
 Don't post in any other way, push, resolve threads, or edit tracked files.
-Don't rename the Rex session or its tabs: Wheelhouse finds them by name.
+Don't rename the session (a Rex session or a Herdr space) or its tabs: Wheelhouse finds them by name.
 
 {{MERGE_DRAFTS}}
 {{CHECK_GUIDE}}

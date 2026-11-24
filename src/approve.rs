@@ -1,6 +1,6 @@
 //! Guarded approve and deny for an agent's permission prompt (from rex-inbox).
 //!
-//! Keys go to a pane only if, read from Rex right now, the prompt is the one
+//! Keys go to a pane only if, read from its runtime right now, the prompt is the one
 //! you were shown: the same record, still `blocked` on `permission`, with the
 //! same message and the same report time, and it's the only prompt waiting
 //! in that pane. Otherwise nothing is sent. Each answer is an `approval`
@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use crate::hub::{Shared, Who};
 use crate::mirror::{Record, app_name};
-use crate::rex::Rex;
+use crate::runtime;
 
 /// The prompt as the app showed it.
 #[derive(Debug, Deserialize)]
@@ -34,8 +34,7 @@ pub fn prompt_keys(app: &str) -> Option<(&'static [&'static str], &'static [&'st
 }
 
 async fn live_records(session: &str, block: &str) -> Result<Vec<Record>> {
-    let v = Rex.block_call(session, block, "program_status", &json!({})).await?;
-    Ok(v["records"].as_array().map(|a| a.iter().filter_map(|r| serde_json::from_value(r.clone()).ok()).collect()).unwrap_or_default())
+    runtime::for_id(block).records(session, block).await
 }
 
 fn describe(r: Option<&Record>) -> String {
@@ -54,7 +53,7 @@ fn describe(r: Option<&Record>) -> String {
     }
 }
 
-/// Whether the prompt in Rex now is the one that was seen.
+/// Whether the prompt in the pane now is the one that was seen.
 pub fn same_prompt(now: Option<&Record>, seen: &Seen) -> bool {
     now.is_some_and(|r| r.state == "blocked" && r.kind.as_deref() == Some("permission") && r.msg == seen.msg && r.updated_at == seen.updated_at)
 }
@@ -66,14 +65,15 @@ pub async fn answer(shared: &Shared, docket: &str, approve: bool, seen: &Seen) -
         let core = shared.lock();
         let st = core.store.state(docket)?.ok_or_else(|| anyhow!("no docket {docket}"))?;
         let a = st.agent.ok_or_else(|| anyhow!("{docket} has no agent"))?;
-        let p = core.mirror.panes.get(&a.block).ok_or_else(|| anyhow!("{docket}'s pane isn't open in Rex"))?;
+        let p = core.mirror.panes.get(&a.block).ok_or_else(|| anyhow!("{docket}'s pane isn't open in {}", runtime::of(&a.block).title()))?;
         (p.session_id.clone(), p.block_id.clone(), p.app().unwrap_or_default().to_string())
     };
+    let where_ = runtime::of(&block).title();
     let Some((yes, no)) = prompt_keys(&app) else {
-        bail!("Wheelhouse doesn't answer {}'s prompts yet. Answer it in Rex.", app_name(&app));
+        bail!("Wheelhouse doesn't answer {}'s prompts yet. Answer it in {where_}.", app_name(&app));
     };
 
-    // The guard: read the prompt from Rex now, not from the mirror.
+    // The guard: read the prompt from the runtime now, not from the mirror.
     let records = live_records(&session, &block).await?;
     let now = records.iter().find(|r| r.id == seen.record);
     if !same_prompt(now, seen) {
@@ -81,11 +81,11 @@ pub async fn answer(shared: &Shared, docket: &str, approve: bool, seen: &Seen) -
     }
     let waiting = records.iter().filter(|r| r.state == "blocked").count();
     if waiting > 1 {
-        bail!("{waiting} prompts are waiting in that pane, so a key could answer the wrong one. Answer it in Rex.");
+        bail!("{waiting} prompts are waiting in that pane, so a key could answer the wrong one. Answer it in {where_}.");
     }
 
     let keys = if approve { yes } else { no };
-    Rex.send_keys(&session, &block, keys).await?;
+    runtime::for_id(&block).keys(&session, &block, keys).await?;
     {
         let mut core = shared.lock();
         let owner = core.owner.clone();

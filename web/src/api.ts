@@ -1,7 +1,31 @@
 // The hub's API, as the app sees it. See src/server.rs.
 
+/** A terminal multiplexer Wheelhouse's agents run in. See docs/runtimes.md. */
+export type RuntimeName = "rex" | "herdr";
+
+/** A runtime as the hub follows it: `runtimes` in /api/state. */
+export type RuntimeLink = { name: RuntimeName; title: string; connected: boolean; error?: string | null; installed: boolean; agents: number; spawn: boolean };
+
+/** The runtime a pane id is in: Herdr's start `herdr:`, Rex's are its own. */
+export const runtimeOf = (block?: string | null): RuntimeName => (block?.startsWith("herdr:") ? "herdr" : "rex");
+export const runtimeTitle = (r: RuntimeName): string => (r === "herdr" ? "Herdr" : "Rex");
+
+/** Where a docket's agent runs, for people: "Rex", "Herdr". */
+export const paneRuntime = (d?: { live?: Live | null; agent?: AgentRef | null } | null): string => runtimeTitle(d?.live?.runtime ?? runtimeOf(d?.agent?.block));
+
+/** The runtimes the hub follows now, for people: "Rex and Herdr". */
+export const followedRuntimes = (s?: { runtimes?: RuntimeLink[] } | null): string => {
+  const on = s?.runtimes ? s.runtimes.filter((r) => r.connected).map((r) => r.title) : ["Rex"];
+  return on.length ? on.join(" and ") : "Rex or Herdr";
+};
+
+/** Where new agents open, for people. */
+export const spawnRuntime = (s?: { runtimes?: RuntimeLink[] } | null): string => s?.runtimes?.find((r) => r.spawn)?.title ?? "Rex";
+
 export type Live = {
   block: string;
+  /** The runtime the pane is in (older hubs leave it out: Rex). */
+  runtime?: RuntimeName;
   record?: string | null;
   /** Wheelhouse can answer this prompt with a key (a Claude Code permission). */
   answerable?: boolean;
@@ -333,6 +357,8 @@ export type HubState = {
   hooks: boolean;
   linear: boolean;
   rex: { connected: boolean; error?: string | null };
+  /** Every runtime, followed or not (older hubs leave it out). */
+  runtimes?: RuntimeLink[];
   dockets: Docket[];
   asks: Ask[];
   agents: (Live & { docket?: string | null })[];
@@ -445,3 +471,16 @@ export async function post<T>(path: string, body: unknown = {}): Promise<T> {
 
 export const appName = (app?: string | null) =>
   app === "claude-code" ? "Claude Code" : app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : app || "Agent";
+
+/** The footer's line: the runtimes followed, or the one that's down. A
+ * runtime that isn't installed is no trouble; one that is and isn't
+ * followed is, and so is having none. Older hubs only say Rex's. */
+export function connLine(s: Pick<HubState, "rex" | "runtimes">): { ok: boolean; text: string; title?: string } {
+  const rs = s.runtimes ?? [{ name: "rex" as const, title: "Rex", connected: s.rex.connected, error: s.rex.error, installed: true, agents: 0, spawn: true }];
+  const down = rs.find((r) => r.installed && !r.connected && (r.spawn || rs.every((x) => !x.connected)));
+  if (down) return { ok: false, text: `${down.title}: ${down.error || "connecting"}` };
+  const on = rs.filter((r) => r.connected).map((r) => r.title);
+  if (!on.length) return { ok: false, text: `${spawnRuntime(s)} isn't installed` };
+  // Two fit the sidebar's footer as "Rex · Herdr"; the title says it whole.
+  return { ok: true, text: on.length > 1 ? on.join(" · ") : `Following ${on[0]}`, title: `Following ${on.join(" and ")}` };
+}

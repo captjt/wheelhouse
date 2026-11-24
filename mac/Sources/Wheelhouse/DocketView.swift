@@ -128,8 +128,8 @@ struct DocketView: View {
         }
         ToolbarItemGroup {
             if d.live != nil {
-                Button { store.openInRex(d.id) } label: { Label("Open in Rex", systemImage: "terminal") }
-                    .help("Bring the agent's pane to the front in Rex (O)")
+                Button { store.openInRex(d.id) } label: { Label("Open in \(d.runtime)", systemImage: "terminal") }
+                    .help("Bring the agent's pane to the front in \(d.runtime) (O)")
                 Button { nav.pane = d.id } label: { Label("Peek", systemImage: "eye") }
                     .help("Peek at the agent's pane here")
             }
@@ -155,7 +155,7 @@ struct DocketBody: View {
                         IdText(id: d.id)
                         Spacer()
                         if d.live != nil {
-                            Button("Open in Rex", systemImage: "terminal") { store.openInRex(d.id) }.controlSize(.small)
+                            Button("Open in \(d.runtime)", systemImage: "terminal") { store.openInRex(d.id) }.controlSize(.small)
                             Button { nav.pane = d.id } label: { Image(systemName: "eye") }.controlSize(.small).help("Peek at the pane")
                         }
                         Button("Open Docket") { openWindow(id: "docket", value: d.id) }.controlSize(.small)
@@ -172,7 +172,7 @@ struct DocketBody: View {
                         if let m = l.msg { Text(m).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(K.text2).textSelection(.enabled) }
                     }
                     Spacer(minLength: 8)
-                    if l.answerable { AnswerButtons(d: d) } else { Button("Answer in Rex") { store.openInRex(d.id) } }
+                    if l.answerable { AnswerButtons(d: d) } else { Button("Answer in \(d.runtime)") { store.openInRex(d.id) } }
                 }
             }
             if let l = d.live, l.state == .error {
@@ -413,7 +413,7 @@ struct Properties: View {
                 if d.agent == nil, task == nil, d.canStartAgent {
                     prop("Agent") {
                         Button("Start an agent…") { nav.starting = d.id }.buttonStyle(.link)
-                            .help("Start Claude Code, Codex or Antigravity on this docket, in a new Rex pane")
+                            .help("Start Claude Code, Codex or Antigravity on this docket, in a new \(store.state?.spawnRuntime ?? "Rex") pane")
                     }
                 }
                 if let a = d.agent, d.proto != "review", task == nil {
@@ -424,11 +424,11 @@ struct Properties: View {
                             Text(d.live.map { "\($0.state.word)\($0.since.map { " · \(ago($0))" } ?? "")" } ?? (d.released.map { "Ended · \($0)" } ?? "Not running"))
                             if d.canStartAgent {
                                 Button("Start one…") { nav.starting = d.id }.buttonStyle(.link)
-                                    .help("Start an agent on this docket again, in a new Rex pane")
+                                    .help("Start an agent on this docket again, in a new \(store.state?.spawnRuntime ?? "Rex") pane")
                             }
                         }
                     }
-                    prop("Rex") {
+                    prop(d.runtime) {
                         Button {
                             if d.live != nil { store.openInRex(d.id) }
                         } label: {
@@ -436,7 +436,7 @@ struct Properties: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(d.live == nil)
-                        .help(d.live == nil ? "" : "Show the pane in Rex")
+                        .help(d.live == nil ? "" : "Show the pane in \(d.runtime)")
                     }
                     if let cwd = a.cwd {
                         prop("Folder") {

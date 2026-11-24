@@ -110,8 +110,8 @@ struct MenuBarPanel: View {
             }
             Divider()
             HStack(spacing: 4) {
-                Circle().fill(store.state?.rexConnected == true && store.live ? K.working : K.blocked).frame(width: 6, height: 6)
-                Text(store.state == nil ? "Hub unreachable" : store.state?.rexConnected == true ? "Following Rex" : "Rex: connecting").font(.system(size: 11)).foregroundStyle(.secondary)
+                Circle().fill(store.state?.connection.ok == true && store.live ? K.working : K.blocked).frame(width: 6, height: 6)
+                Text(store.state?.connection.text ?? "Hub unreachable").font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
                 Button { Windows.showMain() } label: { Text("Open \(Flavor.name)") }.buttonStyle(.borderless).font(.system(size: 12))
                 Menu {
@@ -282,7 +282,7 @@ private struct HubSettings: View {
                 .font(.caption).foregroundStyle(.secondary)
             LabeledContent("Status") {
                 if let s = store.state {
-                    Text(s.rexConnected ? "Running · following Rex" : "Running · Rex: \(s.rexError ?? "connecting")").foregroundStyle(s.rexConnected ? K.working : K.blocked)
+                    Text("Running · \(s.connection.text.hasPrefix("Following") ? "f" + s.connection.text.dropFirst() : s.connection.text)").foregroundStyle(s.connection.ok ? K.working : K.blocked)
                 } else {
                     Text(store.error ?? "Connecting…").foregroundStyle(K.error)
                 }

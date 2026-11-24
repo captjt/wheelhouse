@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
-import { appName, type CheckRun, type Docket, type DocketPage, type EntryView } from "./api";
+import { appName, paneRuntime, runtimeOf, runtimeTitle, spawnRuntime, type CheckRun, type Docket, type DocketPage, type EntryView } from "./api";
 import { AppAvatar, HubAvatar, IconChevron, IconDown, IconDownload, IconShield, IconUp, LiveIcon, PersonAvatar, SessionIcon, StatusIcon, TitleText, liveWord, shortPath } from "./icons";
 import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
 import { Kbd, Prose, Sheet, useKeys, useMenu, usePhone } from "./ui";
@@ -157,7 +157,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
           </Prop>
           {!d.agent && !building && canStartAgent(d) && (
             <Prop label="Agent">
-              <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title="Start Claude Code, Codex or Antigravity on this docket, in a new Rex pane">
+              <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title={`Start Claude Code, Codex or Antigravity on this docket, in a new ${spawnRuntime(hub.state)} pane`}>
                 <IconAgents size={14} /> Start an agent…
               </button>
             </Prop>
@@ -172,7 +172,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </Prop>
               <Prop label="Now">
                 {canStartAgent(d) ? (
-                  <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title={`${d.released ? `Ended: ${d.released}. ` : ""}Start an agent on this docket again, in a new Rex pane`}>
+                  <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title={`${d.released ? `Ended: ${d.released}. ` : ""}Start an agent on this docket again, in a new ${spawnRuntime(hub.state)} pane`}>
                     <LiveIcon state="idle" />
                     <span className="prop-text">Not running · Start one…</span>
                   </button>
@@ -183,9 +183,9 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
                   </span>
                 )}
               </Prop>
-              <Prop label="Rex">
+              <Prop label={paneRuntime(d)}>
                 {d.live ? (
-                  <button className="prop-btn" onClick={() => pane.act(d.id)} title={onThisMac() ? `Show ${d.agent.rex_session} / ${d.agent.pane} in Rex (O)` : "View the pane (O)"}>
+                  <button className="prop-btn" onClick={() => pane.act(d.id)} title={onThisMac() ? `Show ${d.agent.rex_session} / ${d.agent.pane} in ${paneRuntime(d)} (O)` : "View the pane (O)"}>
                     <SessionIcon name={d.agent.rex_session} size={14} />
                     <span className="prop-text">
                       {d.live?.rex_session || d.agent.rex_session} <span className="muted">/ {d.live?.pane || d.agent.pane || "pane"}</span>
@@ -389,7 +389,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
                   <PaneButton id={d.id} small />
                 </span>
               ) : (
-                <PaneButton id={d.id} small label={onThisMac() ? "Answer in Rex" : "View pane"} />
+                <PaneButton id={d.id} small label={onThisMac() ? `Answer in ${paneRuntime(d)}` : "View pane"} />
               )}
             </div>
           )}
@@ -540,7 +540,7 @@ function Activity({ e, d, owner, onOpen, onCheck }: { e: EntryView; d: Docket; o
         return sys(hubA, <><b>rex-reviewer</b> started its {data.role}{data.round ? ` for round ${data.round}` : ""}</>);
       if (data.source === "wheelhouse" && data.role)
         return sys(hubA, <><b>Wheelhouse</b> {data.round ? "started" : "found"} the {data.role}{data.round ? ` for round ${data.round}` : ""}</>);
-      if (data.source === "wheelhouse") return sys(hubA, <><b>Wheelhouse</b> started {agent} in Rex's wheelhouse session</>);
+      if (data.source === "wheelhouse") return sys(hubA, <><b>Wheelhouse</b> started {agent} in {runtimeTitle(runtimeOf((data.agent as { block?: string } | undefined)?.block))}'s wheelhouse session</>);
       const s = <span className="mono-s">{String(data.session || "").slice(0, 8)}</span>;
       const src = data.source;
       return sys(

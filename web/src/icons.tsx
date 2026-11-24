@@ -20,7 +20,7 @@ export function shortPath(p?: string | null): string {
   return parts.length <= 3 ? p : parts.slice(-2).join("/");
 }
 
-/** A steady color for a Rex session, the way a team gets one. */
+/** A steady color for a session (a Rex session, a Herdr space), the way a team gets one. */
 export function sessionHue(name: string): number {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360;
@@ -37,7 +37,7 @@ export function SessionIcon({ name, size = 16 }: { name: string; size?: number }
 
 export function SessionChip({ name }: { name: string }) {
   return (
-    <span className="chip" title={`Rex session ${name}`}>
+    <span className="chip" title={`Session ${name}`}>
       <span className="chip-dot" style={{ ["--h" as string]: sessionHue(name) }} />
       {name}
     </span>
@@ -79,7 +79,7 @@ export function StatusIcon({ status, size = 14 }: { status: Docket["status"] | s
   }
 }
 
-// Live: what the agent on the docket is doing right now, from Rex.
+// Live: what the agent on the docket is doing right now, from its runtime.
 export function LiveIcon({ state, size = 14 }: { state?: string | null; size?: number }) {
   const s = size;
   if (!state) return <span style={{ width: s, height: s, display: "inline-block" }} />;

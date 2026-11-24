@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Build, end to end, on a scratch hub with stand-ins: a made-up Rex
-# (scripts/fake-rex), a made-up gh (scripts/fake-gh), and a local origin.
+# (scripts/fake-rex) and herdr-core (scripts/fake-hc), a made-up gh
+# (scripts/fake-gh), and a local origin.
 # This script plays the builder and the checker (writing their files, as
 # the briefs ask) and you (answering each ask through the API). Nothing
-# touches your Rex, GitHub, Linear, or ~/.config.
+# touches your Rex, your Herdr, GitHub, Linear, or ~/.config.
 #
 #   scripts/build-e2e.sh           # run it; exits non-zero on the first failure
+#   scripts/build-e2e.sh herdr     # the same, with the agents' panes in Herdr
 #   KEEP=1 scripts/build-e2e.sh    # keep the scratch directory to look at
 #
 # It goes: plan → approve → build → check → a witnessed check that fails
@@ -20,6 +22,8 @@
 # hold, the attention list, and settings and guides changed through the API.
 set -euo pipefail
 
+runtime=${1:-rex}
+case $runtime in rex | herdr) ;; *) echo "usage: $0 [rex|herdr]" >&2; exit 2 ;; esac
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
 t=$(mktemp -d)
@@ -87,9 +91,10 @@ linear=$!
 export HOME="$t/home" USER=you WH_STATE="$t/state" WH_SOCKET="$t/wh.sock" WH_HTTP="127.0.0.1:$port" \
   WH_TAILNET=off WH_NOTIFY=off WH_LINEAR_KEY=test WH_LINEAR_ENDPOINT="http://127.0.0.1:$lport/graphql" \
   WH_REX="$here/fake-rex" WH_WORLD="$t/world.json" \
+  WH_HC="$here/fake-hc" WH_HC_WORLD="$t/hc.json" WH_HERDR_APP=/usr/bin/true WH_RUNTIME="$runtime" \
   WH_GH="$here/fake-gh" WH_FAKE_GH="$t/gh" WH_GIT_BASE="$t/origin" WH_BUILD_CONFIG="$t/build.lua" \
   WH_REVIEW_CONFIG="$t/none.lua" WH_BUILD_DATA="$t/build" WH_BUILD_POLL_SECONDS=2
-unset CLAUDE_CONFIG_DIR CODEX_HOME REX_SESSION REX_BLOCK WH_LINEAR_OFF LINEAR_API_KEY
+unset CLAUDE_CONFIG_DIR CODEX_HOME REX_SESSION REX_BLOCK HC_TERMINAL_ID HC_SCOPE HC_TERMINAL_SOCKET WH_SETTINGS WH_LINEAR_OFF LINEAR_API_KEY
 "$wh" serve >"$t/hub.log" 2>&1 &
 hub=$!
 
@@ -137,6 +142,14 @@ api -X POST "$base/api/dockets/D-1/intent" -d '{"body": "Failed deliveries retry
 api -X POST "$base/api/build/start" -d '{"from": "D-1", "repo": "acme/api"}' >/dev/null
 until_ "the builder starts planning" '.state == "active" and .phase == "planning"'
 ok "the builder is planning in its own pane"
+if [ "$runtime" = herdr ]; then
+  jq -e '[.terminals[] | select(.labels["wh.session"] == "wheelhouse-builds" and .labels["wh.pane"] == "d-1")] | length == 1' "$t/hc.json" >/dev/null ||
+    fail "the builder isn't a Herdr terminal in wheelhouse-builds: $(jq -c .terminals "$t/hc.json")"
+  jq -e '[.sent[] | select(.text | contains("plan"))] | length >= 1' "$t/hc.json" >/dev/null || fail "the builder's prompt wasn't sent with hc"
+  api "$base/api/state" | jq -e '[.runtimes[] | select(.name == "herdr" and .connected and .spawn)] | length == 1' >/dev/null || fail "the hub doesn't follow Herdr"
+  [ "$(jq '.sessions | length' "$t/world.json")" = 0 ] || fail "a pane opened in Rex too"
+  ok "in Herdr: its own terminal, labelled, its prompt sent with hc, and nothing in Rex"
+fi
 
 step "the plan, and your approval"
 cat >"$wt/.tmp/plan.md" <<'EOF'
@@ -340,6 +353,11 @@ pr_json MERGED '[]' '[]' '[]' "$passing" CLEAN "$main2"
 until_ "the Build ends" '.state == "merged"'
 [ ! -d "$wt" ] || fail "the worktree is still there"
 ok "merged; the worktree is gone"
+if [ "$runtime" = herdr ]; then
+  for _ in $(seq 20); do [ "$(jq '[.terminals[] | select(.labels["wh.session"] == "wheelhouse-builds")] | length' "$t/hc.json")" = 0 ] && break; sleep 0.5; done
+  [ "$(jq '[.terminals[] | select(.labels["wh.session"] == "wheelhouse-builds")] | length' "$t/hc.json")" = 0 ] || fail "Build's Herdr terminals are still open: $(jq -c '[.terminals[].labels["wh.pane"]]' "$t/hc.json")"
+  ok "its Herdr terminals are closed"
+fi
 
 # --- Linear intake -------------------------------------------------------------
 
@@ -408,4 +426,4 @@ api -X POST "$base/api/settings/doc/reset" -d '{"id": "guide/pr-style.md"}' | jq
 ls "$HOME/.config/wheelhouse/.history/guides/" | grep -q "pr-style.md" || fail "the replaced guide wasn't kept"
 ok "push is auto, notes set, an agent's program and a bad gate refused, a guide saved, reset and kept"
 
-printf '\nBuild end to end: every step passed.\n'
+printf '\nBuild end to end, on %s: every step passed.\n' "$runtime"

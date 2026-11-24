@@ -1,6 +1,6 @@
 # Roadmap
 
-Wheelhouse is one hub and one app for agent work in Rex: every agent on a
+Wheelhouse is one hub and one app for agent work in Rex and [Herdr](https://herdr.dev): every agent on a
 docket, a signed record of what happened, and two protocols, Review and
 Build. It replaces three earlier tools on Rex by the same author:
 rex-inbox (follow agents and answer them), rex-reviewer (multi-agent PR
@@ -13,18 +13,21 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### The hub and the record
 
-- [x] Every Claude Code, Codex or Antigravity agent in a Rex pane gets a
-      docket. Claude Code's and Antigravity's hooks (`wh hooks install`)
+- [x] Every Claude Code, Codex or Antigravity agent in a Rex pane or a
+      Herdr terminal gets a docket. Claude Code's and Antigravity's hooks (`wh hooks install`)
       add names from your prompts,
       each turn's summary, and a new docket on `/clear`.
 - [x] A signed, hash-chained record per docket: `wh verify`, `wh export`,
       and `wh verify --file` for an export ([record.md](record.md))
+- [x] Rex and Herdr as runtimes behind one interface, followed side by
+      side: agents in each message, answer and start each other, and new
+      agents open in the one you pick ([runtimes.md](runtimes.md))
 - [x] The hub at login, as a LaunchAgent: `wh up`, `down`, `logs`, `status`
 - [x] The app on your tailnet, answering only you (`wh web --publish`)
 
 ### Inbox, messages, previews and push
 
-- [x] The app: Inbox, Active, All, Done, Agents, a view per Rex session,
+- [x] The app: Inbox, Active, All, Done, Agents, a view per session (Rex's and Herdr's),
       lists and a board, docket pages, ⌘K, and light and dark themes
 - [x] Guarded approve and deny for Claude Code's permission prompts: a key
       goes in only if the prompt is still the one you saw
@@ -182,7 +185,9 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 - [ ] Codex's and Antigravity's permission prompts answered from the app,
       as Claude Code's are
-- [ ] Rex hosts other than this Mac
+- [ ] Runtimes on other machines: Rex hosts (`rex -S`) and Herdr machines
+      (`hc --on`)
+- [ ] More runtimes behind the same interface (tmux, Zellij)
 
 ## Later
 
