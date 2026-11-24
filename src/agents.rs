@@ -63,8 +63,8 @@ struct PendingTurn {
 pub struct Tracker {
     pub by_block: BTreeMap<String, Tracked>,
     turns: BTreeMap<String, PendingTurn>,
-    /// Dockets whose agent is answering a prompt you sent from the app:
-    /// its reply is pushed to you, since you're away from the terminal.
+    /// Panes answering a prompt you sent from the app: the reply is pushed
+    /// to you, since you're away from the terminal.
     pub remote: std::collections::HashSet<String>,
 }
 
@@ -213,7 +213,7 @@ fn status(core: &mut Core, p: &Pane) -> Result<()> {
     if let Some(h) = head.as_ref().filter(|h| matches!(h.state.as_str(), "blocked" | "error")) {
         let seen = h.updated_at.clone().or_else(|| h.msg.clone());
         if state != t.state || seen != t.blocked_seen {
-            let data = json!({ "what": h.state, "kind": h.kind, "record": h.id, "title": h.title });
+            let data = json!({ "what": h.state, "kind": h.kind, "record": h.id, "title": h.title, "block": p.block_id });
             core.append(&t.docket, "observed", &Who::Hub, h.msg.clone(), data)?;
             let _ = core.events.send(json!({ "type": "needs", "docket": t.docket, "block": p.block_id, "what": h.state, "updated_at": h.updated_at }));
             if let Some(tt) = core.agents.by_block.get_mut(&p.block_id) {
@@ -268,9 +268,9 @@ fn flush_turn(core: &mut Core, block: &str) -> Result<()> {
     let reply = core
         .agents
         .remote
-        .remove(&docket)
+        .remove(block)
         .then(|| summary.clone().or_else(|| pt.message.as_deref().map(|m| m.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(200).collect())));
-    core.append(&docket, "turn", &Who::Hub, pt.message, json!({ "state": pt.status, "summary": summary }))?;
+    core.append(&docket, "turn", &Who::Hub, pt.message, json!({ "state": pt.status, "summary": summary, "block": block }))?;
     // You asked from the app: the reply comes to your phone.
     if let Some(text) = reply {
         let _ = core.events.send(json!({ "type": "turn", "docket": docket, "block": block, "text": text }));
@@ -508,9 +508,9 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
                 return Ok(json!({ "docket": docket }));
             }
             if prompt.starts_with("[rex-inbox]") || prompt.starts_with("[wheelhouse]") {
-                core.append(&docket, "note", &Who::Hub, Some(prompt.to_string()), json!({ "via": "message" }))?;
+                core.append(&docket, "note", &Who::Hub, Some(prompt.to_string()), json!({ "via": "message", "block": block }))?;
             } else {
-                note_prompt(core, &docket, prompt, session, None)?;
+                note_prompt(core, &docket, prompt, session, Some(block), None)?;
             }
         }
         "Stop" => {
@@ -561,9 +561,10 @@ fn from_the_harness(prompt: &str) -> bool {
 
 /// A prompt you gave an agent: a note on its docket, and the docket's title
 /// if it has none of its own yet. `from` says where you typed it, when that
-/// wasn't the pane (`wheelhouse`).
-pub fn note_prompt(core: &mut Core, docket: &str, prompt: &str, session: Option<&str>, from: Option<&str>) -> Result<()> {
-    core.append(docket, "note", &Who::Owner, Some(prompt.to_string()), json!({ "via": "prompt", "session": session, "from": from }))?;
+/// wasn't the pane (`wheelhouse`). `block`: the agent's pane, on a docket
+/// with several.
+pub fn note_prompt(core: &mut Core, docket: &str, prompt: &str, session: Option<&str>, block: Option<&str>, from: Option<&str>) -> Result<()> {
+    core.append(docket, "note", &Who::Owner, Some(prompt.to_string()), json!({ "via": "prompt", "session": session, "block": block, "from": from }))?;
     let untitled = core.store.state(docket)?.is_some_and(|st| st.title_source == "pane");
     if untitled && let Some(title) = title_from(prompt) {
         core.append(docket, "set", &Who::Hub, None, json!({ "title": title, "title_source": "prompt" }))?;
@@ -696,6 +697,34 @@ pub fn live(core: &Core, block: &str) -> Option<Live> {
     })
 }
 
+/// Of a docket's agents live now, the one the apps put first: the one that
+/// needs you (blocked, then failed), then one at work, then the most
+/// recently active. None when no agent of it is live.
+pub fn lead(core: &Core, st: &crate::record::fold::DocketState) -> Option<String> {
+    let rank = |l: &Live| match l.state.as_str() {
+        "blocked" => 0,
+        "error" => 1,
+        "working" => 2,
+        _ => 3,
+    };
+    st.agents_on()
+        .filter(|a| docket_of(core, &a.agent.block).as_deref() == Some(st.id.as_str()))
+        .filter_map(|a| Some((a, live(core, &a.agent.block)?)))
+        // The lowest rank; among equals, the most recently active.
+        .min_by(|(a, la), (b, lb)| rank(la).cmp(&rank(lb)).then(b.active_at.cmp(&a.active_at)))
+        .map(|(a, _)| a.agent.block.clone())
+}
+
+/// The pane to act on for a docket: `want`, when it's one of the docket's
+/// own, or else its lead.
+pub fn pane_on(core: &Core, st: &crate::record::fold::DocketState, want: Option<&str>) -> std::result::Result<String, String> {
+    match want.filter(|w| !w.is_empty()) {
+        Some(w) if docket_of(core, w).as_deref() == Some(st.id.as_str()) => Ok(w.to_string()),
+        Some(w) => Err(format!("{w} isn't an agent on {}", st.id)),
+        None => lead(core, st).ok_or_else(|| format!("{} has no pane open", st.id)),
+    }
+}
+
 /// The docket a pane is on, if any.
 pub fn docket_of(core: &Core, block: &str) -> Option<String> {
     core.agents.by_block.get(block).map(|t| t.docket.clone())
@@ -793,7 +822,7 @@ mod tests {
         reconcile(&mut core, ["b1".to_string()]);
         assert!(turns(&mut rx).is_empty());
         // You sent it something from the app: its reply comes to you, once.
-        core.agents.remote.insert(d.clone());
+        core.agents.remote.insert("b1".into());
         agent_pane(&mut core, "b1", Some("working"));
         reconcile(&mut core, ["b1".to_string()]);
         hook(&mut core, "Stop", "claude-code", "b1", &json!({ "last_assistant_message": "**Fixed.** The retry test passes now." })).unwrap();
@@ -803,7 +832,7 @@ mod tests {
         assert_eq!(t.len(), 1, "{t:?}");
         assert_eq!(t[0]["docket"], d.as_str());
         assert_eq!(t[0]["text"], "Fixed. The retry test passes now.");
-        assert!(!core.agents.remote.contains(&d));
+        assert!(core.agents.remote.is_empty());
     }
 
     #[test]

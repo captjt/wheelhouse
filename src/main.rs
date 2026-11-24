@@ -1045,7 +1045,7 @@ fn attach(what: &str, title: Option<String>, docket: Option<String>) -> Result<(
 
 fn brief(d: Option<String>) -> Result<()> {
     let path = match d {
-        Some(d) => format!("/api/dockets/{d}/brief"),
+        Some(d) => format!("/api/dockets/{d}/brief{}", block_q("?")),
         None => {
             let block = crate::runtime::pane_from_env().ok_or_else(|| anyhow::anyhow!("name a docket (wh brief D-12), or run this from an agent's pane"))?;
             format!("/api/brief?block={block}")

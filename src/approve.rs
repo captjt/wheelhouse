@@ -21,6 +21,9 @@ pub struct Seen {
     pub record: String,
     pub updated_at: Option<String>,
     pub msg: Option<String>,
+    /// The agent's pane, on a docket with several: its lead when not given.
+    #[serde(default)]
+    pub block: Option<String>,
 }
 
 /// Keys that answer a permission prompt: `(approve, deny)`. Only agents whose
@@ -64,8 +67,8 @@ pub async fn answer(shared: &Shared, docket: &str, approve: bool, seen: &Seen) -
     let (session, block, app) = {
         let core = shared.lock();
         let st = core.store.state(docket)?.ok_or_else(|| anyhow!("no docket {docket}"))?;
-        let a = st.agent.ok_or_else(|| anyhow!("{docket} has no agent"))?;
-        let p = core.mirror.panes.get(&a.block).ok_or_else(|| anyhow!("{docket}'s pane isn't open in {}", runtime::of(&a.block).title()))?;
+        let b = crate::agents::pane_on(&core, &st, seen.block.as_deref()).map_err(|e| anyhow!(e))?;
+        let p = core.mirror.panes.get(&b).ok_or_else(|| anyhow!("{docket}'s pane isn't open in {}", runtime::of(&b).title()))?;
         (p.session_id.clone(), p.block_id.clone(), p.app().unwrap_or_default().to_string())
     };
     let where_ = runtime::of(&block).title();
@@ -89,7 +92,7 @@ pub async fn answer(shared: &Shared, docket: &str, approve: bool, seen: &Seen) -
     {
         let mut core = shared.lock();
         let owner = core.owner.clone();
-        let data = json!({ "decision": verb, "by": owner, "kind": "permission", "record": seen.record, "keys": keys });
+        let data = json!({ "decision": verb, "by": owner, "kind": "permission", "record": seen.record, "keys": keys, "block": block });
         core.append(docket, "approval", &Who::Hub, seen.msg.clone(), data)?;
     }
 
@@ -115,7 +118,7 @@ mod tests {
 
     #[test]
     fn only_the_prompt_you_saw_is_answered() {
-        let seen = Seen { record: String::new(), updated_at: Some("t1".into()), msg: Some("Bash: ls".into()) };
+        let seen = Seen { record: String::new(), updated_at: Some("t1".into()), msg: Some("Bash: ls".into()), block: None };
         assert!(same_prompt(Some(&rec("blocked", Some("permission"), "Bash: ls", "t1")), &seen));
         assert!(!same_prompt(Some(&rec("blocked", Some("permission"), "Bash: rm -rf /", "t1")), &seen), "another command");
         assert!(!same_prompt(Some(&rec("blocked", Some("permission"), "Bash: ls", "t2")), &seen), "asked again since");

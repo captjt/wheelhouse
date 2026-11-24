@@ -202,11 +202,11 @@ fn internal(e: anyhow::Error) -> (StatusCode, Json<Value>) {
     fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
 }
 
-/// A docket as the apps show it: its state, plus what its agent is doing now.
+/// A docket as the apps show it: its state, plus what its agents are doing
+/// now. `live` is its lead's (`agents::lead`); each of `agents` has its own.
 fn view(core: &crate::hub::Core, st: &DocketState) -> Value {
-    let block = st.agent.as_ref().map(|a| a.block.as_str());
-    let tracked = block.is_some_and(|b| agents::docket_of(core, b).as_deref() == Some(st.id.as_str()));
-    let live = if tracked { block.and_then(|b| agents::live(core, b)) } else { None };
+    let lead = agents::lead(core, st);
+    let live = lead.as_deref().and_then(|b| agents::live(core, b));
     let quick = !st.is_open()
         && st.protocol == "agent"
         && st.prompts <= 1
@@ -226,6 +226,20 @@ fn view(core: &crate::hub::Core, st: &DocketState) -> Value {
         }
     }
     v["live"] = json!(live);
+    v["lead"] = json!(lead);
+    v["agents"] = st
+        .agents
+        .iter()
+        .map(|a| {
+            let mut x = serde_json::to_value(a).unwrap_or_default();
+            let here = a.on() && agents::docket_of(core, &a.agent.block).as_deref() == Some(st.id.as_str());
+            x["on"] = json!(a.on());
+            x["runtime"] = json!(crate::runtime::of(&a.agent.block));
+            x["live"] = json!(if here { agents::live(core, &a.agent.block) } else { None });
+            x["addr"] = json!(core.mirror.panes.get(&a.agent.block).filter(|_| here).map(|p| crate::messages::addr_of(core, p)));
+            x
+        })
+        .collect();
     v["quick"] = json!(quick);
     v["short_head"] = json!(st.short_head());
     v
@@ -249,6 +263,10 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
             if v["linear"].is_object() {
                 v["linear"]["description"] = Value::Null;
             }
+            // Lists show the agents on a docket now; its page, every one.
+            if let Some(a) = v["agents"].as_array_mut() {
+                a.retain(|x| x["on"] == true);
+            }
             v
         })
         .collect();
@@ -266,6 +284,7 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         let st = states.iter().find(|s| s.id == t.docket);
         asks.push(json!({
             "docket": t.docket,
+            "block": block,
             "title": st.map(|s| s.title.clone()),
             "what": what,
             "kind": l.kind,
@@ -283,7 +302,10 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         .filter(|p| p.is_agent())
         .filter_map(|p| {
             let mut v = serde_json::to_value(agents::live(&core, &p.block_id)?).ok()?;
-            v["docket"] = json!(agents::docket_of(&core, &p.block_id));
+            let docket = agents::docket_of(&core, &p.block_id);
+            let role = docket.as_deref().and_then(|d| states.iter().find(|s| s.id == d)).and_then(|s| s.agents_on().find(|a| a.agent.block == p.block_id)?.role.clone());
+            v["docket"] = json!(docket);
+            v["role"] = json!(role);
             Some(v)
         })
         .collect();
@@ -567,33 +589,31 @@ async fn run_checks(State(shared): State<Shared>, Path(id): Path<String>) -> Api
 }
 
 /// Show the docket's pane in its runtime's app (Rex.app, the Herdr app).
-async fn open_in_rex(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
-    let target = {
+async fn open_in_rex(State(shared): State<Shared>, Path(id): Path<String>, axum::extract::Query(q): axum::extract::Query<PaneQuery>) -> ApiResult {
+    let (session, block, window) = {
         let core = shared.lock();
-        let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
-        st.agent.and_then(|a| core.mirror.panes.get(&a.block).map(|p| (p.session_id.clone(), p.block_id.clone(), p.window_id.clone())))
-    };
-    let Some((session, block, window)) = target else {
-        return Err(fail(StatusCode::CONFLICT, format!("{id} has no pane open")));
+        let (_, b) = pane_of(&core, &id, q.block.as_deref())?;
+        let p = core.mirror.panes.get(&b).ok_or_else(|| fail(StatusCode::CONFLICT, "the pane closed"))?;
+        (p.session_id.clone(), p.block_id.clone(), p.window_id.clone())
     };
     crate::runtime::for_id(&block).focus(&session, &block, window.as_deref()).await.map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
-/// The docket's pane, if it's open now: `(session, block)`.
-fn pane_of(core: &crate::hub::Core, id: &str) -> std::result::Result<(String, String), (StatusCode, Json<Value>)> {
+/// A pane of the docket's, open now: `want` when it's the docket's, or its
+/// lead. `(session, block)`.
+fn pane_of(core: &crate::hub::Core, id: &str, want: Option<&str>) -> std::result::Result<(String, String), (StatusCode, Json<Value>)> {
     let st = core.store.state(id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
-    st.agent
-        .and_then(|a| core.mirror.panes.get(&a.block).map(|p| (p.session_id.clone(), p.block_id.clone())))
-        .ok_or_else(|| fail(StatusCode::CONFLICT, format!("{id} has no pane open")))
+    let b = agents::pane_on(core, &st, want).map_err(|e| fail(StatusCode::CONFLICT, e))?;
+    core.mirror.panes.get(&b).map(|p| (p.session_id.clone(), p.block_id.clone())).ok_or_else(|| fail(StatusCode::CONFLICT, format!("{id}'s pane isn't open")))
 }
 
 /// The pane's screen and recent scrollback, as text, for a phone or any
 /// screen that isn't next to the pane's runtime.
-async fn screen(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+async fn screen(State(shared): State<Shared>, Path(id): Path<String>, axum::extract::Query(q): axum::extract::Query<PaneQuery>) -> ApiResult {
     let (session, block, live) = {
         let core = shared.lock();
-        let (s, b) = pane_of(&core, &id)?;
+        let (s, b) = pane_of(&core, &id, q.block.as_deref())?;
         let live = agents::live(&core, &b);
         (s, b, live)
     };
@@ -607,6 +627,9 @@ struct SendReq {
     /// When the agent is busy: queue it for when its turn ends, instead of refusing.
     #[serde(default)]
     queue: bool,
+    /// Which of the docket's agents: its lead when not given.
+    #[serde(default)]
+    block: Option<String>,
 }
 
 /// Take back a prompt queued for the agent, before it goes in.
@@ -632,7 +655,7 @@ async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
     }
     let (session, block, app, agent_session) = {
         let mut core = shared.lock();
-        let (s, b) = pane_of(&core, &id)?;
+        let (s, b) = pane_of(&core, &id, req.block.as_deref())?;
         let pane = core.mirror.panes.get(&b).ok_or_else(|| fail(StatusCode::CONFLICT, "the pane closed"))?;
         if let Err(why) = agents::can_send(pane) {
             // Busy, or waiting on a prompt: it goes in when the turn ends.
@@ -651,10 +674,10 @@ async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
     // The agent's prompt hook records it when installed; otherwise the hub does.
     if !crate::hooks::installed_for(&app) {
         let mut core = shared.lock();
-        agents::note_prompt(&mut core, &id, &text, agent_session.as_deref(), Some("wheelhouse")).map_err(internal)?;
+        agents::note_prompt(&mut core, &id, &text, agent_session.as_deref(), Some(&block), Some("wheelhouse")).map_err(internal)?;
     }
     let mut core = shared.lock();
-    core.agents.remote.insert(id.clone());
+    core.agents.remote.insert(block.clone());
     core.live_changed();
     Ok(Json(json!({ "ok": true })))
 }
@@ -775,9 +798,9 @@ async fn linear_search(axum::extract::Query(s): axum::extract::Query<Search>) ->
     Ok(Json(json!({ "issues": issues })))
 }
 
-async fn brief_of(State(shared): State<Shared>, Path(id): Path<String>) -> Response {
+async fn brief_of(State(shared): State<Shared>, Path(id): Path<String>, axum::extract::Query(q): axum::extract::Query<PaneQuery>) -> Response {
     let core = shared.lock();
-    match crate::brief::brief(&core, &id) {
+    match crate::brief::brief(&core, &id, q.block.as_deref()) {
         Ok(t) => ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], t).into_response(),
         Err(e) => (StatusCode::NOT_FOUND, format!("{e:#}")).into_response(),
     }
@@ -794,7 +817,7 @@ async fn brief_of_pane(State(shared): State<Shared>, axum::extract::Query(q): ax
     let Some(id) = agents::docket_of(&core, &q.block) else {
         return (StatusCode::NOT_FOUND, "this pane isn't on a docket: name one, as wh brief D-12").into_response();
     };
-    match crate::brief::brief(&core, &id) {
+    match crate::brief::brief(&core, &id, Some(&q.block)) {
         Ok(t) => ([(header::CONTENT_TYPE, "text/markdown; charset=utf-8")], t).into_response(),
         Err(e) => (StatusCode::NOT_FOUND, format!("{e:#}")).into_response(),
     }

@@ -99,7 +99,7 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
         core.append(&docket, "set", &Who::Hub, None, json!({ "status": "in_progress" }))?;
     }
     if let Some(p) = prompt {
-        core.append(&docket, "note", &Who::Owner, Some(p.to_string()), json!({ "via": "prompt", "from": "wheelhouse" }))?;
+        core.append(&docket, "note", &Who::Owner, Some(p.to_string()), json!({ "via": "prompt", "from": "wheelhouse", "block": created.block_id }))?;
     }
     Ok(json!({ "docket": docket, "block": created.block_id, "pane": format!("{SESSION}/{name}"), "others": others }))
 }

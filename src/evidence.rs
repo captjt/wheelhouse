@@ -123,7 +123,7 @@ pub fn attention(core: &Core, states: &[DocketState]) -> Vec<Value> {
             if !failing.is_empty() {
                 push(1, "failing", format!("Failing: {}", failing.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ")));
             }
-            let live = st.agent.as_ref().and_then(|a| crate::agents::live(core, &a.block));
+            let live = crate::agents::lead(core, st).and_then(|b| crate::agents::live(core, &b));
             if let Some(l) = &live
                 && l.state == "working"
                 && l.since.as_deref().is_some_and(|s| age(s) > 3600)
