@@ -93,8 +93,15 @@ pub fn codex_mcp_off(program: &str) -> Vec<String> {
         return args.clone();
     }
     // Tests never run your Codex or read your config.
-    let args = if cfg!(test) { Vec::new() } else { mcp_off_args(codex_mcp_listed(program, PLUGINS_OFF), codex_mcp_configured) };
-    if let Ok(mut g) = CODEX_MCP.lock() {
+    if cfg!(test) {
+        return Vec::new();
+    }
+    let listed = codex_mcp_listed(program, PLUGINS_OFF);
+    // Only a listing is kept: a failed one (a slow wrapper, a timeout) is
+    // tried again on the next launch, not trusted for ten minutes.
+    let keep = listed.is_some();
+    let args = mcp_off_args(listed, codex_mcp_configured);
+    if keep && let Ok(mut g) = CODEX_MCP.lock() {
         *g = Some((std::time::Instant::now(), program.to_string(), args.clone()));
     }
     args
@@ -105,9 +112,12 @@ const PLUGINS_OFF: [&str; 2] = ["--disable", "plugins"];
 /// The arguments that switch MCP off: plugins off and each listed server
 /// named, when Codex listed its servers with plugins off; otherwise only
 /// the servers your config defines, which Codex can always switch off.
+/// `-c features.plugins=false` too, so an agent's own
+/// `-c features.plugins=true` can't turn plugins (and their servers) back
+/// on: `--disable` loses to it.
 fn mcp_off_args(listed_without_plugins: Option<Vec<String>>, configured: impl FnOnce() -> Vec<String>) -> Vec<String> {
     match listed_without_plugins {
-        Some(names) => PLUGINS_OFF.iter().map(|s| s.to_string()).chain(off_args(&names)).collect(),
+        Some(names) => PLUGINS_OFF.iter().map(|s| s.to_string()).chain(["-c".to_string(), "features.plugins=false".to_string()]).chain(off_args(&names)).collect(),
         None => off_args(&configured()),
     }
 }
@@ -983,7 +993,7 @@ mod tests {
         // Listed with plugins off: a plugin's server (codex_app) isn't in
         // the list, so it's never named; naming it stops Codex starting.
         let a = mcp_off_args(Some(vec!["linear".into(), "k8s_dev".into()]), || panic!("the config isn't read when Codex listed"));
-        assert_eq!(a, ["--disable", "plugins", "-c", "mcp_servers.linear.enabled=false", "-c", "mcp_servers.k8s_dev.enabled=false"]);
+        assert_eq!(a, ["--disable", "plugins", "-c", "features.plugins=false", "-c", "mcp_servers.linear.enabled=false", "-c", "mcp_servers.k8s_dev.enabled=false"]);
         // Codex couldn't list that way: only the config's tables, and no
         // `--disable plugins` a Codex without the feature would refuse.
         let a = mcp_off_args(None, || vec!["linear".into()]);
