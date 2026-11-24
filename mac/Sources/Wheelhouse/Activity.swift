@@ -2,11 +2,12 @@ import SwiftUI
 
 /// Who or what an entry's avatar shows.
 enum Avatar {
-    case you(String), hub, app(String), pr, issue, live(LiveState)
+    case you(String), person(String), hub, app(String), pr, issue, live(LiveState)
 
     @ViewBuilder func view(_ size: CGFloat = 18) -> some View {
         switch self {
         case let .you(n): PersonAvatar(name: n, size: size)
+        case let .person(h): PersonDot(handle: h, size: size)
         case .hub: HubAvatar(size: size)
         case let .app(a): AppAvatar(app: a, size: size)
         case .pr: Image(systemName: "arrow.triangle.pull").font(.system(size: size * 0.75)).foregroundStyle(K.muted).frame(width: size, height: size)
@@ -120,15 +121,44 @@ struct ActivityRow: View {
         let data = e.data
         // The agent it's by or about: its own, by block, on a docket with
         // several; the docket's agent for an older entry.
+        // On a shared docket, a teammate's entry (`sam`, `hub@sam`,
+        // `codex@sam`) is named for them, never "You".
+        let memberOf: String? = e.actorId.contains("@") ? e.actorId.split(separator: "@").last.map(String.init) : e.actorType == "person" ? e.actorId : nil
+        let mate: String? = !d.id.hasPrefix("D-") && memberOf != nil && memberOf != "local" && memberOf != Docket.me ? memberOf : nil
+        let youName = mate != nil && e.actorType == "person" ? mate! : "You"
+        let mates = mate.map { "\($0)'s " } ?? ""
         let who = d.member(for: e)
-        let agent = d.agentName(who)
-        let you = Avatar.you(owner)
+        let agent = mates + d.agentName(who)
+        let you: Avatar = mate != nil && e.actorType == "person" ? .person(mate!) : .you(owner)
         let app = Avatar.app(who?.app ?? d.agent?.app ?? "")
-        let writer = e.actorType == "agent" ? (d.crew.count > 1 && who != nil ? agent : appName(e.actorApp)) : e.actorType == "person" ? "You" : "Wheelhouse"
+        let writer = e.actorType == "agent" ? (d.crew.count > 1 && who != nil ? agent : mates + appName(e.actorApp)) : e.actorType == "person" ? youName : "Wheelhouse"
         let writerAvatar: Avatar = e.actorType == "agent" ? .app(e.actorApp) : e.actorType == "person" ? you : .hub
         func sys(_ a: Avatar, _ bits: [Bit], _ tone: String? = nil) -> Shape { .sys(a, line(bits), tone) }
 
         switch e.kind {
+        case "share":
+            return sys(you, [.b(youName), .t(" shared this docket with the team"), data["local"].str.map { .mono(" from \($0)") } ?? .t("")])
+        case "people":
+            let h = data["handle"].str
+            let them = h == Docket.me ? "you" : (h ?? "")
+            let text: String
+            if h == nil {
+                text = data["answer"].str == "members" ? "let anyone on it answer its agents' questions" : "let only owners answer its agents' questions"
+            } else if data["action"].str == "remove" {
+                text = h == e.actorId ? "left this docket" : "took \(them) off this docket"
+            } else {
+                let role = data["role"].str == "owner" ? "an owner" : "a member"
+                text = h == e.actorId ? "joined as \(role)" : "made \(them) \(role)"
+            }
+            return sys(you, [.b(youName), .t(" \(text)")])
+        case "trust":
+            var parts: [String] = []
+            if let t = data["teammate"].str {
+                let whose = t == Docket.me ? "your" : "\(t)'s"
+                parts.append(data["on"].bool == false && data["on"].exists ? "asks before letting \(whose) agents' messages in" : "lets \(whose) agents' messages in")
+            }
+            if data["private_prompts"].exists { parts.append(data["private_prompts"].bool ? "keeps their prompts here private" : "shares their prompts here") }
+            return sys(you, [.b(youName), .t(" \(parts.joined(separator: " and "))")])
         case "open":
             if data["protocol"].str == "review" { return sys(.pr, [.b("Wheelhouse"), .t(" opened this Review docket\(data["review"]["key"].str.map { " for \($0)" } ?? "")")]) }
             if data["protocol"].str == "agent" { return sys(.hub, [.b("Wheelhouse"), .t(" picked up \(agent)\(d.agent?.cwd.map { " in \(shortPath($0))" } ?? "")")]) }
@@ -150,10 +180,10 @@ struct ActivityRow: View {
                 let verb = data["replies_to"].int.map { "replied to #\($0)" } ?? (data["to"].str == "me" ? "wrote to you\(data["subject"].str.map { " · \($0)" } ?? "")" : "wrote to \(data["to"].str ?? "")")
                 return .comment(writerAvatar, writer, verb, e.body ?? "", e.actorType == "person" ? "you" : nil)
             }
-            if data["via"].str == "prompt" { return .comment(you, "You", "asked \(agent)", e.body ?? "", "you") }
+            if data["via"].str == "prompt" { return .comment(you, youName, "asked \(agent)", e.body ?? "", "you") }
             if data["via"].str == "message" { return .comment(.hub, "rex-inbox", "delivered a message", e.body ?? "", nil) }
             if e.actorType == "agent" { return .comment(app, agent, "noted", e.body ?? "", nil) }
-            return .comment(you, "You", "noted", e.body ?? "", "you")
+            return .comment(you, youName, "noted", e.body ?? "", mate == nil ? "you" : nil)
         case "turn":
             guard let b = e.body, !b.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 let st = data["state"].str
@@ -171,7 +201,7 @@ struct ActivityRow: View {
             let url = data["url"].str.flatMap(URL.init(string:))
             if data["kind"].str == "linear" {
                 let how = ["linkback": "Linear links it to the PR", "closes": "the PR closes it", "refs": "the PR is part of it", "branch": "named in the branch", "title": "named in the PR's title"][data["how"].str ?? ""]
-                return sys(e.actorType == "person" ? you : .issue, [.b(e.actorType == "person" ? "You" : "Wheelhouse"), .t(" linked "), .link(key, url), .t(data["title"].str.map { " · \($0)" } ?? ""), .t(how.map { ": \($0)" } ?? "")])
+                return sys(e.actorType == "person" ? you : .issue, [.b(e.actorType == "person" ? youName : "Wheelhouse"), .t(" linked "), .link(key, url), .t(data["title"].str.map { " · \($0)" } ?? ""), .t(how.map { ": \($0)" } ?? "")])
             }
             if data["kind"].str == "github-pr" { return sys(.pr, [.t("Following "), .link(key, url), .t(" on GitHub")]) }
             if data["kind"].str == "github-review" { return sys(.pr, [.t("Round \(data["round"].int ?? 0)'s review is "), .link("on GitHub", url)], "approved") }
@@ -221,7 +251,7 @@ struct ActivityRow: View {
                 parts.append(data["hold"].text.map { "put it on hold: “\($0)”" } ?? "resumed it")
             }
             let tone: String? = data["hold"].text != nil || data["on"].str == "word" ? "blocked" : nil
-            return sys(e.actorType == "person" ? you : .hub, [.b(e.actorType == "person" ? "You" : "Wheelhouse"), .t(" \(parts.joined(separator: " and "))")], tone)
+            return sys(e.actorType == "person" ? you : .hub, [.b(e.actorType == "person" ? youName : "Wheelhouse"), .t(" \(parts.joined(separator: " and "))")], tone)
         case "check":
             let ok = data["ok"].bool
             let how = ok ? "passed" : data["exit"].isNull ? "timed out" : "failed, exit \(data["exit"].int ?? 1)"

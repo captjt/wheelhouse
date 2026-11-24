@@ -40,6 +40,8 @@ enum Snapshot {
     static let shots: [Shot] = [
         Shot(name: "docket", place: .active, select: "D-6"),
         Shot(name: "inbox", place: .inbox),
+        // A workspace's shared dockets (docs/teams.md): only against a hub in one.
+        Shot(name: "team", place: .team, select: "ACME-1"),
         // Rex and Herdr side by side: every agent, and a docket whose agent is in Herdr.
         Shot(name: "agents", place: .agents, select: snapHerdr),
         Shot(name: "docket-herdr", place: .active, select: snapHerdr),

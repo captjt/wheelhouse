@@ -1,22 +1,55 @@
 import { useState } from "react";
 import { post, type TeamStatus } from "./api";
-import { IconChevronDown, IconTeam, LiveIcon } from "./icons";
+import { IconChevronDown, IconRefresh, IconTeam, IconTerminal, LiveIcon, StatusIcon } from "./icons";
 import { ago, useHub } from "./live";
 import { LargeTitle } from "./mobile";
 import { useToast } from "./ui";
 
-/** A handle as a small round mark: the same color for a person everywhere. */
-export function Person({ handle, you }: { handle: string; you?: boolean }) {
+/** A steady hue for a handle: the same person is the same color everywhere. */
+function hue(handle: string): number {
   let h = 0;
   for (const c of handle) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return h;
+}
+
+/** A person's round mark: their initial on their color. */
+export function PersonDot({ handle, size = 18 }: { handle: string; size?: number }) {
+  return (
+    <span className="tm-dot" style={{ ["--hue" as string]: hue(handle), width: size, height: size, fontSize: size * 0.52 }}>
+      {handle.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
+/** A handle with its mark, for a properties rail. */
+export function Person({ handle, you }: { handle: string; you?: boolean }) {
   return (
     <span className="tm-person" title={you ? `${handle} (you)` : handle}>
-      <span className="tm-dot" style={{ ["--hue" as string]: h }}>
-        {handle.slice(0, 1).toUpperCase()}
-      </span>
+      <PersonDot handle={handle} size={16} />
       {handle}
     </span>
   );
+}
+
+/** Several people as overlapping marks, the way Linear shows a team. */
+function Stack({ handles, you, label }: { handles: string[]; you?: string; label: string }) {
+  if (handles.length === 0) return null;
+  const shown = handles.slice(0, 4);
+  return (
+    <span className="tm-stack" title={`${label}: ${handles.map((h) => (h === you ? `${h} (you)` : h)).join(", ")}`}>
+      {shown.map((h) => (
+        <PersonDot key={h} handle={h} />
+      ))}
+      {handles.length > shown.length && <span className="tm-more">+{handles.length - shown.length}</span>}
+    </span>
+  );
+}
+
+/** What an outbox entry was held for, in a few words. */
+function heldWhat(o: { status: string; why?: string | null }) {
+  if (o.status === "refused") return "Refused by the workspace";
+  const m = o.why?.match(/holds (.+)$/);
+  return m ? `Looks like ${m[1]}` : "Looks like a secret";
 }
 
 /** Your workspace: its shared dockets, who's on each, its members, and what's waiting to go. */
@@ -35,7 +68,7 @@ export function TeamView() {
     });
   const outbox = (n: number, action: "send" | "drop") =>
     post(`/api/team/outbox/${n}`, { action }).then(
-      () => (toast(action === "send" ? `#${n} goes to the workspace` : `#${n} dropped`), hub.reload()),
+      () => (toast(action === "send" ? "Sent to the workspace" : "Dropped"), hub.reload()),
       (e: Error) => toast(e.message, "error"),
     );
   const sync = () =>
@@ -56,17 +89,25 @@ export function TeamView() {
       <span className="view-count">{n}</span>
     </button>
   );
+  const conn = t?.online ? "Connected" : "Not connected";
   return (
     <div className="view">
       <header className="view-head">
         <span className="view-title">
-          <IconTeam size={15} /> {w ? w.name : "Team"} {w && <span className="view-count">{dockets.length}</span>}
+          <IconTeam size={15} /> {w ? w.name : "Team"}
         </span>
+        {w && <span className="tm-prefix">{w.prefix}</span>}
         <span className="spacer" />
         {w && (
-          <button className="btn btn-ghost" onClick={sync} title="Send what's waiting and take in what's new, now">
-            Sync
-          </button>
+          <>
+            <span className={`tm-conn ${t?.online ? "on" : "off"}`} title={`${w.url}${t?.error ? `\n${t.error}` : ""}`}>
+              <span className="tm-conn-dot" />
+              <span className="m-hide">{queued > 0 ? `${conn} · ${queued} to send` : conn}</span>
+            </span>
+            <button className="icon-btn" onClick={sync} title="Sync now: send what's waiting and take in what's new">
+              <IconRefresh size={14} />
+            </button>
+          </>
         )}
       </header>
       <LargeTitle title={w ? w.name : "Team"} count={dockets.length} />
@@ -82,41 +123,24 @@ export function TeamView() {
         </div>
       ) : (
         <>
-          <div className="rv-bar">
-            <span className={`rv-pill ${t?.online ? "on" : "paused"}`}>{t?.online ? "Connected" : "Not connected"}</span>
-            <span className="rv-cfg">
-              <span>
-                {w.prefix} · you're <b>{w.you}</b>
-              </span>
-              <span className="act-dot">·</span>
-              <span className="mono-s" title="The workspace hub">
-                {w.url.replace(/^https?:\/\//, "")}
-              </span>
-              {queued > 0 && (
-                <>
-                  <span className="act-dot">·</span>
-                  <span>{queued} waiting to send</span>
-                </>
-              )}
-            </span>
-            {!t?.online && t?.error && <span className="rv-err">{t.error}</span>}
-          </div>
-          <div className="list" style={{ ["--idch" as string]: Math.max(4, ...dockets.map((d) => d.id.length)) }}>
+          {!t?.online && t?.error && <div className="tm-banner">{t.error}</div>}
+          <div className="list" style={{ ["--idch" as string]: Math.max(4, ...dockets.map((d) => d.id.length), ...waiting.map((o) => o.docket.length)) }}>
             {waiting.length > 0 && (
               <div>
                 {head("outbox", "Held back", waiting.length)}
                 {!shut.has("outbox") &&
                   waiting.map((o) => (
-                    <div key={o.n} className="row tm-row">
+                    <div key={o.n} className="row tm-row" title={o.why ?? ""}>
                       <span className="row-live">
                         <LiveIcon state={o.status === "held" ? "blocked" : "error"} />
                       </span>
                       <span className="row-id">{o.docket}</span>
-                      <span className="row-title">{o.status === "held" ? "Held: it looks like it holds a secret" : "Refused by the workspace"}</span>
-                      {o.why && <span className="row-note">{o.why}</span>}
+                      <span className="row-title">{heldWhat(o)}</span>
+                      <span className="row-note m-hide">{o.status === "held" ? "Kept on this Mac until you say" : o.why}</span>
+                      <span className="spacer" />
                       <span className="row-end">
                         {o.status === "held" && (
-                          <button className="btn btn-small btn-ghost" onClick={() => outbox(o.n, "send")} title="Send it to the workspace after all">
+                          <button className="btn btn-small" onClick={() => outbox(o.n, "send")} title="Send it to the workspace after all">
                             Send anyway
                           </button>
                         )}
@@ -137,28 +161,33 @@ export function TeamView() {
                     Nothing shared yet. Share one of yours with <code>wh team share D-12</code>, or open one shared with <code>wh new --team "Title"</code>.
                   </div>
                 ) : (
-                  dockets.map((d) => {
-                    const agents = d.agents ?? [];
+                  dockets.map((sd) => {
+                    const d = hub.byId.get(sd.id);
+                    const agents = sd.agents ?? [];
                     const whose = [...new Set(agents.map((a) => a.member ?? w.you))];
                     return (
-                      <a key={d.id} className="row tm-row" href={`#/d/${d.id}`}>
-                        <span className="row-live">
-                          <LiveIcon state={d.halted ? "error" : agents.length > 0 ? "working" : "idle"} />
+                      <a key={sd.id} className="row" href={`#/d/${sd.id}`}>
+                        <span className="row-live" title={d?.live?.state ?? ""}>
+                          <LiveIcon state={sd.halted ? "error" : d?.live?.state} />
                         </span>
-                        <span className="row-id">{d.id}</span>
-                        <span className="row-title">{d.title ?? d.id}</span>
-                        {d.halted && <span className="row-note">Not followed: {d.halted}</span>}
-                        <span className="row-end tm-people">
-                          {d.owners.map((o) => (
-                            <Person key={`o-${o}`} handle={o} you={o === w.you} />
-                          ))}
-                          {d.members.length > 0 && <span className="muted small">+{d.members.length}</span>}
+                        <span className="row-id">{sd.id}</span>
+                        <span className="row-status">
+                          <StatusIcon status={sd.status ?? "todo"} />
+                        </span>
+                        <span className="row-title">{sd.title ?? sd.id}</span>
+                        {sd.halted && <span className="row-note tm-bad">Not followed</span>}
+                        <span className="spacer" />
+                        <span className="row-end">
                           {agents.length > 0 && (
-                            <span className="chip-mini" title={agents.map((a) => `${a.member ?? w.you}: ${a.role ?? a.app}`).join("\n")}>
-                              {agents.length} agent{agents.length === 1 ? "" : "s"} · {whose.join(", ")}
+                            <span className="chip-mini tm-agents" title={agents.map((a) => `${a.member ?? w.you}'s ${a.app}${a.role ? ` · ${a.role}` : ""}`).join("\n")}>
+                              <IconTerminal size={12} /> {agents.length}
+                              {whose.some((m) => m !== w.you) && <span className="m-hide"> · {whose.filter((m) => m !== w.you).join(", ")}</span>}
                             </span>
                           )}
-                          <span className="row-status-text muted small">{(d.status ?? "").replace("_", " ")}</span>
+                          <Stack handles={[...sd.owners, ...sd.members]} you={w.you} label={`Owners ${sd.owners.join(", ")}${sd.members.length ? `; members ${sd.members.join(", ")}` : ""}`} />
+                          <span className="row-age" title={d?.updated_at}>
+                            {d ? ago(d.updated_at) : ""}
+                          </span>
                         </span>
                       </a>
                     );
@@ -169,13 +198,17 @@ export function TeamView() {
               {head("members", "Members", members.length)}
               {!shut.has("members") &&
                 members.map((m) => (
-                  <div key={m.handle} className="row tm-row">
-                    <Person handle={m.handle} you={m.you} />
-                    <span className="row-title muted">{m.name && m.name !== m.handle ? m.name : ""}</span>
+                  <div key={m.handle} className="row tm-member">
+                    <PersonDot handle={m.handle} size={20} />
+                    <span className="row-title">
+                      {m.handle}
+                      {m.you && <span className="muted"> (you)</span>}
+                    </span>
+                    {m.name && m.name !== m.handle && <span className="row-note">{m.name}</span>}
+                    <span className="spacer" />
                     <span className="row-end">
-                      {m.role === "admin" && <span className="chip-mini">admin</span>}
-                      {m.you && <span className="chip-mini">you</span>}
-                      <span className="muted small mono-s m-hide">{m.login}</span>
+                      {m.role === "admin" && <span className="tm-role">Admin</span>}
+                      <span className="tm-login m-hide">{m.login}</span>
                       <span className="row-age" title={`Joined ${m.joined_at}`}>
                         {ago(m.joined_at)}
                       </span>

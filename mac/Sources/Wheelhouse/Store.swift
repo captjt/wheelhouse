@@ -157,6 +157,7 @@ final class Store {
     func refresh() async {
         do {
             let next = HubState(try await hub.get("/api/state"))
+            Docket.me = next.team?.you
             if next != state { state = next }
             error = nil
             Notifier.shared.reconcile(next)

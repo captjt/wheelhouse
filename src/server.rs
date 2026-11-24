@@ -391,7 +391,7 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
     }
     let report = core.verify(&id).map_err(internal)?;
     let queued: Vec<Value> = core.store.queued_prompts(Some(&id)).map_err(internal)?.into_iter().map(|(q, _, _, body, at)| json!({ "id": q, "body": body, "at": at })).collect();
-    let decisions: Vec<Value> = crate::decisions::of(&read).iter().map(crate::decisions::Decision::json).collect();
+    let decisions: Vec<Value> = crate::decisions::of_stored(&core.store.entries(&id).map_err(internal)?).iter().map(crate::decisions::Decision::json).collect();
     let numbered: Vec<(i64, record::Entry)> = entries.iter().filter_map(|v| v["seq"].as_i64()).zip(read.iter().cloned()).collect();
     let verify_view = crate::evidence::view(&core, &st, &numbered);
     Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions, "evidence": verify_view })))
@@ -541,8 +541,10 @@ async fn standing(State(shared): State<Shared>, Path(id): Path<String>, Json(req
     let (d, repo) = {
         let core = shared.lock();
         let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
-        let read: Vec<record::Entry> = core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| s.entry().ok()).collect();
-        let d = crate::decisions::of(&read).into_iter().find(|d| d.key == req.key).ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no decision {}", req.key)))?;
+        let d = crate::decisions::of_stored(&core.store.entries(&id).map_err(internal)?)
+            .into_iter()
+            .find(|d| d.key == req.key)
+            .ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no decision {}", req.key)))?;
         if let Some(r) = &d.standing {
             return Err(fail(StatusCode::CONFLICT, format!("it stands for {r} already")));
         }

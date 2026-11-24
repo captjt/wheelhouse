@@ -32,8 +32,7 @@ pub fn brief(core: &Core, id: &str, me: Option<&str>) -> Result<String> {
     }
     out.push_str(&agents_on(core, &st, me));
     let entries = core.store.entries(id)?;
-    let read: Vec<crate::record::Entry> = entries.iter().filter_map(|s| s.entry().ok()).collect();
-    let ds = crate::decisions::of(&read);
+    let ds = crate::decisions::of_stored(&entries);
     if !ds.is_empty() {
         out.push_str("\n## Decisions in force\n\nWhat you were asked, and what stands. Don't ask again; work from these.\n\n");
         out.push_str(&crate::decisions::brief(&ds));
