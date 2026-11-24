@@ -261,7 +261,7 @@ function App() {
             Nothing live
           </span>
         ) : (
-          <span className="conn-text">
+          <span className="conn-text" title={hub.state ? connLine(hub.state).title : undefined}>
             {hub.state ? connLine(hub.state).text : hub.error ? "Hub unreachable" : "Connecting…"}
           </span>
         )}

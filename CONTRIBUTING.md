@@ -1,7 +1,8 @@
 # Contributing to Wheelhouse
 
 Thanks for looking. Wheelhouse is macOS only for now, and needs
-[Rex](https://www.superlogical.com/rex), which is in private beta. Read the
+[Rex](https://www.superlogical.com/rex) (in private beta) or Herdr, or
+both: [docs/runtimes.md](docs/runtimes.md). Read the
 [README](README.md) for what it does and [DESIGN.md](DESIGN.md) for why
 it's built the way it is. This page covers how to work on it.
 
@@ -11,7 +12,7 @@ fixes can go straight to a pull request.
 ## Setting up
 
 You need what the README's [Requirements](README.md#requirements) list:
-Rust 1.88 or later, Node 22.18 or later, Xcode 26, `just`, LuaJIT, and Rex. Each
+Rust 1.88 or later, Node 22.18 or later, Xcode 26, `just`, LuaJIT, and Rex or Herdr. Each
 recipe in the `justfile` is a line or two, so you can run its commands by
 hand instead.
 
@@ -79,7 +80,7 @@ WH_STATE=/tmp/wh-try WH_HTTP=127.0.0.1:7610 WH_TAILNET=off WH_NOTIFY=off \
 same socket or port.
 
 **The made-up world.** `just screenshots` (`scripts/screenshots.sh`) builds
-the binary, makes a world of agents in Rex (through `scripts/fake-rex`),
+the binary, makes a world of agents in Rex and Herdr (through `scripts/fake-rex` and `scripts/fake-hc`),
 plays their prompts and replies through the same hooks Claude Code calls,
 adds review history and kept files, and renders the README's images and
 the social preview card. Nothing of yours shows up in them.
@@ -99,7 +100,7 @@ so a rebuilt app shows on reload.
 
 **Tests.** `cargo test` runs the hub's tests: the record, the protocols'
 rules, the post's refusals, links to Linear, the wall. They use an
-in-memory store and stand-ins, never your Rex, GitHub or Linear. `npm test`
+in-memory store and stand-ins, never your Rex, Herdr, GitHub or Linear. `npm test`
 in `web/` runs the renderer's checks. Tests that touch the outside world
 use made-up data (`acme/api`, team `ENG`, `@dana`), never real repos or
 people.

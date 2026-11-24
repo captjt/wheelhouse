@@ -33,7 +33,7 @@ message headers lose every control character (escape sequences included)
 except newlines and tabs before they're pasted, so one agent can't type
 keys into another. Pane names are letters, digits, `.`, `_` and `-`.
 Messages go in only between an agent's turns, only into an agent, and
-only while the hub can see Rex.
+only while the hub can see the pane's runtime (Rex or Herdr).
 
 **Only the hub writes to GitHub, and only what you approved.**
 
@@ -93,7 +93,7 @@ harmless; it can't make a hostile agent harmless.
   with `--dangerously-skip-permissions`, or with blanket allow rules for
   `curl`, `security` or `git push`.
 - **For untrusted code, isolate the agents:** Claude Code's sandbox with
-  network limits, or a separate macOS user with its own Rex. Real isolation
+  network limits, or a separate macOS user with its own Rex or Herdr. Real isolation
   between agents and the hub is on the [roadmap](roadmap.md).
 
 ## Reporting a problem

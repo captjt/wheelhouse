@@ -145,7 +145,7 @@ private func boxes(_ text: String) -> [(Int, Bool)] {
 @Test func followsEveryRuntimeCalmlyAboutOneNotInstalled() throws {
     let s = { (json: String) throws in HubState(try JSON.parse(Data(json.utf8))) }
     let both = try s(#"{"rex":{"connected":true},"runtimes":[{"name":"rex","title":"Rex","connected":true,"installed":true,"spawn":true},{"name":"herdr","title":"Herdr","connected":true,"installed":true}]}"#)
-    #expect(both.connection.ok && both.connection.text == "Following Rex and Herdr")
+    #expect(both.connection.ok && both.connection.text == "Rex · Herdr")
     #expect(both.spawnRuntime == "Rex")
     let noHerdr = try s(#"{"runtimes":[{"name":"rex","title":"Rex","connected":true,"installed":true,"spawn":true},{"name":"herdr","title":"Herdr","connected":false,"installed":false}]}"#)
     #expect(noHerdr.connection.ok && noHerdr.connection.text == "Following Rex")

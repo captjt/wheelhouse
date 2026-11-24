@@ -24,6 +24,7 @@ They're worked out from the config, so they always say what will happen.
 
 | Where | What |
 | --- | --- |
+| Runtimes | Where new agents open: Rex or Herdr (`"runtime"` in settings.json; `WH_RUNTIME` overrides it), and whether each runtime is followed ([runtimes.md](runtimes.md)) |
 | Gates | Each of Build's gates: ask, or go ahead (`start`, `start_cycle`, `plan`, `preview`, `open`, `address`, `push`) |
 | Agents | Build's builder, checker and pre-reviewers; fix rounds; Review's reviewers and checker |
 | Repos | Notes for agents (the repo's rules), the base branch, how much of the plan goes on the PR, witnessed checks ([verify.md](verify.md)), and the repo's review guide |

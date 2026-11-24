@@ -282,7 +282,7 @@ private struct HubSettings: View {
                 .font(.caption).foregroundStyle(.secondary)
             LabeledContent("Status") {
                 if let s = store.state {
-                    Text("Running · \(s.connection.text.prefix(1).lowercased() + s.connection.text.dropFirst())").foregroundStyle(s.connection.ok ? K.working : K.blocked)
+                    Text("Running · \(s.connection.text.hasPrefix("Following") ? "f" + s.connection.text.dropFirst() : s.connection.text)").foregroundStyle(s.connection.ok ? K.working : K.blocked)
                 } else {
                     Text(store.error ?? "Connecting…").foregroundStyle(K.error)
                 }

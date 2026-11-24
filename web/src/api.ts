@@ -475,11 +475,12 @@ export const appName = (app?: string | null) =>
 /** The footer's line: the runtimes followed, or the one that's down. A
  * runtime that isn't installed is no trouble; one that is and isn't
  * followed is, and so is having none. Older hubs only say Rex's. */
-export function connLine(s: Pick<HubState, "rex" | "runtimes">): { ok: boolean; text: string } {
+export function connLine(s: Pick<HubState, "rex" | "runtimes">): { ok: boolean; text: string; title?: string } {
   const rs = s.runtimes ?? [{ name: "rex" as const, title: "Rex", connected: s.rex.connected, error: s.rex.error, installed: true, agents: 0, spawn: true }];
   const down = rs.find((r) => r.installed && !r.connected && (r.spawn || rs.every((x) => !x.connected)));
   if (down) return { ok: false, text: `${down.title}: ${down.error || "connecting"}` };
   const on = rs.filter((r) => r.connected).map((r) => r.title);
   if (!on.length) return { ok: false, text: `${spawnRuntime(s)} isn't installed` };
-  return { ok: true, text: `Following ${on.join(" and ")}` };
+  // Two fit the sidebar's footer as "Rex · Herdr"; the title says it whole.
+  return { ok: true, text: on.length > 1 ? on.join(" · ") : `Following ${on[0]}`, title: `Following ${on.join(" and ")}` };
 }

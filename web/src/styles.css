@@ -6268,3 +6268,15 @@ code {
     display: none;
   }
 }
+
+/* Which runtime a session's agents are in: Rex, Herdr. */
+.runtime-tag {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+}

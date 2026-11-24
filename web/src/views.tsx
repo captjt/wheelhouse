@@ -397,6 +397,11 @@ export function AgentsView() {
                 <SessionIcon name={session} size={14} />
                 <span className="group-label">{session}</span>
                 <span className="view-count">{list.length}</span>
+                {[...new Set(list.map((a) => runtimeTitle(a.runtime ?? runtimeOf(a.block))))].sort().map((r) => (
+                  <span key={r} className="runtime-tag" title={`In ${r}`}>
+                    {r}
+                  </span>
+                ))}
               </div>
               {list.map((a) => {
                 const d = a.docket ? hub.byId.get(a.docket) : undefined;

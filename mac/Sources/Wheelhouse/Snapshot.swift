@@ -34,10 +34,15 @@ enum Snapshot {
 
     /// The docket the envelope shot opens (`WH_SNAP_DOCKET`, for a long record).
     static let snapDocket = ProcessInfo.processInfo.environment["WH_SNAP_DOCKET"] ?? "D-7"
+    /// A docket whose agent runs in Herdr (`WH_SNAP_HERDR`): the made-up world's acme-web.
+    static let snapHerdr = ProcessInfo.processInfo.environment["WH_SNAP_HERDR"] ?? "D-8"
 
     static let shots: [Shot] = [
         Shot(name: "docket", place: .active, select: "D-6"),
         Shot(name: "inbox", place: .inbox),
+        // Rex and Herdr side by side: every agent, and a docket whose agent is in Herdr.
+        Shot(name: "agents", place: .agents, select: snapHerdr),
+        Shot(name: "docket-herdr", place: .active, select: snapHerdr),
         Shot(name: "chat", place: .active, select: "D-6") { _ in NotificationCenter.default.post(name: .snapshotTab, object: "chat") },
         Shot(name: "reviews", place: .reviews, select: "D-7"),
         Shot(name: "board", place: .all),

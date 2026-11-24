@@ -1,7 +1,7 @@
 # Review
 
 A PR that requests you by name, in a repo your review config lists,
-becomes one **Review docket** for its whole life. Agents review it in Rex,
+becomes one **Review docket** for its whole life. Agents review it in Rex or Herdr,
 a checker checks their findings, and you decide what gets posted.
 
 ## Set up
@@ -46,7 +46,7 @@ A PR is `OWNER/NAME N` or `OWNER/NAME#N`, such as `acme/api 341`.
    context to `.tmp/context/round-R/`: the PR, its diff, reviews, comments,
    threads and CI.
 2. **Reviewers.** One to four, each blind to the others, in its own
-   worktree and its own pane of Rex's `wheelhouse-reviews` session (a tab
+   worktree and its own pane of the `wheelhouse-reviews` session (in Rex, or a space in Herdr) (a tab
    per PR). Effort comes from your policy. `gh` is signed out in their
    panes. Each writes `review.json` and `report.md`, then `READY_TO_POST`.
 3. **Checker.** A fresh agent in the primary's worktree merges the drafts,

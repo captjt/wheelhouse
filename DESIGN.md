@@ -7,7 +7,7 @@ is Wheelhouse. This is the design: what's built so far is in
 README.md and `wh --help`.
 
 Wheelhouse is where you run all your agent work on your Mac. Each piece of
-work is a **docket**. Agents run in Rex. Wheelhouse starts them, briefs
+work is a **docket**. Agents run in Rex or Herdr, side by side. Wheelhouse starts them, briefs
 them, and watches them. It asks you only what you must decide, and keeps a
 record you can check.
 
@@ -29,7 +29,7 @@ one person. The record format, first written for rex-inbox, is in
 
 ## Who it's for
 
-One developer running many agents (Claude Code and Codex) in Rex, across
+One developer running many agents (Claude Code and Codex) in Rex or Herdr, across
 their own Macs. Their work is in GitHub repos, with issues in Linear or
 GitHub. They review other people's PRs and write their own, and they also
 start agents by hand all day. They want to steer all of it from one place,
@@ -66,7 +66,8 @@ on the Mac or on their phone, without watching panes.
 | **Protocol** | The playbook a docket follows: its steps, its roles, and its gates. v1 ships three: **Build**, **Review**, and **Agent**. |
 | **Standing order** | A rule you wrote: when something happens, open a docket with a protocol. For example: "when a PR in acme/api requests me, Review it". |
 | **Task** | A unit of work an agent claims: builder, checker, a reviewer. A docket with no tasks has one task with no name. |
-| **Agent** | A Claude Code or Codex session in a Rex pane, holding a task. Every agent is on a docket. |
+| **Agent** | A Claude Code or Codex session in a Rex pane or a Herdr terminal, holding a task. Every agent is on a docket. |
+| **Runtime** | The terminal multiplexer an agent's pane is in: Rex or Herdr ([docs/runtimes.md](docs/runtimes.md)). The hub follows every one that's installed. |
 | **Ask** | Something that waits on you: a permission prompt, a decision, a gate (plan, open PR, post review, push replies), a preview, an issue to start or skip, a failure, a message. Your inbox is your open asks. |
 | **Artifact** | A versioned file on a docket: a plan, a review draft, a preview, a screenshot, a diff. |
 | **Verdict** | A checker's judgment of a patch: pass, pass with notes, or fail. |
@@ -114,7 +115,7 @@ also run `wh review pickup acme/api 341`.
 
 Every agent session that no protocol started gets its own docket. These
 include an agent you start from Wheelhouse, and `claude` typed into any
-Rex pane.
+Rex pane or Herdr terminal.
 
 - **A session is a docket.** `/clear` starts a new session, so it starts
   a new docket. `--resume` and compaction keep the same session, so they
@@ -188,7 +189,7 @@ Done today · 2, and 6 quick
   first (a prompt, or a blocking decision). Then gates and reviews, then
   provisional decisions and previews, then finished agents.
 - **The keyboard:** `j`/`k` move, `↩` opens, `1` to `6` pick an option,
-  `a`/`d` approve or deny, `p` posts, `r` replies, `o` opens in Rex, `e`
+  `a`/`d` approve or deny, `p` posts, `r` replies, `o` opens in Rex or Herdr, `e`
   marks done, and `s` snoozes.
 - **Dots** are agents: green is working, orange is blocked, red has
   failed, and grey is idle.
@@ -251,7 +252,7 @@ Needs you: D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
    ENG-142's plan, answer D1 with a tap, and post the review of api#341.
    The agents carry on.
 2. **A PR requests you.** D-44 opens, three agents review it in its own
-   Rex tab, and you get a notification for the checked review, with
+   tab (in Rex or Herdr), and you get a notification for the checked review, with
    **Post** and **Preview**.
 3. **You type `claude` in a pane.** D-47 appears, named by your prompt.
    When the agent finishes, its summary is on the docket. You mark it
@@ -289,7 +290,7 @@ Needs you: D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
   and `brief`, as the concept defines them. Rex and Herdr are runtimes
   (`src/runtime/`, [docs/runtimes.md](docs/runtimes.md)), followed side by
   side; the protocols don't know which one a pane is in.
-- **Rex layout.** Each host has one `wheelhouse` session. A docket a
+- **Layout.** Each runtime has one `wheelhouse` session (in Herdr, a space). A docket a
   protocol staffs gets a tab, and each task gets a pane in it, named
   `D-41 · builder`. Agents you start yourself stay where you started
   them.
@@ -452,7 +453,7 @@ Each milestone is usable on its own and takes over from one tool.
    *Status: built, with messages between agents, previews (`wh share`),
    starting agents (`wh start`), Mac notifications and Web Push, and the
    phone app with Chat, and Wheelhouse.app (the window, the menu bar,
-   notifications answered in place). Still to come: other Rex hosts,
+   notifications answered in place). Herdr, beside Rex, since feat/runtimes. Still to come: runtimes on other machines,
    Codex's permission prompts, and importing rex-inbox's history.*
 2. **Review. Replaces rex-reviewer.** The Review protocol, the GitHub
    source, standing orders for review requests, several reviewers and a
@@ -503,7 +504,7 @@ Build also gains pre-review by landing second.
 | Which agents are tracked? | Every one. A session no protocol started is an Agent docket. | decided |
 | UI | React and TypeScript, built with Vite and embedded in the binary, for the phone and a browser. On the Mac, Wheelhouse.app is native SwiftUI against the same API: the same views and words, in the system's own controls. | decided |
 | UX bar | It looks, feels, and works like Linear: a sidebar with Inbox and views, dense lists grouped under headers, a board, a docket page with a properties rail and an activity feed, ⌘K, single-key shortcuts, menus with numbered choices, and a new-docket dialog. The UX is vital; the brand stays Wheelhouse's own. | decided |
-| The pane off the Mac | Rex has no link that opens a pane in its iOS app, so off the Mac, "Open in Rex" becomes **View pane**: the agent's terminal, live, in the app, with a box to message the agent between turns. On the Mac it stays "Open in Rex". | decided |
+| The pane off the Mac | Rex has no link that opens a pane in its iOS app, so off the Mac, "Open in Rex" becomes **View pane**: the agent's terminal, live, in the app, with a box to message the agent between turns. On the Mac it stays "Open in Rex", or "Open in Herdr" for a Herdr terminal. | decided |
 | Theme | Colors from Cloudflare's open-source Kumo design system: neutral oklch surfaces, Cloudflare blue for actions and links, Cloudflare orange (`#f6821f`) for the brand, Kumo's success, warning and danger colors and tints. Every token is a CSS `light-dark()`: the mode follows the system by default, or you pin Light or Dark in the sidebar or ⌘K. | decided |
 | Repo | Private for now, and possibly open source later. Fixtures and screenshots use a made-up workspace from the start. | decided |
 | Teams | Not in v1. The record is built so teams can share it later. | decided |
@@ -515,7 +516,7 @@ Build also gains pre-review by landing second.
 | Nostr | No. Take its shape (signed self-contained entries, ids by hash, a key per actor), not its wire format, curve, or relays. A bridge to Buzz can come later. | proposed |
 | Order | Review before Build | proposed |
 | Names | The app is Wheelhouse.app, the CLI is `wh`, and Rex actions start with `wh_` | proposed |
-| Rex layout | One `wheelhouse` session per host, with a tab per staffed docket and a pane per task | proposed |
+| Layout | One `wheelhouse` session per runtime (a Rex session, a Herdr space), with a tab per staffed docket and a pane per task | proposed |
 | Runtime | Rex and Herdr, behind the four verbs, followed at once; new agents open on one (`runtime`, Rex by default) | built |
 
 ## Not in v1

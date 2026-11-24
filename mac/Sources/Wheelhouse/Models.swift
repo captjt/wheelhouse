@@ -368,7 +368,8 @@ struct HubState: Hashable {
             return (false, "\(down.title): \(down.error ?? "connecting")")
         }
         let on = rs.filter(\.connected).map(\.title)
-        return on.isEmpty ? (false, "\(spawnRuntime) isn't installed") : (true, "Following \(on.joined(separator: " and "))")
+        // Two fit the sidebar's footer as "Rex · Herdr".
+        return on.isEmpty ? (false, "\(spawnRuntime) isn't installed") : (true, on.count > 1 ? on.joined(separator: " · ") : "Following \(on[0])")
     }
     var agents: [Live] { j["agents"].array.map(Live.init) }
     var prs: [ReviewPr] { review?.prs ?? [] }

@@ -1,0 +1,21 @@
+⏺ axe found 3 issues on /checkout: two buttons with no accessible name
+  (the quantity steppers) and the card form's error text isn't tied to
+  its field. I fixed all three; now the a11y suite, to confirm.
+
+⏺ Update(src/checkout/QuantityStepper.tsx)
+  ⎿  Updated src/checkout/QuantityStepper.tsx with 2 additions
+
+⏺ Update(src/checkout/CardForm.tsx)
+  ⎿  Updated src/checkout/CardForm.tsx with 3 additions and 1 removal
+
+ ╭──────────────────────────────────────────────────────────────╮
+ │ Bash command                                                 │
+ │                                                              │
+ │   npx playwright test a11y                                   │
+ │   Run the accessibility tests                                │
+ │                                                              │
+ │ Do you want to proceed?                                      │
+ │ ❯ 1. Yes                                                     │
+ │   2. Yes, and don't ask again for npx playwright commands    │
+ │   3. No, and tell Claude what to do differently (esc)        │
+ ╰──────────────────────────────────────────────────────────────╯

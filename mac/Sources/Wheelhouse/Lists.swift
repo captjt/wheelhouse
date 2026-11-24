@@ -464,6 +464,13 @@ struct AgentsScreen: View {
                                     SessionIcon(name: s, size: 14)
                                     Text(s).font(.system(size: 12, weight: .semibold)).foregroundStyle(K.text)
                                     Text("\(bySession[s]?.count ?? 0)").font(.system(size: 11.5)).foregroundStyle(.tertiary)
+                                    // Which runtime the session's agents are in: Rex, Herdr.
+                                    ForEach(Array(Set((bySession[s] ?? []).map(\.runtime))).sorted(), id: \.self) { r in
+                                        Text(r).font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
+                                            .padding(.horizontal, 6).padding(.vertical, 1)
+                                            .overlay(Capsule().strokeBorder(.separator))
+                                            .help("In \(r)")
+                                    }
                                 }
                             }
                         }
