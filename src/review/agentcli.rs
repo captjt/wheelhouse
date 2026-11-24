@@ -74,23 +74,52 @@ static CODEX_MCP: std::sync::Mutex<Option<(std::time::Instant, String, Vec<Strin
 /// Codex's MCP servers, each switched off (`-c mcp_servers."NAME".enabled=
 /// false`): Codex merges `-c mcp_servers={}` with your config and plugins,
 /// so an empty list switches nothing off, and your servers (a tracker, a
-/// cluster) would route around the wall. The names come from `codex mcp
-/// list --json`, or, when that can't run, the `[mcp_servers.NAME]` tables
-/// of `~/.codex/config.toml`. Kept ten minutes.
+/// cluster) would route around the wall. Kept ten minutes.
+///
+/// A plugin's servers (`codex_app`, `cua_repl`) can't be switched off by
+/// name: `-c mcp_servers.codex_app.enabled=false` makes a server with no
+/// command, and Codex won't start ("invalid transport"). So plugins go off
+/// whole (`--disable plugins`), and the servers `codex mcp list --json`
+/// still lists with them off are your config's, each named. A Codex that
+/// can't list that way (one without the plugins feature, or a listing that
+/// failed) gets the `[mcp_servers.NAME]` tables of `~/.codex/config.toml`
+/// named, and no `--disable plugins` it might refuse.
 pub fn codex_mcp_off(program: &str) -> Vec<String> {
     if let Ok(g) = CODEX_MCP.lock()
-        && let Some((at, p, names)) = g.as_ref()
+        && let Some((at, p, args)) = g.as_ref()
         && p == program
         && at.elapsed() < std::time::Duration::from_secs(600)
     {
-        return off_args(names);
+        return args.clone();
     }
     // Tests never run your Codex or read your config.
-    let names = if cfg!(test) { Vec::new() } else { codex_mcp_listed(program).unwrap_or_else(codex_mcp_configured) };
-    if let Ok(mut g) = CODEX_MCP.lock() {
-        *g = Some((std::time::Instant::now(), program.to_string(), names.clone()));
+    if cfg!(test) {
+        return Vec::new();
     }
-    off_args(&names)
+    let listed = codex_mcp_listed(program, PLUGINS_OFF);
+    // Only a listing is kept: a failed one (a slow wrapper, a timeout) is
+    // tried again on the next launch, not trusted for ten minutes.
+    let keep = listed.is_some();
+    let args = mcp_off_args(listed, codex_mcp_configured);
+    if keep && let Ok(mut g) = CODEX_MCP.lock() {
+        *g = Some((std::time::Instant::now(), program.to_string(), args.clone()));
+    }
+    args
+}
+
+const PLUGINS_OFF: [&str; 2] = ["--disable", "plugins"];
+
+/// The arguments that switch MCP off: plugins off and each listed server
+/// named, when Codex listed its servers with plugins off; otherwise only
+/// the servers your config defines, which Codex can always switch off.
+/// `-c features.plugins=false` too, so an agent's own
+/// `-c features.plugins=true` can't turn plugins (and their servers) back
+/// on: `--disable` loses to it.
+fn mcp_off_args(listed_without_plugins: Option<Vec<String>>, configured: impl FnOnce() -> Vec<String>) -> Vec<String> {
+    match listed_without_plugins {
+        Some(names) => PLUGINS_OFF.iter().map(|s| s.to_string()).chain(["-c".to_string(), "features.plugins=false".to_string()]).chain(off_args(&names)).collect(),
+        None => off_args(&configured()),
+    }
 }
 
 /// Codex splits a `-c` key on `.` and takes no quotes (a quoted name is a
@@ -104,14 +133,19 @@ pub(crate) fn off_args(names: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn codex_mcp_listed(program: &str) -> Option<Vec<String>> {
+/// `codex [flags] mcp list --json`, by name. None when Codex fails (it
+/// refuses a feature it doesn't know), times out or prints no list.
+fn codex_mcp_listed(program: &str, flags: [&str; 2]) -> Option<Vec<String>> {
     let mut cmd = std::process::Command::new(program);
-    cmd.args(["mcp", "list", "--json"]).env("PATH", agent_path(&[])).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.args(flags).args(["mcp", "list", "--json"]).env("PATH", agent_path(&[])).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(cmd.output());
     });
     let out = rx.recv_timeout(std::time::Duration::from_secs(10)).ok()?.ok()?;
+    if !out.status.success() {
+        return None;
+    }
     let v: Value = serde_json::from_slice(&out.stdout).ok()?;
     Some(v.as_array()?.iter().filter_map(|s| s["name"].as_str().map(str::to_string)).collect())
 }
@@ -952,6 +986,18 @@ mod tests {
     fn codex_gets_each_mcp_server_switched_off_by_name() {
         let a = off_args(&["linear".into(), "k8s-prod".into(), "odd\"name".into(), "a.b".into()]);
         assert_eq!(a, ["-c", "mcp_servers.linear.enabled=false", "-c", "mcp_servers.k8s-prod.enabled=false"], "unquoted; nothing Codex couldn't name");
+    }
+
+    #[test]
+    fn codex_turns_plugins_off_whole_and_names_only_servers_it_can_switch_off() {
+        // Listed with plugins off: a plugin's server (codex_app) isn't in
+        // the list, so it's never named; naming it stops Codex starting.
+        let a = mcp_off_args(Some(vec!["linear".into(), "k8s_dev".into()]), || panic!("the config isn't read when Codex listed"));
+        assert_eq!(a, ["--disable", "plugins", "-c", "features.plugins=false", "-c", "mcp_servers.linear.enabled=false", "-c", "mcp_servers.k8s_dev.enabled=false"]);
+        // Codex couldn't list that way: only the config's tables, and no
+        // `--disable plugins` a Codex without the feature would refuse.
+        let a = mcp_off_args(None, || vec!["linear".into()]);
+        assert_eq!(a, ["-c", "mcp_servers.linear.enabled=false"]);
     }
 
     #[test]
