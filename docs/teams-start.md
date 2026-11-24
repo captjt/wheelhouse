@@ -26,12 +26,17 @@ On a Linux box or VM, from a checkout of the repo:
 
 ```sh
 docker build -f examples/workspace/Dockerfile -t wheelhouse-workspace .
-docker run -d --name wheelhouse-workspace --restart unless-stopped \
+docker run -d --name wheelhouse-workspace --restart unless-stopped --init \
+  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
   -p 127.0.0.1:7700:7700 -v wheelhouse-workspace:/var/lib/wheelhouse-workspace \
   wheelhouse-workspace
 sudo tailscale serve --bg 7700
 docker logs wheelhouse-workspace     # the setup code: whs1.…
 ```
+
+The image runs as uid 65532. A state volume from an image built before
+that (uid 999) needs its owner changed once, with the container stopped:
+`docker run --rm -v wheelhouse-workspace:/v alpine chown -R 65532:65532 /v`.
 
 Without Docker, use `examples/workspace/wheelhouse-workspace.service`
 (its head has the steps). On an always-on Mac: `wh up --workspace`, then
