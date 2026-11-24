@@ -17,6 +17,8 @@
 #
 #   scripts/team-e2e.sh           # exits non-zero on the first failure
 #   KEEP=1 scripts/team-e2e.sh    # keep the scratch directory to look at
+#   HOLD=1 scripts/team-e2e.sh   # pause with everything running after the
+#                                 # collaboration steps, to look at the apps
 #   WS_IMAGE=wheelhouse-workspace:dev scripts/team-e2e.sh
 #                                 # the workspace hub in its Linux container
 #                                 # (examples/workspace/Dockerfile)
@@ -180,7 +182,7 @@ as sam team members | grep >/dev/null "jordan .*admin" || fail "Sam doesn't see 
 as sam verify ACME-0 >/dev/null || fail "Sam's copy of the member log doesn't check"
 ok "Sam is in; both hubs have the same member log, and it checks"
 
-step "Jordan shares a docket, with its history"
+step "Jordan shares a docket; its history stays on Jordan's Mac"
 D=$(as jordan new "Rate limits on the public API")
 as jordan intent "$D" "Every public route answers 429 past its bucket." >/dev/null
 as jordan note "$D" "Start with the token bucket in middleware." >/dev/null
@@ -192,6 +194,7 @@ sync sam
 as sam show "$S" | grep >/dev/null "Rate limits on the public API" || fail "Sam doesn't see $S"
 api sam "/api/dockets/$S" | jq -e '.docket.intent.body | contains("429")' >/dev/null || fail "Sam doesn't see the intent"
 as sam verify "$S" >/dev/null || fail "$S doesn't check on Sam's hub"
+api sam "/api/dockets/$S" | jq -e '[.entries[] | select(.kind == "share")][0] | (.data.history == null) and (.data.head | length == 64)' >/dev/null || fail "the share carries the history, or no head"
 ok "$D went on as $S; Sam's hub has it, intent and all, and it checks"
 
 step "Writes from both, at once, land in one order"
@@ -273,6 +276,13 @@ sync sam
 until_ "Sam doesn't see Jordan's new agent" sh -c "curl -fsS --max-time 20 -H 'x-wheelhouse: 1' http://127.0.0.1:$(port_of sam)/api/dockets/$S | jq -e '[.docket.agents[] | select(.on and .member == \"jordan\")] | length == 2'"
 ok "Jordan's second agent is on $S, and Sam's hub counts two of Jordan's"
 
+if [ -n "${HOLD:-}" ]; then
+  printf '\n== Holding, with everything running:\n'
+  printf '   Jordan: http://127.0.0.1:%s/#/team   Sam: http://127.0.0.1:%s/#/team\n' "$(port_of jordan)" "$(port_of sam)"
+  printf '   touch %s to go on\n' "$t/release"
+  until [ -e "$t/release" ]; do sleep 1; done
+fi
+
 step "Sam's hub writes offline and catches up"
 stop_ws
 as sam note "$S" "written on a plane" | grep >/dev/null "sent to the workspace" || fail "an offline note wasn't kept"
@@ -349,7 +359,11 @@ step "Jordan removes Sam: Sam's hub can't write any more"
 as jordan team remove sam --reason "left the team" | grep >/dev/null "out of the workspace" || fail "wh team remove"
 as jordan team members | grep >/dev/null "sam .*(removed)" || fail "Sam isn't shown as removed"
 as sam note "$S" "one more thing" >/dev/null 2>&1 || true
-until_ "the workspace didn't refuse Sam's note" sh -c "curl -fsS -H 'x-wheelhouse: 1' http://127.0.0.1:$(port_of sam)/api/team | jq -e '[.outbox[] | select(.status == \"refused\")] | length >= 1'"
+# Sam's hub can't get in any more: the note waits (nothing is lost), and
+# its hub says why.
+refused "isn't an active member" as sam team sync || fail "the workspace let Sam's hub in"
+sync jordan
+api jordan "/api/dockets/$S" | jq -e '[.entries[] | select(.body == "one more thing")] | length == 0' >/dev/null || fail "Sam's note reached Jordan after Sam was removed"
 as jordan verify ACME-0 >/dev/null || fail "the member log doesn't check after the removal"
 ok "Sam is out; the workspace refuses Sam's hub, and what Sam wrote before still checks"
 

@@ -17,7 +17,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Digest;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -49,14 +49,15 @@ pub struct Ws {
     roster: Option<Roster>,
     /// Who's on each shared docket.
     people: BTreeMap<String, People>,
-    /// Numbers handed out for dockets not shared yet.
-    reserved: BTreeSet<String>,
+    /// Numbers handed out for dockets not shared yet, and to whom.
+    reserved: BTreeMap<String, String>,
     replay: Replay,
     /// The setup code, until the workspace is made.
     setup: Option<String>,
     setup_path: std::path::PathBuf,
-    /// Failed joins and creates lately, to slow guessing.
-    failures: Vec<std::time::Instant>,
+    /// Failed joins and creates lately, by Tailscale login, to slow guessing
+    /// without one login locking out the rest.
+    failures: BTreeMap<String, Vec<std::time::Instant>>,
 }
 
 #[derive(Clone)]
@@ -94,7 +95,7 @@ impl Ws {
     /// Open the store and fold what it holds, checking all of it: a
     /// workspace hub whose own record doesn't check doesn't start.
     pub fn open(store: Store, setup_path: std::path::PathBuf) -> Result<Ws> {
-        let mut ws = Ws { store, roster: None, people: BTreeMap::new(), reserved: BTreeSet::new(), replay: Replay::default(), setup: None, setup_path, failures: Vec::new() };
+        let mut ws = Ws { store, roster: None, people: BTreeMap::new(), reserved: BTreeMap::new(), replay: Replay::default(), setup: None, setup_path, failures: BTreeMap::new() };
         let ids = ws.store.docket_ids()?;
         let log = ids.iter().find(|d| d.ends_with("-0")).cloned();
         if let Some(log) = log {
@@ -111,9 +112,10 @@ impl Ws {
                 }
                 ws.people.insert(d.clone(), p);
             }
-            for r in ws.store.meta_get("reserved")?.unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
-                if !ws.people.contains_key(r) {
-                    ws.reserved.insert(r.to_string());
+            let saved: BTreeMap<String, String> = ws.store.meta_get("reserved")?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+            for (id, who) in saved {
+                if !ws.people.contains_key(&id) {
+                    ws.reserved.insert(id, who);
                 }
             }
             ws.roster = Some(r);
@@ -139,15 +141,20 @@ impl Ws {
         Ok(format!("{}-0", self.roster()?.prefix))
     }
 
-    fn slow_down(&mut self) -> Result<()> {
+    fn slow_down(&mut self, login: &str) -> Result<()> {
         let now = std::time::Instant::now();
-        self.failures.retain(|t| now.duration_since(*t) < Duration::from_secs(60));
-        ensure!(self.failures.len() < 20, "too many failed attempts; wait a minute");
+        self.failures.retain(|_, ts| {
+            ts.retain(|t| now.duration_since(*t) < Duration::from_secs(60));
+            !ts.is_empty()
+        });
+        ensure!(self.failures.get(login).is_none_or(|ts| ts.len() < 10), "too many failed attempts; wait a minute");
         Ok(())
     }
 
-    fn failed(&mut self) {
-        self.failures.push(std::time::Instant::now());
+    fn failed(&mut self, login: &str) {
+        if self.failures.len() < 10_000 {
+            self.failures.entry(login.to_string()).or_default().push(std::time::Instant::now());
+        }
     }
 
     /// Order one member log entry, after the rules pass.
@@ -157,6 +164,12 @@ impl Ws {
         let mut r = self.roster.clone().unwrap_or_default();
         let log = if r.seq == 0 { e.data["prefix"].as_str().map(|p| format!("{p}-0")).unwrap_or_default() } else { format!("{}-0", r.prefix) };
         ensure!(e.docket == log, "an entry for {}, not the member log {log}", e.docket);
+        // Its time, by this hub's clock: a join can't be backdated into an
+        // invite's life. A key may have waited in an offline outbox.
+        let at = crate::time::parse(&e.at).map(|t| (t.unix_timestamp_nanos() / 1_000_000) as i64).ok_or_else(|| anyhow!("its time doesn't read"))?;
+        let now = now_ms();
+        ensure!(at <= now + shared::SKEW_MS, "its time {} is ahead of the workspace's clock", e.at);
+        ensure!(e.kind == "key" || at >= now - shared::SKEW_MS, "its time {} is more than 5 minutes behind the workspace's clock", e.at);
         r.check(&e, &keyid, &id)?;
         let s = self.store.append_folded(&log, envelope, &e.kind, &e.at, &keyid, |_, _| None)?;
         ensure!(s.id == id, "the store gave the entry another id");
@@ -168,11 +181,15 @@ impl Ws {
     /// Order one entry on a shared docket, after the rules pass.
     fn order_shared(&mut self, docket: &str, envelope: &str) -> Result<Stored> {
         let roster = self.roster()?.clone();
-        ensure!(docket.strip_prefix(&format!("{}-", roster.prefix)).is_some_and(|n| n.parse::<u64>().is_ok_and(|n| n > 0)), "{docket} isn't one of this workspace's dockets");
+        ensure!(shared::docket_ok(&roster.prefix, docket), "{docket} isn't one of this workspace's dockets");
         let (e, keyid) = open_envelope(envelope)?;
+        let id = chain::id_string(&chain::entry_id(envelope.as_bytes()));
+        // Once: an old entry sent again (a revoked trust, a past promotion)
+        // would bring back what a later one took away.
+        ensure!(!self.store.has_entry(docket, &id)?, "that entry is on {docket} already");
         let next = self.store.entries_len(docket)? + 1;
         if next == 1 {
-            ensure!(self.reserved.contains(docket), "{docket} wasn't handed out: ask for a number first");
+            ensure!(self.reserved.contains_key(docket), "{docket} wasn't handed out: ask for a number first");
         }
         let people = self.people.get(docket).cloned().unwrap_or_default();
         shared::check(&roster, &people, docket, next, &e, &keyid, Some(now_ms()))?;
@@ -193,8 +210,8 @@ impl Ws {
     }
 
     fn save_reserved(&mut self) -> Result<()> {
-        let v: Vec<&str> = self.reserved.iter().map(String::as_str).collect();
-        self.store.meta_set("reserved", &v.join(","))
+        let v = serde_json::to_string(&self.reserved)?;
+        self.store.meta_set("reserved", &v)
     }
 
     /// The member a signed request is from, by their own key; with logins
@@ -204,10 +221,13 @@ impl Ws {
         let path = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
         let h = |k: &str| headers.get(k).and_then(|v| v.to_str().ok());
         let req = Req { method: method.as_str(), path, body, key: h("x-wh-key"), time: h("x-wh-time"), sig: h("x-wh-sig") };
-        let keyid = self.replay.check(&roster.id, &req, now_ms())?;
+        let now = now_ms();
+        let (keyid, sig) = self.replay.verify(&roster.id, &req, now)?;
         let m = roster.member_by_key(&keyid).ok_or_else(|| anyhow!("{} isn't an active member's key", roster::short(&keyid)))?;
         let login = h("tailscale-user-login").ok_or_else(|| anyhow!("no Tailscale login: reach the workspace through tailscale serve"))?;
         ensure!(m.login.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(login)), "the Tailscale login {login} isn't {}'s", m.handle);
+        // A member's, and theirs: only now is it remembered.
+        self.replay.remember(&sig, now)?;
         Ok(m.handle.clone())
     }
 }
@@ -254,11 +274,12 @@ async fn create(State(s): State<WsShared>, headers: HeaderMap, Json(b): Json<Cre
     let out = {
         let mut ws = s.lock();
         (|| -> Result<Value> {
-            ws.slow_down()?;
+            let who = login.clone().unwrap_or_default();
+            ws.slow_down(&who)?;
             ensure!(ws.roster.is_none(), "this workspace hub has a workspace already");
             let want = ws.setup.clone().unwrap_or_default();
             if !constant_eq(want.as_bytes(), b.setup.trim().as_bytes()) {
-                ws.failed();
+                ws.failed(&who);
                 bail!("that isn't this workspace hub's setup code");
             }
             ensure!(!b.entries.is_empty() && b.entries.len() <= 16, "a workspace, then at most 15 keys");
@@ -298,7 +319,8 @@ async fn join(State(s): State<WsShared>, headers: HeaderMap, Json(b): Json<JoinB
     let out = {
         let mut ws = s.lock();
         (|| -> Result<Value> {
-            ws.slow_down()?;
+            let who = login.clone().unwrap_or_default();
+            ws.slow_down(&who)?;
             ws.roster()?;
             ensure!(!b.entries.is_empty() && b.entries.len() <= 16, "a join, then at most 15 keys");
             let (first, _) = open_envelope(&b.entries[0])?;
@@ -306,7 +328,7 @@ async fn join(State(s): State<WsShared>, headers: HeaderMap, Json(b): Json<JoinB
             let l = login.as_deref().ok_or_else(|| anyhow!("no Tailscale login: reach the workspace through tailscale serve"))?;
             ensure!(first.data["login"].as_str().is_some_and(|x| x.eq_ignore_ascii_case(l)), "the login you join with must be the one Tailscale sees: {l}");
             if let Err(e) = ws.order_log(&b.entries[0]) {
-                ws.failed();
+                ws.failed(&who);
                 return Err(e);
             }
             for env in &b.entries[1..] {
@@ -363,8 +385,21 @@ struct AfterQ {
 /// At most this many entries in one answer: a hub far behind asks again.
 const PAGE: usize = 500;
 
+/// And at most this many bytes of envelopes (at least one entry).
+const PAGE_BYTES: usize = 4 << 20;
+
 fn page(store: &Store, docket: &str, after: i64) -> Result<Value> {
-    let entries: Vec<Stored> = store.entries_after(docket, after, PAGE)?;
+    let mut entries: Vec<Stored> = store.entries_after(docket, after, PAGE)?;
+    let mut total = 0;
+    let keep = entries
+        .iter()
+        .position(|s| {
+            total += s.envelope.len();
+            total > PAGE_BYTES
+        })
+        .unwrap_or(entries.len())
+        .max(1);
+    entries.truncate(keep);
     Ok(json!({ "docket": docket, "entries": entries }))
 }
 
@@ -398,11 +433,11 @@ async fn dockets_new(State(s): State<WsShared>, method: Method, uri: Uri, header
     let who = member(&s, &method, &uri, &headers, &body)?;
     let mut ws = s.lock();
     let prefix = ws.roster().map_err(bad)?.prefix.clone();
-    ensure_ok(ws.reserved.len() < 1000, "too many numbers handed out and not used")?;
+    ensure_ok(ws.reserved.values().filter(|w| **w == who).count() < 20, "you have 20 numbers handed out and not used")?;
     let n: i64 = ws.store.meta_get("shared_n").map_err(bad)?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
     ws.store.meta_set("shared_n", &n.to_string()).map_err(bad)?;
     let id = format!("{prefix}-{n}");
-    ws.reserved.insert(id.clone());
+    ws.reserved.insert(id.clone(), who.clone());
     ws.save_reserved().map_err(bad)?;
     say!("{id} handed to {who}");
     Ok(Json(json!({ "id": id })))
@@ -492,4 +527,44 @@ pub fn serve() -> Result<()> {
         say!("workspace hub on http://{addr}");
         axum::serve(tcp, router(shared)).await.context("http")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::record::entry::Actor;
+    use crate::record::{Entry, Envelope, Key};
+    use crate::team::roster::tests::{create, invite_and_join};
+
+    fn now_at() -> String {
+        crate::time::now_ms()
+    }
+
+    #[test]
+    fn an_entry_sent_twice_is_ordered_once() {
+        let jordan = Key::generate("owner");
+        let sam = Key::generate("owner");
+        let mut l = create(&jordan);
+        invite_and_join(&mut l, ("jordan", &jordan), "sam", "member", &sam).unwrap();
+        let mut ws = Ws::open(Store::in_memory().unwrap(), std::env::temp_dir().join("wh-test-unused-setup")).unwrap();
+        ws.roster = Some(l.roster.clone());
+        ws.reserved.insert("ACME-1".into(), "jordan".into());
+        let sign = |kind: &str, who: &str, data: serde_json::Value, k: &Key| {
+            let mut e = Entry::new("ACME-1", kind, &now_at(), Actor::new("person", who));
+            e.data = data;
+            Envelope::sign(&e.to_bytes(), k).to_string_compact()
+        };
+        ws.order_shared("ACME-1", &sign("share", "jordan", serde_json::json!({ "owners": ["jordan"], "title": "T" }), &jordan)).unwrap();
+        ws.order_shared("ACME-1", &sign("people", "sam", serde_json::json!({ "handle": "sam", "role": "member" }), &sam)).unwrap();
+        let trust = sign("trust", "jordan", serde_json::json!({ "teammate": "sam", "on": true }), &jordan);
+        ws.order_shared("ACME-1", &trust).unwrap();
+        ws.order_shared("ACME-1", &sign("trust", "jordan", serde_json::json!({ "teammate": "sam", "on": false }), &jordan)).unwrap();
+        // Sam sends Jordan's old trust again, to get let in again.
+        let err = ws.order_shared("ACME-1", &trust).unwrap_err();
+        assert!(err.to_string().contains("already"), "{err}");
+        assert!(!ws.people["ACME-1"].trust.contains(&("jordan".to_string(), "sam".to_string())));
+        // A number not handed out, and one spelled another way, are refused.
+        assert!(ws.order_shared("ACME-2", &sign("share", "jordan", serde_json::json!({ "owners": ["jordan"] }), &jordan)).is_err());
+        assert!(ws.order_shared("ACME-01", &trust).is_err());
+    }
 }

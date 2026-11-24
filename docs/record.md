@@ -135,7 +135,7 @@ this format and checked the same way, ordered by the workspace hub:
 
 | Kind | Writer | `data` |
 | --- | --- | --- |
-| `share` | person | Always entry 1. `owners` (handles), `title`, `status`, `protocol`, `intent` (its body). When a local docket was shared: `local` (`D-12`), its `head` and `entries`, and `history` (`sha256:` of its export, also in `blobs`) |
+| `share` | person | Always entry 1. `owners` (the sharer alone), `title`, `status`, `protocol`, `intent` (its body). When a local docket was shared: `local` (`D-12`), and its `head` and `entries`; the history stays on the sharer's hub |
 | `people` | person | Who's on the docket: `handle`, `role` (`owner` or `member`), `action: "remove"` to take them off; or `answer` (`owners` or `members`) for who answers its agents' questions |
 | `trust` | person | `teammate`: whose agents' messages go into the writer's panes without asking (`on: false` to ask again); `private_prompts`: whether the writer's prompts on it are kept back |
 

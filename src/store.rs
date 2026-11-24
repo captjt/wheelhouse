@@ -159,6 +159,7 @@ fn migrate(conn: &Connection) -> Result<()> {
     if !has("messages", "preview")? {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN preview TEXT")?;
     }
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS entries_id ON entries(docket, id)")?;
     if !has("messages", "entry")? {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN entry TEXT; CREATE INDEX IF NOT EXISTS messages_entry ON messages(entry)")?;
     }
@@ -428,6 +429,11 @@ impl Store {
         let mut st = self.conn.prepare("SELECT docket, seq, id, chain, envelope FROM entries WHERE docket = ?1 ORDER BY seq")?;
         let rows = st.query_map(params![docket], |r| Ok(Stored { docket: r.get(0)?, seq: r.get(1)?, id: r.get(2)?, chain: r.get(3)?, envelope: r.get(4)? }))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Whether a docket has an entry with this id.
+    pub fn has_entry(&self, docket: &str, id: &str) -> Result<bool> {
+        Ok(self.conn.query_row("SELECT 1 FROM entries WHERE docket = ?1 AND id = ?2", params![docket, id], |_| Ok(())).optional()?.is_some())
     }
 
     /// How many entries a docket has.

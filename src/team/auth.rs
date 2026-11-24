@@ -40,10 +40,10 @@ pub struct Replay {
 }
 
 impl Replay {
-    /// Check a request's signature, its time, and that it's new; the key
-    /// id it was signed with. Whether that key may make the request is the
-    /// caller's to check.
-    pub fn check(&mut self, workspace: &str, req: &Req, now_ms: i64) -> Result<String> {
+    /// Check a request's signature and its time; the key id it was signed
+    /// with and its signature. Nothing is remembered yet: whether that key
+    /// may make the request is the caller's to check, then `remember`.
+    pub fn verify(&self, workspace: &str, req: &Req, now_ms: i64) -> Result<(String, String)> {
         let Req { method, path, body, key, time, sig } = *req;
         let (key, time, sig) = match (key, time, sig) {
             (Some(k), Some(t), Some(s)) => (k, t, s),
@@ -53,10 +53,25 @@ impl Replay {
         ensure!((t - now_ms).abs() <= WINDOW_MS, "the request's clock is more than 5 minutes off the workspace's");
         let raw = B64.decode(sig).map_err(|_| anyhow!("x-wh-sig isn't base64"))?;
         ensure!(keys::verify_by(key, &message(workspace, method, path, t, body), &raw), "the request's signature doesn't match");
+        ensure!(!self.seen.contains_key(sig), "a request sent twice");
+        Ok((key.to_string(), sig.to_string()))
+    }
+
+    /// Remember a member's request's signature, so it's accepted once.
+    /// Only a member's: nobody else can fill this up.
+    pub fn remember(&mut self, sig: &str, now_ms: i64) -> Result<()> {
         self.seen.retain(|_, at| now_ms - *at <= 2 * WINDOW_MS);
         ensure!(self.seen.len() < 100_000, "too many requests");
         ensure!(self.seen.insert(sig.to_string(), now_ms).is_none(), "a request sent twice");
-        Ok(key.to_string())
+        Ok(())
+    }
+
+    /// `verify` and `remember` at once, for tests.
+    #[cfg(test)]
+    pub fn check(&mut self, workspace: &str, req: &Req, now_ms: i64) -> Result<String> {
+        let (k, sig) = self.verify(workspace, req, now_ms)?;
+        self.remember(&sig, now_ms)?;
+        Ok(k)
     }
 }
 
