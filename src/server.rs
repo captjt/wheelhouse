@@ -631,6 +631,10 @@ struct SendReq {
     /// Which of the docket's agents: its lead when not given.
     #[serde(default)]
     block: Option<String>,
+    /// While it works: send it now, for it to read at its next step
+    /// (Claude Code, Codex), instead of when the turn ends.
+    #[serde(default)]
+    steer: bool,
 }
 
 /// Take back a prompt queued for the agent, before it goes in.
@@ -654,27 +658,54 @@ async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
     if text.len() > 16_000 {
         return Err(fail(StatusCode::BAD_REQUEST, "that's too long to paste into a pane"));
     }
-    let (session, block, app, agent_session) = {
+    let (session, block, app, agent_session, steer) = {
         let mut core = shared.lock();
         let (s, b) = pane_of(&core, &id, req.block.as_deref())?;
         let pane = core.mirror.panes.get(&b).ok_or_else(|| fail(StatusCode::CONFLICT, "the pane closed"))?;
-        if let Err(why) = agents::can_send(pane) {
-            // Busy, or waiting on a prompt: it goes in when the turn ends.
-            if req.queue && matches!(pane.root().map(|r| r.state.as_str()), Some("working" | "blocked")) {
-                let q = core.store.queue_prompt(&id, &b, &text).map_err(internal)?;
-                core.live_changed();
-                let _ = core.events.send(json!({ "type": "docket", "docket": id }));
-                return Ok(Json(json!({ "ok": true, "queued": q })));
+        // Steering an agent at work: it reads it at its next step.
+        if req.steer && matches!(pane.root().map(|r| r.state.as_str()), Some("working" | "starting")) {
+            let app = pane.app().unwrap_or("agent").to_string();
+            if !crate::runtime::steers(&app) {
+                return Err(fail(StatusCode::CONFLICT, format!("{} takes messages when its turn ends: queue it", crate::mirror::app_name(&app))));
             }
-            return Err(fail(StatusCode::CONFLICT, why));
+            if !core.mirror.connected_for(&b) {
+                return Err(fail(StatusCode::CONFLICT, format!("Wheelhouse can't see {} right now, so it won't type into the pane", crate::runtime::of(&b).title())));
+            }
+            let agent_session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
+            (s, b, app, agent_session, true)
+        } else {
+            if let Err(why) = agents::can_send(pane) {
+                // Busy, or waiting on a prompt: it goes in when the turn ends.
+                if req.queue && matches!(pane.root().map(|r| r.state.as_str()), Some("working" | "blocked")) {
+                    let q = core.store.queue_prompt(&id, &b, &text).map_err(internal)?;
+                    core.live_changed();
+                    let _ = core.events.send(json!({ "type": "docket", "docket": id }));
+                    return Ok(Json(json!({ "ok": true, "queued": q })));
+                }
+                return Err(fail(StatusCode::CONFLICT, why));
+            }
+            // A mirror that lost the pane's runtime may be stale.
+            if !core.mirror.connected_for(&b) {
+                return Err(fail(StatusCode::CONFLICT, format!("Wheelhouse can't see {} right now, so it won't type into the pane", crate::runtime::of(&b).title())));
+            }
+            let session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
+            (s, b, pane.app().unwrap_or("agent").to_string(), session, false)
         }
-        // A mirror that lost the pane's runtime may be stale.
-        if !core.mirror.connected_for(&b) {
-            return Err(fail(StatusCode::CONFLICT, format!("Wheelhouse can't see {} right now, so it won't type into the pane", crate::runtime::of(&b).title())));
-        }
-        let session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
-        (s, b, pane.app().unwrap_or("agent").to_string(), session)
     };
+    if steer {
+        crate::runtime::for_id(&block).steer(&session, &block, &text).await.map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))?;
+        let mut core = shared.lock();
+        // On the record as yours, sent mid-turn; the agent's own hook, if it
+        // reports it too, is told it's already there.
+        core.append(&id, "note", &Who::Owner, Some(text.clone()), json!({ "via": "prompt", "session": agent_session, "block": block, "from": "wheelhouse", "steer": true }))
+            .map_err(internal)?;
+        if let Some(t) = core.agents.by_block.get_mut(&block) {
+            t.pending_prompt = Some(text.clone());
+        }
+        core.agents.remote.insert(block.clone());
+        core.live_changed();
+        return Ok(Json(json!({ "ok": true, "steered": true })));
+    }
     crate::runtime::for_id(&block).submit(&session, &block, &text).await.map_err(internal)?;
     // The agent's prompt hook records it when installed; otherwise the hub does.
     if !crate::hooks::installed_for(&app) {

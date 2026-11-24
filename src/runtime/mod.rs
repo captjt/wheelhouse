@@ -173,6 +173,19 @@ impl Runtime {
         self.submit_checked(session, block, text, true).await
     }
 
+    /// Type `text` into an agent at work, for it to read at its next step:
+    /// read from its runtime first, one text at a time, never into a prompt
+    /// it's waiting on.
+    pub async fn steer(&self, session: &str, block: &str, text: &str) -> Result<()> {
+        let _typing = Typing::wait(block).await?;
+        can_steer(&self.records(session, block).await?)?;
+        let text = plain(text);
+        match self {
+            Runtime::Rex(r) => r.submit(session, block, &text).await,
+            Runtime::Herdr(h) => h.submit(block, &text).await,
+        }
+    }
+
     pub async fn keys(&self, session: &str, block: &str, keys: &[Key<'_>]) -> Result<()> {
         match self {
             Runtime::Rex(r) => r.send_keys(session, block, keys).await,
@@ -272,6 +285,24 @@ pub fn between_turns(records: &[Record]) -> Result<()> {
     anyhow::bail!("the pane isn't an agent between turns now ({})", root.map_or("no status", |r| r.state.as_str()))
 }
 
+/// Agents that take what's typed while they work, and read it at their
+/// next step: steering. Others get it when the turn ends.
+pub fn steers(app: &str) -> bool {
+    matches!(crate::mirror::canonical_app(app), "claude-code" | "codex")
+}
+
+/// Whether a pane's records, read now, are an agent that can be steered:
+/// at work (or between turns), never waiting on a prompt of its own.
+pub fn can_steer(records: &[Record]) -> Result<()> {
+    let root = records.iter().find(|r| r.is_root());
+    let app = root.and_then(|r| r.effective_app.as_deref().or(r.app.as_deref())).unwrap_or("");
+    let waiting = records.iter().any(|r| r.state == "blocked");
+    match root {
+        Some(r) if !waiting && steers(app) && matches!(r.state.as_str(), "working" | "starting" | "idle" | "done") => Ok(()),
+        _ => anyhow::bail!("the agent can't take a message now ({})", root.map_or("no status", |r| r.state.as_str())),
+    }
+}
+
 /// The panes being typed into now: one text at a time per pane.
 static TYPING: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
@@ -333,6 +364,19 @@ mod tests {
         assert!(between_turns(&[rec("blocked", Some("claude-code"))]).is_err());
         assert!(between_turns(&[rec("idle", Some("zsh"))]).is_err(), "not an agent");
         assert!(between_turns(&[]).is_err(), "no status: a shell");
+    }
+
+    #[test]
+    fn only_claude_and_codex_at_work_are_steered() {
+        let rec = |state: &str, app: &str| Record { state: state.into(), app: Some(app.into()), ..Default::default() };
+        assert!(can_steer(&[rec("working", "claude-code")]).is_ok());
+        assert!(can_steer(&[rec("working", "codex")]).is_ok());
+        assert!(can_steer(&[rec("idle", "claude-code")]).is_ok());
+        assert!(can_steer(&[rec("working", "agy")]).is_err(), "Antigravity gets it when the turn ends");
+        assert!(can_steer(&[rec("blocked", "claude-code")]).is_err(), "never into a prompt it's waiting on");
+        let sub = Record { id: "t1".into(), state: "blocked".into(), app: Some("claude-code".into()), ..Default::default() };
+        assert!(can_steer(&[rec("working", "claude-code"), sub]).is_err(), "nor while a subagent waits");
+        assert!(can_steer(&[]).is_err());
     }
 
     #[test]

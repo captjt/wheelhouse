@@ -68,6 +68,9 @@ it doesn't matter which one an agent runs in:
   Codex in Herdr and get its reply. A message goes in through the
   receiving pane's own runtime, between its turns. When both runtimes have
   a session of the same name, addresses say which: `herdr:wheelhouse/D-12`.
+- **Talk to it while it works.** In Chat, what you send while an agent
+  works is queued, and everything queued goes in together when its turn
+  ends; **Send now** (⌘⇧↩) steers Claude Code or Codex mid-turn instead.
 - **Answer either the same way.** Approve a prompt, queue a prompt, read
   the screen, or **Open in Rex** / **Open in Herdr**, from the Mac, the
   menu bar or your phone. The prompt is read again from its own runtime

@@ -6409,3 +6409,23 @@ code {
     padding-bottom: max(10px, calc(var(--safe-bottom, env(safe-area-inset-bottom)) - var(--kb, 0px)));
   }
 }
+
+/* Send now: steer an agent at work, beside Queue. */
+.chat-steer {
+  flex: none;
+  align-self: flex-end;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 18px;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.chat-steer:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.chat-steer:disabled {
+  opacity: 0.45;
+}
