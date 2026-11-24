@@ -27,13 +27,20 @@ On a Linux box or VM, from a checkout of the repo:
 ```sh
 docker build -f examples/workspace/Dockerfile -t wheelhouse-workspace .
 docker run -d --name wheelhouse-workspace --restart unless-stopped \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+  --cap-drop ALL --security-opt no-new-privileges:true \
   -p 127.0.0.1:7700:7700 -v wheelhouse-workspace:/var/lib/wheelhouse-workspace \
   wheelhouse-workspace
 sudo tailscale serve --bg 7700
 docker logs wheelhouse-workspace     # the setup code: whs1.…
 ```
 
-Without Docker, use `examples/workspace/wheelhouse-workspace.service`
+The image runs as uid 65532. A state volume from an image built before
+that (uid 999) needs its owner changed once, with the container stopped:
+`docker run --rm -v wheelhouse-workspace:/v alpine chown -R 65532:65532 /v`.
+
+On GCP, the Terraform module in `examples/workspace/gcp` does this
+step for you: [teams-gcp.md](teams-gcp.md). Without Docker, use `examples/workspace/wheelhouse-workspace.service`
 (its head has the steps). On an always-on Mac: `wh up --workspace`, then
 `tailscale serve --bg 7700`, and the setup code is in
 `~/Library/Logs/wheelhouse-workspace.log`.

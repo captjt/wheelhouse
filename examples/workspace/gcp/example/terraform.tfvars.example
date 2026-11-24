@@ -1,0 +1,13 @@
+project_id = "acme-wheelhouse"
+region     = "us-central1"
+zone       = "us-central1-a"
+
+# Groups, not people: who's in them changes without an apply.
+ssh_members      = ["group:wheelhouse-ops@acme.com"]
+image_publishers = ["group:wheelhouse-ops@acme.com"]
+
+# Leave out on the first apply. Then the digest `docker push` printed:
+# image = "us-central1-docker.pkg.dev/acme-wheelhouse/wheelhouse-workspace/wheelhouse-workspace@sha256:…"
+
+# Optional: encrypt the disks with your own key (CMEK).
+# kms_key = "projects/acme-kms/locations/us-central1/keyRings/wheelhouse/cryptoKeys/disks"

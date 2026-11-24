@@ -1,0 +1,197 @@
+#cloud-config
+# The workspace hub's boot, for Container-Optimized OS. Rendered by
+# Terraform (examples/workspace/gcp/module/main.tf). COS keeps /etc on
+# tmpfs and runs cloud-init on every boot, so these files are written
+# fresh each time; what lasts is on the data disk at /mnt/disks/wh.
+#
+#   wh-data        formats the data disk if it's blank, checks it, mounts it
+#   wh-tailscale   Tailscale (userspace), publishing the hub with Serve
+#   wh-workspace   wh serve --workspace, on 127.0.0.2:7700 only
+#
+# Why 127.0.0.2: in userspace mode, tailscaled forwards tailnet TCP to any
+# port Serve doesn't handle on to 127.0.0.1 at that port (netstack.go,
+# "case isTailscaleIP"). A hub on 127.0.0.1 would be reachable from the
+# tailnet at 100.x.y.z:7700, past Serve, with a login header of the
+# caller's choosing. Netstack never forwards to 127.0.0.2.
+
+write_files:
+  - path: /etc/wheelhouse/data-disk.sh
+    permissions: "0700"
+    owner: root
+    content: |
+      set -euo pipefail
+      dev=/dev/disk/by-id/google-${data_device}
+      mnt=/mnt/disks/wh
+      for _ in $(seq 1 60); do [ -b "$dev" ] && break; sleep 1; done
+      [ -b "$dev" ] || { echo "the data disk ($dev) isn't attached" >&2; exit 1; }
+      if mountpoint -q "$mnt"; then exit 0; fi
+      # Format only a disk that's new: blkid finds nothing on it (exit 2,
+      # which it also says when it can't read it, or a superblock is
+      # damaged), and its first 16 MiB read back as zeros. A disk that ever
+      # held a filesystem isn't all zeros there, so it's left alone, for
+      # e2fsck -b to repair by hand.
+      rc=0; blkid -p "$dev" >/dev/null 2>&1 || rc=$?
+      case "$rc" in
+        0) ;;
+        2) nonzero=$(head -c 16777216 "$dev" | tr -d '\000' | wc -c) \
+             || { echo "can't read the data disk: leaving it alone" >&2; exit 1; }
+           [ "$nonzero" -eq 0 ] || { echo "blkid finds no filesystem on the data disk, but it isn't blank: not formatting it (try e2fsck -b)" >&2; exit 1; }
+           echo "the data disk is blank: formatting it"
+           mkfs.ext4 -q -m 0 -L wh-data -E lazy_itable_init=0,lazy_journal_init=0,discard "$dev" ;;
+        *) echo "can't tell what's on the data disk (blkid said $rc): leaving it alone" >&2; exit 1 ;;
+      esac
+      fstype=$(blkid -p -s TYPE -o value "$dev")
+      [ "$fstype" = ext4 ] || { echo "the data disk holds $fstype, not ext4: not mounting it" >&2; exit 1; }
+      rc=0; fsck.ext4 -p "$dev" || rc=$?
+      [ "$rc" -lt 4 ] || { echo "fsck couldn't repair the data disk (exit $rc): not mounting it" >&2; exit 1; }
+      mkdir -p "$mnt"
+      mount -t ext4 -o nosuid,nodev,noexec,discard "$dev" "$mnt"
+      # A disk made bigger (data_disk_size_gb) grows its filesystem, online.
+      resize2fs "$dev" || echo "couldn't grow the data disk's filesystem: going on at its old size" >&2
+      install -d -m 0700 -o root -g root "$mnt/tailscale"
+      install -d -m 0700 "$mnt/workspace"
+
+  - path: /etc/wheelhouse/tailscale-key.sh
+    permissions: "0700"
+    owner: root
+    content: |
+      # The auth key, from Secret Manager, into a root-only file on tmpfs.
+      # Tailscale uses it only to log in the first time (TS_AUTH_ONCE); once
+      # its state is on the data disk, a missing or spent key is fine.
+      set -euo pipefail
+      out=/run/wheelhouse/tailscale.env
+      install -d -m 0700 /run/wheelhouse
+      umask 077
+      : > "$out"
+      logged_in() { [ -s /mnt/disks/wh/tailscale/tailscaled.state ] && grep -q '"_profiles"' /mnt/disks/wh/tailscale/tailscaled.state 2>/dev/null; }
+      fail() { if logged_in; then echo "$1 (Tailscale is logged in already: going on)"; exit 0; fi; echo "$1" >&2; exit 1; }
+      md=http://metadata.google.internal/computeMetadata/v1
+      token=$(curl -sf -H 'Metadata-Flavor: Google' "$md/instance/service-accounts/default/token" | sed -n 's/.*"access_token" *: *"\([^"]*\)".*/\1/p') || true
+      [ -n "$token" ] || fail "no access token from the metadata server"
+      resp=$(curl -sf -H "Authorization: Bearer $token" \
+        "https://secretmanager.googleapis.com/v1/projects/${project_id}/secrets/${secret_id}/versions/latest:access") \
+        || fail "can't read the secret ${secret_id}: has a version been added?"
+      key=$(printf '%s' "$resp" | tr -d ' \n' | sed -n 's/.*"data":"\([^"]*\)".*/\1/p' | base64 -d 2>/dev/null | tr -d ' \r\n') || true
+      case "$key" in
+        tskey-auth-*) printf 'TS_AUTHKEY=%s\n' "$key" > "$out" ;;
+        *) fail "the secret ${secret_id} isn't a Tailscale auth key (tskey-auth-…)" ;;
+      esac
+
+  - path: /etc/wheelhouse/workspace-pre.sh
+    permissions: "0700"
+    owner: root
+    content: |
+      set -euo pipefail
+      mkdir -p "$HOME"
+      case "${registry_host}" in
+        *-docker.pkg.dev|*.gcr.io|gcr.io) docker-credential-gcr configure-docker --registries="${registry_host}" ;;
+      esac
+      docker pull "${image}"
+      # The hub never opens a connection: drop anything new its containers
+      # start (the metadata server's token, the internet), keep replies.
+      iptables -C DOCKER-USER -i docker0 -j DROP 2>/dev/null || iptables -I DOCKER-USER -i docker0 -j DROP
+      iptables -C DOCKER-USER -i docker0 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2>/dev/null \
+        || iptables -I DOCKER-USER -i docker0 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+      # The state folder belongs to the image's own user, read from its
+      # config (USER uid:gid, numbers only), and that user mustn't be root.
+      user=$(docker image inspect --format '{{.Config.User}}' "${image}")
+      [[ "$user" =~ ^([0-9]+):([0-9]+)$ ]] || { echo "the image's USER is \"$user\": it must be uid:gid, in numbers" >&2; exit 1; }
+      uid=$${BASH_REMATCH[1]}; gid=$${BASH_REMATCH[2]}
+      [ "$uid" != 0 ] && [ "$gid" != 0 ] || { echo "the image runs as root: refusing it" >&2; exit 1; }
+      chown -R "$uid:$gid" /mnt/disks/wh/workspace
+      chmod 0700 /mnt/disks/wh/workspace
+
+  # Tailscale Serve: HTTPS on 443 at the machine's ts.net name, to the hub
+  # on 127.0.0.2. Serve sets Tailscale-User-Login for each caller and drops
+  # any a caller sent. Funnel (the public internet) stays off.
+  - path: /etc/wheelhouse/serve.json
+    permissions: "0644"
+    owner: root
+    content: |
+      {
+        "TCP": { "443": { "HTTPS": true } },
+        "Web": { "$${TS_CERT_DOMAIN}:443": { "Handlers": { "/": { "Proxy": "http://127.0.0.2:7700" } } } },
+        "AllowFunnel": { "$${TS_CERT_DOMAIN}:443": false }
+      }
+
+  - path: /etc/systemd/system/wh-data.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Wheelhouse data disk
+      Before=wh-tailscale.service wh-workspace.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      TimeoutStartSec=10min
+      ExecStart=/bin/bash /etc/wheelhouse/data-disk.sh
+
+  - path: /etc/systemd/system/wh-tailscale.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Tailscale, publishing the workspace hub on the tailnet
+      Requires=docker.service
+      Wants=wh-data.service network-online.target
+      After=wh-data.service docker.service network-online.target
+      # Keep trying: a disk that wasn't ready, an image that didn't pull.
+      StartLimitIntervalSec=0
+
+      [Service]
+      Environment=HOME=/home/wheelhouse-svc
+      TimeoutStartSec=15min
+      # wh-data again, so a failed disk check is retried with this unit.
+      ExecStartPre=/bin/systemctl start wh-data.service
+      ExecStartPre=/bin/bash /etc/wheelhouse/tailscale-key.sh
+      ExecStartPre=-/usr/bin/docker rm -f tailscale
+      ExecStart=/usr/bin/docker run --rm --name tailscale \
+        --network host --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+        --pids-limit 256 --memory 256m --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+        --env-file /run/wheelhouse/tailscale.env \
+        -e TS_STATE_DIR=/var/lib/tailscale -e TS_USERSPACE=true -e TS_AUTH_ONCE=true \
+        -e TS_ACCEPT_DNS=false -e TS_HOSTNAME=${hostname} \
+        -e TS_EXTRA_ARGS=--advertise-tags=${tags} \
+        -e TS_SERVE_CONFIG=/config/serve.json \
+        -v /mnt/disks/wh/tailscale:/var/lib/tailscale \
+        -v /etc/wheelhouse/serve.json:/config/serve.json:ro \
+        ${tailscale_image}
+      ExecStop=/usr/bin/docker stop tailscale
+      Restart=always
+      RestartSec=10
+
+  - path: /etc/systemd/system/wh-workspace.service
+    permissions: "0644"
+    owner: root
+    content: |
+      [Unit]
+      Description=Wheelhouse workspace hub
+      Requires=docker.service
+      Wants=wh-data.service network-online.target
+      After=wh-data.service docker.service network-online.target
+      # Keep trying: a disk that wasn't ready, an image that didn't pull.
+      StartLimitIntervalSec=0
+
+      [Service]
+      Environment=HOME=/home/wheelhouse-svc
+      TimeoutStartSec=15min
+      # wh-data again, so a failed disk check is retried with this unit.
+      ExecStartPre=/bin/systemctl start wh-data.service
+      ExecStartPre=/bin/bash /etc/wheelhouse/workspace-pre.sh
+      ExecStartPre=-/usr/bin/docker rm -f wheelhouse-workspace
+      ExecStart=/usr/bin/docker run --rm --name wheelhouse-workspace \
+        --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+        --pids-limit 256 --memory 1g --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+        -p 127.0.0.2:7700:7700 -e WH_WORKSPACE_HTTP=0.0.0.0:7700 \
+        -v /mnt/disks/wh/workspace:/var/lib/wheelhouse-workspace \
+        ${image}
+      ExecStop=/usr/bin/docker stop wheelhouse-workspace
+      Restart=always
+      RestartSec=10
+
+runcmd:
+  - systemctl daemon-reload
+  - systemctl start wh-data.service
+  - systemctl start wh-workspace.service wh-tailscale.service

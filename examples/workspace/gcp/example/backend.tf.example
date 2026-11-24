@@ -1,0 +1,17 @@
+# Keep the state where every operator reads the same copy, with versions.
+# The state holds no secrets (the Tailscale auth key never passes through
+# Terraform), but it does describe the deployment. Make the bucket first:
+#
+#   gcloud storage buckets create gs://acme-wheelhouse-tfstate \
+#     --project acme-wheelhouse --location us-central1 \
+#     --uniform-bucket-level-access --public-access-prevention
+#   gcloud storage buckets update gs://acme-wheelhouse-tfstate --versioning
+#
+# then rename this file backend.tf and run terraform init.
+
+terraform {
+  backend "gcs" {
+    bucket = "acme-wheelhouse-tfstate"
+    prefix = "wheelhouse-workspace"
+  }
+}

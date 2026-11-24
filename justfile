@@ -41,6 +41,13 @@ e2e:
     scripts/shared-e2e.sh
     scripts/team-e2e.sh
 
+# The GCP Terraform for a workspace hub: formatting, validation, and its
+# tests against a mocked provider (no project needed). Needs Terraform 1.7+.
+check-gcp:
+    terraform fmt -check -recursive ./examples/workspace/gcp
+    cd ./examples/workspace/gcp/module && terraform init -backend=false -input=false >/dev/null && terraform validate && terraform test
+    cd ./examples/workspace/gcp/example && terraform init -backend=false -input=false >/dev/null && terraform validate
+
 # Build Wheelhouse.app and put it in ~/Applications.
 app:
     ./mac/build.sh --install

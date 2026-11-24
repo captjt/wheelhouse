@@ -1,0 +1,41 @@
+// The parts of a tailnet policy file a Wheelhouse workspace hub needs.
+// Merge them into yours (Tailscale admin console → Access controls).
+// docs/teams-gcp.md explains each.
+{
+  "groups": {
+    // Everyone whose Mac's hub joins the workspace. Their own logins, on
+    // their own (untagged) Macs: a tagged device has no login to check.
+    "group:wheelhouse": ["jordan@acme.com", "sam@acme.com"],
+  },
+
+  "tagOwners": {
+    // Only tailnet admins can make an auth key for the workspace hub.
+    "tag:wheelhouse-workspace": ["autogroup:admin"],
+  },
+
+  "grants": [
+    // Members reach the hub's HTTPS port, and nothing else on it.
+    {
+      "src": ["group:wheelhouse"],
+      "dst": ["tag:wheelhouse-workspace"],
+      "ip":  ["tcp:443"],
+    },
+    // No grant has the workspace hub as its src: it never needs to open a
+    // connection to anyone, so it can't.
+  ],
+
+  // Checked on every save: the policy is refused if a member can't reach
+  // the hub, or if anyone can reach any other port on it. Put a real
+  // member's login in src.
+  "tests": [
+    {
+      "src":    "jordan@acme.com",
+      "accept": ["tag:wheelhouse-workspace:443"],
+      "deny":   ["tag:wheelhouse-workspace:7700", "tag:wheelhouse-workspace:22"],
+    },
+  ],
+
+  // No "funnel" nodeAttr for tag:wheelhouse-workspace: the hub must never
+  // be on the public internet. No "ssh" rule for it either: operators use
+  // IAP, which Google's audit log records.
+}

@@ -525,8 +525,39 @@ pub fn serve() -> Result<()> {
     rt.block_on(async move {
         let tcp = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("binding {addr}"))?;
         say!("workspace hub on http://{addr}");
-        axum::serve(tcp, router(shared)).await.context("http")
+        // On SIGTERM or Ctrl-C, stop taking requests and let those under
+        // way finish, but don't wait out a /changes long poll: members'
+        // hubs ask again. Every entry is ordered in one transaction, so a
+        // request cut short leaves nothing half written.
+        let server = axum::serve(tcp, router(shared)).with_graceful_shutdown(stop_signal());
+        tokio::select! {
+            r = server => r.context("http")?,
+            _ = async {
+                stop_signal().await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            } => {}
+        }
+        say!("workspace hub stopped");
+        Ok(())
     })
+}
+
+/// SIGTERM (docker stop, systemd, launchd) or Ctrl-C. A handler of its own,
+/// so `wh serve --workspace` stops at once as a container's PID 1, which
+/// the kernel doesn't send signals it has no handler for.
+async fn stop_signal() {
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        _ = term => {}
+        _ = tokio::signal::ctrl_c() => {}
+    }
 }
 
 #[cfg(test)]
