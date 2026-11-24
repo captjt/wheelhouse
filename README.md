@@ -59,6 +59,11 @@ it doesn't matter which one an agent runs in:
 
 - **One list of agents.** Every agent in a Rex pane or a Herdr terminal
   gets a docket, in the same Inbox, Active list, Agents view and sessions.
+- **Several agents on one docket.** Any number of agents, in Rex and
+  Herdr at once, can work on one docket: `wh join D-12`, or **Add an
+  agent…** on its page. Each has its own place on the record, the apps
+  say which one did what and which one is asking, and `wh send --to
+  @D-12` reaches all of them.
 - **Agents talk across runtimes.** A Claude Code in Rex can `wh send` to a
   Codex in Herdr and get its reply. A message goes in through the
   receiving pane's own runtime, between its turns. When both runtimes have
@@ -340,7 +345,7 @@ doesn't.
 
 ```sh
 just check          # what a pull request needs to pass (there's no CI: run it)
-just e2e            # a Build end to end, in Rex and in Herdr, with stand-ins for both, gh, GitHub and Linear
+just e2e            # a Build end to end in Rex and in Herdr, both runtimes together, and several agents on one docket, with stand-ins for both, gh, GitHub and Linear
 just app            # build Wheelhouse.app into ~/Applications
 just dev-install    # Wheelhouse Dev: this checkout beside your everyday one, never meeting it
 just dev            # the web app with hot reload on :5180, against a running hub

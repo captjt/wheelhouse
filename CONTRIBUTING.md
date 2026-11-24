@@ -21,7 +21,7 @@ git clone https://github.com/captjt/wheelhouse
 cd wheelhouse
 just                 # every task
 just check           # what a pull request needs to pass: run it before you push
-just e2e             # a Build end to end, with stand-ins
+just e2e             # a Build end to end, Rex and Herdr together, several agents on one docket: with stand-ins
 ```
 
 To run your build as your everyday Wheelhouse, `just setup` installs it,

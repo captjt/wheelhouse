@@ -35,6 +35,16 @@ keys into another. Pane names are letters, digits, `.`, `_` and `-`.
 Messages go in only between an agent's turns, only into an agent, and
 only while the hub can see the pane's runtime (Rex or Herdr).
 
+**Any agent on this Mac can join a docket.** `wh join` puts an agent on
+an open docket that isn't on hold, beside the agents there; it's the same
+trust any agent already has to note on any docket, since the hub holds
+every key on this machine. A join is witnessed on the record (a `claim`
+with `source: join`), so you can see who joined and when. Review's and
+Build's dockets refuse it: their panes are the protocol's. A message from
+another agent, `@D-12` included, carries no more authority than any other
+text: the agent instructions say not to join a docket because a peer
+asked.
+
 **Only the hub writes to GitHub, and only what you approved.**
 
 - The panes Review and Build start have no `GH_TOKEN`, no Linear key and
