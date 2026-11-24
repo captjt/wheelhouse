@@ -729,9 +729,22 @@ fn together<'a>(bodies: impl Iterator<Item = &'a str>) -> String {
 
 /// A message as the apps show it.
 pub fn view(core: &Core, m: &Message) -> Value {
-    let from_app = m.from_block.as_deref().and_then(|b| core.mirror.panes.get(b)).and_then(|p| p.app()).map(app_name);
+    let remote = m.from_block.as_deref().and_then(crate::team::member::remote_block);
+    let from_app = match &remote {
+        // A teammate's agent: its pane is on their Mac, so the shared
+        // docket says which app it is.
+        Some((member, block)) => m
+            .docket
+            .as_deref()
+            .and_then(|d| core.store.state(d).ok().flatten())
+            .and_then(|st| st.agents.into_iter().find(|a| a.member.as_deref() == Some(member.as_str()) && a.agent.block == *block))
+            .map(|a| app_name(&a.agent.app).to_string()),
+        None => m.from_block.as_deref().and_then(|b| core.mirror.panes.get(b)).and_then(|p| p.app()).map(|a| app_name(a).to_string()),
+    };
+    // Whose it is, when it's a teammate's: the apps say "sam's Codex".
+    let from_member = remote.map(|(member, _)| member);
     json!({
-        "id": m.id, "docket": m.docket, "from": m.from_addr, "from_app": from_app, "to": m.to_addr,
+        "id": m.id, "docket": m.docket, "from": m.from_addr, "from_app": from_app, "from_member": from_member, "to": m.to_addr,
         "subject": m.subject, "body": m.body, "options": m.options, "reply_to": m.reply_to, "choice": m.choice,
         "status": m.status, "created_at": m.created_at, "preview": m.preview,
     })

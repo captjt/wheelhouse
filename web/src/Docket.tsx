@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
 import { Person, PersonDot } from "./Team";
-import { agentLabel, agentOfEntry, agentsOn, appName, entryBlock, liveAgents, paneRuntime, runtimeOf, runtimeTitle, spawnRuntime, type CheckRun, type Docket, type DocketAgent, type DocketPage, type EntryView } from "./api";
+import { agentLabel, agentOfEntry, agentsOn, appName, entryBlock, liveAgents, mateOf, paneRuntime, runtimeOf, runtimeTitle, spawnRuntime, type CheckRun, type Docket, type DocketAgent, type DocketPage, type EntryView } from "./api";
 import { AppAvatar, HubAvatar, IconChevron, IconDown, IconDownload, IconShield, IconUp, LiveIcon, PersonAvatar, SessionIcon, StatusIcon, TitleText, liveWord, shortPath } from "./icons";
 import { ago, agoLong, go, lastList, stamp, useData, useHub } from "./live";
 import { Kbd, Prose, Sheet, useKeys, useMenu, usePhone } from "./ui";
@@ -485,7 +485,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
       </div>
       )}
       {menu.node}
-      {viewing && <ArtifactViewer e={viewing} onClose={() => setViewing(null)} />}
+      {viewing && <ArtifactViewer e={viewing} docket={d.id} onClose={() => setViewing(null)} />}
       {checkOut && <CheckOutput c={checkOut} onClose={() => setCheckOut(null)} />}
       {record && <RecordViewer d={d} onClose={() => setRecord(false)} />}
       {linking !== false && (
@@ -581,9 +581,7 @@ function Prop({ label, children }: { label: string; children: ReactNode }) {
 function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docket; owner: string; me?: string; onOpen: (e: EntryView) => void; onCheck: (c: CheckRun) => void }) {
   // On a shared docket, whose it is: a teammate's (`sam`, `hub@sam`,
   // `codex@sam`) is named for them, never "You".
-  const shared = !d.id.startsWith("D-");
-  const memberOf = String(e.actor.id).includes("@") ? String(e.actor.id).split("@").pop() : e.actor.type === "person" ? String(e.actor.id) : undefined;
-  const mate = shared && memberOf && memberOf !== "local" && memberOf !== me ? memberOf : null;
+  const mate = mateOf(e.actor, d.id, me);
   const youName = mate && e.actor.type === "person" ? mate : "You";
   const actorApp = (mate ? `${mate}'s ` : "") + appName(String(e.actor.id).split("@")[0]);
   // The entry's own agent, on a docket that's had several; named by its role or pane.

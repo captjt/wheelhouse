@@ -123,8 +123,7 @@ struct ActivityRow: View {
         // several; the docket's agent for an older entry.
         // On a shared docket, a teammate's entry (`sam`, `hub@sam`,
         // `codex@sam`) is named for them, never "You".
-        let memberOf: String? = e.actorId.contains("@") ? e.actorId.split(separator: "@").last.map(String.init) : e.actorType == "person" ? e.actorId : nil
-        let mate: String? = !d.id.hasPrefix("D-") && memberOf != nil && memberOf != "local" && memberOf != Docket.me ? memberOf : nil
+        let mate = e.mate(on: d.id)
         let youName = mate != nil && e.actorType == "person" ? mate! : "You"
         let mates = mate.map { "\($0)'s " } ?? ""
         let who = d.member(for: e)
@@ -162,7 +161,7 @@ struct ActivityRow: View {
         case "open":
             if data["protocol"].str == "review" { return sys(.pr, [.b("Wheelhouse"), .t(" opened this Review docket\(data["review"]["key"].str.map { " for \($0)" } ?? "")")]) }
             if data["protocol"].str == "agent" { return sys(.hub, [.b("Wheelhouse"), .t(" picked up \(agent)\(d.agent?.cwd.map { " in \(shortPath($0))" } ?? "")")]) }
-            return e.actorType == "person" ? sys(you, [.b("You"), .t(" opened this docket")]) : sys(.hub, [.b("Wheelhouse"), .t(" opened this docket")])
+            return e.actorType == "person" ? sys(you, [.b(youName), .t(" opened this docket")]) : sys(.hub, [.b("Wheelhouse"), .t(" opened this docket")])
         case "claim":
             let src = data["source"].str
             if src == "rex-reviewer" { return sys(.hub, [.b("rex-reviewer"), .t(" started its \(data["role"].str ?? "")\(data["round"].int.map { " for round \($0)" } ?? "")")]) }
@@ -262,13 +261,13 @@ struct ActivityRow: View {
             let ind = data["independent"].isNull ? "" : data["independent"].bool ? ", independent" : ", same session as the builder"
             return .comment(writerAvatar, writer, "\(data["role"].str ?? "checker")\(data["n"].int.map { ", check \($0)" } ?? ""): \(passed ? "passed" : "found problems")\(n > 0 ? " · \(plural(n, "finding"))" : "")\(ind)", e.body ?? "", nil)
         case "approval":
-            if data["what"].str == "post-review" { return sys(you, [.b("You"), .t(" approved posting round \(data["round"].int ?? 0)'s review")], "approved") }
+            if data["what"].str == "post-review" { return sys(you, [.b(youName), .t(" approved posting round \(data["round"].int ?? 0)'s review")], "approved") }
             if data["kind"].str == "review" {
                 let posted = data["decision"].str == "post"
-                return sys(you, [.b("You"), .t(posted ? " posted the review" : " dismissed the review"), .t(e.body.map { ": \($0)" } ?? ""), data["url"].str.map { .link(" · on GitHub", URL(string: $0)) } ?? .t("")], posted ? "approved" : "denied")
+                return sys(you, [.b(youName), .t(posted ? " posted the review" : " dismissed the review"), .t(e.body.map { ": \($0)" } ?? ""), data["url"].str.map { .link(" · on GitHub", URL(string: $0)) } ?? .t("")], posted ? "approved" : "denied")
             }
             let ok = data["decision"].str == "approve"
-            return sys(you, [.b("You"), .t(" \(ok ? "approved" : "denied") \(agent)'s \(data["kind"].str ?? "prompt")"), e.body.map { .mono(": \($0)") } ?? .t("")], ok ? "approved" : "denied")
+            return sys(you, [.b(youName), .t(" \(ok ? "approved" : "denied") \(agent)'s \(data["kind"].str ?? "prompt")"), e.body.map { .mono(": \($0)") } ?? .t("")], ok ? "approved" : "denied")
         case "artifact":
             return .file(writerAvatar, writer, e.body ?? data["name"].str ?? "a file", data["group"].str)
         case "release":

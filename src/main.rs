@@ -397,7 +397,7 @@ enum TeamCmd {
     /// Who's in the workspace.
     Members,
     /// Share a docket of yours with the workspace: it goes on as ACME-n,
-    /// with its history, and you as its first owner.
+    /// naming its history (which stays on this Mac), and you as its first owner.
     Share {
         #[arg(add = complete::dockets())]
         docket: String,
@@ -658,7 +658,7 @@ fn team_cmd(cmd: Option<TeamCmd>) -> Result<()> {
         Some(TeamCmd::Share { docket }) => {
             let v = call("/api/team/share", json!({ "docket": normalize(&docket) }))?;
             println!(
-                "{} is shared as {}, with its history. You're its owner: wh team people {} HANDLE adds someone",
+                "{} is shared as {}; its history stays on this Mac. You're its owner: wh team people {} HANDLE adds someone",
                 v["from"].as_str().unwrap_or("?"),
                 v["docket"].as_str().unwrap_or("?"),
                 v["docket"].as_str().unwrap_or("?")

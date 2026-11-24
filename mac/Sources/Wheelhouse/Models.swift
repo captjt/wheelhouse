@@ -346,7 +346,13 @@ struct Msg: Hashable, Identifiable {
     var options: [String] { j["options"].strings }
     var createdAt: String { j["created_at"].str ?? "" }
     var preview: JSON { j["preview"] }
-    var who: String { from == "wheelhouse" ? "Wheelhouse" : fromApp ?? appName(from) }
+    /// A teammate's agent's message (docs/teams.md): whose agent it is.
+    var fromMember: String? { j["from_member"].text }
+    var who: String {
+        if from == "wheelhouse" { return "Wheelhouse" }
+        if let m = fromMember { return "\(m)'s \(fromApp ?? "agent")" }
+        return fromApp ?? appName(from)
+    }
     var title: String {
         subject ?? body.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? "Message #\(id)"
     }
@@ -570,6 +576,21 @@ struct Entry: Hashable, Identifiable {
     var actorId: String { j["actor"]["id"].str ?? "" }
     /// The app an agent actor speaks for (`claude-code@block` → `claude-code`).
     var actorApp: String { String(actorId.split(separator: "@").first ?? "") }
+    /// On a shared docket (docs/teams.md), the teammate who wrote it (`sam`,
+    /// `hub@sam`, `codex@sam`); nil when it's yours, or the docket isn't shared.
+    func mate(on docket: String) -> String? {
+        if docket.hasPrefix("D-") { return nil }
+        let member: String? = actorId.contains("@") ? actorId.split(separator: "@").last.map(String.init) : actorType == "person" ? actorId : nil
+        guard let member, member != "local", member != Docket.me else { return nil }
+        return member
+    }
+    /// Who wrote it, in words: "You", "sam", "Codex", "sam's Codex", "Wheelhouse".
+    func writer(on docket: String) -> String {
+        let mate = mate(on: docket)
+        if actorType == "person" { return mate ?? "You" }
+        let whose = mate.map { "\($0)'s " } ?? ""
+        return whose + (actorType == "agent" ? appName(actorApp) : "Wheelhouse")
+    }
     /// The agent that wrote it (`actor.block`), or that the hub wrote it
     /// about (`data.block`). Older entries have neither.
     /// The agent's pane: an agent's own entries name it in the actor, the

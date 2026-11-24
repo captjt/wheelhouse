@@ -1072,6 +1072,12 @@ code {
 .act:hover .act-mark {
   opacity: 1;
 }
+/* Shown on hover only, so on a phone it would only take a line. */
+@media (hover: none) {
+  .act-card-head .act-mark {
+    display: none;
+  }
+}
 .act-mark.mark-witnessed {
   color: var(--working);
 }
@@ -1092,13 +1098,16 @@ code {
 }
 .act-card-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
+  gap: 2px 7px;
   margin-bottom: 6px;
   font-size: 12.5px;
 }
+/* A long name ("sam's Claude Code") wraps the line, never into a column. */
 .act-card-head strong {
   font-weight: 500;
+  white-space: nowrap;
 }
 .prose {
   color: var(--text-2);
@@ -2070,12 +2079,18 @@ code {
 }
 .msg-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
+  gap: 2px 7px;
   font-size: 12.5px;
 }
+/* A long subject wraps the line, never "asks you" into a column. */
 .msg-head strong {
   font-weight: 500;
+  white-space: nowrap;
+}
+.msg-head > .muted {
+  white-space: nowrap;
 }
 .msg-subject {
   color: var(--text-2);
