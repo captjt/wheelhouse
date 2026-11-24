@@ -409,7 +409,11 @@ fn claim_in(core: &mut Core, block: &str, session: &str, source: &str, here: Opt
     // This pane, as the docket has it, never the docket's other agents.
     let agent = match here {
         Some(a) => a,
-        None => core.store.state(&t.docket)?.and_then(|s| s.agents.into_iter().rev().find(|x| x.agent.block == block).map(|x| x.agent)).unwrap_or_else(|| pane_ref(core, block, &t.app, None)),
+        None => core
+            .store
+            .state(&t.docket)?
+            .and_then(|s| s.agents.into_iter().rev().find(|x| x.agent.block == block).map(|x| x.agent))
+            .unwrap_or_else(|| pane_ref(core, block, &t.app, None)),
     };
     core.append(&t.docket, "claim", &Who::Hub, None, json!({ "session": session, "source": source, "agent": agent }))?;
     if let Some(tt) = core.agents.by_block.get_mut(block) {

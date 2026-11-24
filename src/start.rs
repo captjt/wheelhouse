@@ -83,8 +83,7 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
         }
     }
     let rt = crate::runtime::spawn_kind().get();
-    let created =
-        rt.open(session.as_deref(), SESSION, &name, &cwd, &argv, crate::runtime::Place::Tab).await.with_context(|| format!("starting {bin} in {}", rt.kind().title()))?;
+    let created = rt.open(session.as_deref(), SESSION, &name, &cwd, &argv, crate::runtime::Place::Tab).await.with_context(|| format!("starting {bin} in {}", rt.kind().title()))?;
     let mut core = shared.lock();
     let agent = AgentRef { app: app.into(), host: "local".into(), block: created.block_id.clone(), rex_session: SESSION.into(), pane: name.clone(), cwd: Some(shown) };
     // The runtime may have shown the new pane to the mirror first, and it got a

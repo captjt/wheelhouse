@@ -372,15 +372,16 @@ fn main() {
             } else {
                 ("claude-code", "Claude Code")
             };
-            client::json("POST", "/api/agents/start", Some(&json!({ "app": app, "cwd": cwd, "prompt": prompt, "title": title, "docket": docket.as_deref().map(normalize) })))
-                .map(|v| {
+            client::json("POST", "/api/agents/start", Some(&json!({ "app": app, "cwd": cwd, "prompt": prompt, "title": title, "docket": docket.as_deref().map(normalize) }))).map(
+                |v| {
                     let beside = match v["others"].as_u64().unwrap_or(0) {
                         0 => String::new(),
                         1 => ", beside 1 other agent".into(),
                         n => format!(", beside {n} other agents"),
                     };
                     println!("{label} started in {}: {}{beside}", v["docket"].as_str().unwrap_or("?"), v["pane"].as_str().unwrap_or("?"))
-                })
+                },
+            )
         }
         Some(Cmd::Skill { action }) => skill(action.as_deref()),
         Some(Cmd::Import { from, force }) => match from.as_str() {
