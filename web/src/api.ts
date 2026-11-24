@@ -13,6 +13,32 @@ export const runtimeTitle = (r: RuntimeName): string => (r === "herdr" ? "Herdr"
 /** Where a docket's agent runs, for people: "Rex", "Herdr". */
 export const paneRuntime = (d?: { live?: Live | null; agent?: AgentRef | null } | null): string => runtimeTitle(d?.live?.runtime ?? runtimeOf(d?.agent?.block));
 
+/** The agents on a docket now. An older hub's docket: its one agent, when live. */
+export const agentsOn = (d?: Docket | null): DocketAgent[] => {
+  if (!d) return [];
+  if (d.agents) return d.agents.filter((a) => a.on);
+  return d.agent && d.live ? [{ ...d.agent, session: d.session, joined_at: d.created_at, active_at: d.updated_at, on: true, live: d.live }] : [];
+};
+
+/** The agents on a docket whose panes are live now, the lead first. */
+export const liveAgents = (d?: Docket | null): DocketAgent[] => {
+  const on = agentsOn(d).filter((a) => a.live);
+  return on.sort((a, b) => Number(b.block === d?.lead) - Number(a.block === d?.lead));
+};
+
+/** An agent, for people, beside others on its docket: its role, else its pane, else its app. */
+export const agentLabel = (a?: { role?: string | null; pane?: string; app: string } | null): string => (a ? a.role || a.pane || appName(a.app) : "the agent");
+
+/** The agent an entry names (`data.block`, or an agent actor's `block`), on a docket that may have several. */
+export const agentOfEntry = (d: Docket, e: { actor?: Record<string, unknown>; data?: Record<string, unknown> }): DocketAgent | AgentRef | undefined => {
+  const block = entryBlock(e);
+  return (block && d.agents?.slice().reverse().find((a) => a.block === block)) || d.agent;
+};
+
+/** The pane an entry names as its agent's, if any. */
+export const entryBlock = (e: { actor?: Record<string, unknown>; data?: Record<string, unknown> }): string | undefined =>
+  (e.data?.block as string | undefined) || ((e.data?.agent as { block?: string } | undefined)?.block) || (e.actor?.block as string | undefined) || undefined;
+
 /** The runtimes the hub follows now, for people: "Rex and Herdr". */
 export const followedRuntimes = (s?: { runtimes?: RuntimeLink[] } | null): string => {
   const on = s?.runtimes ? s.runtimes.filter((r) => r.connected).map((r) => r.title) : ["Rex"];
@@ -48,6 +74,25 @@ export type AgentRef = {
   cwd?: string | null;
 };
 
+/** One agent on a docket (src/record/fold.rs `DocketAgent`), as the hub serves it. */
+export type DocketAgent = AgentRef & {
+  session?: string | null;
+  /** What it's there for: `Build builder`, `claude reviewer`, `tests`. */
+  role?: string | null;
+  round?: number | null;
+  joined_at: string;
+  active_at: string;
+  left_at?: string | null;
+  left?: string | null;
+  /** Still on the docket. */
+  on: boolean;
+  runtime?: RuntimeName;
+  /** What it's doing now, when its pane is live. */
+  live?: Live | null;
+  /** Its message address, when live. */
+  addr?: string | null;
+};
+
 export type Docket = {
   id: string;
   title: string;
@@ -69,6 +114,10 @@ export type Docket = {
   head: string;
   short_head: string;
   live: Live | null;
+  /** Every agent that's been on it (on /api/state, only those on it now). Older hubs leave it out. */
+  agents?: DocketAgent[];
+  /** The pane of the agent shown first: the one that needs you most. */
+  lead?: string | null;
   quick: boolean;
   intent?: { body: string; source: string; by: string; at: string; seq: number };
   intent_versions?: number;
@@ -176,6 +225,8 @@ export const linearStatus = (t?: string | null) =>
 
 export type Ask = {
   docket: string;
+  /** The asking agent's pane (older hubs leave it out). */
+  block?: string;
   title?: string | null;
   what: "blocked" | "failed";
   kind?: string | null;
@@ -361,7 +412,7 @@ export type HubState = {
   runtimes?: RuntimeLink[];
   dockets: Docket[];
   asks: Ask[];
-  agents: (Live & { docket?: string | null })[];
+  agents: (Live & { docket?: string | null; role?: string | null })[];
   attention?: Attention[];
 };
 

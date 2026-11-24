@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { get, paneRuntime, post, spawnRuntime, type Docket } from "./api";
+import { agentLabel, appName, get, liveAgents, paneRuntime, post, spawnRuntime, type Docket } from "./api";
 import { LinearPicker } from "./Linear";
 import { IconActive, IconAgents, IconDone, IconEye, IconIssue, IconInbox, IconLayers, IconMonitor, IconMoon, IconPause, IconPlay, IconPlus, IconSettings, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
 import { AttentionIcon } from "./Verify";
@@ -7,7 +7,7 @@ import { attentionShown } from "./evidence";
 import { go, setTheme, useHub } from "./live";
 import { Kbd, Modal, useToast } from "./ui";
 import { onThisMac, usePane } from "./Pane";
-import { STATUSES, canStartAgent } from "./views";
+import { STATUSES, canStartAgent, startLabel } from "./views";
 import { inboxItems } from "./Inbox";
 
 type Cmd = { id: string; group: string; label: string; icon?: ReactNode; hint?: ReactNode; keywords?: string; run: () => void };
@@ -56,9 +56,11 @@ export function Palette({
     const asks = inboxItems(hub.state?.dockets ?? [], hub.state?.messages ?? [], hub.state?.review?.prs ?? []);
     for (const it of asks) {
       const d = it.d;
-      if (it.kind === "blocked" && d.live?.answerable) {
-        out.push({ id: `ap-${d.id}`, group: "Needs you", label: `Approve ${d.id}: ${d.live.msg ?? "the prompt"}`, keywords: `approve permission yes ${d.title}`, run: () => hub.answer(d, true) });
-        out.push({ id: `dn-${d.id}`, group: "Needs you", label: `Deny ${d.id}: ${d.live.msg ?? "the prompt"}`, keywords: `deny permission no ${d.title}`, run: () => hub.answer(d, false) });
+      const l = it.live ?? d.live;
+      if (it.kind === "blocked" && l?.answerable) {
+        const who = it.who ? ` (${it.who})` : "";
+        out.push({ id: `ap-${it.key}`, group: "Needs you", label: `Approve ${d.id}${who}: ${l.msg ?? "the prompt"}`, keywords: `approve permission yes ${d.title}`, run: () => hub.answer(d, true, l) });
+        out.push({ id: `dn-${it.key}`, group: "Needs you", label: `Deny ${d.id}${who}: ${l.msg ?? "the prompt"}`, keywords: `deny permission no ${d.title}`, run: () => hub.answer(d, false, l) });
       } else if (it.m && it.m.options.length) {
         const m = it.m;
         for (const o of m.options)
@@ -79,7 +81,7 @@ export function Palette({
       if (d.hold) out.push({ id: "resume", group: d.id, label: `Resume: it's on hold (${d.hold})`, icon: <IconPlay size={15} />, keywords: "hold unhold resume", run: () => void hub.resume(d.id).catch(() => {}) });
       else out.push({ id: "hold", group: d.id, label: "Hold…", icon: <IconPause size={15} />, keywords: "hold pause stop wait", run: () => hub.setDialog({ kind: "hold", id: d.id }) });
       out.push({ id: "checks", group: d.id, label: "Run checks", icon: <IconShield size={15} />, keywords: "verify test lint witnessed", run: () => void hub.runChecks(d.id).catch(() => {}) });
-      if (canStartAgent(d)) out.push({ id: "start-agent", group: d.id, label: "Start an agent…", icon: <IconAgents size={15} />, keywords: "agent claude codex agy antigravity start pane work", run: () => hub.setDialog({ kind: "agent", id: d.id }) });
+      if (canStartAgent(d)) out.push({ id: "start-agent", group: d.id, label: startLabel(d), icon: <IconAgents size={15} />, keywords: "agent claude codex agy antigravity start pane work", run: () => hub.setDialog({ kind: "agent", id: d.id }) });
     }
     // What else needs a look: held, failing, quiet, closed on your word.
     for (const a of attentionShown(hub.state?.attention, asks.map((i) => ({ docket: i.d.id, kind: i.kind }))))
@@ -193,7 +195,7 @@ export function Palette({
   );
 }
 
-/** Start an agent on a docket you already have: it claims this docket, in a new pane. */
+/** Start an agent on a docket you already have, in a new pane: beside any agents already on it. */
 export function StartAgent({ id, onClose }: { id: string; onClose: () => void }) {
   const hub = useHub();
   const toast = useToast();
@@ -203,6 +205,7 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
   const [app, setApp] = useState<"claude-code" | "codex" | "agy">(d?.agent?.app === "codex" ? "codex" : d?.agent?.app === "agy" ? "agy" : "claude-code");
   const [note, setNote] = useState(`Read wh brief ${id}, then work on its intent.`);
   const [busy, setBusy] = useState(false);
+  const others = liveAgents(d);
   useEffect(() => {
     get<{ folders: string[]; suggested: string | null }>(`/api/folders?docket=${encodeURIComponent(id)}`).then(
       (r) => {
@@ -215,9 +218,10 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
   const startIt = () => {
     if (busy || !cwd.trim()) return;
     setBusy(true);
-    post<{ docket: string }>("/api/agents/start", { app, cwd: cwd.trim(), prompt: note.trim() || undefined, docket: id }).then(
-      () => {
-        toast(`${app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : "Claude Code"} is on ${id}, in wheelhouse/${id}`);
+    post<{ docket: string; pane?: string; others?: number }>("/api/agents/start", { app, cwd: cwd.trim(), prompt: note.trim() || undefined, docket: id }).then(
+      (r) => {
+        const n = r.others ?? 0;
+        toast(`${app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : "Claude Code"} is on ${id}, in ${r.pane ?? `wheelhouse/${id}`}${n ? `, beside ${n} other agent${n > 1 ? "s" : ""}` : ""}`);
         hub.reload();
         onClose();
       },
@@ -232,12 +236,17 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
       <div className="nd-head">
         <span className="chip">{id}</span>
         <span className="muted">›</span>
-        <span>Start an agent</span>
+        <span>{others.length ? "Add an agent" : "Start an agent"}</span>
         <span className="spacer" />
         <span className="muted small nd-for" title={d?.title}>
           {d?.title}
         </span>
       </div>
+      {others.length > 0 && (
+        <div className="nd-beside muted small">
+          It joins {others.length === 1 ? "the agent" : `the ${others.length} agents`} on {id}: {others.map((a) => `${appName(a.app)} (${agentLabel(a)})`).join(", ")}. They can reach each other with <code>wh send --to @{id}</code>.
+        </div>
+      )}
       <textarea
         autoFocus
         className="nd-note nd-prompt"

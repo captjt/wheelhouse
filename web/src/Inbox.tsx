@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { appName, type Attention, type Docket, type Msg, type ReviewPr } from "./api";
+import { agentLabel, appName, liveAgents, type Attention, type Docket, type Live, type Msg, type ReviewPr } from "./api";
 import { AttentionIcon } from "./Verify";
 import { attentionShown } from "./evidence";
 import { ReviewActions, draftLine, waitsWhy } from "./Reviews";
@@ -13,7 +13,8 @@ import { LargeTitle, SwipeRow, type SwipeAction } from "./mobile";
 import { IconCheck, IconX } from "./icons";
 import { AnswerButtons, usePane } from "./Pane";
 
-type Item = { d: Docket; kind: "blocked" | "error" | "done" | "message" | "review"; line: string; at?: string | null; m?: Msg; p?: ReviewPr; key: string };
+/** `live`: the agent an item is about, on a docket that may have several; `who` names it beside the others. */
+type Item = { d: Docket; kind: "blocked" | "error" | "done" | "message" | "review"; line: string; at?: string | null; m?: Msg; p?: ReviewPr; key: string; live?: Live | null; who?: string };
 
 const ATTENTION: Record<string, string> = {
   ready: "Ready to post",
@@ -48,8 +49,22 @@ export function inboxItems(dockets: Docket[], messages: Msg[] = [], prs: ReviewP
     // A turn finished, or a failure, on a docket you've closed isn't your
     // move; an agent waiting on a prompt still is.
     const open = d.status === "todo" || d.status === "in_progress";
-    if (s === "blocked") items.push({ d, kind: "blocked", line: d.live?.msg || `${appName(d.agent?.app)} needs you`, at: d.live?.since, key: d.id });
-    else if (s === "error" && open) items.push({ d, kind: "error", line: d.live?.msg || "Failed", at: d.live?.since, key: d.id });
+    // Each agent that's asking or failed is its own item: on a docket with several, by name.
+    const live = liveAgents(d);
+    const several = live.length > 1;
+    let asked = false;
+    for (const a of live.length ? live : []) {
+      const l = a.live!;
+      const who = several ? agentLabel(a) : undefined;
+      const key = several ? `${d.id}:${a.block}` : d.id;
+      if (l.state === "blocked") items.push({ d, kind: "blocked", line: l.msg || `${appName(a.app)} needs you`, at: l.since, key, live: l, who });
+      else if (l.state === "error" && open) items.push({ d, kind: "error", line: l.msg || "Failed", at: l.since, key, live: l, who });
+      else continue;
+      asked = true;
+    }
+    if (asked || (live.length && s !== "done")) continue;
+    if (!live.length && s === "blocked") items.push({ d, kind: "blocked", line: d.live?.msg || `${appName(d.agent?.app)} needs you`, at: d.live?.since, key: d.id });
+    else if (!live.length && s === "error" && open) items.push({ d, kind: "error", line: d.live?.msg || "Failed", at: d.live?.since, key: d.id });
     else if (s === "done" && open)
       items.push({ d, kind: "done", line: firstLine(d.last_turn) || "Finished its turn", at: d.live?.since || d.updated_at, key: d.id });
   }
@@ -92,10 +107,10 @@ export function InboxView() {
     }
     if (it.kind === "review") return { leading: [], trailing: [], full: false };
     const leading: SwipeAction[] =
-      it.kind === "blocked" && it.d.live?.answerable
+      it.kind === "blocked" && (it.live ?? it.d.live)?.answerable
         ? [
-            { key: "approve", label: "Approve", icon: <IconCheck size={18} />, tone: "approve", run: () => void hub.answer(it.d, true) },
-            { key: "deny", label: "Deny", icon: <IconX size={18} />, tone: "deny", run: () => void hub.answer(it.d, false) },
+            { key: "approve", label: "Approve", icon: <IconCheck size={18} />, tone: "approve", run: () => void hub.answer(it.d, true, it.live) },
+            { key: "deny", label: "Deny", icon: <IconX size={18} />, tone: "deny", run: () => void hub.answer(it.d, false, it.live) },
           ]
         : [];
     return { leading, trailing: it.d.entries ? swipeEnd(it.d, hub).slice(0, 1) : [], full: it.kind !== "blocked" };
@@ -120,11 +135,11 @@ export function InboxView() {
     k: () => move(-1),
     ArrowUp: () => move(-1),
     Enter: () => currentId && go(`/d/${currentId}`),
-    o: () => currentId && pane.act(currentId),
+    o: () => currentId && pane.act(currentId, current?.live?.block),
     e: () => currentId && hub.setStatus(currentId, "done"),
     // A prompt: approve or deny it. A message with options: 1 to 6 picks one.
-    a: () => current && current.kind !== "message" && current.d.live?.answerable && void hub.answer(current.d, true),
-    d: () => current && current.kind !== "message" && current.d.live?.answerable && void hub.answer(current.d, false),
+    a: () => current && current.kind !== "message" && (current.live ?? current.d.live)?.answerable && void hub.answer(current.d, true, current.live),
+    d: () => current && current.kind !== "message" && (current.live ?? current.d.live)?.answerable && void hub.answer(current.d, false, current.live),
     ...Object.fromEntries(
       [1, 2, 3, 4, 5, 6].map((n) => [String(n), () => current?.m && current.m.options[n - 1] !== undefined && void hub.replyTo(current.m.id, "", current.m.options[n - 1])]),
     ),
@@ -192,7 +207,8 @@ export function InboxView() {
                   </span>
                   <span className="inbox-line">
                     <span className="row-id">{it.d.id}</span>
-                    {it.kind === "blocked" ? (it.d.live?.kind ? `${it.d.live.kind}: ` : "Needs you: ") : it.kind === "error" ? "Failed: " : ""}
+                    {it.who && <span className="inbox-who">{it.who} · </span>}
+                    {it.kind === "blocked" ? ((it.live ?? it.d.live)?.kind ? `${(it.live ?? it.d.live)!.kind}: ` : "Needs you: ") : it.kind === "error" ? "Failed: " : ""}
                     <InlineMd text={it.line} links={false} />
                   </span>
                   {it.p?.attention?.kind === "ready" && (
@@ -205,9 +221,9 @@ export function InboxView() {
                       <MessageCard m={it.m} compact />
                     </span>
                   )}
-                  {it.kind !== "message" && it.d.live?.answerable && (
+                  {it.kind !== "message" && (it.live ?? it.d.live)?.answerable && (
                     <span className="inbox-actions">
-                      <AnswerButtons d={it.d} small />
+                      <AnswerButtons d={it.d} live={it.live} small />
                     </span>
                   )}
                 </span>

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { appName, get, paneRuntime, post, type Docket, type EntryView, type Live } from "./api";
+import { agentLabel, agentOfEntry, appName, entryBlock, get, liveAgents, paneRuntime, post, runtimeOf, runtimeTitle, type Docket, type DocketAgent, type EntryView, type Live } from "./api";
 import { AppAvatar, IconDown, IconFile, IconSend, IconTerminal, LiveIcon, liveWord } from "./icons";
 import { agoLong, stamp, useHub } from "./live";
 import { MessageCard } from "./Messages";
@@ -16,45 +16,50 @@ import { Prose, isPhone, useToast } from "./ui";
 
 type Item =
   | { t: "you"; seq: number; at: string; text: string; note?: boolean }
-  | { t: "agent"; seq: number; at: string; text: string; app: string }
-  | { t: "ask"; seq: number; at: string; text: string; subject?: string; options: string[]; app: string }
+  | { t: "agent"; seq: number; at: string; text: string; app: string; who?: string }
+  | { t: "ask"; seq: number; at: string; text: string; subject?: string; options: string[]; app: string; who?: string }
   | { t: "chose"; seq: number; at: string; text: string }
   | { t: "sys"; seq: number; at: string; text: string; tone?: string }
   | { t: "file"; seq: number; at: string; e: EntryView }
   | { t: "break"; seq: number; at: string; text: string };
 
-function itemsOf(entries: EntryView[], fallbackApp: string): Item[] {
+function itemsOf(entries: EntryView[], dk: Docket): Item[] {
   const out: Item[] = [];
-  let session: string | null = null;
+  // Each agent's session, by its pane: on a docket with several, one's new session isn't another's.
+  const sessions = new Map<string, string>();
+  const several = (dk.agents?.length ?? 0) > 1;
   for (const e of entries) {
     const d = e.data || {};
-    const agentApp = e.actor.type === "agent" ? String(e.actor.id).split("@")[0] : fallbackApp;
+    const a = agentOfEntry(dk, e);
+    const agentApp = e.actor.type === "agent" ? String(e.actor.id).split("@")[0] : a?.app || "agent";
+    const who = several && a ? agentLabel(a) : undefined;
     switch (e.kind) {
       case "claim": {
         const s = String(d.session || "");
-        if (s && s !== session) {
-          if (session) out.push({ t: "break", seq: e.seq, at: e.at, text: d.source === "resume" ? "Resumed an earlier session" : d.source === "clear" ? "A new session (/clear)" : "A new session" });
-          session = s;
-        }
+        const b = entryBlock(e) ?? "";
+        const was = sessions.get(b);
+        if (d.source === "join") out.push({ t: "break", seq: e.seq, at: e.at, text: `${appName(a?.app)}${who ? ` (${who})` : ""} joined` });
+        else if (s && s !== was && was) out.push({ t: "break", seq: e.seq, at: e.at, text: `${who ? `${who}: ` : ""}${d.source === "resume" ? "Resumed an earlier session" : d.source === "clear" ? "A new session (/clear)" : "A new session"}` });
+        if (s) sessions.set(b, s);
         break;
       }
       case "note":
         if (d.via === "prompt") out.push({ t: "you", seq: e.seq, at: e.at, text: e.body || "" });
-        else if (d.message && e.actor.type === "agent") out.push({ t: "agent", seq: e.seq, at: e.at, text: `${d.subject ? `**${d.subject}**\n\n` : ""}${e.body || ""}`, app: agentApp });
+        else if (d.message && e.actor.type === "agent") out.push({ t: "agent", seq: e.seq, at: e.at, text: `${d.subject ? `**${d.subject}**\n\n` : ""}${e.body || ""}`, app: agentApp, who });
         else if (e.actor.type === "person" && !d.message) out.push({ t: "you", seq: e.seq, at: e.at, text: e.body || "", note: true });
         break;
       case "question":
-        out.push({ t: "ask", seq: e.seq, at: e.at, text: e.body || "", subject: d.subject, options: d.options || [], app: agentApp });
+        out.push({ t: "ask", seq: e.seq, at: e.at, text: e.body || "", subject: d.subject, options: d.options || [], app: agentApp, who });
         break;
       case "decision":
         out.push({ t: "chose", seq: e.seq, at: e.at, text: e.body && e.body !== d.choice ? `${d.choice}: ${e.body}` : String(d.choice || "") });
         break;
       case "turn":
-        if (e.body?.trim()) out.push({ t: "agent", seq: e.seq, at: e.at, text: e.body, app: fallbackApp });
+        if (e.body?.trim()) out.push({ t: "agent", seq: e.seq, at: e.at, text: e.body, app: a?.app || "agent", who });
         break;
       case "observed":
-        if (d.what === "blocked") out.push({ t: "sys", seq: e.seq, at: e.at, text: `Waited on you${d.kind ? ` (${d.kind})` : ""}${e.body ? `: ${e.body}` : ""}`, tone: "blocked" });
-        else if (d.what === "error") out.push({ t: "sys", seq: e.seq, at: e.at, text: `Failed${e.body ? `: ${e.body}` : ""}`, tone: "error" });
+        if (d.what === "blocked") out.push({ t: "sys", seq: e.seq, at: e.at, text: `${who ? `${who} w` : "W"}aited on you${d.kind ? ` (${d.kind})` : ""}${e.body ? `: ${e.body}` : ""}`, tone: "blocked" });
+        else if (d.what === "error") out.push({ t: "sys", seq: e.seq, at: e.at, text: `${who ? `${who} f` : "F"}ailed${e.body ? `: ${e.body}` : ""}`, tone: "error" });
         break;
       case "approval":
         if (!d.what && !d.kind) break;
@@ -64,7 +69,7 @@ function itemsOf(entries: EntryView[], fallbackApp: string): Item[] {
         out.push({ t: "file", seq: e.seq, at: e.at, e });
         break;
       case "release":
-        out.push({ t: "break", seq: e.seq, at: e.at, text: `The session ended: ${d.reason || "released"}` });
+        out.push({ t: "break", seq: e.seq, at: e.at, text: who ? `${who} left: ${d.reason || "released"}` : `The session ended: ${d.reason || "released"}` });
         break;
     }
   }
@@ -97,10 +102,11 @@ const elapsed = (since?: string | null) => {
   return s < 60 ? `${Math.floor(s)}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 };
 
-/** What the agent is doing now, at the end of the conversation. */
-function NowLine({ d, onTerminal }: { d: Docket; onTerminal: () => void }) {
-  const app = appName(d.agent?.app);
-  const l = d.live;
+/** What an agent is doing now, at the end of the conversation: one line per live agent. */
+function NowLine({ d, a, several, onTerminal }: { d: Docket; a?: DocketAgent; several?: boolean; onTerminal: () => void }) {
+  const app = several && a ? `${appName(a.app)} (${agentLabel(a)})` : appName(a?.app ?? d.agent?.app);
+  const l = a ? (a.live ?? null) : d.live;
+  const q = a ? `?block=${encodeURIComponent(a.block)}` : "";
   const [peek, setPeek] = useState(false);
   const [tail, setTail] = useState<string>("");
   const [, tick] = useState(0);
@@ -114,7 +120,7 @@ function NowLine({ d, onTerminal }: { d: Docket; onTerminal: () => void }) {
     let live = true;
     let timer: number | undefined;
     const load = () =>
-      get<{ text: string; live: Live | null }>(`/api/dockets/${d.id}/screen`)
+      get<{ text: string; live: Live | null }>(`/api/dockets/${d.id}/screen${q}`)
         .then((s) => live && setTail(s.text.replace(/\s+$/, "").split("\n").slice(-14).join("\n")))
         .catch(() => {})
         .finally(() => {
@@ -125,7 +131,7 @@ function NowLine({ d, onTerminal }: { d: Docket; onTerminal: () => void }) {
       live = false;
       window.clearTimeout(timer);
     };
-  }, [peek, d.id, !!l]);
+  }, [peek, d.id, q, !!l]);
   if (!l)
     return (
       <div className="chat-now off">
@@ -145,7 +151,7 @@ function NowLine({ d, onTerminal }: { d: Docket; onTerminal: () => void }) {
           </div>
         </div>
         <div className="chat-now-actions">
-          <AnswerButtons d={d} />
+          <AnswerButtons d={d} live={l} />
           <button className="btn" onClick={onTerminal}>
             <IconTerminal size={14} /> Terminal
           </button>
@@ -201,8 +207,13 @@ export function ChatView({
   const hub = useHub();
   const pane = usePane();
   const toast = useToast();
-  const app = appName(d.agent?.app);
-  const items = useMemo(() => itemsOf(entries, d.agent?.app || "agent"), [entries, d.agent?.app]);
+  const items = useMemo(() => itemsOf(entries, d), [entries, d]);
+  // Who the box sends to: on a docket with several agents, the one you pick (its lead at first).
+  const live = liveAgents(d);
+  const several = live.length > 1;
+  const [toBlock, setTo] = useState<string | null>(null);
+  const target = live.find((a) => a.block === toBlock) ?? live[0];
+  const app = several && target ? `${appName(target.app)} (${agentLabel(target)})` : appName(target?.app ?? d.agent?.app);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<string[]>([]);
@@ -211,8 +222,9 @@ export function ChatView({
   const [below, setBelow] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const asks = (hub.state?.messages ?? []).filter((m) => m.docket === d.id);
-  const state = d.live?.state;
-  const canSend = !!d.live && state !== "error";
+  const tl = target?.live ?? (live.length ? null : d.live);
+  const state = tl?.state;
+  const canSend = !!tl && state !== "error";
   const willQueue = state === "working" || state === "starting" || state === "blocked";
 
   // What you sent shows at once, until the record has it.
@@ -236,7 +248,7 @@ export function ChatView({
     const t = text.trim();
     if (!t || busy || !canSend) return;
     setBusy(true);
-    post<{ ok: boolean; queued?: number }>(`/api/dockets/${d.id}/send`, { text: t, queue: true }).then(
+    post<{ ok: boolean; queued?: number }>(`/api/dockets/${d.id}/send`, { text: t, queue: true, block: target?.block }).then(
       (r) => {
         setBusy(false);
         setText("");
@@ -279,6 +291,7 @@ export function ChatView({
           <div className="chat-who">
             <AppAvatar app={it.app} size={18} />
             <strong>{appName(it.app)}</strong>
+            {it.who && <span className="chat-role">{it.who}</span>}
             {it.t === "ask" && <span className="muted">asked you{it.subject ? ` · ${it.subject}` : ""}</span>}
             <span className="chat-at" title={stamp(it.at)}>
               {agoLong(it.at)}
@@ -343,7 +356,7 @@ export function ChatView({
             <Prose text={t} />
           </div>
         ))}
-        <NowLine d={d} onTerminal={() => pane.view(d.id)} />
+        {live.length ? live.map((a) => <NowLine key={a.block} d={d} a={a} several={several} onTerminal={() => pane.view(d.id, a.block)} />) : <NowLine d={d} onTerminal={() => pane.view(d.id)} />}
       </div>
       {below && (
         <button className="chat-jump" onClick={toBottom} aria-label="Go to the latest">
@@ -351,11 +364,20 @@ export function ChatView({
         </button>
       )}
       <div className="chat-compose">
+        {several && (
+          <select className="chat-to" value={target?.block} onChange={(e) => setTo(e.target.value)} aria-label="Send to" title="Which agent this goes to">
+            {live.map((a) => (
+              <option key={a.block} value={a.block}>
+                {agentLabel(a)} · {appName(a.app)} · {runtimeTitle(runtimeOf(a.block))}
+              </option>
+            ))}
+          </select>
+        )}
         <textarea
           ref={box}
           value={text}
           rows={1}
-          placeholder={!canSend ? (d.live ? `${app} stopped with an error` : `${app} isn't running`) : willQueue ? `Queue a message for ${app}…` : `Message ${app}…`}
+          placeholder={!canSend ? (tl ? `${app} stopped with an error` : `${app} isn't running`) : willQueue ? `Queue a message for ${app}…` : `Message ${app}…`}
           disabled={!canSend}
           onChange={(e) => {
             setText(e.target.value);
