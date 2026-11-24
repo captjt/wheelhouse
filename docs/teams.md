@@ -1,5 +1,8 @@
 # Teams
 
+To get a workspace running with your first testers, see
+[teams-start.md](teams-start.md).
+
 A **workspace** joins each engineer's own Wheelhouse into one. A team
 works on **shared dockets**, sees who's on what, people and agents alike,
 and its agents work together across machines on one signed record. This

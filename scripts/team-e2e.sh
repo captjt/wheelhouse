@@ -266,6 +266,13 @@ until_ "the answer didn't reach Sam's agent" jq -e '[.pasted[] | select(.block =
 [ "$(msgs sam "SELECT status FROM messages WHERE subject = 'Empty bucket' AND to_addr = 'me'")" = answered ] || fail "Sam's own copy of the question is still open"
 ok "the question reached Jordan as an owner; his answer went to Sam's agent, and Sam's copy was withdrawn"
 
+step "Jordan starts another agent on the shared docket; Sam sees it as Jordan's"
+as jordan start --docket "$S" -C "$t/jordan/code/api" "Check the middleware's tests" >/dev/null || fail "wh start --docket on a shared docket"
+sync jordan
+sync sam
+until_ "Sam doesn't see Jordan's new agent" sh -c "curl -fsS --max-time 20 -H 'x-wheelhouse: 1' http://127.0.0.1:$(port_of sam)/api/dockets/$S | jq -e '[.docket.agents[] | select(.on and .member == \"jordan\")] | length == 2'"
+ok "Jordan's second agent is on $S, and Sam's hub counts two of Jordan's"
+
 step "Sam's hub writes offline and catches up"
 stop_ws
 as sam note "$S" "written on a plane" | grep >/dev/null "sent to the workspace" || fail "an offline note wasn't kept"
