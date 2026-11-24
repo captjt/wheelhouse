@@ -74,10 +74,25 @@ pub fn run() -> Result<()> {
     }
 
     println!("\nAgents");
-    if status["rex"]["connected"] == true {
-        r.ok("rex", "following your panes");
-    } else {
-        r.bad("rex", &format!("not connected: {}", status["rex"]["error"].as_str().unwrap_or("connecting")), "is Rex running? rex whoami says which server it's on");
+    // Every runtime that's on this Mac should be followed; the one new
+    // agents open in must be.
+    for rt in status["runtimes"].as_array().into_iter().flatten() {
+        let (name, title) = (rt["name"].as_str().unwrap_or("?"), rt["title"].as_str().unwrap_or("?"));
+        let spawn = rt["spawn"] == true;
+        let hint = match name {
+            "herdr" => "is herdr-core running? hc server status",
+            _ => "is Rex running? rex whoami says which server it's on",
+        };
+        if rt["connected"] == true {
+            r.ok(name, &format!("following your {}{}", if name == "herdr" { "terminals" } else { "panes" }, if spawn { "; new agents open here" } else { "" }));
+        } else if rt["installed"] != true {
+            if spawn {
+                r.bad(name, &format!("{title} isn't installed, and new agents open in it"), "install it, or set runtime in Settings");
+            }
+        } else {
+            let msg = format!("not connected: {}", rt["error"].as_str().unwrap_or("connecting"));
+            if spawn { r.bad(name, &msg, hint) } else { r.warn(name, &msg, hint) }
+        }
     }
     if status["hooks"] == true {
         r.ok("hooks", "Claude Code's hooks are on: prompts, turns and /clear reach the record");

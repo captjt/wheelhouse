@@ -300,7 +300,8 @@ async fn state(State(shared): State<Shared>) -> ApiResult {
         "flavor": flavor(),
         "hooks": crate::hooks::any_installed(),
         "linear": core.linear_ready,
-        "rex": { "connected": core.mirror.connected, "error": core.mirror.error },
+        "rex": crate::runtime::link_json(&core.mirror, crate::runtime::Kind::Rex),
+        "runtimes": crate::runtime::status(&core.mirror),
         "dockets": dockets,
         "asks": asks,
         "agents": agents_now,
@@ -327,7 +328,8 @@ async fn status(State(shared): State<Shared>) -> ApiResult {
         "flavor": flavor(),
         "pid": std::process::id(),
         "uptime_secs": core.started.elapsed().as_secs(),
-        "rex": { "connected": core.mirror.connected, "error": core.mirror.error },
+        "rex": crate::runtime::link_json(&core.mirror, crate::runtime::Kind::Rex),
+        "runtimes": crate::runtime::status(&core.mirror),
         "agents": core.mirror.panes.values().filter(|p| p.is_agent()).count(),
         "dockets": { "open": dockets.iter().filter(|d| d.is_open()).count(), "all": dockets.len() },
         "hooks": crate::hooks::any_installed(),
@@ -562,6 +564,7 @@ async fn run_checks(State(shared): State<Shared>, Path(id): Path<String>) -> Api
     Ok(Json(json!({ "run": run, "checks": names })))
 }
 
+/// Show the docket's pane in its runtime's app (Rex.app, the Herdr app).
 async fn open_in_rex(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
     let target = {
         let core = shared.lock();
@@ -569,22 +572,22 @@ async fn open_in_rex(State(shared): State<Shared>, Path(id): Path<String>) -> Ap
         st.agent.and_then(|a| core.mirror.panes.get(&a.block).map(|p| (p.session_id.clone(), p.block_id.clone(), p.window_id.clone())))
     };
     let Some((session, block, window)) = target else {
-        return Err(fail(StatusCode::CONFLICT, format!("{id} has no pane open in Rex")));
+        return Err(fail(StatusCode::CONFLICT, format!("{id} has no pane open")));
     };
-    crate::rex::Rex.focus(&session, &block, window.as_deref()).await.map_err(internal)?;
+    crate::runtime::for_id(&block).focus(&session, &block, window.as_deref()).await.map_err(internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
-/// The docket's pane, if it's open in Rex now: `(session, block)`.
+/// The docket's pane, if it's open now: `(session, block)`.
 fn pane_of(core: &crate::hub::Core, id: &str) -> std::result::Result<(String, String), (StatusCode, Json<Value>)> {
     let st = core.store.state(id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
     st.agent
         .and_then(|a| core.mirror.panes.get(&a.block).map(|p| (p.session_id.clone(), p.block_id.clone())))
-        .ok_or_else(|| fail(StatusCode::CONFLICT, format!("{id} has no pane open in Rex")))
+        .ok_or_else(|| fail(StatusCode::CONFLICT, format!("{id} has no pane open")))
 }
 
 /// The pane's screen and recent scrollback, as text, for a phone or any
-/// screen that isn't next to Rex.
+/// screen that isn't next to the pane's runtime.
 async fn screen(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
     let (session, block, live) = {
         let core = shared.lock();
@@ -592,7 +595,7 @@ async fn screen(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
         let live = agents::live(&core, &b);
         (s, b, live)
     };
-    let text = crate::rex::Rex.capture(&session, &block, 400).await.map_err(internal)?;
+    let text = crate::runtime::for_id(&block).capture(&session, &block, 400).await.map_err(internal)?;
     Ok(Json(json!({ "text": text, "live": live, "at": crate::time::now_ms() })))
 }
 
@@ -642,10 +645,7 @@ async fn send(State(shared): State<Shared>, Path(id): Path<String>, Json(req): J
         let session = core.agents.by_block.get(&b).and_then(|t| t.session.clone());
         (s, b, pane.app().unwrap_or("agent").to_string(), session)
     };
-    let rex = crate::rex::Rex;
-    rex.paste(&session, &block, &text).await.map_err(internal)?;
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    rex.send_keys(&session, &block, &["enter"]).await.map_err(internal)?;
+    crate::runtime::for_id(&block).submit(&session, &block, &text).await.map_err(internal)?;
     // The agent's prompt hook records it when installed; otherwise the hub does.
     if !crate::hooks::installed_for(&app) {
         let mut core = shared.lock();
@@ -912,16 +912,16 @@ struct NameReq {
 async fn pane_name(State(shared): State<Shared>, Json(req): Json<NameReq>) -> ApiResult {
     let name = req.name.trim().to_string();
     // A name goes into message headers pasted into other agents' panes, and
-    // onto Rex's command line: letters, digits, `.`, `_` and `-`, not leading.
+    // onto a runtime's command line: letters, digits, `.`, `_` and `-`, not leading.
     let ok = !name.is_empty() && name.len() <= 40 && !name.starts_with(['-', '.']) && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
     if !ok {
         return Err(fail(StatusCode::BAD_REQUEST, "a name is one word of letters, digits, '.', '_' or '-', up to 40, not starting with '-' or '.'"));
     }
     let session = {
         let core = shared.lock();
-        core.mirror.panes.get(&req.block).map(|p| p.session_id.clone()).ok_or_else(|| fail(StatusCode::NOT_FOUND, "that pane isn't in Rex"))?
+        core.mirror.panes.get(&req.block).map(|p| p.session_id.clone()).ok_or_else(|| fail(StatusCode::NOT_FOUND, "that pane isn't open"))?
     };
-    crate::rex::Rex.rename_block(&session, &req.block, &name).await.map_err(internal)?;
+    crate::runtime::for_id(&req.block).rename(&session, &req.block, &name).await.map_err(internal)?;
     let mut core = shared.lock();
     if let Some(p) = core.mirror.panes.get_mut(&req.block) {
         p.label = name.clone();
@@ -1263,7 +1263,7 @@ async fn review_pickup(State(shared): State<Shared>, Json(req): Json<PickupReq>)
 struct ReviewAct {
     /// `owner/name#n`.
     key: String,
-    /// The pane asking, from `wh` (`$REX_BLOCK`); none from the app.
+    /// The pane asking, from `wh` (`$REX_BLOCK`, `$HC_TERMINAL_ID`); none from the app.
     #[serde(default)]
     block: Option<String>,
     /// The digest of the draft the asker saw: a post refuses a changed one.

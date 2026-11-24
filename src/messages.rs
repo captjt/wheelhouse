@@ -321,13 +321,7 @@ pub async fn deliver_loop(shared: Shared) {
         };
         for (m, session, block, root, docket) in due {
             let text = render(&m, docket.as_deref());
-            let rex = crate::rex::Rex;
-            let ok = async {
-                rex.paste(&session, &block, &text).await?;
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                rex.send_keys(&session, &block, &["enter"]).await
-            }
-            .await;
+            let ok = crate::runtime::for_id(&block).submit(&session, &block, &text).await;
             let mut core = shared.lock();
             // Tried this turn, whatever happened: a paste that went in but
             // whose Enter failed isn't pasted again a second later.
@@ -377,9 +371,9 @@ fn plan(core: &Core, last: &std::collections::HashMap<String, (Option<String>, I
 /// for a moment, that hasn't had something typed this turn. Its session, and
 /// its root record's time.
 fn ready(core: &Core, block: &str, last: &std::collections::HashMap<String, (Option<String>, Instant)>) -> Option<(String, Option<String>)> {
-    // A mirror that lost Rex may be stale: the agent may have exited and
-    // left a shell, which would run the message's lines as commands.
-    if !core.mirror.connected {
+    // A mirror that lost the pane's runtime may be stale: the agent may have
+    // exited and left a shell, which would run the message's lines as commands.
+    if !core.mirror.connected_for(block) {
         return None;
     }
     let p = core.mirror.panes.get(block)?;
@@ -439,13 +433,7 @@ async fn deliver_prompts(shared: &Shared, last: &mut std::collections::HashMap<S
             .collect()
     };
     for (id, docket, block, body, session, root) in due {
-        let rex = crate::rex::Rex;
-        let ok = async {
-            rex.paste(&session, &block, &body).await?;
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            rex.send_keys(&session, &block, &["enter"]).await
-        }
-        .await;
+        let ok = crate::runtime::for_id(&block).submit(&session, &block, &body).await;
         let mut core = shared.lock();
         last.insert(block.clone(), (root, Instant::now()));
         match ok {

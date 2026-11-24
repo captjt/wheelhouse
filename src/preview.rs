@@ -126,7 +126,7 @@ pub async fn sweep(shared: Shared) {
                 let status = core.store.message(msg).ok().flatten().map(|m| m.status);
                 if !matches!(status.as_deref(), Some("open")) {
                     Some("you answered it")
-                } else if block.as_ref().is_some_and(|b| core.mirror.connected && !core.mirror.panes.contains_key(b)) {
+                } else if block.as_ref().is_some_and(|b| core.mirror.connected_for(b) && !core.mirror.panes.contains_key(b)) {
                     Some("the agent's pane closed")
                 } else {
                     None

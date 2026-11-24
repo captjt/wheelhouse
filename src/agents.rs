@@ -141,6 +141,16 @@ fn reconcile_one(core: &mut Core, block: &str) -> Result<()> {
 
 /// Every second: write turns that waited long enough, and release agents
 /// that have been gone past the grace period.
+/// Every second: turns that ended are written, and agents gone past the
+/// grace are released, whichever runtime they were in.
+pub async fn tick_loop(shared: crate::hub::Shared) {
+    let mut t = tokio::time::interval(std::time::Duration::from_secs(1));
+    loop {
+        t.tick().await;
+        tick(&mut shared.lock());
+    }
+}
+
 pub fn tick(core: &mut Core) {
     let due: Vec<String> = core.agents.turns.iter().filter(|(_, t)| t.since.elapsed() >= TURN_WAIT).map(|(b, _)| b.clone()).collect();
     for b in due {
@@ -515,14 +525,15 @@ pub fn note_prompt(core: &mut Core, docket: &str, prompt: &str, session: Option<
 /// as a command), never mid-turn, and never over a prompt it's waiting on.
 pub fn can_send(p: &Pane) -> std::result::Result<(), String> {
     let app = app_name(p.app().unwrap_or("agent")).to_string();
+    let rt = p.runtime.title();
     if !p.is_agent() {
         return Err("That pane isn't running an agent, so Wheelhouse won't type into it.".into());
     }
     match p.root().map(|r| r.state.as_str()) {
         Some("idle" | "done") => Ok(()),
         Some("working") => Err(format!("{app} is working. Send it when the turn ends.")),
-        Some("blocked") => Err(format!("{app} is waiting on a prompt in its pane. Answer that in Rex first.")),
-        Some("error") => Err(format!("{app} stopped with an error. Look at its pane in Rex.")),
+        Some("blocked") => Err(format!("{app} is waiting on a prompt in its pane. Answer that in {rt} first.")),
+        Some("error") => Err(format!("{app} stopped with an error. Look at its pane in {rt}.")),
         _ => Err(format!("{app} hasn't said it's ready yet.")),
     }
 }
@@ -594,10 +605,12 @@ pub fn summarize(text: &str) -> Option<String> {
 
 // ---- views ----
 
-/// What an agent is doing now, from Rex. Not part of the record.
+/// What an agent is doing now, from its runtime. Not part of the record.
 #[derive(Debug, Clone, Serialize)]
 pub struct Live {
     pub block: String,
+    /// The runtime the pane is in: `rex`, `herdr`.
+    pub runtime: crate::runtime::Kind,
     /// The record that the state comes from, for answering its prompt.
     pub record: Option<String>,
     /// Whether Wheelhouse can answer this prompt with a key.
@@ -618,6 +631,7 @@ pub fn live(core: &Core, block: &str) -> Option<Live> {
     let answerable = h.is_some_and(|r| r.state == "blocked" && r.kind.as_deref() == Some("permission")) && p.app().and_then(crate::approve::prompt_keys).is_some();
     Some(Live {
         block: block.to_string(),
+        runtime: p.runtime,
         record: h.map(|r| r.id.clone()),
         answerable,
         app: p.app().unwrap_or("agent").to_string(),
@@ -672,6 +686,29 @@ mod tests {
         assert_eq!(st.prompts, 2);
         assert_eq!(entries(&core, &d), ["open", "claim", "note", "set", "note"]);
         assert!(core.verify(&d).unwrap().ok);
+    }
+
+    #[test]
+    fn agents_in_rex_and_herdr_are_tracked_side_by_side() {
+        let mut core = test_core();
+        agent_pane(&mut core, "block:1", Some("idle"));
+        let fg = json!({ "foreground": { "name": "claude", "cwd": "/Users/you/git/web" } });
+        let rec = vec![Record { state: "blocked".into(), kind: Some("permission".into()), app: Some("claude-code".into()), ..Default::default() }];
+        core.mirror.apply_pane_status("herdr:space:wheelhouse", "herdr:t2h", rec, Some(&fg), None);
+        reconcile(&mut core, ["block:1".to_string(), "herdr:t2h".to_string()]);
+        let rex = docket_of(&core, "block:1").expect("Rex's agent has a docket");
+        let herdr = docket_of(&core, "herdr:t2h").expect("Herdr's agent has a docket");
+        assert_ne!(rex, herdr);
+        let l = live(&core, "herdr:t2h").unwrap();
+        assert_eq!(l.runtime, crate::runtime::Kind::Herdr);
+        assert!(l.answerable);
+        assert_eq!(can_send(&core.mirror.panes["herdr:t2h"]).unwrap_err(), "Claude Code is waiting on a prompt in its pane. Answer that in Herdr first.");
+
+        // Herdr went away: its agent is missing, Rex's isn't.
+        let changed = core.mirror.replace(crate::runtime::Kind::Herdr, crate::mirror::Mirror::default());
+        reconcile(&mut core, changed);
+        assert!(core.agents.by_block["herdr:t2h"].missing_since.is_some());
+        assert!(core.agents.by_block["block:1"].missing_since.is_none());
     }
 
     #[test]
@@ -896,7 +933,9 @@ mod tests {
     #[test]
     fn a_reviews_panes_join_its_docket_which_only_the_protocol_ends() {
         let mut core = test_core();
-        core.mirror.sessions.insert("s1".into(), crate::mirror::Session { session_id: "s1".into(), label: crate::review::session_name(), windows: vec![] });
+        core.mirror
+            .sessions
+            .insert("s1".into(), crate::mirror::Session { runtime: crate::runtime::Kind::Rex, session_id: "s1".into(), label: crate::review::session_name(), windows: vec![] });
         let mut p = crate::review::pr::Pr::new("acme/api", 341);
         p.title = Some("Add rate limiting".into());
         p.state = "reviewing".into();

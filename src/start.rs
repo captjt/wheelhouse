@@ -1,5 +1,6 @@
 //! Starting an agent on a docket: Claude Code or Codex, in a new tab of the
-//! `wheelhouse` Rex session, in a folder, with your prompt. The docket comes
+//! `wheelhouse` session on the spawn runtime (Rex, or Herdr), in a folder,
+//! with your prompt. The docket comes
 //! first, and the pane is named after it (`wheelhouse/D-12`), so others can
 //! message it.
 
@@ -60,12 +61,13 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
             }
             None => core.open(&Who::Owner, &t, json!({ "protocol": "agent", "title_source": src, "started": true }))?,
         };
-        let session = core.mirror.sessions.values().find(|s| s.label == SESSION).map(|s| s.session_id.clone());
+        let kind = crate::runtime::spawn_kind();
+        let session = core.mirror.sessions.values().find(|s| s.runtime == kind && s.label == SESSION).map(|s| s.session_id.clone());
         (id, session)
     };
-    // `rex run` starts the agent straight from Rex Server, with its short
-    // login PATH: no nvm, pyenv or the rest `.zshrc` adds, so hooks that run
-    // `node` fail. It gets your shell's PATH, as Build's and Review's do.
+    // A runtime starts the agent from its own server, with its short login
+    // PATH (`rex run` from Rex Server, `hc run` from herdr-core): no nvm,
+    // pyenv or the rest `.zshrc` adds, so hooks that run `node` fail. It gets your shell's PATH, as Build's and Review's do.
     let path = tokio::task::spawn_blocking(|| crate::review::agentcli::agent_path(&[])).await.context("reading your shell's PATH")?;
     let mut argv = vec!["env".to_string(), format!("PATH={path}"), bin.to_string()];
     if let Some(p) = prompt {
@@ -78,11 +80,12 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
             argv.push(p.to_string());
         }
     }
-    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
-    let created = crate::rex::Rex.start(session.as_deref(), SESSION, &docket, &cwd, &argv).await.with_context(|| format!("starting {bin} in Rex"))?;
+    let rt = crate::runtime::spawn_kind().get();
+    let created =
+        rt.open(session.as_deref(), SESSION, &docket, &cwd, &argv, crate::runtime::Place::Tab).await.with_context(|| format!("starting {bin} in {}", rt.kind().title()))?;
     let mut core = shared.lock();
     let agent = AgentRef { app: app.into(), host: "local".into(), block: created.block_id.clone(), rex_session: SESSION.into(), pane: docket.clone(), cwd: Some(shown) };
-    // Rex may have shown the new pane to the mirror first, and it got a
+    // The runtime may have shown the new pane to the mirror first, and it got a
     // docket of its own: that one goes, and the pane is this docket's.
     if let Some(other) = core.agents.by_block.get(&created.block_id).map(|t| t.docket.clone()).filter(|d| *d != docket) {
         core.append(&other, "set", &Who::Hub, None, json!({ "status": "dropped" }))?;

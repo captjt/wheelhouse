@@ -175,7 +175,7 @@ pub fn addresses() -> ArgValueCandidates {
     ArgValueCandidates::new(|| {
         let mut out = vec![cand("me", "you, in the Inbox")];
         if let Some(state) = get("/api/state") {
-            out.extend(address_candidates(&state, std::env::var("REX_BLOCK").ok().as_deref()));
+            out.extend(address_candidates(&state, crate::runtime::pane_from_env().as_deref()));
         }
         out
     })
