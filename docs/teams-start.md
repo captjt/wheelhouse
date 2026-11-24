@@ -2,6 +2,7 @@
 
 How the first testers get a workspace running: one person runs the
 workspace hub, and every engineer joins from their own Mac.
+[teams-guide.md](teams-guide.md) is how it works once you're in, and
 [teams.md](teams.md) is the design. Until the branch merges, build from
 `feat/teams`.
 
@@ -84,12 +85,18 @@ Then:
 
 - Tell your agents: `wh skill install` again, so they know about shared
   dockets and teammates' messages.
-- In the app, the workspace shows in the sidebar under its name.
+- In the app, the workspace shows in the sidebar under its name, with its
+  shared dockets and members:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/team-dark.png">
+  <img src="images/team-light.png" alt="The Acme workspace in the web app: connected, an entry held back, four shared dockets with their agents and people, and the members">
+</picture>
 
 ## 5. Work on something together
 
 ```sh
-wh team share D-12                 # one of yours, with its history → ACME-n
+wh team share D-12                 # one of yours → ACME-n (its history stays on your Mac)
 wh new --team "Rate limits"        # or a new one, straight on the workspace
 wh team people ACME-1 sam --owner  # add Sam as an owner (or leave off --owner)
 ```
@@ -103,6 +110,9 @@ wh team people ACME-1 sam --owner  # add Sam as an owner (or leave off --owner)
 - An agent's question (`wh send --to me`) reaches its own person and every
   owner. Whoever answers first, it stands.
 - Only owners change a shared docket's intent and status.
+
+[teams-guide.md](teams-guide.md) has the rest, with pictures: owners and
+members, what reaches your Inbox, and what stays on your Mac.
 
 ## What stays on your Mac
 
