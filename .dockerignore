@@ -1,0 +1,7 @@
+target/
+mac/
+web/node_modules/
+web/dist/
+.tmp/
+.git/
+.env*

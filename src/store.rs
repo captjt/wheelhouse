@@ -31,6 +31,9 @@ pub struct Message {
     /// A preview the message carries: its url, local url, ports, and why
     /// it came down.
     pub preview: Option<serde_json::Value>,
+    /// The id of its entry on the record (`sha256:…`): the same on every
+    /// hub, so a teammate's hub can answer it (docs/teams.md).
+    pub entry: Option<String>,
 }
 
 pub struct Store {
@@ -155,6 +158,9 @@ fn migrate(conn: &Connection) -> Result<()> {
     };
     if !has("messages", "preview")? {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN preview TEXT")?;
+    }
+    if !has("messages", "entry")? {
+        conn.execute_batch("ALTER TABLE messages ADD COLUMN entry TEXT; CREATE INDEX IF NOT EXISTS messages_entry ON messages(entry)")?;
     }
     // A prompt the hub was typing when it stopped may or may not have gone
     // in: it's never typed again.
@@ -464,8 +470,8 @@ impl Store {
 
     pub fn insert_message(&mut self, m: &Message) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO messages (docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+            "INSERT INTO messages (docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, created_at, updated_at, entry)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13, ?14)",
             params![
                 m.docket,
                 m.seq,
@@ -479,7 +485,8 @@ impl Store {
                 m.reply_to,
                 m.choice,
                 m.status,
-                m.created_at
+                m.created_at,
+                m.entry
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -491,7 +498,7 @@ impl Store {
 
     pub fn messages_where(&self, cond: &str, args: impl rusqlite::Params) -> Result<Vec<Message>> {
         let sql = format!(
-            "SELECT id, docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, why, created_at, updated_at, preview
+            "SELECT id, docket, seq, from_addr, from_block, to_addr, to_block, subject, body, options, reply_to, choice, status, why, created_at, updated_at, preview, entry
              FROM messages WHERE {cond} ORDER BY id"
         );
         let mut st = self.conn.prepare(&sql)?;
@@ -514,6 +521,7 @@ impl Store {
                 created_at: r.get(14)?,
                 updated_at: r.get(15)?,
                 preview: r.get::<_, Option<String>>(16)?.and_then(|p| serde_json::from_str(&p).ok()),
+                entry: r.get(17)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -529,6 +537,12 @@ impl Store {
         let mut p = m.preview.unwrap_or_default();
         p["down"] = serde_json::json!(why);
         self.set_message_preview(id, &p)
+    }
+
+    /// The entry a message is on the record as.
+    pub fn set_message_entry(&mut self, id: i64, entry: &str) -> Result<()> {
+        self.conn.execute("UPDATE messages SET entry = ?2 WHERE id = ?1", params![id, entry])?;
+        Ok(())
     }
 
     pub fn set_message_place(&mut self, id: i64, docket: &str, seq: i64) -> Result<()> {

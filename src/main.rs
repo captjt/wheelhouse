@@ -312,10 +312,17 @@ enum Cmd {
         #[arg(add = complete::words(complete::HOOKS))]
         action: Option<String>,
     },
-    /// Run the hub in the background, at login (a LaunchAgent).
-    Up,
-    /// Stop the background hub.
-    Down,
+    /// Run the hub in the background, at login (a LaunchAgent);
+    /// --workspace runs a workspace hub beside it instead (docs/teams.md).
+    Up {
+        #[arg(long)]
+        workspace: bool,
+    },
+    /// Stop the background hub (--workspace: the workspace hub).
+    Down {
+        #[arg(long)]
+        workspace: bool,
+    },
     /// The background hub's log.
     Logs {
         #[arg(short = 'n', default_value_t = 60)]
@@ -445,8 +452,10 @@ fn main() {
         Some(Cmd::Serve { workspace: true }) => team::workspace::serve(),
         Some(Cmd::Hook { agent, event }) => hooks::run(&agent, &event),
         Some(Cmd::Hooks { action }) => hooks::cli(action.as_deref()),
-        Some(Cmd::Up) => service::up(),
-        Some(Cmd::Down) => service::down(),
+        Some(Cmd::Up { workspace: false }) => service::up(),
+        Some(Cmd::Up { workspace: true }) => service::up_workspace(),
+        Some(Cmd::Down { workspace: false }) => service::down(),
+        Some(Cmd::Down { workspace: true }) => service::down_workspace(),
         Some(Cmd::Logs { lines }) => service::logs(lines),
         Some(Cmd::Status) => status(),
         Some(Cmd::Doctor) => doctor::run(),

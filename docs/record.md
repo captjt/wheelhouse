@@ -40,6 +40,11 @@ entries still read.
 The hub fills `actor` in from where a request came from. A caller never
 names itself.
 
+On a workspace's shared docket ([teams.md](teams.md)), actors are qualified
+by member instead of by host: a person is their handle (`sam`), Sam's hub
+is `hub@sam`, and Sam's agents are `codex@sam`. A hub's own dockets keep
+`@local`.
+
 ## The envelope
 
 Each entry is signed in a [DSSE](https://github.com/secure-systems-lab/dsse)
@@ -118,6 +123,32 @@ Verify adds. The protocols write others (`question`, `decision`,
 
 Status is one of `todo`, `in_progress`, `done`, `dropped`.
 
+### On a workspace
+
+A workspace ([teams.md](teams.md)) has two more kinds of record, both in
+this format and checked the same way, ordered by the workspace hub:
+
+- **The member log** (`ACME-0`): `workspace`, `invite`, `join`, `key`,
+  `role` and `remove`. Every hub folds it to the roster and checks each
+  entry against its rules; teams.md has the table.
+- **Shared dockets** (`ACME-1`, `ACME-2`, …): the kinds above, plus:
+
+| Kind | Writer | `data` |
+| --- | --- | --- |
+| `share` | person | Always entry 1. `owners` (handles), `title`, `status`, `protocol`, `intent` (its body). When a local docket was shared: `local` (`D-12`), its `head` and `entries`, and `history` (`sha256:` of its export, also in `blobs`) |
+| `people` | person | Who's on the docket: `handle`, `role` (`owner` or `member`), `action: "remove"` to take them off; or `answer` (`owners` or `members`) for who answers its agents' questions |
+| `trust` | person | `teammate`: whose agents' messages go into the writer's panes without asking (`on: false` to ask again); `private_prompts`: whether the writer's prompts on it are kept back |
+
+On a shared docket, a message (`note` or `question` with `message`) can
+carry `team_to`: `[{member, block, pane}]`, the teammates' agents it's
+for; an answer carries `answers`: the id of the entry it answers, the
+same on every hub. An approval, a blocked prompt, and (for someone keeping
+them private) a prompt carry no text: `data.private` is the `sha256:` of
+the full text, kept only on the writer's hub.
+
+A local docket that was shared gets a `set` with `shared_as`
+(`ACME-31`), and its record here ends there.
+
 ## Files
 
 An entry's `blobs` names files by `sha256:<hex>` of their exact bytes. The
@@ -141,6 +172,12 @@ Applying entries in order, from nothing:
 - `turn` counts a turn and is the last turn.
 - `release` marks its pane's agent as left, or every agent when it names
   no pane. The docket is released when no agent is left on it.
+- On a shared docket, an agent is its member's (`hub@sam` claimed it) and
+  is told apart by member and pane together: a `claim` or `release` from
+  Sam's hub never touches Jordan's agents.
+- `share` sets the title, status, protocol, intent and owners; `people`
+  adds, moves or removes someone (a member joining a docket they're on
+  already changes nothing).
 - Of the agents on it, the docket's `agent` (and `session`) is the one
   most recently active: its last claim, or the last entry that names its
   pane (`data.block`, or an agent actor's `block`). With none on it, the

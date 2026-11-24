@@ -418,6 +418,50 @@ mod tests {
     }
 
     #[test]
+    fn a_late_self_join_keeps_an_owner_an_owner() {
+        let w = world();
+        let mut p = shared(&w);
+        p.apply(&e("people", "person", "jordan", json!({ "handle": "sam", "role": "owner" })));
+        // Sam's own join, sent before Jordan's change, ordered after it.
+        p.apply(&e("people", "person", "sam", json!({ "handle": "sam", "role": "member" })));
+        assert!(p.owners.contains("sam") && !p.members.contains("sam"));
+        let mut st = crate::record::DocketState::new("ACME-1");
+        st.apply(1, "c1", &e("share", "person", "jordan", json!({ "owners": ["jordan"], "title": "T" })));
+        st.apply(2, "c2", &e("people", "person", "jordan", json!({ "handle": "sam", "role": "owner" })));
+        st.apply(3, "c3", &e("people", "person", "sam", json!({ "handle": "sam", "role": "member" })));
+        assert_eq!(st.owners, ["jordan", "sam"]);
+        assert!(st.members.is_empty());
+    }
+
+    #[test]
+    fn two_macs_panes_of_one_id_stay_apart() {
+        // Jordan's and Sam's hubs each have a `herdr:t1` on the docket.
+        let claim = |hub: &str| {
+            let mut x = e("claim", "hub", hub, json!({ "agent": { "app": "codex", "host": "local", "block": "herdr:t1" }, "source": "join" }));
+            x.docket = "ACME-1".into();
+            x
+        };
+        let mut st = crate::record::DocketState::new("ACME-1");
+        st.apply(1, "c1", &claim("hub@jordan"));
+        st.apply(2, "c2", &claim("hub@sam"));
+        assert_eq!(st.agents_on().count(), 2);
+        st.apply(3, "c3", &e("release", "hub", "hub@sam", json!({ "block": "herdr:t1", "reason": "pane closed" })));
+        let on: Vec<Option<&str>> = st.agents_on().map(|a| a.member.as_deref()).collect();
+        assert_eq!(on, [Some("jordan")], "Sam's hub released only Sam's agent");
+        assert_eq!(st.own_agents_on(Some("jordan")).count(), 1);
+        assert_eq!(st.own_agents_on(Some("sam")).count(), 0);
+        assert!(st.released.is_none());
+    }
+
+    #[test]
+    fn remote_blocks_read() {
+        use crate::team::member::remote_block;
+        assert_eq!(remote_block("team:sam:block:sam-1"), Some(("sam".into(), "block:sam-1".into())));
+        assert_eq!(remote_block("team:sam:"), Some(("sam".into(), String::new())));
+        assert_eq!(remote_block("block:local-1"), None);
+    }
+
+    #[test]
     fn secrets_are_spotted() {
         assert!(secret_in(Some("use ghp_abcdefghijklmnopqrstuvwxyz0123456789 for it"), &Value::Null).is_some());
         assert!(secret_in(None, &json!({ "x": "AKIAABCDEFGHIJKLMNOP" })).is_some());

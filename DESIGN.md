@@ -494,8 +494,13 @@ Each milestone is usable on its own and takes over from one tool.
    boundaries, variants in worktrees, and the trace view.
 6. **A team.** The workspace hub, member keys, and shared dockets, as the
    record design lays out.
+   *Status: in progress on D-187 ([docs/teams.md](docs/teams.md)): the
+   workspace hub, the member log, shared dockets, members' hubs that
+   follow and check them, and agents messaging across Macs are built and
+   tested end to end. Still to come: the apps' Team view, Linux
+   packaging, and a live test with other engineers.*
 
-Milestones 5 and 6 haven't started. [docs/roadmap.md](docs/roadmap.md)
+Milestone 5 hasn't started; milestone 6 is under way. [docs/roadmap.md](docs/roadmap.md)
 tracks what's built and what's next.
 
 Review comes before Build because rex-reviewer is the more settled tool
@@ -515,7 +520,7 @@ Build also gains pre-review by landing second.
 | The pane off the Mac | Rex has no link that opens a pane in its iOS app, so off the Mac, "Open in Rex" becomes **View pane**: the agent's terminal, live, in the app, with a box to message the agent between turns. On the Mac it stays "Open in Rex", or "Open in Herdr" for a Herdr terminal. | decided |
 | Theme | Colors from Cloudflare's open-source Kumo design system: neutral oklch surfaces, Cloudflare blue for actions and links, Cloudflare orange (`#f6821f`) for the brand, Kumo's success, warning and danger colors and tints. Every token is a CSS `light-dark()`: the mode follows the system by default, or you pin Light or Dark in the sidebar or ⌘K. | decided |
 | Repo | Private for now, and possibly open source later. Fixtures and screenshots use a made-up workspace from the start. | decided |
-| Teams | Not in v1. The record is built so teams can share it later. | decided |
+| Teams | A workspace hub (Linux or an always-on Mac) orders shared dockets; each engineer's hub stays theirs. Opt-in sharing, owners and members, member keys in a signed member log, teammates' agents' messages held until let in (docs/teams.md, D-187). | decided |
 | Language | A Rust daemon (rex-inbox's code ports directly), a React UI, and a SwiftUI Mac app (`mac/`). | decided |
 | Protocol rules | Ported to Rust as pure functions, tested by replaying the tools' fixtures | proposed |
 | Config | Lua files, like the tools', so effort and routing can be functions. Settings writes what isn't code to `settings.json`, laid over the Lua and checked by the same reader. Guides and briefs are files that replace the built-in ones. Runtime changes to a docket are entries. | decided |

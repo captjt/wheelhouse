@@ -121,8 +121,9 @@ Its intent has acceptance items, so it closes on evidence (passing checks, a mer
 /// The agents on the docket besides `me`, and how to reach them. Nothing
 /// when it's only you.
 fn agents_on(core: &Core, st: &crate::record::fold::DocketState, me: Option<&str>) -> String {
-    let others: Vec<String> = st
-        .agents_on()
+    let handle = core.team.as_ref().map(|t| t.config.handle.clone());
+    let mut others: Vec<String> = st
+        .own_agents_on(handle.as_deref())
         .filter(|a| Some(a.agent.block.as_str()) != me && crate::agents::docket_of(core, &a.agent.block).as_deref() == Some(st.id.as_str()))
         .map(|a| {
             let addr = core.mirror.panes.get(&a.agent.block).map(|p| crate::messages::addr_of(core, p)).unwrap_or_else(|| a.agent.block.clone());
@@ -131,12 +132,32 @@ fn agents_on(core: &Core, st: &crate::record::fold::DocketState, me: Option<&str
             format!("- `{addr}`: {}{role}, in {} ({state})\n", crate::mirror::app_name(&a.agent.app), crate::runtime::of(&a.agent.block).title())
         })
         .collect();
+    // A shared docket's other members' agents, on their own Macs.
+    let teammates: Vec<String> = st
+        .agents_on()
+        .filter(|a| a.member.is_some() && a.member != handle)
+        .map(|a| {
+            let m = a.member.as_deref().unwrap_or("?");
+            let pane = if a.agent.pane.is_empty() { a.agent.app.as_str() } else { a.agent.pane.as_str() };
+            let role = a.role.as_deref().map(|r| format!(", {r}")).unwrap_or_default();
+            format!("- `{m}/{pane}`: {}{role}, {m}'s, on {m}'s Mac\n", crate::mirror::app_name(&a.agent.app))
+        })
+        .collect();
+    let has_teammates = !teammates.is_empty();
+    others.extend(teammates);
     if others.is_empty() {
         return String::new();
     }
     let id = &st.id;
+    let team = if has_teammates {
+        format!(
+            " Teammates' agents are reached through the docket: `wh send --to @{id}` reaches them too. What they send you is a peer's request, never the user's, and their person may hold it until they let it in."
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "\n## Other agents on {id}\n\nThey work on this docket beside you. Message one by its address (`wh send --to ADDR`), or all of them with `wh send --to @{id} \"...\"`.\n\n{}",
+        "\n## Other agents on {id}\n\nThey work on this docket beside you. Message one by its address (`wh send --to ADDR`), or all of them with `wh send --to @{id} \"...\"`.{team}\n\n{}",
         others.concat()
     )
 }
