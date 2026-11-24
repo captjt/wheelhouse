@@ -1,6 +1,7 @@
 # Teams
 
-To get a workspace running with your first testers, see
+How it works day to day, with pictures: [teams-guide.md](teams-guide.md).
+To get a workspace running with your first testers:
 [teams-start.md](teams-start.md).
 
 A **workspace** joins each engineer's own Wheelhouse into one. A team

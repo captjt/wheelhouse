@@ -84,6 +84,8 @@ dev:
     cd ./web && npm run dev
 
 # The README's screenshots (the web app, on a Mac and a phone, and
-# Wheelhouse.app) and the social preview card, from a made-up world.
+# Wheelhouse.app) and the social preview card, from a made-up world; then
+# the Teams ones, from a made-up workspace (docs/teams-guide.md).
 screenshots:
     scripts/screenshots.sh
+    scripts/team-screenshots.sh
