@@ -29,7 +29,7 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
   rounds of fixes, with one reply per thread you approve before it posts.
   Linear issues with a label (or in your cycle) can start one.
 - **Recap.** What happened today, this week, or in 30 days, as a standup
-  note.
+  note, and the tokens all of it took, by provider and model.
 
 <table>
   <tr>

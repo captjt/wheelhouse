@@ -47,14 +47,16 @@ final class HubClient: @unchecked Sendable {
         URL(string: base.absoluteString + path) ?? base
     }
 
-    func data(_ path: String) async throws -> Data {
-        let (data, res) = try await session.data(from: url(path))
+    /// `slow`: a read the hub may take a while over (a recap's first read
+    /// of the agents' transcripts).
+    func data(_ path: String, slow: Bool = false) async throws -> Data {
+        let (data, res) = try await (slow ? patient : session).data(from: url(path))
         try check(res, data)
         return data
     }
 
-    func get(_ path: String) async throws -> JSON {
-        try JSON.parse(try await data(path))
+    func get(_ path: String, slow: Bool = false) async throws -> JSON {
+        try JSON.parse(try await data(path, slow: slow))
     }
 
     @discardableResult

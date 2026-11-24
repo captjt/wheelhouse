@@ -1,7 +1,8 @@
 //! Recap: what happened over a period, for a standup or a week's note.
 //! Reviews posted and their verdicts, the PRs that merged, still wait or
-//! closed; the agents' work; and what you decided. The app sends the
-//! period's bounds in its own time zone.
+//! closed; the agents' work; what you decided; and the tokens all of it
+//! took, by provider and model. The app sends the period's bounds in its
+//! own time zone.
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -36,6 +37,20 @@ impl Window {
     fn day(&self, t: OffsetDateTime) -> usize {
         ((t - self.since).whole_hours() / 24).max(0) as usize
     }
+
+    /// Unix seconds, for the usage.
+    fn has_secs(&self, t: i64) -> bool {
+        t >= self.since.unix_timestamp() && t < self.until.unix_timestamp()
+    }
+}
+
+/// A docket whose agents' tokens count: the period's and the one before.
+pub struct Work {
+    id: String,
+    title: String,
+    /// `agents`, `builds` or `reviews`.
+    kind: &'static str,
+    claims: Vec<crate::subagents::Claim>,
 }
 
 fn median(mut v: Vec<i64>) -> Option<i64> {
@@ -47,8 +62,22 @@ fn median(mut v: Vec<i64>) -> Option<i64> {
     Some(if n % 2 == 1 { v[n / 2] } else { (v[n / 2 - 1] + v[n / 2]) / 2 })
 }
 
+/// The recap, all at once (the usage reads files: see `gather`).
+#[cfg(test)]
 pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value> {
-    let w = Window { since: at(Some(since)).ok_or_else(|| anyhow::anyhow!("since isn't a time"))?, until: at(Some(until)).ok_or_else(|| anyhow::anyhow!("until isn't a time"))? };
+    let (out, work) = gather(core, since, until)?;
+    Ok(finish(out, &work, label))
+}
+
+fn window(since: &str, until: &str) -> Result<Window> {
+    Ok(Window { since: at(Some(since)).ok_or_else(|| anyhow::anyhow!("since isn't a time"))?, until: at(Some(until)).ok_or_else(|| anyhow::anyhow!("until isn't a time"))? })
+}
+
+/// Everything in the recap but its usage and Markdown, from the hub (under
+/// its lock), and the dockets whose agents' tokens count. `finish` reads
+/// their transcripts, without the lock.
+pub fn gather(core: &Core, since: &str, until: &str) -> Result<(Value, Vec<Work>)> {
+    let w = window(since, until)?;
     let prev = w.before();
     let days = w.days();
 
@@ -134,14 +163,30 @@ pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value
     // each ended, from the events Build puts on its docket.
     let mut builds = Vec::new();
     let (mut b_opened, mut b_rounds, mut b_replies, mut b_merged) = (0, 0, 0, 0);
+    let mut work = Vec::new();
     for st in core.store.states()? {
-        if at(Some(&st.updated_at)).is_some_and(|u| u < w.since) {
+        let updated = at(Some(&st.updated_at));
+        if updated.is_some_and(|u| u < prev.since) {
+            continue;
+        }
+        let stored = core.store.entries(&st.id)?;
+        let kind = match st.protocol.as_str() {
+            "review" => "reviews",
+            "build" => "builds",
+            _ if core.store.build_task(&st.id)?.is_some() => "builds",
+            _ => "agents",
+        };
+        let claims = crate::subagents::claims(&stored.iter().filter_map(|s| s.entry().ok()).filter(|e| e.kind == "claim" || e.kind == "release").collect::<Vec<_>>());
+        if !claims.is_empty() {
+            work.push(Work { id: st.id.clone(), title: st.title.clone(), kind, claims });
+        }
+        if updated.is_some_and(|u| u < w.since) {
             continue;
         }
         let mut d_turns = 0;
         let mut finished = None;
         let mut b: Option<Value> = None;
-        for s in core.store.entries(&st.id)? {
+        for s in &stored {
             let Ok(e) = s.entry() else { continue };
             let t = at(Some(&e.at));
             if !w.has(t) {
@@ -225,7 +270,7 @@ pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value
     builds.sort_by(|a, b| b["at"].as_str().cmp(&a["at"].as_str()));
     decisions.sort_by(|a, b| b["at"].as_str().cmp(&a["at"].as_str()));
 
-    let mut out = json!({
+    let out = json!({
         "since": since, "until": until, "days": days,
         "reviews": {
             "posted": posted, "prev_posted": prev_posted, "per_day": per_day,
@@ -239,8 +284,151 @@ pub fn recap(core: &Core, since: &str, until: &str, label: &str) -> Result<Value
         "builds": { "opened": b_opened, "rounds": b_rounds, "replies": b_replies, "merged": b_merged, "list": builds },
         "you": { "decisions": decisions, "approved": ok, "denied": denied, "asked": asked, "answered": answered, "intents": intents },
     });
+    Ok((out, work))
+}
+
+/// The recap with its usage and Markdown: reads the agents' transcripts.
+pub fn finish(mut out: Value, work: &[Work], label: &str) -> Value {
+    if let (Some(s), Some(u)) = (out["since"].as_str(), out["until"].as_str())
+        && let Ok(w) = window(s, u)
+    {
+        let mut finder = crate::subagents::Finder::new();
+        let mut files: Vec<(usize, crate::subagents::Transcript)> =
+            work.iter().enumerate().flat_map(|(i, d)| finder.transcripts(&d.claims).into_iter().map(move |t| (i, t))).collect();
+        // A session a claim names is that docket's before one found by its
+        // folder (a claim left open can't take another docket's).
+        files.sort_by_key(|(_, t)| !t.named);
+        // Each file is read once, however many dockets reach it.
+        let mut paths: Vec<(String, std::path::PathBuf)> = Vec::new();
+        let mut index: std::collections::HashMap<std::path::PathBuf, usize> = std::collections::HashMap::new();
+        let spans: Vec<Span> = files
+            .into_iter()
+            .map(|(i, t)| {
+                let k = *index.entry(t.path.clone()).or_insert_with(|| {
+                    paths.push((t.app.clone(), t.path.clone()));
+                    paths.len() - 1
+                });
+                Span { docket: i, file: k, from: t.from, until: t.until }
+            })
+            .collect();
+        let from = w.before().since.unix_timestamp();
+        // The first read of a period's transcripts can be gigabytes: a few
+        // threads share it.
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let read: Vec<Vec<crate::usage::Call>> = std::thread::scope(|sc| {
+            let jobs: Vec<_> = (0..8)
+                .map(|_| {
+                    sc.spawn(|| {
+                        let mut mine = Vec::new();
+                        loop {
+                            let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some((app, p)) = paths.get(k) else { break };
+                            // A file that can't be read is left out, not the rest.
+                            let calls = std::panic::catch_unwind(|| crate::usage::calls(app, p, from)).unwrap_or_default();
+                            mine.push((k, calls));
+                        }
+                        mine
+                    })
+                })
+                .collect();
+            let mut all = vec![Vec::new(); paths.len()];
+            for (k, c) in jobs.into_iter().flat_map(|j| j.join().unwrap_or_default()) {
+                all[k] = c;
+            }
+            all
+        });
+        crate::usage::forget_stale();
+        out["usage"] = usage(&w, work, &spans, &read);
+    }
     out["markdown"] = json!(markdown(&out, label));
-    Ok(out)
+    out
+}
+
+/// A docket's hold on a file (an index into what was read): its calls
+/// from `from` to `until` are that docket's.
+struct Span {
+    docket: usize,
+    file: usize,
+    from: i64,
+    until: Option<i64>,
+}
+
+/// Tokens over the window, by provider, model, kind of work, day and
+/// docket; the window before's total for comparison. Each call counts once,
+/// for the first span that holds it.
+fn usage(w: &Window, work: &[Work], spans: &[Span], read: &[Vec<crate::usage::Call>]) -> Value {
+    use std::collections::{BTreeMap, HashSet};
+    let prev = w.before();
+    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    let (mut total, mut prev_total) = (0i64, 0i64);
+    let mut split = [0i64; 4];
+    let mut per_day = vec![0i64; w.days()];
+    // (provider, model) → (fields, dockets)
+    let mut models: BTreeMap<(String, String), ([i64; 4], HashSet<usize>)> = BTreeMap::new();
+    let mut kinds: BTreeMap<&str, i64> = BTreeMap::new();
+    let mut dockets: BTreeMap<usize, (i64, BTreeMap<String, i64>)> = BTreeMap::new();
+    for sp in spans {
+        let i = sp.docket;
+        for (j, c) in read.get(sp.file).into_iter().flatten().enumerate() {
+            if c.at < sp.from || sp.until.is_some_and(|u| c.at > u) || !seen.insert((sp.file, j)) {
+                continue;
+            }
+            let c = c.clone();
+            let n = c.total();
+            if prev.has_secs(c.at) {
+                prev_total += n;
+            }
+            if !w.has_secs(c.at) {
+                continue;
+            }
+            total += n;
+            let m = models.entry((c.provider.clone(), c.model.clone())).or_default();
+            for (k, t) in c.tokens.iter().enumerate() {
+                split[k] += t;
+                m.0[k] += t;
+            }
+            m.1.insert(i);
+            if let Some(d) = OffsetDateTime::from_unix_timestamp(c.at).ok().and_then(|t| per_day.get_mut(w.day(t))) {
+                *d += n;
+            }
+            *kinds.entry(work[i].kind).or_default() += n;
+            let d = dockets.entry(i).or_default();
+            d.0 += n;
+            *d.1.entry(c.model).or_default() += n;
+        }
+    }
+    let fields = |t: [i64; 4]| json!({ "input": t[0], "cache_read": t[1], "cache_write": t[2], "output": t[3] });
+    let mut by_provider: BTreeMap<String, i64> = BTreeMap::new();
+    let mut model_list: Vec<Value> = models
+        .into_iter()
+        .map(|((provider, model), (t, ds))| {
+            let n: i64 = t.iter().sum();
+            *by_provider.entry(provider.clone()).or_default() += n;
+            json!({ "model": model, "provider": provider, "provider_name": crate::usage::provider_name(&provider), "tokens": n, "split": fields(t), "dockets": ds.len() })
+        })
+        .collect();
+    model_list.sort_by_key(|m| std::cmp::Reverse(m["tokens"].as_i64().unwrap_or(0)));
+    let mut providers: Vec<Value> = by_provider.into_iter().map(|(p, n)| json!({ "provider": p, "name": crate::usage::provider_name(&p), "tokens": n })).collect();
+    providers.sort_by_key(|p| std::cmp::Reverse(p["tokens"].as_i64().unwrap_or(0)));
+    let mut top: Vec<(i64, usize, BTreeMap<String, i64>)> = dockets.into_iter().map(|(i, (n, m))| (n, i, m)).collect();
+    top.sort_by_key(|(n, i, _)| (std::cmp::Reverse(*n), *i));
+    let top: Vec<Value> = top
+        .into_iter()
+        .take(10)
+        .map(|(n, i, m)| {
+            let mut m: Vec<(String, i64)> = m.into_iter().collect();
+            m.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+            json!({ "id": work[i].id, "title": work[i].title, "kind": work[i].kind, "tokens": n, "models": m.into_iter().map(|(name, _)| name).collect::<Vec<_>>() })
+        })
+        .collect();
+    let input_side = split[0] + split[1] + split[2];
+    json!({
+        "tokens": total, "prev_tokens": prev_total, "split": fields(split),
+        "cached": if input_side > 0 { Some(split[1] as f64 / input_side as f64) } else { None },
+        "per_day": per_day, "providers": providers, "models": model_list,
+        "work": { "agents": kinds.get("agents").copied().unwrap_or(0), "builds": kinds.get("builds").copied().unwrap_or(0), "reviews": kinds.get("reviews").copied().unwrap_or(0) },
+        "dockets": top,
+    })
 }
 
 fn compact(n: i64) -> String {
@@ -374,6 +562,35 @@ pub fn markdown(r: &Value, label: &str) -> String {
             ));
         }
     }
+    let us = &r["usage"];
+    if n(&us["tokens"]) > 0 {
+        let d = n(&us["tokens"]) - n(&us["prev_tokens"]);
+        let mut line = vec![format!(
+            "{} ({}{} vs the period before{})",
+            compact(n(&us["tokens"])),
+            if d >= 0 { "+" } else { "−" },
+            compact(d.abs()),
+            us["cached"].as_f64().map(|c| format!(", {:.0}% cached", c * 100.0)).unwrap_or_default()
+        )];
+        let models = us["models"].as_array().cloned().unwrap_or_default();
+        for p in us["providers"].as_array().into_iter().flatten() {
+            let mine: Vec<String> =
+                models.iter().filter(|m| m["provider"] == p["provider"]).map(|m| format!("{} {}", m["model"].as_str().unwrap_or(""), compact(n(&m["tokens"])))).collect();
+            line.push(format!("{} {} ({})", p["name"].as_str().unwrap_or(""), compact(n(&p["tokens"])), mine.join(", ")));
+        }
+        let kinds: Vec<String> = [("agents", "agents"), ("builds", "Builds"), ("reviews", "reviews")]
+            .iter()
+            .filter(|(k, _)| n(&us["work"][k]) > 0)
+            .map(|(k, w)| format!("{w} {}", compact(n(&us["work"][k]))))
+            .collect();
+        if !kinds.is_empty() {
+            line.push(kinds.join(", "));
+        }
+        md.push_str(&format!("\n**Tokens:** {}\n", line.join(" · ")));
+        for d in us["dockets"].as_array().into_iter().flatten().take(5) {
+            md.push_str(&format!("- {} {}: {}\n", d["id"].as_str().unwrap_or(""), d["title"].as_str().unwrap_or(""), compact(n(&d["tokens"]))));
+        }
+    }
     let you = &r["you"];
     let ds = you["decisions"].as_array().cloned().unwrap_or_default();
     if !ds.is_empty() || n(&you["approved"]) + n(&you["denied"]) > 0 {
@@ -467,5 +684,59 @@ mod tests {
             "{md}"
         );
         assert!(md.contains("\n**Merged**\n- api#7: ✕ → ✓, 2 rounds"), "{md}");
+    }
+
+    fn call(at: &str, model: &str, provider: &str, tokens: [i64; 4]) -> crate::usage::Call {
+        crate::usage::Call { at: OffsetDateTime::parse(at, &Rfc3339).unwrap().unix_timestamp(), model: model.into(), provider: provider.into(), tokens }
+    }
+
+    #[test]
+    fn tokens_by_provider_model_and_work_over_the_window_only() {
+        let work = |id: &str, kind| Work { id: id.into(), title: format!("{id} title"), kind, claims: Vec::new() };
+        let work = vec![work("D-1", "agents"), work("D-2", "reviews"), work("D-3", "builds")];
+        let w = window("2026-11-10T00:00:00-05:00", "2026-11-17T00:00:00-05:00").unwrap();
+        let read = vec![
+            vec![call("2026-11-10T06:00:00Z", "Opus 5.5", "anthropic", [10, 80, 10, 100]), call("2026-11-12T06:00:00Z", "Sonnet 5.5", "anthropic", [5, 0, 0, 5])],
+            vec![call("2026-11-11T06:00:00Z", "GPT-6.2 Astra", "openai", [50, 30, 0, 20]), call("2026-11-04T06:00:00Z", "GPT-6.2 Astra", "openai", [1000, 0, 0, 0])],
+            // Before the window and after it: only the comparison.
+            vec![call("2026-11-09T06:00:00Z", "Opus 5.5", "anthropic", [7, 0, 0, 0]), call("2026-11-17T06:00:00Z", "Opus 5.5", "anthropic", [9, 0, 0, 0])],
+        ];
+        let all = |docket, file| Span { docket, file, from: i64::MIN / 2, until: None };
+        // The same file reached from another docket counts once.
+        let spans = vec![all(0, 0), all(1, 0), all(1, 1), all(2, 2)];
+        let u = usage(&w, &work, &spans, &read);
+        assert_eq!(u["tokens"], 310);
+        assert_eq!(u["prev_tokens"], 1007);
+        assert_eq!(u["split"], json!({ "input": 65, "cache_read": 110, "cache_write": 10, "output": 125 }));
+        assert_eq!(u["providers"], json!([{ "provider": "anthropic", "name": "Anthropic", "tokens": 210 }, { "provider": "openai", "name": "OpenAI", "tokens": 100 }]));
+        assert_eq!(u["models"][0]["model"], "Opus 5.5");
+        assert_eq!(u["models"][0]["tokens"], 200);
+        assert_eq!(u["models"][2]["model"], "Sonnet 5.5");
+        assert_eq!(u["work"], json!({ "agents": 210, "builds": 0, "reviews": 100 }));
+        assert_eq!(u["per_day"], json!([200, 100, 10, 0, 0, 0, 0]), "days in the window's own time zone");
+        assert_eq!(u["dockets"][0]["id"], "D-1");
+        assert_eq!(u["dockets"][0]["models"], json!(["Opus 5.5", "Sonnet 5.5"]));
+        assert_eq!(u["dockets"].as_array().unwrap().len(), 2);
+
+        // A session held by D-1 until Nov 11, then by D-2: each gets its own calls.
+        let at = |s: &str| OffsetDateTime::parse(s, &Rfc3339).unwrap().unix_timestamp();
+        let spans = vec![Span { docket: 0, file: 0, from: 0, until: Some(at("2026-11-11T00:00:00Z")) }, Span { docket: 1, file: 0, from: at("2026-11-11T00:00:00Z"), until: None }];
+        let v = usage(&w, &work, &spans, &read);
+        assert_eq!(
+            v["dockets"],
+            json!([
+                { "id": "D-1", "title": "D-1 title", "kind": "agents", "tokens": 200, "models": ["Opus 5.5"] },
+                { "id": "D-2", "title": "D-2 title", "kind": "reviews", "tokens": 10, "models": ["Sonnet 5.5"] },
+            ])
+        );
+        assert_eq!(v["tokens"], 210);
+
+        let mut r = json!({ "reviews": {}, "agents": {}, "builds": {}, "you": {}, "usage": u });
+        r["markdown"] = json!(markdown(&r, "Nov 10 to 16"));
+        let md = r["markdown"].as_str().unwrap();
+        assert!(
+            md.contains("\n**Tokens:** 310 (−697 vs the period before, 59% cached) · Anthropic 210 (Opus 5.5 200, Sonnet 5.5 10) · OpenAI 100 (GPT-6.2 Astra 100) · agents 210, reviews 100\n- D-1 D-1 title: 210\n"),
+            "{md}"
+        );
     }
 }

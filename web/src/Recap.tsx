@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { get } from "./api";
-import { AppAvatar, IconBuild, IconChart, IconClipboard, IconExternal, StatusIcon } from "./icons";
+import { AppAvatar, IconBuild, IconChart, IconClipboard, IconExternal, IconPR, StatusIcon } from "./icons";
 import { ago, useHub } from "./live";
 import { RiskChip } from "./Reviews";
 import { InlineMd, useToast } from "./ui";
@@ -54,6 +54,20 @@ type RecapData = {
     list: { id: string; title: string; key?: string; pr?: number | null; url?: string | null; opened: boolean; rounds: number; replies: number; outcome?: string | null; at: string }[];
   };
   you: { decisions: { docket: string; title: string; choice: string; at: string }[]; approved: number; denied: number; asked: number; answered: number; intents: number };
+  usage?: Usage;
+};
+
+type Split = { input: number; cache_read: number; cache_write: number; output: number };
+type Usage = {
+  tokens: number;
+  prev_tokens: number;
+  split: Split;
+  cached?: number | null;
+  per_day: number[];
+  providers: { provider: string; name: string; tokens: number }[];
+  models: { model: string; provider: string; provider_name: string; tokens: number; split: Split; dockets: number }[];
+  work: { agents: number; builds: number; reviews: number };
+  dockets: { id: string; title: string; kind: string; tokens: number; models: string[] }[];
 };
 
 type Period = "today" | "week" | "30d";
@@ -78,13 +92,13 @@ const compact = (n?: number | null) => (!n ? "0" : n >= 1e9 ? `${(n / 1e9).toFix
 const dur = (s?: number | null) => (s == null ? "" : s < 3600 ? `${Math.max(1, Math.round(s / 60))}m` : s < 86400 ? `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m` : `${Math.floor(s / 86400)}d ${Math.round((s % 86400) / 3600)}h`);
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : "–");
 
-function Delta({ now, before, words }: { now: number; before: number; words: string }) {
+function Delta({ now, before, words, format = String, neutral = false }: { now: number; before: number; words: string; format?: (n: number) => string; neutral?: boolean }) {
   const d = now - before;
-  return <span className={`rc-delta ${d > 0 ? "up" : d < 0 ? "down" : ""}`}>{`${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d)} vs ${words}`}</span>;
+  return <span className={`rc-delta ${neutral ? "" : d > 0 ? "up" : d < 0 ? "down" : ""}`}>{`${d > 0 ? "+" : d < 0 ? "−" : "±"}${format(Math.abs(d))} vs ${words}`}</span>;
 }
 
 /** A per-day sparkline: the past in the muted ink, today in the accent. */
-function Spark({ values, since, what }: { values: number[]; since: string; what: string }) {
+function Spark({ values, since, what, format = String }: { values: number[]; since: string; what: string; format?: (n: number) => string }) {
   const [hover, setHover] = useState<number | null>(null);
   if (values.length < 2) return null;
   const W = 160;
@@ -110,7 +124,7 @@ function Spark({ values, since, what }: { values: number[]; since: string; what:
       <span className="rc-dot" style={{ left: `${(x(hover ?? last) / W) * 100}%`, top: y(values[hover ?? last]) }} />
       {hover !== null && (
         <span className="rc-tip" style={{ left: `${(x(hover) / W) * 100}%` }}>
-          {day(hover)}: {values[hover]} {what}
+          {day(hover)}: {format(values[hover])} {what}
         </span>
       )}
     </div>
@@ -182,6 +196,120 @@ function Group({ title, n, children }: { title: string; n: number; children: Rea
   );
 }
 
+/** A provider's color: the same as its agent's avatar. */
+const PROVIDER: Record<string, string> = { anthropic: "var(--p-anthropic)", openai: "var(--p-openai)", google: "var(--p-google)" };
+const color = (provider: string) => PROVIDER[provider] ?? "var(--progress)";
+const share = (n: number, of: number) => (of ? `${n / of >= 0.995 ? 100 : (n / of) * 100 >= 1 ? Math.round((n / of) * 100) : "<1"}%` : "–");
+const WORK: { key: keyof Usage["work"]; label: string }[] = [
+  { key: "agents", label: "Agents" },
+  { key: "builds", label: "Builds" },
+  { key: "reviews", label: "Reviews" },
+];
+
+/** Tokens across all the work: by provider and model, kind of work, and the dockets that took the most. */
+function UsageSection({ u, words }: { u: Usage; words: string }) {
+  if (!u.tokens) {
+    return (
+      <section className="rc-section">
+        <h2>Tokens</h2>
+        <p className="muted rc-empty">No model calls {words}.</p>
+      </section>
+    );
+  }
+  const workMax = Math.max(1, ...WORK.map((w) => u.work[w.key]));
+  return (
+    <section className="rc-section">
+      <h2>Tokens</h2>
+      <p className="rc-line">
+        {[
+          `${compact(u.tokens)} tokens ${words}`,
+          u.cached != null && `${Math.round(u.cached * 100)}% of input from the cache`,
+          `${compact(u.split.output)} output`,
+          `${u.models.length} model${u.models.length === 1 ? "" : "s"} from ${u.providers.length} provider${u.providers.length === 1 ? "" : "s"}`,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+      </p>
+      <div className="rc-bar" role="img" aria-label={u.models.map((m) => `${m.model}: ${share(m.tokens, u.tokens)}`).join(", ")}>
+        {u.models.map((m, i) => (
+          <span
+            key={`${m.provider}/${m.model}`}
+            style={{ flexGrow: m.tokens, background: color(m.provider), opacity: 1 - Math.min(i, 3) * 0.18 }}
+            title={`${m.model} (${m.provider_name}): ${compact(m.tokens)}, ${share(m.tokens, u.tokens)}`}
+          />
+        ))}
+      </div>
+      <div className="rc-legend">
+        {u.providers.map((p) => (
+          <span key={p.provider} className="rc-legend-item">
+            <span className="rc-swatch" style={{ background: color(p.provider) }} />
+            {p.name} <span className="muted">{compact(p.tokens)} · {share(p.tokens, u.tokens)}</span>
+          </span>
+        ))}
+      </div>
+      <div className="rc-cols">
+        <div className="rc-group">
+          <div className="rc-group-head">Models</div>
+          <div className="rc-table" role="table">
+            {u.models.map((m) => {
+              const input = m.split.input + m.split.cache_read + m.split.cache_write;
+              return (
+                <div key={`${m.provider}/${m.model}`} className="rc-row" role="row">
+                  <span className="rc-swatch" style={{ background: color(m.provider) }} />
+                  <span className="rc-row-name" role="cell">
+                    {m.model} <span className="muted">{m.provider_name}</span>
+                  </span>
+                  <span className="rc-row-meta muted" role="cell" title="Input from the cache, and output">
+                    {input ? `${Math.round((m.split.cache_read / input) * 100)}% cached · ` : ""}
+                    {compact(m.split.output)} out · {m.dockets} docket{m.dockets === 1 ? "" : "s"}
+                  </span>
+                  <span className="rc-row-num" role="cell">
+                    {compact(m.tokens)}
+                  </span>
+                  <span className="rc-row-pct muted" role="cell">
+                    {share(m.tokens, u.tokens)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="rc-group">
+          <div className="rc-group-head">By kind of work</div>
+          {WORK.map((w) => (
+            <div key={w.key} className="rc-work">
+              <span className="rc-work-label">{w.label}</span>
+              <span className="rc-work-track">
+                <span style={{ width: `${(u.work[w.key] / workMax) * 100}%` }} />
+              </span>
+              <span className="rc-row-num">{compact(u.work[w.key])}</span>
+              <span className="rc-row-pct muted">{share(u.work[w.key], u.tokens)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <Group title="Most tokens" n={u.dockets.length}>
+        {u.dockets.map((d) => (
+          <a key={d.id} className="rc-pr" href={`#/d/${d.id}`}>
+            <span className="rc-pr-icon">{d.kind === "builds" ? <IconBuild size={14} /> : d.kind === "reviews" ? <IconPR size={14} /> : <StatusIcon status="in_progress" size={14} />}</span>
+            <span className="rc-pr-main">
+              <span className="rc-pr-top">
+                <span className="rc-pr-key">{d.id}</span>
+                <span className="rc-pr-title">{d.title}</span>
+                <span className="spacer" />
+                <span className="rc-pr-at rc-row-num">{compact(d.tokens)}</span>
+              </span>
+              <span className="rc-pr-meta">
+                {[WORK.find((w) => w.key === d.kind)?.label.replace(/s$/, ""), d.models.join(", "), `${share(d.tokens, u.tokens)} of the tokens`].filter(Boolean).join(" · ")}
+              </span>
+            </span>
+          </a>
+        ))}
+      </Group>
+    </section>
+  );
+}
+
 export function RecapView() {
   const hub = useHub();
   const toast = useToast();
@@ -190,14 +318,18 @@ export function RecapView() {
   const [error, setError] = useState<string | null>(null);
   const meta = PERIODS.find((p) => p.key === period)!;
   const last = useRef(0);
+  const asked = useRef(0);
   const load = useMemo(
     () => () => {
       const b = bounds(period);
       const q = new URLSearchParams({ since: b.since.toISOString(), until: b.until.toISOString(), label: meta.words });
       last.current = Date.now();
+      // Only the latest ask's answer shows: a slow first read for one
+      // period doesn't land under another's.
+      const ask = ++asked.current;
       get<RecapData>(`/api/recap?${q}`).then(
-        (d) => (setData(d), setError(null)),
-        (e: Error) => setError(e.message),
+        (d) => ask === asked.current && (setData(d), setError(null)),
+        (e: Error) => ask === asked.current && setError(e.message),
       );
     },
     [period, meta.words],
@@ -271,6 +403,12 @@ export function RecapView() {
                 </span>
                 <Spark values={ag!.per_day} since={data.since} what="turns" />
               </Tile>
+              {data.usage && (
+                <Tile label="Tokens" value={compact(data.usage.tokens)}>
+                  <Delta now={data.usage.tokens} before={data.usage.prev_tokens} words={meta.before} format={compact} neutral />
+                  <Spark values={data.usage.per_day} since={data.since} what="tokens" format={compact} />
+                </Tile>
+              )}
             </div>
             {(r!.median_to_review != null || r!.tokens > 0 || r!.dismissed > 0) && (
               <div className="rc-line">
@@ -283,6 +421,8 @@ export function RecapView() {
                   .join(" · ")}
               </div>
             )}
+
+            {data.usage && <UsageSection u={data.usage} words={meta.words} />}
 
             <section className="rc-section">
               <h2>Reviews</h2>

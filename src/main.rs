@@ -42,6 +42,7 @@ mod store;
 mod subagents;
 mod tailnet;
 mod time;
+mod usage;
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
