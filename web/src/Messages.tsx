@@ -20,7 +20,7 @@ export function MessageCard({ m, compact }: { m: Msg; compact?: boolean }) {
     <div className="msg-card">
       <div className="msg-head">
         {m.from === "wheelhouse" ? <HubAvatar size={18} /> : <AppAvatar app={m.from_app === "Codex" ? "codex" : m.from_app === "Antigravity" ? "agy" : "claude-code"} size={18} />}
-        <strong>{m.from === "wheelhouse" ? "Wheelhouse" : m.from_app || m.from}</strong>
+        <strong>{msgFrom(m)}</strong>
         <span className="muted">{m.options.length ? "asks you" : "wrote to you"}</span>
         {m.subject && <span className="msg-subject">· {m.subject}</span>}
         <span className="spacer" />
@@ -56,7 +56,7 @@ export function MessageCard({ m, compact }: { m: Msg; compact?: boolean }) {
       {!compact && (
         <div className="msg-reply">
           <textarea
-            placeholder={m.options.length ? "Add words to your choice, or answer in your own…" : `Reply to ${m.from_app || m.from}…`}
+            placeholder={m.options.length ? "Add words to your choice, or answer in your own…" : `Reply to ${msgFrom(m)}…`}
             value={text}
             rows={1}
             onChange={(e) => setText(e.target.value)}
@@ -77,4 +77,5 @@ export function MessageCard({ m, compact }: { m: Msg; compact?: boolean }) {
 }
 
 export const msgTitle = (m: Msg) => m.subject || m.body.split("\n").find((l) => l.trim())?.trim() || `Message #${m.id}`;
-export const msgFrom = (m: Msg) => (m.from === "wheelhouse" ? "Wheelhouse" : m.from_app || appName(m.from));
+export const msgFrom = (m: Msg) =>
+  m.from === "wheelhouse" ? "Wheelhouse" : m.from_member ? `${m.from_member}'s ${m.from_app || "agent"}` : m.from_app || appName(m.from);

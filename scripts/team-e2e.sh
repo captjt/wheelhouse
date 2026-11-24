@@ -262,12 +262,13 @@ sync sam
 sync jordan
 q=$(api jordan /api/messages | jq -r '[.[] | select(.status == "open" and .subject == "Empty bucket")][0].id')
 [ -n "$q" ] && [ "$q" != null ] || fail "Jordan, an owner, didn't get Sam's agent's question"
+api jordan /api/messages | jq -e --argjson q "$q" '.[] | select(.id == $q) | .from_member == "sam" and .from_app == "Claude Code"' >/dev/null || fail "the question isn't named as Sam's Claude Code: $(api jordan /api/messages | jq -c --argjson q "$q" '.[] | select(.id == $q) | [.from_member, .from_app]')"
 as jordan reply "$q" --choice 429 >/dev/null || fail "Jordan couldn't answer"
 sync jordan
 sync sam
 until_ "the answer didn't reach Sam's agent" jq -e '[.pasted[] | select(.block == "block:sam-1" and (.text | contains("Re: Empty bucket")) and (.text | contains("429")) and (.text | contains("from jordan")))] | length == 1' "$t/sam/rex.json"
 [ "$(msgs sam "SELECT status FROM messages WHERE subject = 'Empty bucket' AND to_addr = 'me'")" = answered ] || fail "Sam's own copy of the question is still open"
-ok "the question reached Jordan as an owner; his answer went to Sam's agent, and Sam's copy was withdrawn"
+ok "the question reached Jordan as an owner; Jordan's answer went to Sam's agent, and Sam's copy was withdrawn"
 
 step "Jordan starts another agent on the shared docket; Sam sees it as Jordan's"
 as jordan start --docket "$S" -C "$t/jordan/code/api" "Check the middleware's tests" >/dev/null || fail "wh start --docket on a shared docket"

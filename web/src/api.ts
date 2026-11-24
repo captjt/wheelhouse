@@ -259,6 +259,8 @@ export type Msg = {
   docket?: string | null;
   from: string;
   from_app?: string | null;
+  /** A teammate's agent's message (docs/teams.md): whose agent it is. */
+  from_member?: string | null;
   to: string;
   subject?: string | null;
   body: string;
@@ -564,6 +566,25 @@ export async function post<T>(path: string, body: unknown = {}): Promise<T> {
 
 export const appName = (app?: string | null) =>
   app === "claude-code" ? "Claude Code" : app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : app || "Agent";
+
+/** On a shared docket (docs/teams.md), the teammate an entry's writer
+ * belongs to (`sam`, `hub@sam`, `codex@sam`); null when it's yours, or the
+ * docket isn't shared. `me` is your handle in the workspace. */
+export function mateOf(actor: { type: string; id: unknown }, docket: string, me?: string | null): string | null {
+  if (docket.startsWith("D-")) return null;
+  const id = String(actor.id);
+  const member = id.includes("@") ? id.split("@").pop() : actor.type === "person" ? id : undefined;
+  return member && member !== "local" && member !== me ? member : null;
+}
+
+/** Who wrote an entry, in words: "You", "sam", "Codex", "sam's Codex", "Wheelhouse". */
+export function actorName(actor: { type: string; id: unknown }, docket: string, me?: string | null): string {
+  const mate = mateOf(actor, docket, me);
+  if (actor.type === "person") return mate ?? "You";
+  const whose = mate ? `${mate}'s ` : "";
+  if (actor.type === "agent") return whose + appName(String(actor.id).split("@")[0]);
+  return whose + "Wheelhouse";
+}
 
 /** The footer's line: the runtimes followed, or the one that's down. A
  * runtime that isn't installed is no trouble; one that is and isn't
