@@ -11,8 +11,15 @@
 # removed and can't write any more. Nothing touches your Rex, Tailscale,
 # GitHub, Linear, or ~/.config. docs/teams.md is the design.
 #
+# Each member's hub reaches the workspace hub through a stand-in for
+# `tailscale serve` (scripts/fake-tailscale-serve) that sets their login,
+# so the workspace hub checks logins as it does on a tailnet.
+#
 #   scripts/team-e2e.sh           # exits non-zero on the first failure
 #   KEEP=1 scripts/team-e2e.sh    # keep the scratch directory to look at
+#   WS_IMAGE=wheelhouse-workspace:dev scripts/team-e2e.sh
+#                                 # the workspace hub in its Linux container
+#                                 # (examples/workspace/Dockerfile)
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -20,7 +27,9 @@ root=$(cd "$here/.." && pwd)
 t=$(mktemp -d)
 wsport=${PORT:-7710}
 pids=()
+ws_container=""
 cleanup() {
+  [ -n "$ws_container" ] && docker rm -f "$ws_container" >/dev/null 2>&1 || true
   for p in "${pids[@]:-}"; do
     [ -n "$p" ] && kill "$p" 2>/dev/null || true
   done
@@ -84,15 +93,37 @@ in_pane() { # who wh-args...  (as that member's agent, in its Rex pane)
 api() { # who path
   curl -fsS --max-time 20 -H 'x-wheelhouse: 1' "http://127.0.0.1:$(port_of "$1")$2"
 }
+# Where each member's hub reaches the workspace: its own stand-in for
+# tailscale serve, which says who's calling.
+ws_url() { if [ "$1" = jordan ]; then echo "http://127.0.0.1:$((wsport + 10))"; else echo "http://127.0.0.1:$((wsport + 11))"; fi; }
+for who in jordan sam; do
+  port=$(ws_url "$who" | sed 's/.*://')
+  "$here/fake-tailscale-serve" "$port" "http://127.0.0.1:$wsport" "$who@acme.dev" 2>>"$t/serve.log" &
+  pids+=("$!")
+done
 start_ws() {
-  env "${base_env[@]}" HOME="$t/ws" WH_STATE="$t/ws/state" WH_WORKSPACE_HTTP="127.0.0.1:$wsport" WH_WORKSPACE_LOGIN=off "$wh" serve --workspace >>"$t/ws.log" 2>&1 &
-  wspid=$!
-  pids+=("$wspid")
-  until_ "the workspace hub didn't start" curl -fsS "http://127.0.0.1:$wsport/team/v1/hello"
+  if [ -n "${WS_IMAGE:-}" ]; then
+    if [ -z "$ws_container" ]; then
+      mkdir -p "$t/ws/state"
+      chmod 777 "$t/ws/state"
+      ws_container=$(docker run -d -p "127.0.0.1:$wsport:7700" -v "$t/ws/state:/var/lib/wheelhouse-workspace" "$WS_IMAGE")
+    else
+      docker start "$ws_container" >/dev/null
+    fi
+  else
+    env "${base_env[@]}" HOME="$t/ws" WH_STATE="$t/ws/state" WH_WORKSPACE_HTTP="127.0.0.1:$wsport" "$wh" serve --workspace >>"$t/ws.log" 2>&1 &
+    wspid=$!
+    pids+=("$wspid")
+  fi
+  until_ "the workspace hub didn't start" curl -fsS "$(ws_url jordan)/team/v1/hello"
 }
 stop_ws() {
-  kill "$wspid" 2>/dev/null || true
-  wait "$wspid" 2>/dev/null || true
+  if [ -n "$ws_container" ]; then
+    docker stop "$ws_container" >/dev/null
+  else
+    kill "$wspid" 2>/dev/null || true
+    wait "$wspid" 2>/dev/null || true
+  fi
 }
 start_hub() { # who
   # shellcheck disable=SC2046
@@ -116,19 +147,28 @@ mkdir -p "$t/ws"
 start_ws
 start_hub jordan
 start_hub sam
-ws="http://127.0.0.1:$wsport"
+# Without a login, the workspace hub answers no one.
+code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$wsport/team/v1/hello")
+[ "$code" = 403 ] || fail "the workspace hub answered without a Tailscale login: $code"
 
 step "Jordan makes the workspace with the workspace hub's setup code"
+until_ "no setup code" test -s "$t/ws/state/setup-code"
 setup=$(cat "$t/ws/state/setup-code")
 [ -n "$setup" ] || fail "no setup code"
-as jordan team create Acme --prefix ACME --url "$ws" --setup "$setup" --handle jordan --login jordan@acme.dev | grep >/dev/null "Made Acme" || fail "wh team create"
-refused "already" as jordan team create Acme --prefix ACME --url "$ws" --setup "$setup" --handle jordan || fail "a second create wasn't refused"
+as jordan team create Acme --prefix ACME --url "$(ws_url jordan)" --setup "$setup" --handle jordan --login jordan@acme.dev | grep >/dev/null "Made Acme" || fail "wh team create"
+refused "already" as jordan team create Acme --prefix ACME --url "$(ws_url jordan)" --setup "$setup" --handle jordan || fail "a second create wasn't refused"
 [ ! -e "$t/ws/state/setup-code" ] || fail "the setup code is still there"
 ok "ACME made; Jordan is its first admin; the setup code is spent"
 
 step "Jordan invites Sam, who joins with the code"
 code=$(as jordan team invite sam | grep '^whi1\.')
 [ -n "$code" ] || fail "no invite code"
+# The code names the workspace as Jordan reaches it; Sam's Mac reaches it
+# through Sam's own tailscale serve stand-in.
+recode() { python3 -c 'import sys,base64,json; c=sys.argv[1][5:]; d=json.loads(base64.urlsafe_b64decode(c+"="*(-len(c)%4))); d["u"]=sys.argv[2]; print("whi1."+base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("="))' "$1" "$2"; }
+code=$(recode "$code" "$(ws_url sam)")
+# Joining as someone else's login: refused.
+refused "login" as sam team join "$code" --login priya@acme.dev || fail "a join with another login wasn't refused"
 # A tampered code (another key's secret) can't join.
 bad=$(python3 -c 'import sys,base64,json; c=sys.argv[1][5:]; d=json.loads(base64.urlsafe_b64decode(c+"="*(-len(c)%4))); d["s"]="11"*32; print("whi1."+base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("="))' "$code")
 refused "proof" as sam team join "$bad" --login sam@acme.dev || fail "a code with the wrong secret wasn't refused"
@@ -247,6 +287,9 @@ sync jordan
 api jordan "/api/dockets/$S" | jq -e '[.entries[] | select((.body // "") | contains("ghp_"))] | length == 0' >/dev/null || fail "the token reached the workspace"
 ok "the token stayed on Sam's Mac until Sam dropped it"
 
+if [ -n "${WS_IMAGE:-}" ]; then
+  printf '\n== (the misbehaving workspace hub steps run on a native workspace hub only)\n'
+else
 step "The workspace hub changes an entry after ordering it: caught"
 as sam note "$S" "the original words" >/dev/null
 sync sam
@@ -293,6 +336,7 @@ ok "Sam's hub refused the slipped-in key; its copy of the member log still check
 # Take the slipped-in entry out again, so the workspace hub's database and
 # what it holds in memory agree for the last step.
 sqlite3 "$t/ws/state/workspace.db" "DELETE FROM entries WHERE docket = 'ACME-0' AND seq = (SELECT MAX(seq) FROM entries WHERE docket = 'ACME-0')"
+fi
 
 step "Jordan removes Sam: Sam's hub can't write any more"
 as jordan team remove sam --reason "left the team" | grep >/dev/null "out of the workspace" || fail "wh team remove"
