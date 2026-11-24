@@ -293,8 +293,24 @@ pub fn finish(mut out: Value, work: &[Work], label: &str) -> Value {
         && let Ok(w) = window(s, u)
     {
         let mut finder = crate::subagents::Finder::new();
-        let files: Vec<(usize, String, std::path::PathBuf)> =
-            work.iter().enumerate().flat_map(|(i, d)| finder.transcripts(&d.claims).into_iter().map(move |(app, p)| (i, app, p))).collect();
+        let mut files: Vec<(usize, crate::subagents::Transcript)> =
+            work.iter().enumerate().flat_map(|(i, d)| finder.transcripts(&d.claims).into_iter().map(move |t| (i, t))).collect();
+        // A session a claim names is that docket's before one found by its
+        // folder (a claim left open can't take another docket's).
+        files.sort_by_key(|(_, t)| !t.named);
+        // Each file is read once, however many dockets reach it.
+        let mut paths: Vec<(String, std::path::PathBuf)> = Vec::new();
+        let mut index: std::collections::HashMap<std::path::PathBuf, usize> = std::collections::HashMap::new();
+        let spans: Vec<Span> = files
+            .into_iter()
+            .map(|(i, t)| {
+                let k = *index.entry(t.path.clone()).or_insert_with(|| {
+                    paths.push((t.app.clone(), t.path.clone()));
+                    paths.len() - 1
+                });
+                Span { docket: i, file: k, from: t.from, until: t.until }
+            })
+            .collect();
         let from = w.before().since.unix_timestamp();
         // The first read of a period's transcripts can be gigabytes: a few
         // threads share it.
@@ -306,33 +322,44 @@ pub fn finish(mut out: Value, work: &[Work], label: &str) -> Value {
                         let mut mine = Vec::new();
                         loop {
                             let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            let Some((_, app, p)) = files.get(k) else { break };
-                            mine.push((k, crate::usage::calls(app, p, from)));
+                            let Some((app, p)) = paths.get(k) else { break };
+                            // A file that can't be read is left out, not the rest.
+                            let calls = std::panic::catch_unwind(|| crate::usage::calls(app, p, from)).unwrap_or_default();
+                            mine.push((k, calls));
                         }
                         mine
                     })
                 })
                 .collect();
-            // By position: a reader that failed leaves its files empty.
-            let mut all = vec![Vec::new(); files.len()];
+            let mut all = vec![Vec::new(); paths.len()];
             for (k, c) in jobs.into_iter().flat_map(|j| j.join().unwrap_or_default()) {
                 all[k] = c;
             }
             all
         });
-        out["usage"] = usage(&w, work, files.into_iter().zip(read).map(|((i, _, p), c)| (i, c, p)));
+        crate::usage::forget_stale();
+        out["usage"] = usage(&w, work, &spans, &read);
     }
     out["markdown"] = json!(markdown(&out, label));
     out
 }
 
+/// A docket's hold on a file (an index into what was read): its calls
+/// from `from` to `until` are that docket's.
+struct Span {
+    docket: usize,
+    file: usize,
+    from: i64,
+    until: Option<i64>,
+}
+
 /// Tokens over the window, by provider, model, kind of work, day and
-/// docket; the window before's total for comparison. Each file counts
-/// once, for the first docket that has it.
-fn usage(w: &Window, work: &[Work], files: impl Iterator<Item = (usize, Vec<crate::usage::Call>, std::path::PathBuf)>) -> Value {
+/// docket; the window before's total for comparison. Each call counts once,
+/// for the first span that holds it.
+fn usage(w: &Window, work: &[Work], spans: &[Span], read: &[Vec<crate::usage::Call>]) -> Value {
     use std::collections::{BTreeMap, HashSet};
     let prev = w.before();
-    let mut seen = HashSet::new();
+    let mut seen: HashSet<(usize, usize)> = HashSet::new();
     let (mut total, mut prev_total) = (0i64, 0i64);
     let mut split = [0i64; 4];
     let mut per_day = vec![0i64; w.days()];
@@ -340,11 +367,13 @@ fn usage(w: &Window, work: &[Work], files: impl Iterator<Item = (usize, Vec<crat
     let mut models: BTreeMap<(String, String), ([i64; 4], HashSet<usize>)> = BTreeMap::new();
     let mut kinds: BTreeMap<&str, i64> = BTreeMap::new();
     let mut dockets: BTreeMap<usize, (i64, BTreeMap<String, i64>)> = BTreeMap::new();
-    for (i, calls, path) in files {
-        if !seen.insert(path) {
-            continue;
-        }
-        for c in calls {
+    for sp in spans {
+        let i = sp.docket;
+        for (j, c) in read.get(sp.file).into_iter().flatten().enumerate() {
+            if c.at < sp.from || sp.until.is_some_and(|u| c.at > u) || !seen.insert((sp.file, j)) {
+                continue;
+            }
+            let c = c.clone();
             let n = c.total();
             if prev.has_secs(c.at) {
                 prev_total += n;
@@ -666,24 +695,16 @@ mod tests {
         let work = |id: &str, kind| Work { id: id.into(), title: format!("{id} title"), kind, claims: Vec::new() };
         let work = vec![work("D-1", "agents"), work("D-2", "reviews"), work("D-3", "builds")];
         let w = window("2026-11-10T00:00:00-05:00", "2026-11-17T00:00:00-05:00").unwrap();
-        let p = |s: &str| std::path::PathBuf::from(s);
-        let files = vec![
-            (
-                0,
-                vec![call("2026-11-10T06:00:00Z", "Opus 5.5", "anthropic", [10, 80, 10, 100]), call("2026-11-12T06:00:00Z", "Sonnet 5.5", "anthropic", [5, 0, 0, 5])],
-                p("/a.jsonl"),
-            ),
-            // The same file reached from another docket counts once.
-            (1, vec![call("2026-11-10T06:00:00Z", "Opus 5.5", "anthropic", [10, 80, 10, 100])], p("/a.jsonl")),
-            (
-                1,
-                vec![call("2026-11-11T06:00:00Z", "GPT-6.2 Astra", "openai", [50, 30, 0, 20]), call("2026-11-04T06:00:00Z", "GPT-6.2 Astra", "openai", [1000, 0, 0, 0])],
-                p("/r.jsonl"),
-            ),
+        let read = vec![
+            vec![call("2026-11-10T06:00:00Z", "Opus 5.5", "anthropic", [10, 80, 10, 100]), call("2026-11-12T06:00:00Z", "Sonnet 5.5", "anthropic", [5, 0, 0, 5])],
+            vec![call("2026-11-11T06:00:00Z", "GPT-6.2 Astra", "openai", [50, 30, 0, 20]), call("2026-11-04T06:00:00Z", "GPT-6.2 Astra", "openai", [1000, 0, 0, 0])],
             // Before the window and after it: only the comparison.
-            (2, vec![call("2026-11-09T06:00:00Z", "Opus 5.5", "anthropic", [7, 0, 0, 0]), call("2026-11-17T06:00:00Z", "Opus 5.5", "anthropic", [9, 0, 0, 0])], p("/b.jsonl")),
+            vec![call("2026-11-09T06:00:00Z", "Opus 5.5", "anthropic", [7, 0, 0, 0]), call("2026-11-17T06:00:00Z", "Opus 5.5", "anthropic", [9, 0, 0, 0])],
         ];
-        let u = usage(&w, &work, files.into_iter());
+        let all = |docket, file| Span { docket, file, from: i64::MIN / 2, until: None };
+        // The same file reached from another docket counts once.
+        let spans = vec![all(0, 0), all(1, 0), all(1, 1), all(2, 2)];
+        let u = usage(&w, &work, &spans, &read);
         assert_eq!(u["tokens"], 310);
         assert_eq!(u["prev_tokens"], 1007);
         assert_eq!(u["split"], json!({ "input": 65, "cache_read": 110, "cache_write": 10, "output": 125 }));
@@ -696,6 +717,19 @@ mod tests {
         assert_eq!(u["dockets"][0]["id"], "D-1");
         assert_eq!(u["dockets"][0]["models"], json!(["Opus 5.5", "Sonnet 5.5"]));
         assert_eq!(u["dockets"].as_array().unwrap().len(), 2);
+
+        // A session held by D-1 until Nov 11, then by D-2: each gets its own calls.
+        let at = |s: &str| OffsetDateTime::parse(s, &Rfc3339).unwrap().unix_timestamp();
+        let spans = vec![Span { docket: 0, file: 0, from: 0, until: Some(at("2026-11-11T00:00:00Z")) }, Span { docket: 1, file: 0, from: at("2026-11-11T00:00:00Z"), until: None }];
+        let v = usage(&w, &work, &spans, &read);
+        assert_eq!(
+            v["dockets"],
+            json!([
+                { "id": "D-1", "title": "D-1 title", "kind": "agents", "tokens": 200, "models": ["Opus 5.5"] },
+                { "id": "D-2", "title": "D-2 title", "kind": "reviews", "tokens": 10, "models": ["Sonnet 5.5"] },
+            ])
+        );
+        assert_eq!(v["tokens"], 210);
 
         let mut r = json!({ "reviews": {}, "agents": {}, "builds": {}, "you": {}, "usage": u });
         r["markdown"] = json!(markdown(&r, "Nov 10 to 16"));

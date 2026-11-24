@@ -9,9 +9,17 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::review::agentcli;
+
+/// A line longer than this isn't a model call's (it's a pasted file or
+/// garbage): it's skipped, never held whole.
+const MAX_LINE: usize = 16 << 20;
+/// No one call takes more tokens than this; a bigger count is garbage.
+const MAX_TOKENS: i64 = 100_000_000;
+/// A file no recap has asked for in this long is forgotten.
+const FORGET: Duration = Duration::from_secs(6 * 3600);
 
 /// One model call's tokens: `[input, cache_read, cache_write, output]`,
 /// input not counting what came from the cache.
@@ -28,7 +36,7 @@ pub struct Call {
 
 impl Call {
     pub fn total(&self) -> i64 {
-        self.tokens.iter().sum()
+        self.tokens.iter().fold(0i64, |a, t| a.saturating_add(*t))
     }
 }
 
@@ -37,6 +45,9 @@ impl Call {
 struct Progress {
     offset: u64,
     mtime: Option<SystemTime>,
+    /// The file itself: a new one in its place is read from the start.
+    ino: u64,
+    used: Option<Instant>,
     calls: Vec<Call>,
     /// Claude Code: responses already counted (a response in several
     /// blocks repeats its usage on each line).
@@ -45,6 +56,9 @@ struct Progress {
     model: Option<String>,
     provider: Option<String>,
     total: Option<[i64; 4]>,
+    /// Claude Code: a forked subagent's file begins with a copy of the call
+    /// that spawned it, which is its parent's.
+    forked: bool,
 }
 
 fn cache() -> &'static Mutex<HashMap<PathBuf, Progress>> {
@@ -65,17 +79,21 @@ pub fn calls(app: &str, path: &Path, from: i64) -> Vec<Call> {
     let Some(meta) = meta else {
         // An archived Codex rollout: read whole, once.
         let z = PathBuf::from(format!("{}.zst", path.display()));
-        if app == "codex" && z.is_file() {
+        let zw = std::fs::metadata(&z).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
+        if app == "codex" && z.is_file() && zw.is_none_or(|w| w >= from) {
             return archived(&z);
         }
         return Vec::new();
     };
     let (len, mtime) = (meta.len(), meta.modified().ok());
+    let ino = std::os::unix::fs::MetadataExt::ino(&meta);
     let mut r = cache().lock().unwrap_or_else(|e| e.into_inner()).remove(path).unwrap_or_default();
-    // Rewritten rather than appended to: start over.
-    if len < r.offset {
-        r = Progress::default();
+    // Rewritten rather than appended to, or another file in its place:
+    // start over.
+    if len < r.offset || r.ino != ino {
+        r = Progress { ino, ..Default::default() };
     }
+    r.used = Some(Instant::now());
     if r.offset < len || r.mtime != mtime {
         if let Ok(mut f) = std::fs::File::open(path)
             && f.seek(SeekFrom::Start(r.offset)).is_ok()
@@ -93,10 +111,11 @@ pub fn calls(app: &str, path: &Path, from: i64) -> Vec<Call> {
 
 fn archived(z: &Path) -> Vec<Call> {
     let key = z.to_path_buf();
-    if let Some(r) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+    if let Some(r) = cache().lock().unwrap_or_else(|e| e.into_inner()).get_mut(&key) {
+        r.used = Some(Instant::now());
         return r.calls.clone();
     }
-    let mut r = Progress::default();
+    let mut r = Progress { used: Some(Instant::now()), ..Default::default() };
     let child = std::process::Command::new("zstd")
         .arg("-dcq")
         .arg(z)
@@ -116,20 +135,51 @@ fn archived(z: &Path) -> Vec<Call> {
     calls
 }
 
+/// Forget the files no recap has asked for lately.
+pub fn forget_stale() {
+    cache().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, r| r.used.is_some_and(|u| u.elapsed() < FORGET));
+}
+
 fn epoch(at: &str) -> Option<i64> {
     crate::time::parse(at).map(|t| t.unix_timestamp())
 }
 
 /// Reads whole lines, one at a time, and says how many bytes they were: a
 /// line still being written (no newline yet) is left for next time. A line
-/// that isn't UTF-8 is read as well as it can be, never the end of the file.
+/// that isn't UTF-8 is read as well as it can be, never the end of the
+/// file; one longer than `MAX_LINE` is passed over without being held.
 fn read_lines(app: &str, r: &mut Progress, mut from: impl BufRead) -> u64 {
     let (mut done, mut buf) = (0u64, Vec::new());
     loop {
         buf.clear();
-        match from.read_until(b'\n', &mut buf) {
-            Ok(n) if n > 0 && buf.ends_with(b"\n") => done += n as u64,
-            _ => return done,
+        let (mut n, mut long) = (0usize, false);
+        let ended = loop {
+            let chunk = match from.fill_buf() {
+                Ok([]) | Err(_) => break false,
+                Ok(c) => c,
+            };
+            let (take, end) = match chunk.iter().position(|b| *b == b'\n') {
+                Some(i) => (i + 1, true),
+                None => (chunk.len(), false),
+            };
+            if !long && buf.len() + take <= MAX_LINE {
+                buf.extend_from_slice(&chunk[..take]);
+            } else {
+                long = true;
+                buf.clear();
+            }
+            from.consume(take);
+            n += take;
+            if end {
+                break true;
+            }
+        };
+        if !ended {
+            return done;
+        }
+        done += n as u64;
+        if long {
+            continue;
         }
         let line = String::from_utf8_lossy(&buf);
         match app {
@@ -141,7 +191,18 @@ fn read_lines(app: &str, r: &mut Progress, mut from: impl BufRead) -> u64 {
     }
 }
 
+/// A count from a file: never negative, never past `MAX_TOKENS`.
+fn count(v: &Value) -> i64 {
+    v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(0).clamp(0, MAX_TOKENS)
+}
+
 fn claude_line(r: &mut Progress, line: &str) {
+    if line.starts_with("{\"type\":\"fork-context-ref\"")
+        || (line.contains("\"fork-context-ref\"") && serde_json::from_str::<Value>(line).is_ok_and(|v| v["type"] == "fork-context-ref"))
+    {
+        r.forked = true;
+        return;
+    }
     if !line.contains("\"usage\"") {
         return;
     }
@@ -153,13 +214,17 @@ fn claude_line(r: &mut Progress, line: &str) {
     }
     // `<synthetic>` is Claude Code's own message, not a model's.
     let Some(model) = m["model"].as_str().filter(|x| x.starts_with("claude-")) else { return };
+    let Some(at) = v["timestamp"].as_str().and_then(epoch) else { return };
     if let Some(id) = m["id"].as_str()
         && !r.seen.insert(id.to_string())
     {
         return;
     }
-    let Some(at) = v["timestamp"].as_str().and_then(epoch) else { return };
-    let n = |k: &str| u[k].as_i64().unwrap_or(0);
+    // The parent's call that forked this subagent: counted in its file.
+    if std::mem::take(&mut r.forked) {
+        return;
+    }
+    let n = |k: &str| count(&u[k]);
     let tokens = [n("input_tokens"), n("cache_read_input_tokens"), n("cache_creation_input_tokens"), n("output_tokens")];
     push(r, Call { at, model: agentcli::claude_model_name(model).unwrap_or_else(|| model.to_string()), provider: "anthropic".into(), tokens });
 }
@@ -188,7 +253,7 @@ fn codex_line(r: &mut Progress, line: &str) {
         return;
     }
     let four = |t: &Value| {
-        let n = |k: &str| t[k].as_i64().unwrap_or(0);
+        let n = |k: &str| t[k].as_i64().unwrap_or(0).clamp(0, i64::MAX / 8);
         let cached = n("cached_input_tokens");
         [(n("input_tokens") - cached).max(0), cached, n("cache_write_input_tokens"), n("output_tokens")]
     };
@@ -200,7 +265,8 @@ fn codex_line(r: &mut Progress, line: &str) {
     let tokens = match r.total {
         Some(prev) if (0..4).all(|i| total[i] >= prev[i]) => [total[0] - prev[0], total[1] - prev[1], total[2] - prev[2], total[3] - prev[3]],
         _ => own,
-    };
+    }
+    .map(|t| t.clamp(0, MAX_TOKENS));
     r.total = Some(total);
     // The same count again (a rate-limit update) isn't a call.
     if tokens.iter().all(|t| *t == 0) {
@@ -219,7 +285,7 @@ fn agy_line(r: &mut Progress, line: &str) {
     if v["type"] != "PLANNER_RESPONSE" {
         return;
     }
-    let n = |k: &str| v[k].as_i64().or_else(|| v[k].as_str().and_then(|s| s.parse().ok())).unwrap_or(0);
+    let n = |k: &str| count(&v[k]);
     let tokens = [n("input_tokens"), n("cache_read_tokens"), n("cache_write_tokens"), n("output_tokens")];
     if tokens.iter().all(|t| *t == 0) {
         return;
@@ -239,8 +305,8 @@ fn push(r: &mut Progress, c: Call) {
         && last.model == c.model
         && last.provider == c.provider
     {
-        for i in 0..4 {
-            last.tokens[i] += c.tokens[i];
+        for (t, n) in last.tokens.iter_mut().zip(c.tokens) {
+            *t = t.saturating_add(n);
         }
         return;
     }
@@ -414,6 +480,42 @@ mod tests {
 
     fn secs(at: &str) -> i64 {
         crate::time::parse(at).unwrap().unix_timestamp()
+    }
+
+    #[test]
+    fn a_forked_subagent_doesnt_count_the_call_that_spawned_it() {
+        let dir = scratch("fork");
+        let usage = json!({ "input_tokens": 10, "cache_read_input_tokens": 100, "output_tokens": 20 });
+        let p = write(
+            &dir,
+            "agent-a1.jsonl",
+            &[
+                json!({ "type": "fork-context-ref", "parentSessionId": "s1" }),
+                json!({ "type": "assistant", "timestamp": "2026-11-20T17:00:05Z", "message": { "id": "parent", "model": "claude-opus-5-5", "usage": usage } }),
+                json!({ "type": "assistant", "timestamp": "2026-11-20T17:00:05Z", "message": { "id": "parent", "model": "claude-opus-5-5", "usage": usage } }),
+                json!({ "type": "assistant", "timestamp": "2026-11-20T17:03:00Z", "message": { "id": "own", "model": "claude-opus-5-5", "usage": usage } }),
+            ],
+        );
+        let c = calls("claude", &p, 0);
+        assert_eq!((c.len(), c[0].at), (1, secs("2026-11-20T17:03:00Z")));
+    }
+
+    #[test]
+    fn garbage_counts_and_huge_lines_dont_reach_the_totals() {
+        let dir = scratch("hostile");
+        let p = dir.join("s.jsonl");
+        let mut text = String::new();
+        // Negative and absurd counts are clamped.
+        let bad = json!({ "type": "assistant", "timestamp": "2026-11-20T17:00:05Z", "message": { "id": "m1", "model": "claude-opus-5-5", "usage": { "input_tokens": -5_000_000, "output_tokens": i64::MAX } } });
+        text.push_str(&format!("{bad}\n"));
+        // A line past the limit is passed over, and the next one still counts.
+        text.push_str(&"x".repeat(MAX_LINE + 10));
+        text.push('\n');
+        let ok = json!({ "type": "assistant", "timestamp": "2026-11-20T17:09:05Z", "message": { "id": "m2", "model": "claude-opus-5-5", "usage": { "input_tokens": 3, "output_tokens": 4 } } });
+        text.push_str(&format!("{ok}\n"));
+        std::fs::write(&p, text).unwrap();
+        let c = calls("claude", &p, 0);
+        assert_eq!(c.iter().map(|c| c.tokens).collect::<Vec<_>>(), vec![[0, 0, 0, MAX_TOKENS], [3, 0, 0, 4]]);
     }
 
     #[test]

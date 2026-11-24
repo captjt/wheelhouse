@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { get } from "./api";
-import { AppAvatar, IconBuild, IconChart, IconClipboard, IconExternal, StatusIcon } from "./icons";
+import { AppAvatar, IconBuild, IconChart, IconClipboard, IconExternal, IconPR, StatusIcon } from "./icons";
 import { ago, useHub } from "./live";
 import { RiskChip } from "./Reviews";
 import { InlineMd, useToast } from "./ui";
@@ -291,7 +291,7 @@ function UsageSection({ u, words }: { u: Usage; words: string }) {
       <Group title="Most tokens" n={u.dockets.length}>
         {u.dockets.map((d) => (
           <a key={d.id} className="rc-pr" href={`#/d/${d.id}`}>
-            <span className="rc-pr-icon">{d.kind === "builds" ? <IconBuild size={14} /> : <StatusIcon status="in_progress" size={14} />}</span>
+            <span className="rc-pr-icon">{d.kind === "builds" ? <IconBuild size={14} /> : d.kind === "reviews" ? <IconPR size={14} /> : <StatusIcon status="in_progress" size={14} />}</span>
             <span className="rc-pr-main">
               <span className="rc-pr-top">
                 <span className="rc-pr-key">{d.id}</span>
@@ -318,14 +318,18 @@ export function RecapView() {
   const [error, setError] = useState<string | null>(null);
   const meta = PERIODS.find((p) => p.key === period)!;
   const last = useRef(0);
+  const asked = useRef(0);
   const load = useMemo(
     () => () => {
       const b = bounds(period);
       const q = new URLSearchParams({ since: b.since.toISOString(), until: b.until.toISOString(), label: meta.words });
       last.current = Date.now();
+      // Only the latest ask's answer shows: a slow first read for one
+      // period doesn't land under another's.
+      const ask = ++asked.current;
       get<RecapData>(`/api/recap?${q}`).then(
-        (d) => (setData(d), setError(null)),
-        (e: Error) => setError(e.message),
+        (d) => ask === asked.current && (setData(d), setError(null)),
+        (e: Error) => ask === asked.current && setError(e.message),
       );
     },
     [period, meta.words],

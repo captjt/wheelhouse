@@ -55,7 +55,11 @@ struct RecapScreen: View {
         let f = ISO8601DateFormatter()
         let q = "since=\(f.string(from: since))&until=\(f.string(from: until))&label=\(words.now)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         do {
-            data = try await store.hub.get("/api/recap?\(q.replacingOccurrences(of: "+", with: "%2B"))")
+            let asked = period
+            let d = try await store.hub.get("/api/recap?\(q.replacingOccurrences(of: "+", with: "%2B"))", slow: true)
+            // A slower answer for the period before doesn't replace this one's.
+            guard asked == period else { return }
+            data = d
             error = nil
             loadedAt = Date()
         } catch {

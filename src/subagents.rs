@@ -440,6 +440,24 @@ fn collect(
     (sessions, agy)
 }
 
+/// A transcript a docket's agent wrote, and the span (unix seconds) the
+/// docket's claims held its session over: its calls outside that are some
+/// other work's. `named`: a claim names the session (not found by folder).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transcript {
+    pub app: String,
+    pub path: PathBuf,
+    pub from: i64,
+    pub until: Option<i64>,
+    pub named: bool,
+}
+
+/// A session or conversation id that's only an id: letters, digits, `-`
+/// and `_` (never a path).
+fn plain_id(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// What finding many dockets' sessions shares: Codex's database, and each
 /// Claude Code project's listing.
 pub struct Finder {
@@ -476,23 +494,31 @@ impl Finder {
     }
 
     /// Every file a docket's agents wrote their model calls to: each
-    /// agent's own transcript and its subagents', as (app, path). For the
-    /// recap's usage; a path is the same file however it's reached.
-    pub fn transcripts(&mut self, claims: &[Claim]) -> Vec<(String, PathBuf)> {
+    /// agent's own transcript and its subagents', with the span its claims
+    /// held the session over. For the recap's usage; a path is the same
+    /// file however it's reached.
+    pub fn transcripts(&mut self, claims: &[Claim]) -> Vec<Transcript> {
         let (sessions, agy) = collect(claims, self.conn.as_ref(), &self.agy_root, &mut self.claude);
-        let mut out = Vec::new();
+        let mut found: Vec<(String, PathBuf, String)> = Vec::new();
+        let mut all = Vec::new();
         for ((app, session), (_, _, cwd, _)) in sessions {
+            // Session ids come from agents' hooks: only a plain id names a file.
+            if !plain_id(&session) {
+                continue;
+            }
+            found.clear();
+            let out = &mut found;
             match app.as_str() {
                 "claude" => {
                     let own = agentcli::claude_project(&cwd).join(format!("{session}.jsonl"));
                     let Some(own) = (if own.is_file() { Some(own) } else { claude_find(&session) }) else { continue };
                     // Its subagents are beside it.
                     let subs = own.with_extension("").join("subagents");
-                    out.push(("claude".to_string(), own));
+                    out.push(("claude".to_string(), own, session.clone()));
                     for e in std::fs::read_dir(subs).into_iter().flatten().flatten() {
                         let p = e.path();
                         if p.extension().is_some_and(|x| x == "jsonl") {
-                            out.push(("claude".into(), p));
+                            out.push(("claude".into(), p, session.clone()));
                         }
                     }
                 }
@@ -505,7 +531,7 @@ impl Finder {
                         ids.extend(tree.children.get(&ids[i]).into_iter().flatten().cloned());
                         i += 1;
                     }
-                    out.extend(ids.iter().filter_map(|id| tree.rollout.get(id)).map(|p| ("codex".to_string(), PathBuf::from(p))));
+                    out.extend(ids.iter().filter_map(|id| tree.rollout.get(id)).map(|p| ("codex".to_string(), PathBuf::from(p), session.clone())));
                 }
                 "agy" => {
                     let mut ids = vec![session.clone()];
@@ -517,12 +543,19 @@ impl Finder {
                         ids.extend(all.iter().filter(|c| c.parent.as_deref() == Some(&id)).map(|c| c.id.clone()));
                         i += 1;
                     }
-                    out.extend(ids.iter().map(|id| ("agy".to_string(), agentcli::agy_transcript(&self.agy_root, id))));
+                    out.extend(ids.iter().filter(|id| plain_id(id)).map(|id| ("agy".to_string(), agentcli::agy_transcript(&self.agy_root, id), session.clone())));
                 }
                 _ => {}
             }
+            // The claims that held it: one naming it, or (a session found by
+            // its folder) the session-less ones in that folder.
+            let held: Vec<&Claim> = claims.iter().filter(|c| c.app == app && (c.session.as_deref() == Some(&session) || (c.session.is_none() && c.cwd == cwd))).collect();
+            let named = held.iter().any(|c| c.session.is_some());
+            let from = held.iter().map(|c| c.from).min().unwrap_or(i64::MIN / 2) - SLACK;
+            let until = if held.iter().any(|c| c.until.is_none()) { None } else { held.iter().filter_map(|c| c.until).max().map(|u| u + SLACK) };
+            all.extend(found.drain(..).map(|(app, path, _)| Transcript { app, path, from, until, named }));
         }
-        out
+        all
     }
 }
 
@@ -639,6 +672,14 @@ mod tests {
         assert_eq!(round_at(&rounds, "codex", Path::new("/w/pr-793"), cs[1].from + 3700), Some(2));
         let only_reviewer = &cs[..1];
         assert_eq!(owner(only_reviewer, "codex", Path::new("/w/pr-793"), cs[0].until.unwrap() + 3600), None);
+    }
+
+    #[test]
+    fn only_a_plain_session_id_names_a_file() {
+        assert!(plain_id("01a20b4f-50c1-70e3-ae70-28a8998a2f12"));
+        for bad in ["", "../../etc/x", "a/b", "a.jsonl", &"x".repeat(129)] {
+            assert!(!plain_id(bad), "{bad}");
+        }
     }
 
     #[test]
