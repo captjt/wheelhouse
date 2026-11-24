@@ -45,9 +45,6 @@ pub struct Tracked {
     /// A prompt Wheelhouse already recorded (one it started the agent with):
     /// the agent's own hook reports it again, once.
     pending_prompt: Option<String>,
-    /// The last user prompt recorded for this pane, so hooks that fire on
-    /// every model invocation (Antigravity's `PreInvocation`) don't duplicate it.
-    last_prompt: Option<String>,
 }
 
 struct PendingTurn {
@@ -91,7 +88,6 @@ pub fn load(core: &mut Core) -> Result<()> {
                 blocked_seen: None,
                 missing_since: None,
                 pending_prompt: None,
-                last_prompt: None,
             },
         );
     }
@@ -203,7 +199,6 @@ fn open_for(core: &mut Core, a: AgentRef, session: Option<&str>, source: Option<
             blocked_seen: None,
             missing_since: None,
             pending_prompt: None,
-            last_prompt: None,
         },
     );
     Ok(id)
@@ -222,7 +217,6 @@ pub fn adopt(core: &mut Core, docket: &str, a: &AgentRef, prompt: Option<&str>) 
             blocked_seen: None,
             missing_since: None,
             pending_prompt: prompt.map(str::to_string),
-            last_prompt: None,
         },
     );
 }
@@ -366,8 +360,17 @@ fn claim_in(core: &mut Core, block: &str, session: &str, source: &str, here: Opt
 /// One call from an agent's hook: `event` is the agent's name for it.
 pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> Result<Value> {
     let session = p["session_id"].as_str().or_else(|| p["conversationId"].as_str()).filter(|s| !s.is_empty());
-    let source = p["source"].as_str().unwrap_or("startup");
     let cwd = p["cwd"].as_str();
+    // Antigravity doesn't say it resumed (`agy --conversation`, `-c`): a
+    // conversation another docket has, seen in this pane for the first
+    // time, is one resumed here. Its first hook may be the prompt's.
+    let agy_resumed = app == "agy"
+        && session.is_some_and(|s| core.agents.by_block.get(block).is_none_or(|t| t.session.as_deref() != Some(s)))
+        && resumed_docket(core, block, session.unwrap_or_default())?.is_some();
+    if agy_resumed && event != "SessionStart" {
+        hook(core, "SessionStart", app, block, p)?;
+    }
+    let source = p["source"].as_str().unwrap_or(if agy_resumed { "resume" } else { "startup" });
     // A resumed session goes back to the docket it was on, in whichever
     // pane it's resumed (claude --resume in a new one, after the old closed).
     let resumed = match (event, source, session) {
@@ -422,6 +425,11 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
             }
         }
         "UserPromptSubmit" | "PreInvocation" => {
+            // Antigravity calls PreInvocation before every model call in a
+            // turn, repeating the prompt: only the first (0) is a new one.
+            if event == "PreInvocation" && p["invocationNum"].as_i64().is_some_and(|n| n > 0) {
+                return Ok(json!({ "docket": core.agents.by_block.get(block).map(|t| t.docket.clone()) }));
+            }
             let prompt = p["prompt"].as_str().or_else(|| p["lastUserInput"].as_str()).unwrap_or_default().trim();
             if prompt.is_empty() || from_the_harness(prompt) {
                 return Ok(json!({}));
@@ -432,15 +440,11 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
                 claim(core, block, s, "startup")?;
             }
             let docket = core.agents.by_block[block].docket.clone();
-            if event == "PreInvocation" && core.agents.by_block.get(block).is_some_and(|t| t.last_prompt.as_deref() == Some(prompt)) {
+            if let Some(t) = core.agents.by_block.get_mut(block)
+                && t.pending_prompt.as_deref() == Some(prompt)
+            {
+                t.pending_prompt = None;
                 return Ok(json!({ "docket": docket }));
-            }
-            if let Some(t) = core.agents.by_block.get_mut(block) {
-                t.last_prompt = Some(prompt.to_string());
-                if t.pending_prompt.as_deref() == Some(prompt) {
-                    t.pending_prompt = None;
-                    return Ok(json!({ "docket": docket }));
-                }
             }
             if prompt.starts_with("[rex-inbox]") || prompt.starts_with("[wheelhouse]") {
                 core.append(&docket, "note", &Who::Hub, Some(prompt.to_string()), json!({ "via": "message" }))?;
@@ -450,6 +454,11 @@ pub fn hook(core: &mut Core, event: &str, app: &str, block: &str, p: &Value) -> 
         }
         "Stop" => {
             if p["stop_hook_active"].as_bool() == Some(true) || p["continuationActive"].as_bool() == Some(true) {
+                return Ok(json!({}));
+            }
+            // Claude Code's Stop is a finished turn; Antigravity's also
+            // fires when you cancel or it fails, with no new words.
+            if matches!(p["terminationReason"].as_str(), Some("USER_CANCELED" | "ERROR")) {
                 return Ok(json!({}));
             }
             let msg = p["last_assistant_message"].as_str().map(str::to_string).filter(|s| !s.trim().is_empty()).or_else(|| p["transcriptPath"].as_str().and_then(agy_last_message));
@@ -948,9 +957,9 @@ mod tests {
         assert_eq!(core.store.state(&d).unwrap().unwrap().title, "Antigravity in git/api");
 
         hook(&mut core, "SessionStart", "agy", "a1", &json!({ "conversationId": "conv-1", "cwd": "/Users/you/git/api" })).unwrap();
-        hook(&mut core, "PreInvocation", "agy", "a1", &json!({ "conversationId": "conv-1", "invocationNum": 1, "lastUserInput": "Add agy support" })).unwrap();
+        hook(&mut core, "PreInvocation", "agy", "a1", &json!({ "conversationId": "conv-1", "invocationNum": 0, "lastUserInput": "Add agy support" })).unwrap();
         // Second model invocation in the same turn repeats lastUserInput: don't record twice.
-        hook(&mut core, "PreInvocation", "agy", "a1", &json!({ "conversationId": "conv-1", "invocationNum": 2, "lastUserInput": "Add agy support" })).unwrap();
+        hook(&mut core, "PreInvocation", "agy", "a1", &json!({ "conversationId": "conv-1", "invocationNum": 1, "lastUserInput": "Add agy support" })).unwrap();
         let st = core.store.state(&d).unwrap().unwrap();
         assert_eq!(st.title, "Add agy support");
         assert_eq!(st.session.as_deref(), Some("conv-1"));
@@ -969,6 +978,42 @@ mod tests {
         let st = core.store.state(&d).unwrap().unwrap();
         assert_eq!(st.turns, 1);
         assert_eq!(st.last_turn.as_deref(), Some("Implemented **agy** support."));
+
+        // The same words again are a new turn (invocation 0), not a repeat.
+        hook(&mut core, "PreInvocation", "agy", "a1", &json!({ "conversationId": "conv-1", "invocationNum": 0, "lastUserInput": "Add agy support" })).unwrap();
+        assert_eq!(core.store.state(&d).unwrap().unwrap().prompts, 2);
+        // A canceled turn isn't a turn.
+        core.mirror.apply_pane_status("s1", "a1", vec![Record { state: "working".into(), app: Some("agy".into()), ..Default::default() }], Some(&fg), None);
+        reconcile(&mut core, ["a1".to_string()]);
+        hook(&mut core, "Stop", "agy", "a1", &json!({ "conversationId": "conv-1", "transcriptPath": transcript.to_string_lossy(), "terminationReason": "USER_CANCELED" })).unwrap();
+        core.mirror.apply_pane_status("s1", "a1", vec![Record { state: "idle".into(), app: Some("agy".into()), ..Default::default() }], Some(&fg), None);
+        reconcile(&mut core, ["a1".to_string()]);
+        assert_eq!(core.store.state(&d).unwrap().unwrap().turns, 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_agy_conversation_resumed_in_a_new_pane_goes_back_to_its_docket() {
+        let mut core = test_core();
+        // Rex's own status names it `antigravity`; a wrapper may be the process.
+        let rec = |state: &str| vec![Record { state: state.into(), app: Some("antigravity".into()), ..Default::default() }];
+        let fg = json!({ "foreground": { "name": "viper", "cwd": "/Users/you/git/api" } });
+        core.mirror.apply_pane_status("s1", "a1", rec("idle"), Some(&fg), None);
+        reconcile(&mut core, ["a1".to_string()]);
+        let d = docket_of(&core, "a1").unwrap();
+        hook(&mut core, "PreInvocation", "agy", "a1", &json!({ "conversationId": "conv-9", "invocationNum": 0, "lastUserInput": "Fix the login bug" })).unwrap();
+        assert_eq!(core.store.state(&d).unwrap().unwrap().session.as_deref(), Some("conv-9"));
+
+        // The pane closes; `agy --conversation conv-9` in another. agy sends
+        // no SessionStart source, and its first hook may be the prompt's.
+        release(&mut core, "a1", "pane closed").unwrap();
+        core.mirror.apply_pane_status("s1", "b2", rec("idle"), Some(&fg), None);
+        reconcile(&mut core, ["b2".to_string()]);
+        let fresh = docket_of(&core, "b2").unwrap();
+        assert_ne!(fresh, d);
+        hook(&mut core, "PreInvocation", "agy", "b2", &json!({ "conversationId": "conv-9", "invocationNum": 0, "lastUserInput": "Also the logout one" })).unwrap();
+        assert_eq!(docket_of(&core, "b2").as_deref(), Some(d.as_str()));
+        assert_eq!(core.store.state(&d).unwrap().unwrap().prompts, 2);
+        assert_eq!(core.store.state(&fresh).unwrap().unwrap().status, "dropped");
     }
 }

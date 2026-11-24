@@ -565,6 +565,9 @@ async fn open_reviewer(
         panes::close(&session, &block).await;
         bail!("{label} didn't take its task: {why:#}");
     }
+    if r.agent == "agy" && r.session.is_none() {
+        r.session = panes::agy_session(shared, &block, &wt, since).await;
+    }
     Ok((session, block))
 }
 
@@ -830,6 +833,8 @@ pub async fn start_checker(shared: &Shared, key: &str) -> Result<()> {
     }
     let session = if cfg.checker == "codex" {
         wait_codex_thread(&primary, since).await
+    } else if cfg.checker == "agy" {
+        panes::agy_session(shared, &created.block_id, &primary, since).await
     } else {
         l.session.or_else(|| shared.lock().agents.by_block.get(&created.block_id).and_then(|t| t.session.clone()))
     };

@@ -134,6 +134,20 @@ pub async fn deliver(shared: &Shared, session: &str, block: &str, prompt: &str) 
     Err(anyhow!("it stayed busy and never took its task"))
 }
 
+/// An Antigravity agent's conversation, once it has its first prompt: its
+/// hook names it, or its own files do (with the hooks off). An interactive
+/// agy starts the conversation only then, so this runs after `deliver`.
+pub async fn agy_session(shared: &Shared, block: &str, cwd: &std::path::Path, since: i64) -> Option<String> {
+    for _ in 0..30 {
+        let hooked = shared.lock().agents.by_block.get(block).and_then(|t| t.session.clone());
+        if let Some(s) = hooked.or_else(|| super::agentcli::agy_conversation(cwd, since)) {
+            return Some(s);
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    None
+}
+
 pub async fn close(session: &str, block: &str) {
     if let Err(e) = Rex.close_block(session, block).await {
         say!("review: closing {block}: {e:#}");

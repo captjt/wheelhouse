@@ -384,7 +384,7 @@ pub(super) async fn open_role(shared: &Shared, cfg: &Config, t: &mut Task, role:
     } else {
         l.session.or_else(|| shared.lock().agents.by_block.get(&created.block_id).and_then(|t| t.session.clone()))
     };
-    let a = super::Agent { agent: r.agent.clone(), session, pane: Some(label), block: Some(created.block_id.clone()), effort };
+    let a = super::Agent { agent: r.agent.clone(), session: session.clone(), pane: Some(label), block: Some(created.block_id.clone()), effort };
     match &reviewer {
         Some((_, name)) => {
             let p = t.prereview.get_or_insert_with(|| json!({ "n": 0, "reviewers": {} }));
@@ -395,6 +395,19 @@ pub(super) async fn open_role(shared: &Shared, cfg: &Config, t: &mut Task, role:
     }
     t.session_id = Some(created.session_id.clone());
     panes::deliver(shared, &created.session_id, &created.block_id, prompt).await?;
+    // An interactive agy starts its conversation with its first prompt.
+    if r.agent == "agy" && session.is_none() {
+        let s = panes::agy_session(shared, &created.block_id, &w, since).await;
+        match &reviewer {
+            Some((_, name)) => {
+                if let Some(p) = t.prereview.as_mut() {
+                    p["reviewers"][name.as_str()]["session"] = json!(s);
+                }
+            }
+            None if role == "builder" => t.builder.session = s,
+            None => t.checker.session = s,
+        }
+    }
     Ok(())
 }
 

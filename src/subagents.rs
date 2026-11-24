@@ -1,6 +1,7 @@
 //! The subagents of a docket's agents: what each reviewer, checker, Build
-//! agent or other agent on the docket spawned, read live from Claude Code's
-//! and Codex's own files. Nothing here is stored or goes on the record.
+//! agent or other agent on the docket spawned, read live from Claude Code's,
+//! Codex's and Antigravity's own files. Nothing here is stored or goes on the
+//! record.
 //!
 //! The docket's record names its agents: each `claim` has the agent's app
 //! and folder, and a Claude Code agent's has its session. From there:
@@ -11,6 +12,10 @@
 //! - Codex keeps every thread in its state database; a subagent's `source`
 //!   names the thread that spawned it, and its rollout ends `task_complete`
 //!   when it's done.
+//! - Antigravity keeps each conversation, a subagent's too, in
+//!   `~/.gemini/antigravity-cli/conversations/<id>.db` (its workspace) and
+//!   `brain/<id>/` (its transcript); a subagent's first step is a message
+//!   from the conversation that invoked it.
 //!
 //! An agent Wheelhouse started has no session on its claim (it isn't known
 //! yet when the agent starts): its sessions are the ones that began in its
@@ -70,7 +75,7 @@ pub fn claims(entries: &[Entry]) -> Vec<Claim> {
                 let app = match a["app"].as_str() {
                     Some("claude-code" | "claude") => "claude",
                     Some("codex") => "codex",
-                    Some("agy") => "agy",
+                    Some("agy" | "antigravity") => "agy",
                     _ => continue,
                 };
                 let Some(cwd) = a["cwd"].as_str().filter(|c| !c.is_empty()) else { continue };
@@ -309,6 +314,58 @@ fn codex_subagents(conn: &rusqlite::Connection, thread: &str, now: i64, depth: i
     }
 }
 
+// ---- Antigravity ----
+
+/// Every subagent under `conversation` (nested ones too), from the
+/// conversations in its folder: each names its caller.
+fn agy_subagents(root: &Path, all: &[agentcli::AgyConversation], conversation: &str, now: i64, depth: i64, out: &mut Vec<Value>) {
+    if depth > 4 {
+        return;
+    }
+    let caller = agentcli::agy_read(root, conversation);
+    for c in all.iter().filter(|c| c.parent.as_deref() == Some(conversation)) {
+        let r = agentcli::agy_read(root, &c.id);
+        // Its task is the prompt it was invoked with: the call that sent it
+        // says its role and type.
+        let task = agy_task(root, &c.id);
+        let call = task.as_deref().and_then(|t| caller.invoked.iter().find(|(p, _, _)| p.trim() == t.trim()));
+        let last = r.last.as_deref().and_then(epoch).unwrap_or(c.updated);
+        let state = if r.finished {
+            "done"
+        } else if now - last < RUNNING {
+            "running"
+        } else {
+            "idle"
+        };
+        out.push(json!({
+            "id": c.id,
+            "name": call.and_then(|(_, _, ty)| ty.clone()).unwrap_or_else(|| "subagent".into()),
+            "task": call.and_then(|(_, role, _)| role.clone()).or_else(|| task.as_deref().map(clip)),
+            "model": r.model,
+            "effort": r.effort,
+            "state": state,
+            "tokens": r.tokens.iter().sum::<i64>(),
+            "started_at": r.first.or_else(|| rfc3339(c.created)),
+            "last_at": r.last.or_else(|| rfc3339(c.updated)),
+            "words": r.words.as_deref().map(clip),
+            "depth": depth,
+            "parent": conversation,
+        }));
+        agy_subagents(root, all, &c.id, now, depth + 1, out);
+    }
+}
+
+/// The prompt a subagent was invoked with: its first step,
+/// `[Message] … sender=<id> … content=<prompt>`.
+fn agy_task(root: &Path, id: &str) -> Option<String> {
+    let f = std::fs::File::open(agentcli::agy_transcript(root, id)).ok()?;
+    let first = std::io::BufReader::new(f).lines().next()?.ok()?;
+    let v: Value = serde_json::from_str(&first).ok()?;
+    let c = v["content"].as_str()?;
+    let body = &c[c.find(" content=")? + " content=".len()..];
+    Some(body.split("</SYSTEM_MESSAGE>").next().unwrap_or(body).trim().to_string())
+}
+
 fn clip(s: &str) -> String {
     let s = s.trim();
     if s.chars().count() <= LAST_CHARS {
@@ -354,6 +411,23 @@ pub fn of(claims: &[Claim]) -> Value {
             }
         }
     }
+    // Antigravity's conversations, by folder: its agents' and their subagents'.
+    let agy_root = agentcli::agy_home();
+    let mut agy: HashMap<PathBuf, Vec<agentcli::AgyConversation>> = HashMap::new();
+    for c in claims.iter().filter(|c| c.app == "agy") {
+        let first = claims.iter().filter(|x| x.app == "agy" && x.cwd == c.cwd).map(|x| x.from).min().unwrap_or(c.from);
+        let all = agy.entry(c.cwd.clone()).or_insert_with(|| agentcli::agy_conversations(&agy_root, &c.cwd, first - SLACK)).clone();
+        match &c.session {
+            Some(s) => put("agy", s.clone(), c, c.from),
+            None => {
+                for x in all.iter().filter(|x| x.parent.is_none() && x.created >= c.from - SLACK) {
+                    if owner(claims, "agy", &c.cwd, x.created).is_some_and(|o| std::ptr::eq(o, c)) {
+                        put("agy", x.id.clone(), c, x.created);
+                    }
+                }
+            }
+        }
+    }
     let (mut running, mut total, mut tokens) = (0, 0, 0i64);
     let mut agents = Vec::new();
     for ((app, session), (label, round, cwd, began)) in sessions {
@@ -363,6 +437,13 @@ pub fn of(claims: &[Claim]) -> Value {
                 let mut v = Vec::new();
                 if let Some(conn) = &conn {
                     codex_subagents(conn, &session, now, 1, &mut v);
+                }
+                v
+            }
+            "agy" => {
+                let mut v = Vec::new();
+                if let Some(all) = agy.get(&cwd) {
+                    agy_subagents(&agy_root, all, &session, now, 1, &mut v);
                 }
                 v
             }
@@ -488,5 +569,38 @@ mod tests {
         assert_eq!(s["tokens"], json!(135), "a response's usage counts once");
         assert_eq!((s["model"].as_str(), s["words"].as_str()), (Some("Opus 5.5"), Some("Found it.")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_agy_subagent_is_the_conversation_its_caller_invoked() {
+        let root = std::env::temp_dir().join(format!("wh-subagents-agy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let wt = PathBuf::from("/w/pr-9");
+        let call = json!([{ "name": "invoke_subagent", "args": { "Prompt": "\"Reply with pong.\"", "Role": "\"Ping Responder\"", "TypeName": "\"research\"" } }]);
+        agentcli::fake_agy(
+            &root,
+            "main",
+            &wt,
+            &[
+                json!({ "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": "2026-11-23T23:57:36Z", "model": "gemini-4-neon-medium", "input_tokens": 10, "tool_calls": call }),
+            ],
+        );
+        agentcli::fake_agy(
+            &root,
+            "kid",
+            &wt,
+            &[
+                json!({ "type": "SYSTEM_MESSAGE", "created_at": "2026-11-23T23:57:39Z", "content": "<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-23T23:57:39Z sender=main priority=MESSAGE_PRIORITY_HIGH content=Reply with pong.\n</SYSTEM_MESSAGE>" }),
+                json!({ "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": "2026-11-23T23:57:43Z", "model": "gemini-4-neon-medium", "input_tokens": 7, "output_tokens": 3, "content": "Sent pong to caller." }),
+            ],
+        );
+        let all = agentcli::agy_conversations(&root, &wt, 0);
+        let mut subs = Vec::new();
+        agy_subagents(&root, &all, "main", epoch("2026-11-23T23:58:00Z").unwrap(), 1, &mut subs);
+        assert_eq!(subs.len(), 1);
+        let s = &subs[0];
+        assert_eq!((s["id"].as_str(), s["name"].as_str(), s["task"].as_str(), s["state"].as_str()), (Some("kid"), Some("research"), Some("Ping Responder"), Some("done")));
+        assert_eq!((s["tokens"].as_i64(), s["model"].as_str(), s["words"].as_str()), (Some(10), Some("Gemini 4 Neon"), Some("Sent pong to caller.")));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

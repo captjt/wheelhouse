@@ -46,6 +46,15 @@ pub fn urgency(state: &str) -> u8 {
     }
 }
 
+/// Wheelhouse's one name for an app Rex may report under another: Rex's
+/// own status for the Antigravity CLI says `antigravity`, its binary is `agy`.
+fn canonical_app(app: &str) -> &str {
+    match app {
+        "antigravity" => "agy",
+        other => other,
+    }
+}
+
 /// Agents Wheelhouse tracks.
 pub fn is_agent_app(app: &str) -> bool {
     matches!(app, "claude-code" | "codex" | "agy")
@@ -108,6 +117,7 @@ impl Pane {
         self.root()
             .and_then(|r| r.effective_app.as_deref().or(r.app.as_deref()))
             .or_else(|| self.records.values().find_map(|r| r.effective_app.as_deref().or(r.app.as_deref())))
+            .map(canonical_app)
             .or(match self.process.as_deref() {
                 Some("claude") => Some("claude-code"),
                 Some("codex") => Some("codex"),
@@ -394,5 +404,16 @@ mod tests {
         assert_eq!(m.panes["c"].app(), Some("agy"));
         assert!(m.panes["c"].is_agent());
         assert_eq!(app_name("agy"), "Antigravity");
+        // Rex's own status for the Antigravity CLI names it `antigravity`,
+        // even when a wrapper (here `viper`) is the foreground process.
+        m.apply_pane_status(
+            "s",
+            "d",
+            vec![Record { state: "idle".into(), app: Some("antigravity".into()), effective_app: Some("antigravity".into()), ..Default::default() }],
+            Some(&fg("viper")),
+            None,
+        );
+        assert_eq!(m.panes["d"].app(), Some("agy"));
+        assert!(m.panes["d"].is_agent());
     }
 }

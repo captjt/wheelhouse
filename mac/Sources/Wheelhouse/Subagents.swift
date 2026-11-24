@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// What the docket's agents spawned (src/subagents.rs): read live from Claude
-/// Code's and Codex's own files, so it's fetched again while it's on screen.
+/// Code's, Codex's and Antigravity's own files, so it's fetched again while it's on screen.
 struct SubagentsSection: View {
     let d: Docket
     @Environment(Store.self) private var store

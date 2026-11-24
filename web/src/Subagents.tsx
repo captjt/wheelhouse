@@ -5,7 +5,7 @@ import { ago, useData } from "./live";
 import { Prose } from "./ui";
 
 // What the docket's agents spawned (src/subagents.rs): read live from Claude
-// Code's and Codex's own files, so it's polled while the page is open.
+// Code's, Codex's and Antigravity's own files, so it's polled while the page is open.
 
 type Sub = {
   id: string;

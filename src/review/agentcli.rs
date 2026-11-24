@@ -1,4 +1,4 @@
-//! The review agents' command lines (Claude Code and Codex), and what Wheelhouse
+//! The review agents' command lines (Claude Code, Codex and Antigravity), and what Wheelhouse
 //! reads back from their own logs: which model ran, at what effort, and how
 //! many tokens it spent. Ported from rex-reviewer's `agents.lua`,
 //! `bin/token-usage` and its byline.
@@ -278,12 +278,13 @@ pub fn checker(cfg: &Config, worktree: &Path, others: &[PathBuf], effort: Option
         for d in others {
             argv.extend(["--add-dir".to_string(), d.display().to_string()]);
         }
-        let mut allow = vec!["command(wh review preview*)"];
-        let mut deny = vec!["command(wh review dismiss*)"];
+        // Whole-word prefixes: agy takes no glob in `command(…)`.
+        let mut allow = vec!["command(wh review preview)"];
+        let mut deny = vec!["command(wh review dismiss)"];
         if auto {
-            allow.push("command(wh review post*)");
+            allow.push("command(wh review post)");
         } else {
-            deny.push("command(wh review post*)");
+            deny.push("command(wh review post)");
         }
         argv.extend(["--settings".to_string(), json!({ "permissions": { "allow": allow, "deny": deny } }).to_string()]);
         Launch { argv, session: None }
@@ -375,9 +376,175 @@ fn codex_model(thread: &str) -> Option<String> {
     c.query_row("select model from threads where id = ?1", [thread], |r| r.get::<_, Option<String>>(0)).ok().flatten()
 }
 
-/// Antigravity CLI's transcript for a conversation.
-pub fn agy_transcript(session: &str) -> PathBuf {
-    crate::paths::home().join(".gemini/antigravity-cli/brain").join(session).join(".system_generated/logs/transcript.jsonl")
+/// Antigravity CLI's own folder: `conversations/<id>.db` and `brain/<id>/`.
+pub fn agy_home() -> PathBuf {
+    crate::paths::home().join(".gemini/antigravity-cli")
+}
+
+/// Antigravity CLI's transcript for a conversation, under `root`.
+pub fn agy_transcript(root: &Path, session: &str) -> PathBuf {
+    root.join("brain").join(session).join(".system_generated/logs/transcript.jsonl")
+}
+
+/// One Antigravity conversation, from its database and transcript.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgyConversation {
+    pub id: String,
+    pub created: i64,
+    pub updated: i64,
+    /// The conversation that spawned it, for a subagent: its first step is
+    /// a message from its caller, `sender=<id>`.
+    pub parent: Option<String>,
+}
+
+fn epoch_of(t: std::io::Result<std::time::SystemTime>) -> Option<i64> {
+    Some(t.ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64)
+}
+
+/// `file://` plus the path, percent-encoded as Antigravity writes it.
+fn file_uri(cwd: &Path) -> Vec<u8> {
+    let mut out = b"file://".to_vec();
+    for &b in cwd.to_string_lossy().as_bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            out.push(b);
+        } else {
+            out.extend(format!("%{b:02X}").bytes());
+        }
+    }
+    out
+}
+
+/// Whether a conversation's metadata (protobuf) holds `uri` as a whole
+/// string field: its length goes just before it, so `/w/pr-7` isn't
+/// `/w/pr-70`.
+fn holds_string(blob: &[u8], uri: &[u8]) -> bool {
+    let mut len = Vec::new();
+    let mut n = uri.len();
+    loop {
+        let b = (n & 0x7f) as u8;
+        n >>= 7;
+        if n == 0 {
+            len.push(b);
+            break;
+        }
+        len.push(b | 0x80);
+    }
+    let mut want = len;
+    want.extend_from_slice(uri);
+    blob.windows(want.len()).any(|w| w == want.as_slice())
+}
+
+fn agy_workspace_blob(db: &Path) -> Option<Vec<u8>> {
+    let ro = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI;
+    let q = |c: rusqlite::Connection| c.query_row("select data from trajectory_metadata_blob limit 1", [], |r| r.get::<_, Vec<u8>>(0)).ok();
+    rusqlite::Connection::open_with_flags(db, ro)
+        .ok()
+        .and_then(q)
+        .or_else(|| rusqlite::Connection::open_with_flags(format!("file:{}?immutable=1", db.display()), ro).ok().and_then(q))
+}
+
+/// The caller of a subagent conversation, from its first transcript step.
+fn agy_parent(root: &Path, id: &str) -> Option<String> {
+    let f = std::fs::File::open(agy_transcript(root, id)).ok()?;
+    let first = std::io::BufReader::new(f).lines().next()?.ok()?;
+    let v: Value = serde_json::from_str(&first).ok()?;
+    if v["type"] != "SYSTEM_MESSAGE" {
+        return None;
+    }
+    let c = v["content"].as_str()?;
+    let at = c.find("[Message] ")?;
+    let sender = c[at..].split_whitespace().find_map(|w| w.strip_prefix("sender="))?;
+    Some(sender.to_string())
+}
+
+/// Antigravity conversations in `cwd` that moved from `since` (seconds)
+/// on, subagents too, oldest first.
+pub fn agy_conversations(root: &Path, cwd: &Path, since: i64) -> Vec<AgyConversation> {
+    let uri = file_uri(cwd);
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(root.join("conversations")).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.extension().is_none_or(|x| x != "db") {
+            continue;
+        }
+        let Some(id) = p.file_stem().and_then(|s| s.to_str()).map(str::to_string) else { continue };
+        let meta = e.metadata().ok();
+        let wal = std::fs::metadata(p.with_extension("db-wal")).ok().and_then(|m| epoch_of(m.modified()));
+        let updated = meta.as_ref().and_then(|m| epoch_of(m.modified())).max(wal).unwrap_or(0);
+        if updated < since {
+            continue;
+        }
+        if !agy_workspace_blob(&p).is_some_and(|b| holds_string(&b, &uri)) {
+            continue;
+        }
+        let created = meta.as_ref().and_then(|m| epoch_of(m.created())).unwrap_or(updated);
+        out.push(AgyConversation { parent: agy_parent(root, &id), id, created, updated });
+    }
+    out.sort_by_key(|c| c.created);
+    out
+}
+
+/// The Antigravity conversation started in `cwd` since `since` (seconds),
+/// skipping subagents. An interactive agy starts its conversation with its
+/// first prompt, so look after the prompt goes in.
+pub fn agy_conversation(cwd: &Path, since: i64) -> Option<String> {
+    agy_conversations(&agy_home(), cwd, since).into_iter().rev().find(|c| c.parent.is_none() && c.created >= since).map(|c| c.id)
+}
+
+/// What an Antigravity transcript says: model and effort last run with,
+/// tokens (`[input, cache_read, cache_write, output]`), last words, when it
+/// began and last moved, whether its last step finished its turn, and the
+/// subagents it invoked (`Prompt` → (`Role`, `TypeName`)).
+#[derive(Debug, Default)]
+pub struct AgyRead {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub tokens: [i64; 4],
+    pub words: Option<String>,
+    pub first: Option<String>,
+    pub last: Option<String>,
+    pub finished: bool,
+    pub invoked: Vec<(String, Option<String>, Option<String>)>,
+}
+
+pub fn agy_read(root: &Path, session: &str) -> AgyRead {
+    let mut r = AgyRead::default();
+    let Ok(f) = std::fs::File::open(agy_transcript(root, session)) else { return r };
+    let n = |v: &Value| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(0);
+    // Tool arguments are JSON-encoded strings: `"\"Reply with pong.\""`.
+    let arg = |v: &Value| v.as_str().map(|s| serde_json::from_str::<String>(s).unwrap_or_else(|_| s.to_string()));
+    for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        if let Some(at) = v["created_at"].as_str() {
+            r.first.get_or_insert_with(|| at.to_string());
+            r.last = Some(at.to_string());
+        }
+        if v["type"] != "PLANNER_RESPONSE" {
+            r.finished = false;
+            continue;
+        }
+        if let Some(m) = v["model"].as_str().filter(|m| !m.is_empty()) {
+            let (pretty, eff) = agy_model_name(m);
+            r.model = Some(pretty);
+            if eff.is_some() {
+                r.effort = eff;
+            }
+        }
+        for (i, k) in ["input_tokens", "cache_read_tokens", "cache_write_tokens", "output_tokens"].iter().enumerate() {
+            r.tokens[i] += n(&v[k]);
+        }
+        if let Some(t) = v["content"].as_str().or_else(|| v["response"].as_str()).filter(|t| !t.trim().is_empty()) {
+            r.words = Some(t.to_string());
+        }
+        let calls = v["tool_calls"].as_array().map(Vec::as_slice).unwrap_or_default();
+        for c in calls.iter().filter(|c| c["name"] == "invoke_subagent") {
+            if let Some(p) = arg(&c["args"]["Prompt"]) {
+                r.invoked.push((p, arg(&c["args"]["Role"]), arg(&c["args"]["TypeName"])));
+            }
+        }
+        r.finished = calls.is_empty() && v["status"] == "DONE";
+    }
+    r
 }
 
 /// `gemini-4-neon-medium` → `("Gemini 4 Neon", Some("medium"))`.
@@ -401,27 +568,30 @@ pub fn agy_model_name(id: &str) -> (String, Option<String>) {
     (if name.is_empty() { id.to_string() } else { name }, effort)
 }
 
+/// A fake Antigravity conversation under `root` for tests: its database
+/// names `cwd` as Antigravity's does (a length-prefixed `file://` string).
+#[cfg(test)]
+pub fn fake_agy(root: &Path, id: &str, cwd: &Path, lines: &[Value]) {
+    std::fs::create_dir_all(root.join("conversations")).unwrap();
+    let uri = file_uri(cwd);
+    let mut blob = vec![0x0a, 0x24];
+    blob.extend_from_slice(b"f2347147-0e29-4db4-89b5-d0e6e9816683");
+    blob.push(0x32);
+    blob.push(uri.len() as u8);
+    blob.extend_from_slice(&uri);
+    blob.push(0x7a);
+    let c = rusqlite::Connection::open(root.join("conversations").join(format!("{id}.db"))).unwrap();
+    c.execute_batch("create table trajectory_metadata_blob (id text primary key, data blob)").unwrap();
+    c.execute("insert into trajectory_metadata_blob values ('main', ?1)", [blob]).unwrap();
+    let t = agy_transcript(root, id);
+    std::fs::create_dir_all(t.parent().unwrap()).unwrap();
+    std::fs::write(t, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n")).unwrap();
+}
+
 /// The last model and effort an Antigravity CLI conversation ran with.
 fn agy_last(session: &str) -> (Option<String>, Option<String>) {
-    let Ok(f) = std::fs::File::open(agy_transcript(session)) else { return (None, None) };
-    let (mut model, mut effort) = (None, None);
-    for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
-        if !line.contains("\"PLANNER_RESPONSE\"") {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-        if v["type"] != "PLANNER_RESPONSE" {
-            continue;
-        }
-        if let Some(m) = v["model"].as_str().filter(|m| !m.is_empty()) {
-            let (pretty, eff) = agy_model_name(m);
-            model = Some(pretty);
-            if eff.is_some() {
-                effort = eff;
-            }
-        }
-    }
-    (model, effort)
+    let r = agy_read(&agy_home(), session);
+    (r.model, r.effort)
 }
 
 /// How a harness and model sign a review: `Claude Code (Opus 5.5)`.
@@ -501,7 +671,7 @@ fn add(sum: &mut [i64; 4], u: [i64; 4]) {
 }
 
 /// Tokens spent in a worktree, by agent: `{claude: {input, cache_read,
-/// cache_write, output, total}, codex: {…}, total}`. Every session with this
+/// cache_write, output, total}, codex: {…}, agy: {…}, total}`. Every session with this
 /// cwd counts: reviewers, checkers, subagents.
 pub fn tokens(wt: &Path) -> Value {
     let mut out = serde_json::Map::new();
@@ -555,6 +725,16 @@ pub fn tokens(wt: &Path) -> Value {
             total += u["total"].as_i64().unwrap_or(0);
             out.insert("codex".into(), u);
         }
+    }
+    let mut g = [0i64; 4];
+    let root = agy_home();
+    for c in agy_conversations(&root, wt, 0) {
+        add(&mut g, agy_read(&root, &c.id).tokens);
+    }
+    if g.iter().any(|v| *v > 0) {
+        let u = usage(g[0], g[1], g[2], g[3]);
+        total += u["total"].as_i64().unwrap_or(0);
+        out.insert("agy".into(), u);
     }
     out.insert("total".into(), json!(total));
     Value::Object(out)
@@ -693,7 +873,56 @@ mod tests {
         let c = checker(&cfg, &wt, &[], Some("high"), false, "t");
         let a = c.argv.join(" ");
         assert!(a.contains("--mode auto --model gemini-4-neon --effort high --settings"), "{a}");
-        assert!(a.contains("command(wh review preview*)") && a.contains("command(wh review dismiss*)") && a.contains("command(wh review post*)"), "{a}");
+        assert!(a.contains("command(wh review preview)") && a.contains("command(wh review dismiss)") && a.contains("command(wh review post)") && !a.contains("*)\""), "{a}");
+    }
+    #[test]
+    fn agy_conversations_are_found_by_folder_and_read_from_their_transcripts() {
+        assert_eq!(file_uri(Path::new("/w/My Code")), b"file:///w/My%20Code".to_vec());
+        let root = std::env::temp_dir().join(format!("wh-agy-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (wt, other) = (PathBuf::from("/w/pr-7"), PathBuf::from("/w/pr-70"));
+        let planner = |content: &str, calls: Value, tokens: Value| {
+            let mut v = json!({ "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": "2026-11-23T23:57:36Z", "model": "gemini-4-neon-high", "input_tokens": tokens[0], "cache_read_tokens": tokens[1], "output_tokens": tokens[2], "content": content });
+            if !calls.is_null() {
+                v["tool_calls"] = calls;
+            }
+            v
+        };
+        let call = json!([{ "name": "invoke_subagent", "args": { "Prompt": "\"Find the flaky test.\"", "Role": "\"Test Hunter\"", "TypeName": "\"research\"" } }]);
+        fake_agy(
+            &root,
+            "main",
+            &wt,
+            &[
+                json!({ "type": "USER_INPUT", "created_at": "2026-11-23T23:57:35Z", "content": "<USER_REQUEST>\nReview it\n</USER_REQUEST>" }),
+                planner("", call, json!([100, 0, 10])),
+                // Older transcripts write counts as strings.
+                planner("Looks good.", Value::Null, json!(["20", "300", "5"])),
+            ],
+        );
+        fake_agy(
+            &root,
+            "sub",
+            &wt,
+            &[
+                json!({ "type": "SYSTEM_MESSAGE", "created_at": "2026-11-23T23:57:39Z", "content": "<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-23T23:57:39Z sender=main priority=MESSAGE_PRIORITY_HIGH content=Find the flaky test.\n</SYSTEM_MESSAGE>" }),
+                planner("", json!([{ "name": "send_message", "args": {} }]), json!([1, 2, 3])),
+            ],
+        );
+        fake_agy(&root, "elsewhere", &other, &[planner("x", Value::Null, json!([1, 0, 1]))]);
+
+        let cs = agy_conversations(&root, &wt, 0);
+        let ids: Vec<(&str, Option<&str>)> = cs.iter().map(|c| (c.id.as_str(), c.parent.as_deref())).collect();
+        assert!(ids.contains(&("main", None)) && ids.contains(&("sub", Some("main"))) && ids.len() == 2, "/w/pr-7 isn't /w/pr-70: {ids:?}");
+        assert!(agy_conversations(&root, &wt, i64::MAX).is_empty(), "nothing moved since then");
+
+        let r = agy_read(&root, "main");
+        assert_eq!((r.model.as_deref(), r.effort.as_deref()), (Some("Gemini 4 Neon"), Some("high")));
+        assert_eq!(r.tokens, [120, 300, 0, 15]);
+        assert_eq!((r.words.as_deref(), r.finished), (Some("Looks good."), true));
+        assert_eq!(r.invoked, vec![("Find the flaky test.".to_string(), Some("Test Hunter".to_string()), Some("research".to_string()))]);
+        assert!(!agy_read(&root, "sub").finished, "its last step called a tool");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 
@@ -705,5 +934,22 @@ mod shell {
     #[ignore]
     fn print_agent_path() {
         println!("WH_AGENT_PATH={}", super::agent_path(&["/first".into()]));
+    }
+}
+
+#[cfg(test)]
+mod agy_live {
+    /// `WH_AGY_CWD=/path cargo test agy_live -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn print_agy_folder() {
+        let cwd = std::path::PathBuf::from(std::env::var("WH_AGY_CWD").unwrap());
+        let root = super::agy_home();
+        for c in super::agy_conversations(&root, &cwd, 0) {
+            let r = super::agy_read(&root, &c.id);
+            println!("{} parent={:?} model={:?} tokens={:?} finished={} invoked={}", c.id, c.parent, r.model, r.tokens, r.finished, r.invoked.len());
+        }
+        println!("newest top-level: {:?}", super::agy_conversation(&cwd, 0));
+        println!("tokens: {}", super::tokens(&cwd));
     }
 }
