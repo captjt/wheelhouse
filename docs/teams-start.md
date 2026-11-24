@@ -38,7 +38,8 @@ The image runs as uid 65532. A state volume from an image built before
 that (uid 999) needs its owner changed once, with the container stopped:
 `docker run --rm -v wheelhouse-workspace:/v alpine chown -R 65532:65532 /v`.
 
-Without Docker, use `examples/workspace/wheelhouse-workspace.service`
+On GCP, the Terraform module in `examples/workspace/gcp` does this
+step for you: [teams-gcp.md](teams-gcp.md). Without Docker, use `examples/workspace/wheelhouse-workspace.service`
 (its head has the steps). On an always-on Mac: `wh up --workspace`, then
 `tailscale serve --bg 7700`, and the setup code is in
 `~/Library/Logs/wheelhouse-workspace.log`.

@@ -264,6 +264,10 @@ signature is accepted once.
 - **Linux, under systemd:** `examples/workspace/wheelhouse-workspace.service`,
   with `WH_STATE=/var/lib/wheelhouse-workspace`, then
   `tailscale serve --bg 7700`.
+- **GCP, with Terraform:** `examples/workspace/gcp` makes a private VM
+  with the hub and Tailscale Serve on it, its state on a snapshotted
+  disk, and no way in but the tailnet. [teams-gcp.md](teams-gcp.md) is
+  how a team deploys and runs it.
 - **A Mac:** `wh up --workspace`, a LaunchAgent beside (never instead of)
   the daily hub, with its own state in `~/.local/state/wheelhouse-workspace`,
   then `tailscale serve --bg 7700`.
