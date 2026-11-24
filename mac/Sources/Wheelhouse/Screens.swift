@@ -395,7 +395,7 @@ struct ReviewsOff: View {
         ContentUnavailableView {
             Label("Reviews run in Wheelhouse", systemImage: "arrow.triangle.pull")
         } description: {
-            Text("Each PR that asks you for a review becomes a Review docket: blind reviewers in Rex, a checker that merges their drafts and rates the merge risk, and a post you approve (or let the checker make).")
+            Text("Each PR that asks you for a review becomes a Review docket: blind reviewers in panes of their own, a checker that merges their drafts and rates the merge risk, and a post you approve (or let the checker make).")
             Text(rv.config.exists ? "Its settings are in \(rv.config["path"].str ?? "review.lua"): repos, reviewers, the checker, and your effort policy." : "Set it up in ~/.config/wheelhouse/review.lua (docs/review.md). Moving from rex-reviewer? `wh import rex-reviewer` brings its config and history over.")
             if let e = rv.configError { Text(e).foregroundStyle(K.error) }
         } actions: {

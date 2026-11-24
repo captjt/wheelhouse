@@ -63,7 +63,7 @@ struct PaletteOverlay: View {
         }
         if !floating, let id = nav.current, let d = store.docket(id) {
             if d.live != nil {
-                out.append(Command(id: "rex", group: d.id, label: "Show pane in Rex", symbol: "terminal", hint: "O") { store.openInRex(d.id) })
+                out.append(Command(id: "rex", group: d.id, label: "Show pane in \(d.runtime)", symbol: "terminal", hint: "O") { store.openInRex(d.id) })
                 out.append(Command(id: "peek", group: d.id, label: "Peek at pane", symbol: "eye", keywords: "screen terminal message send") { reveal(); nav.pane = d.id })
             }
             if d.live?.answerable == true {
@@ -330,7 +330,7 @@ struct NewDocketSheet: View {
                 }
             }
             HStack {
-                Text("A new tab in Rex's wheelhouse session, named after the docket.").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Text("A new tab in \(store.state?.spawnRuntime ?? "Rex")'s wheelhouse session, named after the docket.").font(.system(size: 11.5)).foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(busy ? "Starting…" : "Start agent") { start() }
@@ -379,7 +379,7 @@ struct NewDocketSheet: View {
 }
 
 /// Start an agent on a docket you already have: it claims this docket, in a
-/// new pane of Rex's wheelhouse session.
+/// new pane of the wheelhouse session, in the runtime new agents open in.
 struct StartAgentSheet: View {
     let id: String
     @Environment(Store.self) private var store
@@ -422,7 +422,7 @@ struct StartAgentSheet: View {
                 }
             }
             HStack {
-                Text("A new tab in Rex's wheelhouse session, named \(id). The agent works on this docket and reads its intent.")
+                Text("A new tab in \(store.state?.spawnRuntime ?? "Rex")'s wheelhouse session, named \(id). The agent works on this docket and reads its intent.")
                     .font(.system(size: 11.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)

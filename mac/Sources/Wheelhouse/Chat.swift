@@ -271,7 +271,7 @@ struct NowLine: View {
                 EmptyView()
             }
         } else {
-            Text("\(d.released.map { "The session ended (\($0))." } ?? "\(app) isn't running in Rex.") Start it again on the Mac to keep going.")
+            Text("\(d.released.map { "The session ended (\($0))." } ?? "\(app) isn't running in \(d.runtime).") Start it again on the Mac to keep going.")
                 .font(.system(size: 12.5)).foregroundStyle(K.muted)
         }
     }
@@ -323,7 +323,7 @@ struct PaneSheet: View {
         let d = store.docket(id)
         let state = d?.live?.state
         let app = appName(d?.agent?.app)
-        let why: String? = state == .error ? "\(app) stopped with an error." : state == nil ? "The pane isn't open in Rex." : nil
+        let why: String? = state == .error ? "\(app) stopped with an error." : state == nil ? "The pane isn't open in \(d?.runtime ?? "Rex")." : nil
         let queues = state == .working || state == .starting || state == .blocked
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -338,7 +338,7 @@ struct PaneSheet: View {
                     .font(.system(size: 11.5))
                 }
                 Spacer()
-                Button("Open in Rex", systemImage: "terminal") { store.openInRex(id) }
+                Button("Open in \(d?.runtime ?? "Rex")", systemImage: "terminal") { store.openInRex(id) }
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             .padding(14)

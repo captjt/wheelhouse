@@ -150,7 +150,7 @@ struct DocketsScreen: View {
                 } label: {
                     Label("Display", systemImage: "line.3.horizontal.decrease.circle")
                 }
-                .help("Group by attention, status, or Rex session")
+                .help("Group by attention, status, or session")
             }
         }
     }
@@ -165,7 +165,7 @@ struct DocketsScreen: View {
     }
 
     private var emptyText: String {
-        section == .active ? "Start an agent in Rex, or press ⌘N." : section == .done ? "Dockets you finish or drop land here." : "Every agent in Rex gets a docket."
+        section == .active ? "Start an agent in Rex or Herdr, or press ⌘N." : section == .done ? "Dockets you finish or drop land here." : "Every agent in Rex or Herdr gets a docket."
     }
 }
 
@@ -289,7 +289,7 @@ struct DocketMenu: View {
         Button("Open in New Window") { openWindow(id: "docket", value: d.id) }
         if d.live != nil {
             Divider()
-            Button("Show Pane in Rex") { store.openInRex(d.id) }
+            Button("Show Pane in \(d.runtime)") { store.openInRex(d.id) }
             Button("Peek at Pane") { nav.pane = d.id }
             if d.live?.answerable == true {
                 Button("Approve\(d.live?.msg.map { ": \($0.prefix(40))" } ?? "")") { Task { await store.answer(d, approve: true) } }
@@ -448,7 +448,7 @@ struct AgentsScreen: View {
         let bySession = Dictionary(grouping: agents) { $0.rexSession.isEmpty ? "—" : $0.rexSession }
         Group {
             if store.state != nil && agents.isEmpty {
-                ContentUnavailableView("No agents running in Rex", systemImage: "terminal", description: Text("Every Claude Code, Codex and Antigravity pane in Rex shows up here, live."))
+                ContentUnavailableView("No agents running", systemImage: "terminal", description: Text("Every Claude Code, Codex and Antigravity pane in \(store.state?.followed ?? "Rex") shows up here, live."))
             } else {
                 SplitPane {
                     List(selection: Binding<String?>(get: { nav.selected(.agents) }, set: { nav.select($0, in: .agents) })) {
@@ -475,7 +475,7 @@ struct AgentsScreen: View {
                 }
             }
         }
-        .navigationSubtitle(agents.isEmpty ? "" : "\(agents.count) in Rex")
+        .navigationSubtitle(agents.isEmpty ? "" : "\(agents.count) in \(store.state?.followed ?? "Rex")")
     }
 }
 
