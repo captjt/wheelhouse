@@ -34,7 +34,7 @@ entries still read.
 | `type` | `id` | More |
 | --- | --- | --- |
 | `person` | The person's handle | |
-| `agent` | `<app>@<host>`, such as `claude-code@local` | `block` (its Rex pane), `session` (the agent's own session id) |
+| `agent` | `<app>@<host>`, such as `claude-code@local` | `block` (its pane: a Rex block, or `herdr:<terminal>` in Herdr; see [runtimes.md](runtimes.md)), `session` (the agent's own session id) |
 | `hub` | `hub@<host>` | |
 
 The hub fills `actor` in from where a request came from. A caller never
@@ -104,11 +104,11 @@ Verify adds. The protocols write others (`question`, `decision`,
 
 | Kind | Writer | `data` |
 | --- | --- | --- |
-| `open` | any | `protocol` (`agent` or `none`), `title_source` (`pane`, `prompt`, `person`), and for an agent `agent`: `{app, host, block, rex_session, pane, cwd}` |
+| `open` | any | `protocol` (`agent` or `none`), `title_source` (`pane`, `prompt`, `person`), and for an agent `agent`: `{app, host, block, rex_session, pane, cwd}` (`rex_session` is the session's name in either runtime: a Rex session, or a Herdr space) |
 | `claim` | hub | An agent session holds the docket: `session`, `source` (`startup`, `resume`, `clear`, `compact`, `fork`), `agent` as in `open` |
 | `note` | person, agent, hub | `via`: `prompt` (you typed it to the agent), `message` (another agent's message, delivered), or absent (a note on the docket) |
 | `turn` | hub | An agent's turn ended. `body` is its last message, when its hook sent one. `state` is what the agent reported after the turn (`done`, `idle`) |
-| `observed` | hub | Something the hub saw in Rex: `what` (`blocked`, `error`), `kind`, `record` |
+| `observed` | hub | Something the hub saw in the pane's runtime: `what` (`blocked`, `error`), `kind`, `record` |
 | `set` | person, hub | Any of `title`, `title_source`, `status`, `hold`. Done on your word, without evidence: `on: "word"` and `reason` (docs/verify.md). `hold` is the reason it's held, or `null` to resume |
 | `release` | hub | The session no longer holds the docket: `reason` |
 | `check` | hub | A witnessed check (docs/verify.md): `name`, `command`, `required`, `repo`, `head` (the commit it ran at), `base`, `dirty`, `patch` (`sha256:` of the diff it covered), `exit` (null when it timed out), `ok`, `ms`, `output` (`sha256:` of its output), `run`, `why`. `blobs` names the output and the patch |
