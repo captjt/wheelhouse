@@ -107,6 +107,7 @@ struct PaletteOverlay: View {
         out += [
             Command(id: "new", group: "Create", label: "New docket", symbol: "square.and.pencil", hint: "⌘N") { reveal(); nav.creating = .blank },
             Command(id: "new-agent", group: "Create", label: "Start an agent on a new docket", symbol: "terminal", hint: "⇧⌘N", keywords: "claude codex agy antigravity pi start run") { reveal(); nav.creating = .agent },
+            Command(id: "new-call", group: "Create", label: "Add a Call's Transcript…", symbol: "phone", keywords: "call meeting transcript listen listener zoom meet granola") { reveal(); nav.creating = .call },
             Command(id: "new-linear", group: "Create", label: "New docket from a Linear issue", symbol: "circle.hexagongrid", keywords: "linear issue import") { reveal(); nav.creating = .linear },
         ]
         for (i, (p, key)) in Place.order.enumerated() {
@@ -279,6 +280,7 @@ struct NewDocketSheet: View {
                     Text("Blank").tag(NewMode.blank)
                     Text("From Linear").tag(NewMode.linear)
                     Text("Agent").tag(NewMode.agent)
+                    Text("Call").tag(NewMode.call)
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
             }
@@ -288,6 +290,7 @@ struct NewDocketSheet: View {
                 switch mode {
                 case .blank: blank
                 case .agent: agent
+                case .call: NewCallForm(done: done)
                 case .linear:
                     LinearPicker(busy: busy) { issue in
                         busy = true

@@ -38,6 +38,8 @@ enum Snapshot {
     static let snapHerdr = ProcessInfo.processInfo.environment["WH_SNAP_HERDR"] ?? "D-8"
     /// A docket whose code is on this Mac, for its Changes window (`WH_SNAP_CHANGES`).
     static let snapChanges = ProcessInfo.processInfo.environment["WH_SNAP_CHANGES"] ?? "D-6"
+    /// A call's docket (`WH_SNAP_CALL`): the made-up world's "Webhooks sync".
+    static let snapCall = ProcessInfo.processInfo.environment["WH_SNAP_CALL"] ?? "D-9"
 
     static let shots: [Shot] = [
         Shot(name: "docket", place: .active, select: "D-6"),
@@ -51,6 +53,7 @@ enum Snapshot {
         Shot(name: "reviews", place: .reviews, select: "D-7"),
         Shot(name: "board", place: .all),
         Shot(name: "recap", place: .recap),
+        Shot(name: "call", place: .all, select: snapCall),
         Shot(name: "palette", place: .inbox) { nav in nav.palette = true },
         Shot(name: "record", place: .active, select: "D-6", target: .sheet) { nav in nav.record = "D-6" },
         // A checkable link's signed envelope, open: it once hung the app.

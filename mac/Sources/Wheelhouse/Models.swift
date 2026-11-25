@@ -232,9 +232,12 @@ struct Docket: Hashable, Identifiable {
     var linearAlso: [LinearRef] { j["linear_also"].array.map(LinearRef.init) }
     var review: ReviewRef? { j["review"].object == nil ? nil : ReviewRef(j: j["review"]) }
     var isOpen: Bool { status.isOpen }
-    /// It can take an agent now: open, not a Review's, and no agent working on it.
+    /// It can take an agent now: open, not a Review's or a call's, and no agent working on it.
     /// A hub that lists agents adds one beside those on it.
-    var canStartAgent: Bool { isOpen && proto != "review" && (hasAgents || live == nil) }
+    var canStartAgent: Bool { isOpen && proto != "review" && !isCall && (hasAgents || live == nil) }
+    /// A call's docket (src/calls.rs): it keeps a transcript, and has no
+    /// intent, Build or agents of its own.
+    var isCall: Bool { proto == "call" }
     /// On hold: Build and Review take no steps on it. The reason, or nil.
     var hold: String? { j["hold"].text }
     /// A local docket that was shared: the shared docket it went on as.
@@ -655,6 +658,8 @@ struct DocketPage: Hashable {
     var evidence: Evidence { Evidence(j: j["evidence"]) }
     /// What agents asked, and the answers that stand (src/decisions.rs).
     var decisions: [JSON] { j["decisions"].array }
+    /// A call's proposals and how listening went; nil for any other docket.
+    var call: CallView? { j["call"].object == nil ? nil : CallView(j: j["call"]) }
     var queued: [(id: Int, body: String, at: String)] { j["queued"].array.map { ($0["id"].int ?? 0, $0["body"].str ?? "", $0["at"].str ?? "") } }
 }
 

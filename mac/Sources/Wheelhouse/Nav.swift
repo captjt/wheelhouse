@@ -66,7 +66,7 @@ enum GroupBy: String, CaseIterable {
 
 /// What a new docket starts as.
 enum NewMode: String, Identifiable {
-    case blank, linear, agent
+    case blank, linear, agent, call
     var id: String { rawValue }
 }
 

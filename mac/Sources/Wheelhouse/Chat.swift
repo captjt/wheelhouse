@@ -65,6 +65,10 @@ struct ChatView: View {
                 else if e.actorType == "person", !x["message"].exists { put(.you(e.seq, e.at, e.body ?? "", note: true, to: nil), nil) }
             case "question":
                 put(.agent(e.seq, e.at, e.body ?? "", app: app, who: who, ask: x["options"].strings, subject: x["subject"].str), by)
+            case "proposal":
+                put(.agent(e.seq, e.at, Calls.proposedBody("Proposed #\(x["n"].int ?? 0): \(e.body ?? "")", quote: x["quote"].str), app: "claude-code", who: "Listener", ask: nil, subject: nil), nil)
+            case "decision" where x["proposal"].int != nil:
+                put(.sys(e.seq, Calls.answered(x), nil), nil)
             case "decision" where x["via"].str == "composer":
                 // One of yours: a subject, not a question it answers.
                 let c = x["choice"].str ?? ""
@@ -76,6 +80,7 @@ struct ChatView: View {
                 if let b = e.body, !b.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { put(.agent(e.seq, e.at, b, app: app, who: who, ask: nil, subject: nil), by) }
             case "observed":
                 if x["what"].str == "blocked" { put(.sys(e.seq, "\(who.map { "\($0) waited" } ?? "Waited") on you\(x["kind"].str.map { " (\($0))" } ?? "")\(e.body.map { ": \($0)" } ?? "")", .blocked), by) }
+                else if x["what"].str == "listen" { put(.sys(e.seq, e.body ?? "", x["state"].str == "failed" ? .error : nil), nil) }
                 else if x["what"].str == "error" { put(.sys(e.seq, "\(who.map { "\($0) failed" } ?? "Failed")\(e.body.map { ": \($0)" } ?? "")", .error), by) }
             case "approval":
                 if x["what"].exists || x["kind"].exists, x["kind"].str != "review" {

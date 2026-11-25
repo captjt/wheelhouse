@@ -171,6 +171,15 @@ struct ActivityRow: View {
             return sys(.hub, [.b(agent), .t(src == "resume" ? " resumed session " : src == "clear" ? " cleared into session " : " started session "), .mono(s)])
         case "question":
             return .comment(writerAvatar, writer, "asked \(data["to"].str == "me" ? "you" : data["to"].str ?? "")\(data["subject"].str.map { " · \($0)" } ?? "") (#\(data["message"].int ?? 0))", "\(e.body ?? "")\n\nOptions: \(data["options"].strings.joined(separator: " · "))", "ask")
+        case "proposal":
+            // The Listener's, from a call's transcript (src/calls.rs).
+            return .comment(.app("claude-code"), "Listener", "proposed #\(data["n"].int ?? 0)", Calls.proposedBody(e.body, quote: data["quote"].str), nil)
+        case "decision" where data["proposal"].int != nil:
+            let n = data["proposal"].int ?? 0
+            var bits: [Bit] = [.b(youName), .t(" \(data["choice"].str == "Apply" ? "applied" : "ignored") #\(n)")]
+            if let to = data["applied"]["docket"].text { bits += [.t(" to "), .link(to, Calls.link(to))] }
+            if !(data["edited"].object?.isEmpty ?? true) { bits.append(.t(", edited")) }
+            return sys(you, bits)
         case "decision" where data["via"].str == "composer":
             return .comment(you, youName, "decided\(data["subject"].str.map { " · \($0)" } ?? "")", "**\(data["choice"].str ?? "")**", "you")
         case "decision":
@@ -217,6 +226,8 @@ struct ActivityRow: View {
         case "observed":
             switch data["what"].str {
             case "review" where data["source"].str == "wheelhouse": return .none
+            case "listen":
+                return sys(.hub, [.t(e.body ?? "")], data["state"].str == "failed" ? "error" : nil)
             case "review-event":
                 let ev = data["event"].str
                 return sys(.pr, [.t(e.body ?? "")], ev == "posted" || ev == "merged" ? "approved" : ev == "dismissed" || ev == "post-refused" ? "denied" : nil)

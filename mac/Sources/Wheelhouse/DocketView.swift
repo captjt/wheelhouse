@@ -85,6 +85,15 @@ struct DocketView: View {
             }
         }
         .task(id: store.version) { await load() }
+        // While the Listener reads a call, look again now and then: it can take minutes.
+        .task(id: page?.call?.reading == true) {
+            guard page?.call?.reading == true else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                if Task.isCancelled { return }
+                await load()
+            }
+        }
         .onAppear { nav.current = id }
         .focusedSceneValue(\.docket, embedded ? nil : DocketFocus(id: id, nav: nav))
         .onReceive(NotificationCenter.default.publisher(for: .snapshotTab)) { tab = $0.object as? String }
@@ -191,12 +200,13 @@ struct DocketBody: View {
                     }
                 }
             }
-            AgentsSection(d: d)
+            if !d.isCall { AgentsSection(d: d) }
             ReviewPanel(d: d)
             BuildPanel(d: d)
             SubagentsSection(d: d)
             ForEach((store.state?.messages ?? []).filter { $0.docket == d.id }) { m in MessageCard(m: m) }
-            IntentSection(d: d, entries: page.entries)
+            if !d.isCall { IntentSection(d: d, entries: page.entries) }
+            if let call = page.call { CallSection(id: d.id, call: call).id("call") }
             DecisionsSection(decisions: page.decisions, docket: d.id, repo: page.evidence.repo)
             VerifySection(page: page)
             ArtifactsSection(d: d, entries: page.entries)
@@ -409,7 +419,7 @@ struct Properties: View {
                         }
                     }
                 }
-                if d.proto != "review" {
+                if d.proto != "review", !d.isCall {
                     prop("Build") {
                         if let t = task {
                             Text("\(t.repo) · \(t.state == "active" ? (t.phase ?? "").replacingOccurrences(of: "_", with: " ") : t.state)")
@@ -438,7 +448,7 @@ struct Properties: View {
                     }
                 }
                 // The lead (or the one agent); the Agents section lists them all.
-                if let a = d.onAgents.first ?? d.leftAgents.first, d.proto != "review", task == nil {
+                if let a = d.onAgents.first ?? d.leftAgents.first, d.proto != "review", !d.isCall, task == nil {
                     let on = d.onAgents.count
                     prop(d.several ? "Lead" : "Agent") {
                         HStack(spacing: 6) {
@@ -478,7 +488,7 @@ struct Properties: View {
                         prop("Session") { Button(String(s.prefix(8))) { copy(s) }.buttonStyle(.plain).font(.system(size: 12, design: .monospaced)).help("Copy the agent's session id") }
                     }
                 }
-                prop("Protocol") { Text(task != nil ? "Build" : d.proto == "agent" ? "Agent" : d.proto == "review" ? "Review" : "By hand") }
+                prop("Protocol") { Text(task != nil ? "Build" : d.proto == "agent" ? "Agent" : d.proto == "review" ? "Review" : d.isCall ? "Call" : "By hand") }
                 prop("Hold") {
                     if let why = d.hold {
                         HStack(spacing: 8) {
@@ -490,7 +500,7 @@ struct Properties: View {
                             .help("Build and Review take no steps on it until you resume it")
                     }
                 }
-                if d.proto != "review", task == nil {
+                if d.proto != "review", !d.isCall, task == nil {
                     prop("Work") { Text("\(plural(d.prompts, "prompt")) · \(plural(d.turns, "turn"))") }
                 }
                 prop("Created") { Text(stamp(d.createdAt)) }

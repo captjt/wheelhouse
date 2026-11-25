@@ -413,6 +413,34 @@ final class Store {
         return id
     }
 
+    // ---- calls (src/calls.rs) ----
+
+    /// A call's transcript: a call docket that keeps it, and the Listener
+    /// starts reading it. The new docket's id, or nil when it was refused.
+    func addCall(title: String, transcript: String) async -> String? {
+        var body: [String: Any] = ["transcript": transcript]
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !t.isEmpty { body["title"] = t }
+        guard let r = await act("/api/calls", body), let id = r["docket"].text else { return nil }
+        toast("\(id): the Listener is reading the call")
+        return id
+    }
+
+    /// Read a call again: after a failure, or with dockets that have changed.
+    @discardableResult
+    func listen(_ id: String) async -> Bool {
+        await act("/api/calls/\(id)/listen") != nil
+    }
+
+    /// Apply a call's proposal (as edited), or ignore it. True if it went through.
+    func answerProposal(_ id: String, _ n: Int, apply: Bool, edit: [String: Any]? = nil) async -> Bool {
+        var body: [String: Any] = ["action": apply ? "apply" : "ignore"]
+        if let edit { body["edit"] = edit }
+        guard let r = await act("/api/calls/\(id)/proposals/\(n)", body) else { return false }
+        if apply { toast(Calls.appliedToast(r["result"])) }
+        return true
+    }
+
     /// `?block=B`, for a pane action on one of a docket's agents; nothing
     /// for its lead.
     nonisolated static func blockQuery(_ block: String?) -> String {

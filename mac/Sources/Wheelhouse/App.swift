@@ -148,6 +148,7 @@ struct AppCommands: Commands {
             Button("New Docket") { Windows.showMain(); nav.creating = .blank }.keyboardShortcut("n")
             Button("Start an Agent…") { Windows.showMain(); nav.creating = .agent }.keyboardShortcut("n", modifiers: [.command, .shift])
             Button("New Docket from Linear…") { Windows.showMain(); nav.creating = .linear }
+            Button("Add a Call's Transcript…") { Windows.showMain(); nav.creating = .call }
         }
         CommandMenu("Go") {
             Button("Search…") { Windows.showMain(); nav.palette.toggle() }.keyboardShortcut("k")
