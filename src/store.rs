@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS blobs (  -- files entries name, by the sha256 of thei
   added_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS usage (  -- derived: each transcript's model calls by minute, kept after its tool prunes the file
-  path TEXT NOT NULL,        -- the transcript, as Recap found it
+  file TEXT NOT NULL,        -- the transcript, by its id (usage::file_key), wherever its tool moves it
   minute INTEGER NOT NULL,   -- unix seconds, the minute's start
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS usage (  -- derived: each transcript's model calls by
   cache_read INTEGER NOT NULL,
   cache_write INTEGER NOT NULL,
   output INTEGER NOT NULL,
-  PRIMARY KEY (path, minute, provider, model)
+  PRIMARY KEY (file, minute, provider, model)
 );
 CREATE INDEX IF NOT EXISTS usage_minute ON usage(minute);
 ";
@@ -624,13 +624,13 @@ impl Store {
         let tx = self.conn.transaction()?;
         {
             let mut st = tx.prepare(
-                "INSERT INTO usage (path, minute, provider, model, docket, input, cache_read, cache_write, output) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT (path, minute, provider, model) DO UPDATE SET docket = ?5, input = ?6, cache_read = ?7, cache_write = ?8, output = ?9
+                "INSERT INTO usage (file, minute, provider, model, docket, input, cache_read, cache_write, output) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                 ON CONFLICT (file, minute, provider, model) DO UPDATE SET docket = ?5, input = ?6, cache_read = ?7, cache_write = ?8, output = ?9
                  WHERE (docket, input, cache_read, cache_write, output) IS NOT (?5, ?6, ?7, ?8, ?9)",
             )?;
             for r in rows {
                 let [i, cr, cw, o] = r.tokens;
-                st.execute(params![r.path, r.minute, r.provider, r.model, r.docket, i, cr, cw, o])?;
+                st.execute(params![r.file, r.minute, r.provider, r.model, r.docket, i, cr, cw, o])?;
             }
         }
         tx.commit()?;
@@ -641,10 +641,10 @@ impl Store {
     pub fn usage_between(&self, from: i64, until: i64) -> Result<Vec<crate::usage::Row>> {
         let mut st = self
             .conn
-            .prepare("SELECT path, minute, provider, model, docket, input, cache_read, cache_write, output FROM usage WHERE minute >= ?1 AND minute < ?2 ORDER BY minute, path")?;
+            .prepare("SELECT file, minute, provider, model, docket, input, cache_read, cache_write, output FROM usage WHERE minute >= ?1 AND minute < ?2 ORDER BY minute, file")?;
         let rows = st.query_map(params![from, until], |r| {
             Ok(crate::usage::Row {
-                path: r.get(0)?,
+                file: r.get(0)?,
                 minute: r.get(1)?,
                 provider: r.get(2)?,
                 model: r.get(3)?,

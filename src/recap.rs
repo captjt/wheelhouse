@@ -68,11 +68,10 @@ pub type Names = HashMap<String, (String, &'static str)>;
 #[cfg(test)]
 pub fn recap(core: &mut Core, since: &str, until: &str, label: &str) -> Result<Value> {
     let (out, work, names) = gather(core, since, until)?;
-    let (from, read_from, to) = bounds(core, since, until)?;
-    let rows = read(&work, read_from);
-    core.store.put_usage(&rows)?;
+    let (from, read_from, to) = bounds(core, since, until, OffsetDateTime::now_utc().unix_timestamp())?;
+    let live = read(&work, read_from).rows;
     let kept = core.store.usage_between(from, to)?;
-    Ok(finish(out, &names, &kept, label))
+    Ok(finish(out, &names, &merge(kept, live), label))
 }
 
 /// What a docket's agents' tokens count as.
@@ -92,33 +91,45 @@ fn work_of(core: &Core, st: &crate::record::DocketState) -> Result<Option<Work>>
     Ok((!claims.is_empty()).then(|| Work { id: st.id.clone(), claims }))
 }
 
-/// The dockets touched since `since` (unix seconds) whose agents' tokens
-/// count, for a snapshot.
-pub fn work_since(core: &Core, since: i64) -> Result<Vec<Work>> {
+/// Every docket with agents, for a snapshot: an old docket's agent may
+/// still write (a claim never released), so none is left out by age. In
+/// Recap's order (newest first), so a transcript two dockets reach counts
+/// for the same one in both. The hub's lock is taken for one docket at a
+/// time.
+fn all_work(shared: &crate::hub::Shared) -> Result<Vec<Work>> {
+    let ids: Vec<String> = shared.lock().store.states()?.into_iter().map(|s| s.id).collect();
     let mut work = Vec::new();
-    for st in core.store.states()? {
-        if at(Some(&st.updated_at)).is_some_and(|u| u.unix_timestamp() < since) {
-            continue;
+    for id in ids {
+        let core = shared.lock();
+        if let Some(st) = core.store.state(&id)? {
+            work.extend(work_of(&core, &st)?);
         }
-        work.extend(work_of(core, &st)?);
     }
     Ok(work)
 }
 
-/// When the last snapshot was taken (unix seconds), if one finished.
+/// How far the snapshots have kept everything (unix seconds): every
+/// transcript last written before this, less `SNAPSHOT_SLACK`, is in the
+/// store whole.
 const SNAPSHOT: &str = "usage.snapshot";
-/// A transcript last written this long before the last snapshot is in the
-/// store whole: Recap doesn't read it again.
+/// When the last snapshot ran (unix seconds), for when the next one's due.
+const SNAPSHOT_RAN: &str = "usage.snapshot_ran";
+/// Transcripts written this long before the mark are read again anyway.
 const SNAPSHOT_SLACK: i64 = 2 * 86400;
+/// A mark further ahead than this is the clock's mistake, and isn't used.
+const CLOCK_SLACK: i64 = 3600;
+
+fn meta_secs(core: &Core, k: &str, now: i64) -> Result<Option<i64>> {
+    Ok(core.store.meta_get(k)?.and_then(|v| v.parse::<i64>().ok()).filter(|t| *t <= now + CLOCK_SLACK))
+}
 
 /// A recap's usage bounds (unix seconds): from the start of the period
 /// before, the time its transcripts are read from (later, when a snapshot
 /// already kept what came before), and the period's end.
-pub fn bounds(core: &Core, since: &str, until: &str) -> Result<(i64, i64, i64)> {
+pub fn bounds(core: &Core, since: &str, until: &str, now: i64) -> Result<(i64, i64, i64)> {
     let w = window(since, until)?;
     let from = w.before().since.unix_timestamp();
-    let snap = core.store.meta_get(SNAPSHOT)?.and_then(|v| v.parse::<i64>().ok());
-    Ok((from, read_from(from, snap), w.until.unix_timestamp()))
+    Ok((from, read_from(from, meta_secs(core, SNAPSHOT, now)?), w.until.unix_timestamp()))
 }
 
 fn read_from(from: i64, snapshot: Option<i64>) -> i64 {
@@ -337,70 +348,135 @@ pub fn gather(core: &Core, since: &str, until: &str) -> Result<(Value, Vec<Work>
     Ok((out, work, names))
 }
 
-/// Every call in the work's transcripts written since `from` (unix
-/// seconds), as rows for the store, each counted for the first docket that
-/// held it. Reads files: call it off the hub's lock.
-pub fn read(work: &[Work], from: i64) -> Vec<crate::usage::Row> {
+/// What reading the work's transcripts takes: each file once (by its
+/// `usage::file_key`, however many dockets or paths reach it), and each
+/// docket's hold on it.
+pub struct Plan {
+    ids: Vec<String>,
+    /// (app, path, key)
+    files: Vec<(String, std::path::PathBuf, String)>,
+    spans: Vec<Span>,
+}
+
+pub fn plan(work: &[Work]) -> Plan {
     let mut finder = crate::subagents::Finder::new();
-    let mut files: Vec<(usize, crate::subagents::Transcript)> = work.iter().enumerate().flat_map(|(i, d)| finder.transcripts(&d.claims).into_iter().map(move |t| (i, t))).collect();
+    let mut found: Vec<(usize, crate::subagents::Transcript)> = work.iter().enumerate().flat_map(|(i, d)| finder.transcripts(&d.claims).into_iter().map(move |t| (i, t))).collect();
     // A session a claim names is that docket's before one found by its
     // folder (a claim left open can't take another docket's).
-    files.sort_by_key(|(_, t)| !t.named);
-    // Each file is read once, however many dockets reach it.
-    let mut paths: Vec<(String, std::path::PathBuf)> = Vec::new();
-    let mut index: HashMap<std::path::PathBuf, usize> = HashMap::new();
-    let spans: Vec<Span> = files
+    found.sort_by_key(|(_, t)| !t.named);
+    let mut files = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let spans = found
         .into_iter()
         .map(|(i, t)| {
-            let k = *index.entry(t.path.clone()).or_insert_with(|| {
-                paths.push((t.app.clone(), t.path.clone()));
-                paths.len() - 1
+            let key = crate::usage::file_key(&t.app, &t.path);
+            let k = *index.entry(key.clone()).or_insert_with(|| {
+                files.push((t.app.clone(), t.path.clone(), key));
+                files.len() - 1
             });
             Span { docket: i, file: k, from: t.from, until: t.until }
         })
         .collect();
-    // The first read of a period's transcripts can be gigabytes: a few
-    // threads share it.
+    Plan { ids: work.iter().map(|w| w.id.clone()).collect(), files, spans }
+}
+
+/// What a read came to: its rows, and the transcripts it couldn't read.
+#[derive(Default)]
+pub struct Read {
+    pub rows: Vec<crate::usage::Row>,
+    pub failed: usize,
+    /// The oldest last write among those (unix seconds), when known.
+    pub failed_written: Option<i64>,
+}
+
+/// Every call in the work's transcripts written since `from` (unix
+/// seconds), as rows, each counted for the first docket that held it.
+/// Reads files: call it off the hub's lock.
+pub fn read(work: &[Work], from: i64) -> Read {
+    let p = plan(work);
+    let r = read_part(&p, 0, p.files.len(), from);
+    crate::usage::forget_stale();
+    r
+}
+
+/// The plan's files `lo..hi`, read by a few threads (a first read can be
+/// gigabytes), as rows. A file's rows depend only on its own spans, so
+/// reading in parts counts the same as reading at once.
+fn read_part(p: &Plan, lo: usize, hi: usize, from: i64) -> Read {
+    let hi = hi.min(p.files.len());
+    let part = &p.files[lo.min(hi)..hi];
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let read: Vec<Vec<crate::usage::Call>> = std::thread::scope(|sc| {
+    let got: Vec<Option<Vec<crate::usage::Call>>> = std::thread::scope(|sc| {
         let jobs: Vec<_> = (0..8)
             .map(|_| {
                 sc.spawn(|| {
                     let mut mine = Vec::new();
                     loop {
                         let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some((app, p)) = paths.get(k) else { break };
+                        let Some((app, path, _)) = part.get(k) else { break };
                         // A file that can't be read is left out, not the rest.
-                        let calls = std::panic::catch_unwind(|| crate::usage::calls(app, p, from)).unwrap_or_default();
+                        let calls = std::panic::catch_unwind(|| crate::usage::calls(app, path, from)).ok().flatten();
                         mine.push((k, calls));
                     }
                     mine
                 })
             })
             .collect();
-        let mut all = vec![Vec::new(); paths.len()];
+        let mut all = vec![None; part.len()];
         for (k, c) in jobs.into_iter().flat_map(|j| j.join().unwrap_or_default()) {
             all[k] = c;
         }
         all
     });
-    crate::usage::forget_stale();
-    let names: Vec<String> = paths.iter().map(|(_, p)| p.to_string_lossy().into_owned()).collect();
-    attribute(work, &spans, &read, &names)
+    let mut out = Read::default();
+    for (k, c) in got.iter().enumerate() {
+        if c.is_some() {
+            continue;
+        }
+        out.failed += 1;
+        let path = &part[k].1;
+        let written = std::fs::metadata(path)
+            .or_else(|_| std::fs::metadata(format!("{}.zst", path.display())))
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+            .map_or(from, |d| d.as_secs() as i64);
+        out.failed_written = Some(out.failed_written.map_or(written, |w| w.min(written)));
+    }
+    let spans: Vec<&Span> = p.spans.iter().filter(|s| (lo..hi).contains(&s.file)).collect();
+    out.rows = attribute(&p.ids, &spans, |f| got.get(f.wrapping_sub(lo)).and_then(Option::as_deref), |f| p.files.get(f).map(|x| x.2.clone()));
+    out
 }
 
-/// The recap with its usage, from what the store keeps, and its Markdown.
-pub fn finish(mut out: Value, names: &Names, kept: &[crate::usage::Row], label: &str) -> Value {
+/// What Recap counts: what the store keeps, with what it just read over
+/// it. A minute read now replaces the kept one unless the kept one holds
+/// more (a snapshot reads every docket's transcripts, and may have
+/// counted a call the period's work doesn't reach).
+pub fn merge(kept: Vec<crate::usage::Row>, live: Vec<crate::usage::Row>) -> Vec<crate::usage::Row> {
+    let mut by: HashMap<(String, i64, String, String), crate::usage::Row> = HashMap::new();
+    for r in kept.into_iter().chain(live) {
+        let k = (r.file.clone(), r.minute, r.provider.clone(), r.model.clone());
+        if by.get(&k).is_none_or(|was| r.total() >= was.total()) {
+            by.insert(k, r);
+        }
+    }
+    let mut out: Vec<crate::usage::Row> = by.into_values().collect();
+    out.sort_by(|a, b| (a.minute, &a.file, &a.provider, &a.model).cmp(&(b.minute, &b.file, &b.provider, &b.model)));
+    out
+}
+
+/// The recap with its usage, from the rows `merge` gave, and its Markdown.
+pub fn finish(mut out: Value, names: &Names, rows: &[crate::usage::Row], label: &str) -> Value {
     if let (Some(s), Some(u)) = (out["since"].as_str(), out["until"].as_str())
         && let Ok(w) = window(s, u)
     {
-        out["usage"] = usage(&w, names, kept);
+        out["usage"] = usage(&w, names, rows);
     }
     out["markdown"] = json!(markdown(&out, label));
     out
 }
 
-/// A docket's hold on a file (an index into what was read): its calls
+/// A docket's hold on a file (an index into the plan's files): its calls
 /// from `from` to `until` are that docket's.
 struct Span {
     docket: usize,
@@ -412,15 +488,16 @@ struct Span {
 /// Each file's calls as rows, a minute and a model at a time: each call
 /// counts once, for the first span that holds it, and a minute's row goes
 /// to the docket its first call counted for. Calls no span holds are some
-/// other work's, and aren't kept.
-fn attribute(work: &[Work], spans: &[Span], read: &[Vec<crate::usage::Call>], paths: &[String]) -> Vec<crate::usage::Row> {
+/// other work's, and aren't kept. `calls` and `key` look a file up by its
+/// index; one that wasn't read has no calls.
+fn attribute<'a>(ids: &[String], spans: &[&Span], calls: impl Fn(usize) -> Option<&'a [crate::usage::Call]>, key: impl Fn(usize) -> Option<String>) -> Vec<crate::usage::Row> {
     use std::collections::{BTreeMap, HashSet};
     let mut seen: HashSet<(usize, usize)> = HashSet::new();
     // (file, minute, provider, model) → (docket, tokens)
     type Minute = (usize, i64, String, String);
     let mut rows: BTreeMap<Minute, (usize, [i64; 4])> = BTreeMap::new();
     for sp in spans {
-        for (j, c) in read.get(sp.file).into_iter().flatten().enumerate() {
+        for (j, c) in calls(sp.file).into_iter().flatten().enumerate() {
             if c.at < sp.from || sp.until.is_some_and(|u| c.at > u) || !seen.insert((sp.file, j)) {
                 continue;
             }
@@ -431,9 +508,7 @@ fn attribute(work: &[Work], spans: &[Span], read: &[Vec<crate::usage::Call>], pa
         }
     }
     rows.into_iter()
-        .filter_map(|((file, minute, provider, model), (d, tokens))| {
-            Some(crate::usage::Row { path: paths.get(file)?.clone(), minute, provider, model, docket: work.get(d)?.id.clone(), tokens })
-        })
+        .filter_map(|((file, minute, provider, model), (d, tokens))| Some(crate::usage::Row { file: key(file)?, minute, provider, model, docket: ids.get(d)?.clone(), tokens }))
         .collect()
 }
 
@@ -521,7 +596,7 @@ fn docket_order(id: &str) -> (&str, i64) {
 
 /// Keep what the agents' transcripts came to, about daily, so Recap's
 /// tokens outlast the tools pruning them: the first time, everything on
-/// disk; then whatever was written since a little before the last time. A
+/// disk; then whatever was written since a little before the mark. A
 /// snapshot that fails (or the hub stopping in one) is taken again.
 pub async fn snapshot_loop(shared: crate::hub::Shared) {
     const DAY: i64 = 86400;
@@ -529,32 +604,73 @@ pub async fn snapshot_loop(shared: crate::hub::Shared) {
     tokio::time::sleep(std::time::Duration::from_secs(90)).await;
     loop {
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        let last = shared.lock().store.meta_get(SNAPSHOT).ok().flatten().and_then(|v| v.parse::<i64>().ok());
-        if last.is_none_or(|l| now - l >= DAY - 3600 || l > now) {
-            let from = last.filter(|l| *l <= now).map_or(0, |l| l.saturating_sub(SNAPSHOT_SLACK));
-            match snapshot(&shared, from, now).await {
-                Ok(n) => say!("kept the tokens of {n} transcript-minutes{}", if last.is_none() { " (everything on disk, the first time)" } else { "" }),
-                Err(e) => say!("couldn't keep the tokens: {e:#}; trying again within the hour"),
+        let due = {
+            let core = shared.lock();
+            let ran = meta_secs(&core, SNAPSHOT_RAN, now);
+            let mark = meta_secs(&core, SNAPSHOT, now);
+            match (ran, mark) {
+                (Ok(ran), Ok(mark)) => ran.is_none_or(|r| now - r >= DAY - 3600).then_some(mark),
+                (Err(e), _) | (_, Err(e)) => {
+                    say!("couldn't read when the tokens were last kept: {e:#}");
+                    None
+                }
+            }
+        };
+        if let Some(mark) = due {
+            let first = mark.is_none();
+            let sh = shared.clone();
+            let took = tokio::task::spawn_blocking(move || snapshot(&sh, mark.map_or(0, |m| m.saturating_sub(SNAPSHOT_SLACK)), now)).await;
+            match took {
+                Ok(Ok((rows, 0))) => say!("kept the tokens of {rows} transcript-minutes{}", if first { " (everything on disk, the first time)" } else { "" }),
+                Ok(Ok((rows, failed))) => say!("kept the tokens of {rows} transcript-minutes; {failed} transcripts couldn't be read, and are tried again next time"),
+                Ok(Err(e)) => say!("couldn't keep the tokens: {e:#}; trying again within the hour"),
+                Err(e) => say!("couldn't keep the tokens: {e}; trying again within the hour"),
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
     }
 }
 
-/// One snapshot: the work touched since `from`, its transcripts read off
-/// the lock, then kept a batch at a time (the lock held only to write).
-/// The time it's marked as taken is `now`, and only once every row is in.
-async fn snapshot(shared: &crate::hub::Shared, from: i64, now: i64) -> Result<usize> {
-    let work = work_since(&shared.lock(), from)?;
-    let rows = tokio::task::spawn_blocking(move || read(&work, from)).await?;
-    keep(shared, &rows)?;
-    shared.lock().store.meta_set(SNAPSHOT, &now.to_string())?;
-    Ok(rows.len())
+/// Files read and kept at a time: what's held in memory at once.
+const SNAPSHOT_PART: usize = 64;
+
+/// One snapshot: every docket's transcripts written since `from`, read a
+/// part at a time and kept (the lock held only to write a batch). Then the
+/// mark: `now`, or early enough that a transcript that couldn't be read is
+/// read again. Returns the rows kept and the transcripts that failed.
+fn snapshot(shared: &crate::hub::Shared, from: i64, now: i64) -> Result<(usize, usize)> {
+    let p = plan(&all_work(shared)?);
+    let (mut rows, mut failed, mut oldest) = (0, 0, None::<i64>);
+    for lo in (0..p.files.len()).step_by(SNAPSHOT_PART) {
+        let r = read_part(&p, lo, lo + SNAPSHOT_PART, from);
+        keep(shared, &r.rows)?;
+        crate::usage::forget_stale();
+        rows += r.rows.len();
+        failed += r.failed;
+        oldest = match (oldest, r.failed_written) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+    }
+    let mark = mark_after(now, from, oldest);
+    let mut core = shared.lock();
+    core.store.meta_set(SNAPSHOT, &mark.to_string())?;
+    core.store.meta_set(SNAPSHOT_RAN, &now.to_string())?;
+    Ok((rows, failed))
 }
 
-/// Keep rows in the store a batch at a time, so a first read of months of
-/// transcripts never holds the hub's lock for long.
-pub fn keep(shared: &crate::hub::Shared, rows: &[crate::usage::Row]) -> Result<()> {
+/// How far a snapshot that read from `from` kept everything: `now`, or,
+/// when a transcript last written at `failed` couldn't be read, early
+/// enough that Recap and the next snapshot read it again. Never before
+/// where the last snapshot's mark stood (`from` plus the slack).
+fn mark_after(now: i64, from: i64, failed: Option<i64>) -> i64 {
+    let floor = from.saturating_add(SNAPSHOT_SLACK).min(now);
+    failed.map_or(now, |w| now.min(w.saturating_add(SNAPSHOT_SLACK)).max(floor))
+}
+
+/// Keep rows in the store a batch at a time, so a long snapshot never
+/// holds the hub's lock for long.
+fn keep(shared: &crate::hub::Shared, rows: &[crate::usage::Row]) -> Result<()> {
     for batch in rows.chunks(2000) {
         shared.lock().store.put_usage(batch)?;
     }
@@ -824,12 +940,18 @@ mod tests {
         [("D-1", "agents"), ("D-2", "reviews"), ("D-3", "builds")].into_iter().map(|(id, k)| (id.to_string(), (format!("{id} title"), k))).collect()
     }
 
-    fn work() -> Vec<Work> {
-        ["D-1", "D-2", "D-3"].into_iter().map(|id| Work { id: id.into(), claims: Vec::new() }).collect()
+    fn ids() -> Vec<String> {
+        vec!["D-1".into(), "D-2".into(), "D-3".into()]
     }
 
-    fn paths() -> Vec<String> {
-        vec!["/t/a.jsonl".into(), "/t/b.jsonl".into(), "/t/c.jsonl".into()]
+    fn keys() -> Vec<String> {
+        vec!["claude:a.jsonl".into(), "codex:b.jsonl".into(), "claude:c.jsonl".into()]
+    }
+
+    /// `attribute` over calls already read, one list per file.
+    fn rows_of(spans: &[Span], read: &[Vec<crate::usage::Call>]) -> Vec<crate::usage::Row> {
+        let spans: Vec<&Span> = spans.iter().collect();
+        attribute(&ids(), &spans, |f| read.get(f).map(Vec::as_slice), |f| keys().get(f).cloned())
     }
 
     #[test]
@@ -843,8 +965,7 @@ mod tests {
         ];
         let all = |docket, file| Span { docket, file, from: i64::MIN / 2, until: None };
         // The same file reached from another docket counts once.
-        let spans = vec![all(0, 0), all(1, 0), all(1, 1), all(2, 2)];
-        let rows = attribute(&work(), &spans, &read, &paths());
+        let rows = rows_of(&[all(0, 0), all(1, 0), all(1, 1), all(2, 2)], &read);
         assert_eq!(rows.len(), 6);
         let u = usage(&w, &names(), &rows);
         assert_eq!(u["tokens"], 310);
@@ -862,8 +983,8 @@ mod tests {
 
         // A session held by D-1 until Nov 11, then by D-2: each gets its own calls.
         let at = |s: &str| OffsetDateTime::parse(s, &Rfc3339).unwrap().unix_timestamp();
-        let spans = vec![Span { docket: 0, file: 0, from: 0, until: Some(at("2026-11-11T00:00:00Z")) }, Span { docket: 1, file: 0, from: at("2026-11-11T00:00:00Z"), until: None }];
-        let v = usage(&w, &names(), &attribute(&work(), &spans, &read, &paths()));
+        let spans = [Span { docket: 0, file: 0, from: 0, until: Some(at("2026-11-11T00:00:00Z")) }, Span { docket: 1, file: 0, from: at("2026-11-11T00:00:00Z"), until: None }];
+        let v = usage(&w, &names(), &rows_of(&spans, &read));
         assert_eq!(
             v["dockets"],
             json!([
@@ -893,42 +1014,36 @@ mod tests {
             call("2026-11-10T06:00:40Z", "Opus 5.5", "anthropic", [3, 0, 0, 3]),
             call("2026-11-10T09:00:00Z", "Opus 5.5", "anthropic", [50, 0, 0, 50]),
         ]];
-        let spans = vec![Span { docket: 0, file: 0, from: 0, until: Some(at("2026-11-10T08:00:00Z")) }];
-        let rows = attribute(&work(), &spans, &read, &paths());
+        let rows = rows_of(&[Span { docket: 0, file: 0, from: 0, until: Some(at("2026-11-10T08:00:00Z")) }], &read);
         let minute = at("2026-11-10T06:00:00Z");
-        assert_eq!(
-            rows,
-            vec![
-                crate::usage::Row { path: "/t/a.jsonl".into(), minute, provider: "anthropic".into(), model: "Haiku 5.5".into(), docket: "D-1".into(), tokens: [2, 0, 0, 2] },
-                crate::usage::Row { path: "/t/a.jsonl".into(), minute, provider: "anthropic".into(), model: "Opus 5.5".into(), docket: "D-1".into(), tokens: [4, 0, 0, 4] },
-            ]
-        );
+        let row =
+            |model: &str, tokens| crate::usage::Row { file: "claude:a.jsonl".into(), minute, provider: "anthropic".into(), model: model.into(), docket: "D-1".into(), tokens };
+        assert_eq!(rows, vec![row("Haiku 5.5", [2, 0, 0, 2]), row("Opus 5.5", [4, 0, 0, 4])]);
     }
 
     #[test]
-    fn kept_tokens_outlast_the_transcript_and_count_once_however_often_read() {
+    fn kept_tokens_outlast_the_transcript_and_count_once_however_often_kept() {
         let mut core = test_core();
         let w = window("2026-11-10T00:00:00Z", "2026-11-17T00:00:00Z").unwrap();
         let (from, to) = (w.before().since.unix_timestamp(), w.until.unix_timestamp());
-        let spans = vec![Span { docket: 0, file: 0, from: 0, until: None }, Span { docket: 2, file: 1, from: 0, until: None }];
-        let first = vec![vec![call("2026-11-10T06:00:00Z", "Opus 5.5", "anthropic", [10, 0, 0, 10])], vec![call("2026-11-11T06:00:00Z", "Opus 5.5", "anthropic", [1, 0, 0, 1])]];
-        let rows = attribute(&work(), &spans, &first, &paths());
-        // Read and kept twice: still counted once.
+        let all = |docket, file| Span { docket, file, from: 0, until: None };
+        let spans = [all(0, 0), all(2, 2)];
+        let first =
+            vec![vec![call("2026-11-10T06:00:00Z", "Opus 5.5", "anthropic", [10, 0, 0, 10])], vec![], vec![call("2026-11-11T06:00:00Z", "Opus 5.5", "anthropic", [1, 0, 0, 1])]];
+        let rows = rows_of(&spans, &first);
+        // Kept twice: still counted once.
         core.store.put_usage(&rows).unwrap();
         core.store.put_usage(&rows).unwrap();
         assert_eq!(usage(&w, &names(), &core.store.usage_between(from, to).unwrap())["tokens"], 22);
 
-        // a.jsonl grew in the same minute, and later: its rows are replaced, not added to.
-        let grown =
-            vec![vec![call("2026-11-10T06:00:00Z", "Opus 5.5", "anthropic", [15, 0, 0, 15]), call("2026-11-12T06:00:00Z", "Opus 5.5", "anthropic", [5, 0, 0, 5])], Vec::new()];
-        core.store.put_usage(&attribute(&work(), &spans, &grown, &paths())).unwrap();
-        let kept = core.store.usage_between(from, to).unwrap();
-        assert_eq!(usage(&w, &names(), &kept)["tokens"], 42);
+        // a.jsonl grew in the same minute, and later: its minutes are replaced, not added to.
+        let grown = vec![vec![call("2026-11-10T06:00:00Z", "Opus 5.5", "anthropic", [15, 0, 0, 15]), call("2026-11-12T06:00:00Z", "Opus 5.5", "anthropic", [5, 0, 0, 5])]];
+        core.store.put_usage(&rows_of(&spans[..1], &grown)).unwrap();
+        assert_eq!(usage(&w, &names(), &core.store.usage_between(from, to).unwrap())["tokens"], 42);
 
         // Then c.jsonl is pruned: nothing reads it, and its tokens still count.
-        let pruned = vec![vec![call("2026-11-10T06:00:00Z", "Opus 5.5", "anthropic", [15, 0, 0, 15])]];
-        core.store.put_usage(&attribute(&work(), &spans[..1], &pruned, &paths())).unwrap();
-        let u = usage(&w, &names(), &core.store.usage_between(from, to).unwrap());
+        let kept = core.store.usage_between(from, to).unwrap();
+        let u = usage(&w, &names(), &merge(kept, rows_of(&spans[..1], &grown)));
         assert_eq!(u["tokens"], 42);
         assert_eq!(u["work"], json!({ "agents": 40, "builds": 2, "reviews": 0 }));
 
@@ -942,6 +1057,79 @@ mod tests {
     }
 
     #[test]
+    fn recap_reads_over_what_is_kept_but_never_below_it() {
+        let row = |file: &str, docket: &str, n: i64| crate::usage::Row {
+            file: file.into(),
+            minute: 60,
+            provider: "anthropic".into(),
+            model: "Opus 5.5".into(),
+            docket: docket.into(),
+            tokens: [n, 0, 0, 0],
+        };
+        // The file grew since the snapshot: what's read now wins.
+        assert_eq!(merge(vec![row("a", "D-1", 5)], vec![row("a", "D-1", 9)]), vec![row("a", "D-1", 9)]);
+        // The snapshot counted a call this period's work doesn't reach: it stays.
+        assert_eq!(merge(vec![row("a", "D-2", 9)], vec![row("a", "D-1", 5)]), vec![row("a", "D-2", 9)]);
+        // Only kept (a pruned transcript), or only read: each counts once.
+        assert_eq!(merge(vec![row("a", "D-1", 5)], vec![row("b", "D-1", 7)]), vec![row("a", "D-1", 5), row("b", "D-1", 7)]);
+    }
+
+    #[test]
+    fn reading_in_parts_counts_what_reading_at_once_does() {
+        let dir = std::env::temp_dir().join(format!("wh-recap-parts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let line = |id: &str, at: &str, n: i64| {
+            json!({ "type": "assistant", "timestamp": at, "message": { "id": id, "model": "claude-opus-5-5", "usage": { "input_tokens": n, "output_tokens": 1 } } }).to_string()
+                + "\n"
+        };
+        let mut files = Vec::new();
+        for i in 0..5 {
+            let p = dir.join(format!("s{i}.jsonl"));
+            std::fs::write(&p, line(&format!("m{i}"), "2026-11-10T06:00:00Z", i + 1) + &line(&format!("n{i}"), "2026-11-10T07:00:00Z", 10)).unwrap();
+            files.push(("claude".to_string(), p.clone(), crate::usage::file_key("claude", &p)));
+        }
+        // A sixth that can't be read: a folder where the transcript should be.
+        let bad = dir.join("s5.jsonl");
+        std::fs::create_dir_all(&bad).unwrap();
+        files.push(("claude".to_string(), bad, "claude:s5.jsonl".into()));
+        // Two dockets reach file 2: the first holds it.
+        let mut spans: Vec<Span> = (0..6).map(|f| Span { docket: f % 2, file: f, from: 0, until: None }).collect();
+        spans.push(Span { docket: 2, file: 2, from: 0, until: None });
+        let p = Plan { ids: ids(), files, spans };
+        let whole = read_part(&p, 0, 6, 0);
+        let mut parts = Vec::new();
+        let mut failed = 0;
+        for lo in (0..6).step_by(4) {
+            let r = read_part(&p, lo, lo + 4, 0);
+            failed += r.failed;
+            parts.extend(r.rows);
+        }
+        assert_eq!(whole.rows, parts);
+        assert_eq!((whole.failed, failed), (1, 1));
+        assert!(whole.failed_written.is_some());
+        assert_eq!(whole.rows.len(), 10);
+        assert_eq!(whole.rows.iter().filter(|r| r.docket == "D-3").count(), 0);
+        assert_eq!(read_part(&p, 7, 9, 0).rows, vec![], "past the end: nothing");
+    }
+
+    #[test]
+    fn a_transcript_that_couldnt_be_read_holds_the_mark_back_until_it_is() {
+        let day = 86400;
+        assert_eq!(mark_after(100 * day, 97 * day, None), 100 * day);
+        // Written on day 98 and not read: the next read starts by day 98.
+        let mark = mark_after(100 * day, 97 * day, Some(98 * day));
+        assert_eq!(mark, 100 * day);
+        assert!(read_from(0, Some(mark)) <= 98 * day);
+        let mark = mark_after(110 * day, 97 * day, Some(98 * day));
+        assert_eq!(read_from(0, Some(mark)), 98 * day);
+        // Never behind the last mark (day 99), even for an older file.
+        assert_eq!(mark_after(110 * day, 97 * day, Some(90 * day)), 99 * day);
+        // The first snapshot (from 0) that fails holds at the file's day.
+        assert_eq!(read_from(0, Some(mark_after(110 * day, 0, Some(50 * day)))), 50 * day);
+    }
+
+    #[test]
     fn transcripts_a_snapshot_kept_arent_read_again() {
         let day = 86400;
         assert_eq!(read_from(100 * day, None), 100 * day, "no snapshot yet: the whole period");
@@ -950,14 +1138,17 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_keeps_everything_and_marks_when_it_was_taken() {
+    fn a_snapshot_marks_how_far_it_kept_and_a_mark_from_the_future_isnt_used() {
         let shared = crate::hub::Shared::new(test_core());
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        // No dockets with agents: nothing to read, and still marked as taken.
-        assert_eq!(rt.block_on(snapshot(&shared, 0, 1_800_000_000)).unwrap(), 0);
-        assert_eq!(shared.lock().store.meta_get(SNAPSHOT).unwrap().as_deref(), Some("1800000000"));
+        // No dockets with agents: nothing to read, and still marked.
+        assert_eq!(snapshot(&shared, 0, 1_800_000_000).unwrap(), (0, 0));
         let core = shared.lock();
-        let (_, read_from, _) = bounds(&core, "2027-01-10T00:00:00Z", "2027-01-17T00:00:00Z").unwrap();
-        assert_eq!(read_from, 1_800_000_000 - SNAPSHOT_SLACK);
+        assert_eq!(core.store.meta_get(SNAPSHOT).unwrap().as_deref(), Some("1800000000"));
+        assert_eq!(core.store.meta_get(SNAPSHOT_RAN).unwrap().as_deref(), Some("1800000000"));
+        let (_, from, _) = bounds(&core, "2027-01-10T00:00:00Z", "2027-01-17T00:00:00Z", 1_800_000_100).unwrap();
+        assert_eq!(from, 1_800_000_000 - SNAPSHOT_SLACK);
+        // The clock went back a day: the mark is ignored, and the whole period read.
+        let (prev, from, _) = bounds(&core, "2027-01-10T00:00:00Z", "2027-01-17T00:00:00Z", 1_800_000_000 - 86400).unwrap();
+        assert_eq!(from, prev);
     }
 }
