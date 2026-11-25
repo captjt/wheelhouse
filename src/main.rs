@@ -22,6 +22,7 @@ mod diffs;
 mod doctor;
 mod evidence;
 
+mod comments;
 mod compose;
 mod hooks;
 mod hub;

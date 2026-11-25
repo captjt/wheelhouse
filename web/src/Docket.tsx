@@ -26,7 +26,7 @@ import { checkState, checkWord, independence, shortSha, verifyShown } from "./ev
 import { IconAgents, IconPause, IconPlay } from "./icons";
 import { SubagentsSection } from "./Subagents";
 import { IconCode } from "./icons";
-import { diffPath, type DiffView } from "./diffview";
+import { commentPlace, diffPath, type DiffView } from "./diffview";
 import { composeButton, composeHint, composeKind, composeToast, composeWarning, suggestions, type ComposeResult, type Suggestion } from "./compose";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
@@ -730,6 +730,14 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
         return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, writer, verb, e.body || "", e.actor.type === "person" ? "you" : "");
       }
       if (data.via === "prompt") return comment(you, youName, `asked ${agent}`, e.body || "", "you");
+      // A comment on a diff's lines (src/comments.rs): where, then what it says, and the code it's on.
+      if (data.via === "diff" && data.diff) {
+        const place = commentPlace(data.diff);
+        const ex = data.diff.excerpt ? String(data.diff.excerpt) : "";
+        const fence = ex.includes("```") ? "````" : "```";
+        const code = ex ? `\n\n${fence}\n${ex}\n${fence}` : "";
+        return comment(e.actor.type === "agent" ? app : you, e.actor.type === "agent" ? agent : youName, `commented on ${place}`, `${e.body || ""}${code}`, e.actor.type === "person" ? "you" : "");
+      }
       if (data.via === "message") return comment(hubA, "rex-inbox", "delivered a message", e.body || "");
       if (e.actor.type === "agent") return comment(app, agent, "noted", e.body || "");
       return comment(you, youName, "noted", e.body || "", "you");

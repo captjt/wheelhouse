@@ -9,16 +9,37 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CodeView, WorkerPoolContextProvider, type CodeViewHandle, type CodeViewItem } from "@pierre/diffs/react";
 import { parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
 import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
-import { get } from "./api";
-import { countsLabel, diffPath, fileStatus, sortFiles, sourceLabel, splitPath, statKey, statusesOf, type DiffFile, type DiffPoint, type DiffView } from "./diffview";
+import { appName, get, liveAgents, post } from "./api";
+import {
+  commentPlace,
+  countsLabel,
+  diffPath,
+  excerptOf,
+  fileStatus,
+  placeComments,
+  sortFiles,
+  sourceLabel,
+  splitPath,
+  statKey,
+  statusesOf,
+  type DiffComment,
+  type DiffFile,
+  type DiffPoint,
+  type DiffView,
+} from "./diffview";
 import { IconBack, IconChevronDown, IconRefresh } from "./icons";
 import { ago, go, store, useHub, useTheme } from "./live";
-import { useKeys, useMenu, usePhone } from "./ui";
+import { Kbd, Prose, useKeys, useMenu, usePhone, useToast } from "./ui";
 
 /** How often a live checkout's counts are read again while the view is open. */
 const POLL_MS = 8000;
 
 type Layout = "unified" | "split";
+
+/** What an annotation under a line holds: the comments on it, or the one you're writing. */
+type Note = { kind: "comments" | "draft"; list: DiffComment[] };
+/** Where you're writing a comment: a file's line or lines, on one side. */
+type Draft = { path: string; side: "additions" | "deletions"; line: number; end: number };
 
 const POOL = {
   poolOptions: { workerFactory: () => new DiffsWorker(), poolSize: Math.min(3, Math.max(1, (navigator.hardwareConcurrency || 2) - 1)) },
@@ -55,7 +76,8 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
   const rangeRef = useRef(range);
   rangeRef.current = range;
   const [filter, setFilter] = useState("");
-  const codeRef = useRef<CodeViewHandle<undefined, undefined>>(null);
+  const codeRef = useRef<CodeViewHandle<Note, undefined>>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
   const seen = useRef("");
   const fromRef = useRef<HTMLButtonElement>(null);
   const toRef = useRef<HTMLButtonElement>(null);
@@ -143,7 +165,12 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
     return q ? files.filter((f) => f.path.toLowerCase().includes(q)) : files;
   }, [files, filter]);
 
-  const items = useMemo<CodeViewItem<undefined>[]>(() => {
+  // Comments on what's shown go under their lines; the rest are listed above.
+  const placed = useMemo(() => (view ? placeComments(view.comments, view) : { here: new Map<string, DiffComment[]>(), elsewhere: [] as DiffComment[] }), [view]);
+  // Comments can be written on a commit (both sides known) or the working tree (on its HEAD).
+  const canComment = !!view && !!view.from.sha && view.source !== "record";
+
+  const items = useMemo<CodeViewItem<Note>[]>(() => {
     const patch = single?.patch ?? view?.patch;
     if (!patch) return [];
     let parsed: FileDiffMetadata[];
@@ -154,9 +181,36 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
     }
     const order = new Map(files.map((f, i) => [f.path, i]));
     return parsed
-      .map((fd) => ({ id: fd.name, type: "diff" as const, fileDiff: fd }))
+      .map((fd) => {
+        // One annotation per line and side, under the comment's last line.
+        const at = new Map<string, DiffComment[]>();
+        for (const c of placed.here.get(fd.name) ?? []) {
+          const k = `${c.diff.side}:${c.diff.end_line ?? c.diff.line}`;
+          at.set(k, [...(at.get(k) ?? []), c]);
+        }
+        const annotations = [...at.entries()].map(([k, list]) => {
+          const [side, line] = k.split(":");
+          return { side: side as "additions" | "deletions", lineNumber: Number(line), metadata: { kind: "comments", list } as Note };
+        });
+        if (draft?.path === fd.name) annotations.push({ side: draft.side, lineNumber: draft.end, metadata: { kind: "draft", list: [] } });
+        // What it shows changed: drawn again.
+        const version = hash(`${annotations.map((a) => `${a.side}${a.lineNumber}${a.metadata.kind === "comments" ? a.metadata.list.map((c) => c.seq).join(".") : "d"}`).join("|")}`);
+        return { id: fd.name, type: "diff" as const, fileDiff: fd, annotations, version };
+      })
       .sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9));
-  }, [view, single, files]);
+  }, [view, single, files, placed, draft]);
+
+  // A draft ends, sent or not: its lines are no longer picked.
+  const endDraft = () => {
+    setDraft(null);
+    codeRef.current?.clearSelectedLines();
+  };
+
+  const startDraft = (path: string, range: { start: number; end: number; side?: "additions" | "deletions"; endSide?: "additions" | "deletions" }) => {
+    if (!canComment) return;
+    const [a, b] = range.start <= range.end ? [range.start, range.end] : [range.end, range.start];
+    setDraft({ path, side: range.endSide ?? range.side ?? "additions", line: a, end: b });
+  };
 
   const open = async (f: DiffFile) => {
     setActive(f.path);
@@ -253,7 +307,7 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
         </div>
       ) : (
         <div className={`ch-body${phone ? " ch-phone" : ""}`}>
-          <FileList files={shown} all={files.length} view={view} statuses={statuses} active={active} filter={filter} setFilter={setFilter} onOpen={(f) => void open(f)} phone={phone} />
+          <FileList files={shown} all={files.length} view={view} statuses={statuses} active={active} filter={filter} setFilter={setFilter} onOpen={(f) => void open(f)} phone={phone} comments={placed.here} />
           <div className="ch-diff">
             {error && <div className="ch-error">{error}</div>}
             {view.too_big && !single ? (
@@ -263,7 +317,30 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
                 ref={codeRef}
                 className="ch-code"
                 items={items}
+                renderCodeViewHeader={() => (placed.elsewhere.length ? <Elsewhere list={placed.elsewhere} onShow={(c) => (setFrom(c.diff.from), setTo(c.diff.to ?? "work"))} /> : null)}
+                renderAnnotation={(...args) => {
+                  const note = args[0].metadata;
+                  if (!note) return null;
+                  if (note.kind === "comments") return <Thread list={note.list} />;
+                  if (!draft || !view) return null;
+                  const patch = single?.patch ?? view.patch;
+                  return (
+                    <CommentBox
+                      id={id}
+                      view={view}
+                      draft={draft}
+                      oldPath={files.find((f) => f.path === draft.path)?.old_path ?? null}
+                      excerpt={excerptOf(patch, draft.path, draft.side, draft.line, draft.end)}
+                      onCancel={endDraft}
+                      onDone={() => (endDraft(), void load(true))}
+                    />
+                  );
+                }}
                 options={{
+                  enableGutterUtility: canComment,
+                  onGutterUtilityClick: ((range: { start: number; end: number; side?: "additions" | "deletions"; endSide?: "additions" | "deletions" }, ctx?: { item?: { id: string } }) => {
+                    if (ctx?.item?.id) startDraft(ctx.item.id, range);
+                  }) as never,
                   diffStyle: effective,
                   themeType,
                   theme: { dark: "pierre-dark", light: "pierre-light" },
@@ -285,6 +362,125 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
 
 const pointLabel = (p: DiffPoint) => (p.at ? `${p.label} · ${ago(p.at)}` : p.label);
 
+/** A small number that changes when the string does: an item's version, so CodeView draws it again. */
+function hash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  return h >>> 0;
+}
+
+const who = (by: string) => (by === "you" ? "You" : appName(by));
+
+/** The comments under a line. */
+function Thread({ list }: { list: DiffComment[] }) {
+  return (
+    <div className="ch-thread">
+      {list.map((c) => (
+        <div key={c.seq} className="ch-comment">
+          <div className="ch-comment-head">
+            <b>{who(c.by)}</b> <span className="muted">· {ago(c.at)}</span>
+          </div>
+          <Prose text={c.body} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Writing a comment under a line: it goes on the record, and the agents on the docket are told unless you say not. */
+function CommentBox(p: { id: string; view: DiffView; draft: Draft; oldPath: string | null; excerpt: string; onCancel: () => void; onDone: () => void }) {
+  const hub = useHub();
+  const toast = useToast();
+  const agents = liveAgents(hub.byId.get(p.id));
+  const [text, setText] = useState("");
+  const [tell, setTell] = useState(agents.length > 0);
+  const [busy, setBusy] = useState(false);
+  const { draft, view } = p;
+  const send = () => {
+    const body = text.trim();
+    if (!body || busy) return;
+    setBusy(true);
+    post<{ seq: number; told: string[] }>(`/api/dockets/${encodeURIComponent(p.id)}/comments`, {
+      path: draft.path,
+      old_path: p.oldPath,
+      side: draft.side,
+      line: draft.line,
+      end_line: draft.end !== draft.line ? draft.end : null,
+      from: view.from.sha,
+      to: view.to.ref === "work" ? null : view.to.sha,
+      head: view.head,
+      excerpt: p.excerpt || null,
+      body,
+      tell,
+    }).then(
+      (r) => {
+        toast(r.told.length ? `Commented, and told ${r.told.length === 1 ? r.told[0] : `${r.told.length} agents`}` : "Commented");
+        p.onDone();
+      },
+      (e: Error) => (setBusy(false), toast(e.message, "error")),
+    );
+  };
+  return (
+    <div className="ch-thread ch-draft">
+      <div className="ch-comment-head muted small">Comment on {commentPlace({ path: draft.path, line: draft.line, end_line: draft.end, side: draft.side })}</div>
+      <textarea
+        autoFocus
+        className="ch-draft-text"
+        placeholder="What should change here? (Markdown)"
+        value={text}
+        rows={3}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) return (e.preventDefault(), send());
+          if (e.key === "Escape") return (e.preventDefault(), e.stopPropagation(), p.onCancel());
+        }}
+      />
+      <div className="ch-draft-bar">
+        {agents.length > 0 ? (
+          <label className="small ch-tell">
+            <input type="checkbox" checked={tell} onChange={(e) => setTell(e.target.checked)} /> Tell {agents.length === 1 ? appName(agents[0].app) : `the ${agents.length} agents`}
+          </label>
+        ) : (
+          <span className="muted small">No agent is on it now: it stays on the record</span>
+        )}
+        <span className="spacer" />
+        <button className="btn btn-ghost btn-small" onClick={p.onCancel}>
+          Cancel
+        </button>
+        <button className="btn btn-primary btn-small" disabled={!text.trim() || busy} onClick={send}>
+          Comment <Kbd>⌘↩</Kbd>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Comments written on other versions than the one shown, with a way to show theirs. */
+function Elsewhere({ list, onShow }: { list: DiffComment[]; onShow: (c: DiffComment) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="ch-elsewhere">
+      <button className="ch-elsewhere-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {list.length} comment{list.length === 1 ? "" : "s"} on other versions <IconChevronDown size={11} />
+      </button>
+      {open && (
+        <ul>
+          {list.map((c) => (
+            <li key={c.seq}>
+              <span className="mono-s">{commentPlace(c.diff)}</span>
+              <span className="muted"> · {c.diff.to ? c.diff.to.slice(0, 7) : "uncommitted"} · {who(c.by)}, {ago(c.at)}: </span>
+              <span className="ch-elsewhere-body">{c.body.split("\n")[0].replace(/[*_`]/g, "")}</span>
+              <button className="btn btn-ghost btn-small" onClick={() => onShow(c)} title="Compare what it was written on">
+                Show
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function FileList(p: {
   files: DiffFile[];
   all: number;
@@ -295,6 +491,7 @@ function FileList(p: {
   setFilter: (s: string) => void;
   onOpen: (f: DiffFile) => void;
   phone: boolean;
+  comments: Map<string, DiffComment[]>;
 }) {
   const [shut, setShut] = useState(p.phone);
   return (
@@ -318,14 +515,21 @@ function FileList(p: {
                       {name}
                       {dir && <span className="ch-dir">{dir}</span>}
                     </span>
-                    {f.binary ? (
-                      <span className="ch-n muted">bin</span>
-                    ) : (
-                      <span className="ch-n">
-                        {f.added > 0 && <span className="ch-add">+{f.added}</span>}
-                        {f.removed > 0 && <span className="ch-del">−{f.removed}</span>}
-                      </span>
-                    )}
+                    <span className={`ch-n${f.binary ? " muted" : ""}`}>
+                      {(p.comments.get(f.path)?.length ?? 0) > 0 && (
+                        <span className="ch-n-comments" title="Comments on this version">
+                          {p.comments.get(f.path)!.length}
+                        </span>
+                      )}
+                      {f.binary ? (
+                        "bin"
+                      ) : (
+                        <>
+                          {f.added > 0 && <span className="ch-add">+{f.added}</span>}
+                          {f.removed > 0 && <span className="ch-del">−{f.removed}</span>}
+                        </>
+                      )}
+                    </span>
                   </button>
                 </li>
               );

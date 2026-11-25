@@ -3,6 +3,7 @@ import { agentLabel, agentOfEntry, appName, entryBlock, get, liveAgents, paneRun
 import { AppAvatar, IconDown, IconFile, IconSend, IconTerminal, LiveIcon, liveWord } from "./icons";
 import { agoLong, stamp, useHub } from "./live";
 import { MessageCard } from "./Messages";
+import { commentPlace } from "./diffview";
 import { AnswerButtons, usePane } from "./Pane";
 import { Prose, isPhone, useToast } from "./ui";
 
@@ -46,6 +47,7 @@ function itemsOf(entries: EntryView[], dk: Docket): Item[] {
       case "note":
         if (d.via === "prompt") out.push({ t: "you", seq: e.seq, at: e.at, text: e.body || "" });
         else if (d.message && e.actor.type === "agent") out.push({ t: "agent", seq: e.seq, at: e.at, text: `${d.subject ? `**${d.subject}**\n\n` : ""}${e.body || ""}`, app: agentApp, who });
+        else if (e.actor.type === "person" && d.via === "diff" && d.diff) out.push({ t: "you", seq: e.seq, at: e.at, text: `On \`${commentPlace(d.diff)}\`: ${e.body || ""}`, note: true });
         else if (e.actor.type === "person" && !d.message) out.push({ t: "you", seq: e.seq, at: e.at, text: e.body || "", note: true });
         break;
       case "question":
