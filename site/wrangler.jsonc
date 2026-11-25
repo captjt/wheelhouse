@@ -1,0 +1,16 @@
+// Cloudflare Workers Builds deploys the site with `npx wrangler deploy`: a
+// Worker that serves dist/ as static assets, nothing server-side. Without
+// this file Wrangler configures the project itself, adding Astro's
+// Cloudflare adapter and server rendering, which the site doesn't use.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "wheelhouse",
+  "compatibility_date": "2026-11-11",
+  "assets": {
+    "directory": "./dist",
+    // dist/404.html for a path that isn't there, with a 404 status
+    "not_found_handling": "404-page",
+    // /start/install serves /start/install/index.html at /start/install/
+    "html_handling": "auto-trailing-slash"
+  }
+}

@@ -1,4 +1,4 @@
-# Cloudflare Pages headers. Each page's script and style policy is a <meta>
+# Cloudflare's response headers (Workers static assets read this file). Each page's script and style policy is a <meta>
 # CSP written after the build with a hash of each of its inline scripts and
 # styles (src/integrations/csp.mjs); this one adds what a <meta> can't.
 /*
