@@ -89,7 +89,10 @@ struct RecapScreen: View {
                     let u = d["usage"]
                     Tile(label: "Tokens", value: u["tokens"].int ?? 0, delta: (u["tokens"].int ?? 0, u["prev_tokens"].int ?? 0, words.before), spark: u["per_day"].array.compactMap(\.int), since: d["since"].str, format: compact, neutral: true)
                 }
-                if let cost = d["usage"]["cost"].double {
+                if d["usage"]["cost"].double != nil, Cost.nothingPriced(d["usage"]) {
+                    Tile(label: "Cost", value: 0, sub: Cost.words(d["usage"], count: compact), format: { _ in "–" })
+                        .help("No model used has a price: add one under prices in settings.json")
+                } else if let cost = d["usage"]["cost"].double {
                     // In micro-dollars, so the tile's sums and spark stay whole numbers.
                     let u = d["usage"], unpriced = u["unpriced"]["tokens"].int ?? 0
                     let now = Int(Cost.micros(cost))
@@ -215,7 +218,7 @@ private struct UsageView: View {
         } else {
             let line = [
                 "\(compact(total)) tokens \(words)",
-                u["cost"].double.map { "\(Cost.money($0)) at API prices" },
+                Cost.words(u, count: compact),
                 u["cached"].double.map { "\(Int(($0 * 100).rounded()))% of input from the cache" },
                 "\(compact(u["split"]["output"].int ?? 0)) output",
                 "\(plural(models.count, "model")) from \(plural(providers.count, "provider"))",

@@ -1092,8 +1092,9 @@ fn codex_usage(rollout: &str) -> Option<[i64; 4]> {
     })?;
     let t = &line["payload"]["info"]["total_token_usage"];
     let n = |k: &str| t[k].as_i64().unwrap_or(0);
-    let cached = n("cached_input_tokens");
-    Some([n("input_tokens") - cached, cached, n("cache_write_input_tokens"), n("output_tokens")])
+    // `input_tokens` holds the cached and the written input too (usage.rs).
+    let (cached, written) = (n("cached_input_tokens"), n("cache_write_input_tokens"));
+    Some([n("input_tokens").saturating_sub(cached).saturating_sub(written).max(0), cached, written, n("output_tokens")])
 }
 
 /// Two token counts' sum, by agent.

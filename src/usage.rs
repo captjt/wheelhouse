@@ -37,6 +37,10 @@ pub struct Call {
     /// `anthropic`, `openai`, `google`, or what Codex names.
     pub provider: String,
     pub tokens: [i64; 4],
+    /// Of the tokens written to the cache (`tokens[2]`), those written to
+    /// Anthropic's 1-hour cache, which costs more than its 5-minute one.
+    /// Only Claude Code's transcripts say; every other tool's is 0.
+    pub write_1h: i64,
 }
 
 impl Call {
@@ -81,6 +85,8 @@ pub struct Row {
     pub model: String,
     pub docket: String,
     pub tokens: [i64; 4],
+    /// Of `tokens[2]`, those written to the 1-hour cache (`Call::write_1h`).
+    pub write_1h: i64,
 }
 
 impl Row {
@@ -300,7 +306,10 @@ fn claude_line(r: &mut Progress, line: &str) {
     }
     let n = |k: &str| count(&u[k]);
     let tokens = [n("input_tokens"), n("cache_read_input_tokens"), n("cache_creation_input_tokens"), n("output_tokens")];
-    push(r, Call { at, model: agentcli::claude_model_name(model).unwrap_or_else(|| model.to_string()), provider: "anthropic".into(), tokens });
+    // Which cache the writes went to, when the transcript says: never more
+    // than were written.
+    let write_1h = count(&u["cache_creation"]["ephemeral_1h_input_tokens"]).min(tokens[2]);
+    push(r, Call { at, model: agentcli::claude_model_name(model).unwrap_or_else(|| model.to_string()), provider: "anthropic".into(), tokens, write_1h });
 }
 
 fn codex_line(r: &mut Progress, line: &str) {
@@ -326,10 +335,13 @@ fn codex_line(r: &mut Progress, line: &str) {
     if p["type"] != "token_count" || info.is_null() {
         return;
     }
+    // OpenAI's `input_tokens` counts all the input, what was read from the
+    // cache and what was written to it too: input here is neither, so a
+    // written token isn't counted twice.
     let four = |t: &Value| {
         let n = |k: &str| t[k].as_i64().unwrap_or(0).clamp(0, i64::MAX / 8);
-        let cached = n("cached_input_tokens");
-        [(n("input_tokens") - cached).max(0), cached, n("cache_write_input_tokens"), n("output_tokens")]
+        let (cached, written) = (n("cached_input_tokens"), n("cache_write_input_tokens"));
+        [(n("input_tokens") - cached - written).max(0), cached, written, n("output_tokens")]
     };
     let total = four(&info["total_token_usage"]);
     // The running total's step is this call's. The file's first count (a
@@ -348,7 +360,7 @@ fn codex_line(r: &mut Progress, line: &str) {
     }
     let Some(at) = v["timestamp"].as_str().and_then(epoch) else { return };
     let model = r.model.clone().unwrap_or_else(|| "Codex".into());
-    push(r, Call { at, model: codex_model_name(&model), provider: r.provider.clone().unwrap_or_else(|| "openai".into()), tokens });
+    push(r, Call { at, model: codex_model_name(&model), provider: r.provider.clone().unwrap_or_else(|| "openai".into()), tokens, write_1h: 0 });
 }
 
 fn agy_line(r: &mut Progress, line: &str) {
@@ -368,7 +380,7 @@ fn agy_line(r: &mut Progress, line: &str) {
         r.model = Some(agentcli::agy_model_name(m).0);
     }
     let Some(at) = v["created_at"].as_str().and_then(epoch) else { return };
-    push(r, Call { at, model: r.model.clone().unwrap_or_else(|| "Gemini".into()), provider: "google".into(), tokens });
+    push(r, Call { at, model: r.model.clone().unwrap_or_else(|| "Gemini".into()), provider: "google".into(), tokens, write_1h: 0 });
 }
 
 /// One line of a Pi session: whatever spent tokens (an assistant message,
@@ -399,7 +411,7 @@ fn pi_line(r: &mut Progress, line: &str) {
         r.provider = Some(p.to_string());
     }
     let model = r.model.clone().unwrap_or_else(|| "Pi".into());
-    push(r, Call { at, model, provider: r.provider.clone().unwrap_or_else(|| "pi".into()), tokens });
+    push(r, Call { at, model, provider: r.provider.clone().unwrap_or_else(|| "pi".into()), tokens, write_1h: 0 });
 }
 
 /// Calls by the same model in the same minute are kept as one: a long
@@ -413,6 +425,7 @@ fn push(r: &mut Progress, c: Call) {
         for (t, n) in last.tokens.iter_mut().zip(c.tokens) {
             *t = t.saturating_add(n);
         }
+        last.write_1h = last.write_1h.saturating_add(c.write_1h);
         return;
     }
     r.calls.push(c);
@@ -498,7 +511,7 @@ mod tests {
             ],
         );
         let c = calls("claude", &p, 0).unwrap();
-        assert_eq!(c, vec![Call { at: 1_795_194_005, model: "Opus 5.5".into(), provider: "anthropic".into(), tokens: [10, 100, 5, 20] }]);
+        assert_eq!(c, vec![Call { at: 1_795_194_005, model: "Opus 5.5".into(), provider: "anthropic".into(), tokens: [10, 100, 5, 20], write_1h: 0 }]);
 
         // A later response, a minute on, and a line still being written.
         append(&p, &[json!({ "type": "assistant", "timestamp": "2026-11-20T17:01:30Z", "message": { "id": "m2", "model": "claude-sonnet-5-5", "usage": usage } })]);
@@ -510,6 +523,53 @@ mod tests {
         let c = calls("claude", &p, 0).unwrap();
         assert_eq!(c.len(), 2);
         assert_eq!((c[1].model.as_str(), c[1].total()), ("Sonnet 5.5", 135));
+    }
+
+    #[test]
+    fn claude_says_which_cache_its_writes_went_to() {
+        let dir = scratch("claude-1h");
+        let line = |id: &str, at: &str, written: i64, five: i64, hour: i64| {
+            let u = json!({ "input_tokens": 1, "cache_creation_input_tokens": written, "output_tokens": 1,
+                "cache_creation": { "ephemeral_5m_input_tokens": five, "ephemeral_1h_input_tokens": hour } });
+            json!({ "type": "assistant", "timestamp": at, "message": { "id": id, "model": "claude-opus-5-5", "usage": u } })
+        };
+        let p = write(
+            &dir,
+            "s.jsonl",
+            &[
+                line("a", "2026-11-20T17:00:05Z", 1000, 10, 990),
+                // The same minute: kept as one call, its 1-hour writes added.
+                line("b", "2026-11-20T17:00:30Z", 500, 0, 500),
+                // More 1-hour writes than writes: never more than were written.
+                line("c", "2026-11-20T17:05:00Z", 100, 0, 7000),
+                // No split: none counted as the 1-hour cache's.
+                json!({ "type": "assistant", "timestamp": "2026-11-20T17:09:00Z", "message": { "id": "d", "model": "claude-opus-5-5", "usage": { "cache_creation_input_tokens": 40 } } }),
+            ],
+        );
+        let c = calls("claude", &p, 0).unwrap();
+        assert_eq!(c.iter().map(|c| (c.tokens[2], c.write_1h)).collect::<Vec<_>>(), vec![(1500, 1490), (100, 100), (40, 0)]);
+    }
+
+    #[test]
+    fn codex_doesnt_count_a_written_token_as_input_too() {
+        let dir = scratch("codex-write");
+        // OpenAI's input_tokens holds the cached and the written input too.
+        let u = json!({ "input_tokens": 1000, "cached_input_tokens": 600, "cache_write_input_tokens": 300, "output_tokens": 50 });
+        let bad = json!({ "input_tokens": 10, "cached_input_tokens": 8, "cache_write_input_tokens": 5, "output_tokens": 1 });
+        let p = write(
+            &dir,
+            "rollout.jsonl",
+            &[
+                json!({ "timestamp": "2026-11-24T02:07:58Z", "type": "turn_context", "payload": { "model": "gpt-6.2-astra" } }),
+                json!({ "timestamp": "2026-11-24T02:08:34Z", "type": "event_msg", "payload": { "type": "token_count", "info": { "total_token_usage": u, "last_token_usage": u } } }),
+                // Counts that don't add up: input is never below nothing.
+                json!({ "timestamp": "2026-11-24T02:20:00Z", "type": "event_msg", "payload": { "type": "token_count", "info": { "total_token_usage": bad, "last_token_usage": bad } } }),
+            ],
+        );
+        let c = calls("codex", &p, 0).unwrap();
+        assert_eq!(c[0].tokens, [100, 600, 300, 50]);
+        assert_eq!((c[0].total(), c[0].write_1h), (1050, 0));
+        assert_eq!(c[1].tokens, [0, 8, 5, 1]);
     }
 
     #[test]

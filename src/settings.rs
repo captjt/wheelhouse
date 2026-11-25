@@ -170,7 +170,6 @@ fn lua_raw() -> Result<(Value, Value)> {
 /// Whether `s` (all of settings.json) loads with the Lua under it.
 pub fn check(s: &Value) -> Result<()> {
     check_runtime(&s["runtime"])?;
-    crate::pricing::check(&s["prices"])?;
     let (rraw, braw) = lua_raw()?;
     let review = if rraw.is_null() {
         if s["review"].as_object().is_some_and(|o| !o.is_empty()) {
@@ -253,10 +252,21 @@ pub fn change(patch: &Value) -> Result<Value> {
     }
     merge(&mut s, patch);
     prune(&mut s);
+    check_prices(patch, &s)?;
     check(&s)?;
     keep(&path())?;
     write(&path(), &(serde_json::to_string_pretty(&s)? + "\n"))?;
     Ok(s)
+}
+
+/// Prices, when a change touches them: all of them, as they'll be saved
+/// (`s`). A bad price written by hand doesn't stop a change to anything
+/// else; Recap goes on saying what's wrong with it.
+fn check_prices(patch: &Value, s: &Value) -> Result<()> {
+    if patch.get("prices").is_some() {
+        crate::pricing::check(&s["prices"]).map_err(|e| anyhow!("prices: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Keep a file's current text in `.history/` before it's replaced.
@@ -717,6 +727,20 @@ mod tests {
         let mut t = json!({ "build": { "repos": { "o/a": {} } } });
         prune(&mut t);
         assert_eq!(t, json!({}));
+    }
+
+    #[test]
+    fn prices_are_checked_only_when_a_change_touches_them() {
+        let bad = json!({ "prices": { "anthropic": { "Opus 5.5": { "input": -1 } } }, "runtime": "rex" });
+        // A bad price written by hand doesn't stop a change to the runtime.
+        assert!(check_prices(&json!({ "runtime": "herdr" }), &bad).is_ok());
+        // A change to prices is checked with everything that's set.
+        let err = check_prices(&json!({ "prices": { "anthropic": { "Sonnet 5.5": { "input": 2 } } } }), &bad).unwrap_err().to_string();
+        assert!(err.starts_with("prices: prices.anthropic[\"Opus 5.5\"].input is dollars per million tokens"), "{err}");
+        let fine = json!({ "prices": { "anthropic": { "Opus 5.5": { "cache_write_1h": 8 } } } });
+        assert!(check_prices(&fine, &fine).is_ok());
+        // Removing the bad one is a change to prices, and passes.
+        assert!(check_prices(&json!({ "prices": { "anthropic": { "Opus 5.5": null } } }), &json!({})).is_ok());
     }
 
     #[test]

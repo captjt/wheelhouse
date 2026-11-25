@@ -32,13 +32,35 @@ export function moneyDelta(now?: number | null, before?: number | null): string 
 }
 
 /** A model's price, for its tooltip: dollars per million tokens of each kind. */
-export type Price = { input: number; cache_read: number; cache_write: number; output: number; source: string };
+export type Price = { input: number; cache_read: number; cache_write: number; cache_write_1h?: number; output: number; source: string };
 
 export function priceWords(p?: Price | null): string {
   if (!p) return "No price: add one under prices in settings.json";
   const d = (n: number) => `$${Number(n.toFixed(6))}`;
-  return `Per million tokens: ${d(p.input)} input, ${d(p.cache_read)} from the cache, ${d(p.cache_write)} to the cache, ${d(p.output)} output${p.source === "settings" ? " (from settings.json)" : ""}`;
+  // Only Anthropic's 1-hour cache costs more to write to than its 5-minute one.
+  const hour = p.cache_write_1h != null && p.cache_write_1h !== p.cache_write ? `, ${d(p.cache_write_1h)} to the 1-hour cache` : "";
+  return `Per million tokens: ${d(p.input)} input, ${d(p.cache_read)} from the cache, ${d(p.cache_write)} to the cache${hour}, ${d(p.output)} output${p.source === "settings" ? " (from settings.json)" : ""}`;
 }
+
+/** Nothing has a price: every token is unpriced, so there's no cost to give, not a cost of $0. */
+export function nothingPriced(u: { tokens: number; unpriced?: { tokens: number } | null }): boolean {
+  const off = u.unpriced?.tokens ?? 0;
+  return off > 0 && off >= u.tokens;
+}
+
+/** The cost in the Tokens line: `$12.34 at API prices`, or `unpriced, 5M tokens with no price`. */
+export function costWords(u: { tokens: number; cost?: number | null; unpriced?: { tokens: number } | null }, count: (n: number) => string): string | null {
+  if (nothingPriced(u)) return `unpriced, ${count(u.unpriced!.tokens)} tokens with no price`;
+  return u.cost == null ? null : `${money(u.cost)} at API prices`;
+}
+
+/** A cost sparkline's top: never below a micro-dollar, as the Mac app's, so a few cents a day still draw. */
+export function sparkTop(values: number[], floor: number): number {
+  return Math.max(floor, ...values.filter((v) => Number.isFinite(v)));
+}
+
+/** The smallest top a cost sparkline has: a micro-dollar. */
+export const COST_FLOOR = 1e-6;
 
 /**
  * A count's cost: `$1.23`, or `unpriced` when none of its tokens has a
