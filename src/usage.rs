@@ -2,7 +2,9 @@
 //! provider: read from the agents' own transcripts (Claude Code's, Codex's
 //! rollouts, Antigravity's, Pi's sessions), so every kind of work counts, not just
 //! reviews. Each file is read once and then only for what it appended.
-//! Nothing here is stored or goes on the record.
+//! What the calls come to is kept in the store, a minute at a time
+//! (`Row`), so it outlasts the transcripts (Claude Code's go after 30
+//! days). None of it goes on the record.
 
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -20,6 +22,9 @@ const MAX_LINE: usize = 16 << 20;
 const MAX_TOKENS: i64 = 100_000_000;
 /// A file no recap has asked for in this long is forgotten.
 const FORGET: Duration = Duration::from_secs(6 * 3600);
+/// A file last written this long ago is forgotten once read: what it came
+/// to is in the store, and it isn't read again (see `recap::read_from`).
+const SETTLED: Duration = Duration::from_secs(3 * 86400);
 
 /// One model call's tokens: `[input, cache_read, cache_write, output]`,
 /// input not counting what came from the cache.
@@ -35,6 +40,26 @@ pub struct Call {
 }
 
 impl Call {
+    #[cfg(test)]
+    pub fn total(&self) -> i64 {
+        self.tokens.iter().fold(0i64, |a, t| a.saturating_add(*t))
+    }
+}
+
+/// A transcript's calls in one minute, by one model, kept in the store with
+/// the docket they count for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Row {
+    pub path: String,
+    /// Unix seconds, the minute's start.
+    pub minute: i64,
+    pub provider: String,
+    pub model: String,
+    pub docket: String,
+    pub tokens: [i64; 4],
+}
+
+impl Row {
     pub fn total(&self) -> i64 {
         self.tokens.iter().fold(0i64, |a, t| a.saturating_add(*t))
     }
@@ -138,9 +163,11 @@ fn archived(z: &Path) -> Vec<Call> {
     calls
 }
 
-/// Forget the files no recap has asked for lately.
+/// Forget the files no recap has asked for lately, and the ones nothing
+/// has written to in days.
 pub fn forget_stale() {
-    cache().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, r| r.used.is_some_and(|u| u.elapsed() < FORGET));
+    let settled = SystemTime::now().checked_sub(SETTLED);
+    cache().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, r| r.used.is_some_and(|u| u.elapsed() < FORGET) && !matches!((r.mtime, settled), (Some(m), Some(s)) if m < s));
 }
 
 fn epoch(at: &str) -> Option<i64> {
