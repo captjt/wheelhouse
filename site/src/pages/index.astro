@@ -1,0 +1,409 @@
+---
+// The landing page. The UI pieces drawn here in HTML (the prompt, the
+// Inbox, Build's gates, the record) follow the app's own look and words, so
+// they're sharp at any size; the screenshots are the app itself, from the
+// made-up world scripts/screenshots.sh builds.
+import Site from "../layouts/Site.astro";
+import Window from "../components/site/Window.astro";
+import Phone from "../components/site/Phone.astro";
+import Logo from "../components/site/Logo.astro";
+
+const title = "Wheelhouse: every piece of agent work as a docket";
+const description =
+  "Wheelhouse follows your Claude Code, Codex, Antigravity and Pi agents in Rex and Herdr. Approve what they ask from your Mac or your phone, let them review PRs and build issues, and check what happened on a signed record.";
+
+const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhouse", "cd ~/src/wheelhouse", "just setup"];
+---
+
+<Site title={title} description={description}>
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-glow" aria-hidden="true"></div>
+    <div class="wrap hero-copy">
+      <a class="pill" href="/concepts/runtimes/">
+        <span class="pill-dot"></span>
+        Claude Code, Codex, Antigravity and Pi, in Rex and Herdr
+        <span class="pill-arrow" aria-hidden="true">→</span>
+      </a>
+      <h1>Every piece of agent work<br /> as a docket.</h1>
+      <p class="lede">
+        Wheelhouse follows every agent you run. It asks you only what you must decide, runs the reviews and builds you'd
+        otherwise babysit, and keeps a signed record of all of it, on your Mac and your phone.
+      </p>
+      <div class="cta">
+        <a class="wh-btn wh-btn-primary" href="/start/install/">Install Wheelhouse <span aria-hidden="true">→</span></a>
+        <a class="wh-btn wh-btn-ghost" href="/start/introduction/">Read the docs</a>
+      </div>
+      <p class="hero-meta">
+        <span>macOS</span><span>Rex or Herdr</span><span>MIT licensed</span>
+      </p>
+    </div>
+
+    <div class="wrap-wide hero-stage">
+      <Window
+        name="docket"
+        title="Retry failed webhook deliveries · D-6"
+        alt="A docket in Wheelhouse: the Active list grouped by what needs you, and the docket beside it with its intent's acceptance boxes, the checks the hub ran, the files it kept, and its signed activity"
+        class="hero-window"
+      />
+
+      <div class="float-prompt" role="img" aria-label="A permission prompt in the Inbox">
+        <div class="fp-head">
+          <span class="fp-avatar"><Logo size={13} /></span>
+          <span class="fp-who"><b>Claude Code</b> · acme-web · D-10</span>
+          <span class="fp-time">now</span>
+        </div>
+        <div class="fp-title">Fix the checkout's a11y findings</div>
+        <div class="fp-ask"><span class="tag tag-warn">Permission</span> Bash: <code>npx playwright test a11y</code></div>
+        <div class="fp-actions">
+          <span class="ui-btn ui-btn-primary">Approve <kbd>A</kbd></span>
+          <span class="ui-btn">Deny <kbd>D</kbd></span>
+          <span class="ui-btn ui-btn-quiet">Open in Herdr</span>
+        </div>
+      </div>
+
+      <Phone
+        name="phone-inbox"
+        alt="The Inbox on a phone: a prompt to approve with Approve and Deny, and a question with its answers as buttons"
+        class="hero-phone"
+      />
+    </div>
+  </section>
+
+  <!-- What it follows -->
+  <section class="strip wrap" aria-label="What Wheelhouse works with">
+    <div><span class="strip-k">Agents</span><span>Claude Code</span><span>Codex</span><span>Antigravity</span><span>Pi</span></div>
+    <div><span class="strip-k">Runtimes</span><span>Rex</span><span>Herdr</span></div>
+    <div><span class="strip-k">With</span><span>GitHub</span><span>Linear</span><span>Tailscale</span></div>
+  </section>
+
+  <!-- Inbox -->
+  <section class="feature wrap" id="inbox">
+    <div class="feature-copy">
+      <p class="kicker">Inbox</p>
+      <h2>Agents do. You decide.</h2>
+      <p>
+        Every agent's permission prompts, questions, failures and finished turns land in one Inbox, ordered by what
+        needs you. A question comes with its answers as buttons and the agent's recommendation first, and the agent keeps
+        working on it while it waits.
+      </p>
+      <ul class="ticks">
+        <li>Answer from the window, the menu bar, a notification's banner, <kbd>⌥⌘K</kbd> over any app, or your phone.</li>
+        <li>The prompt is read again from its pane before a key goes in.</li>
+        <li>Quiet by default: it tells you only what needs you, and only once.</li>
+      </ul>
+      <a class="more" href="/features/inbox-chat/">Inbox and Chat <span aria-hidden="true">→</span></a>
+    </div>
+
+    <div class="panel inbox-mock" role="img" aria-label="The Inbox, drawn">
+      <div class="im-head">
+        <span class="im-title">Inbox</span><span class="im-count">4</span>
+        <span class="spacer"></span>
+        <span class="tag tag-warn">1 waiting on you</span><span class="tag tag-danger">1 failed</span>
+      </div>
+      <div class="im-row">
+        <span class="im-icon im-warn">!</span>
+        <div class="im-body">
+          <div class="im-line"><b>Fix the checkout tests after the cart refactor</b><span class="im-time">2m</span></div>
+          <div class="im-sub">D-1 · acme-api · <span class="warn">permission: Bash: pnpm test --filter checkout</span></div>
+          <div class="im-acts"><span class="ui-btn ui-btn-primary">Approve</span><span class="ui-btn">Deny</span></div>
+        </div>
+      </div>
+      <div class="im-row">
+        <span class="im-icon im-info">?</span>
+        <div class="im-body">
+          <div class="im-line"><b>How many retries?</b><span class="im-time">5m</span></div>
+          <div class="im-sub">D-6 · acme-api · Claude Code asks: three keeps a down endpoint to four calls a minute; five rides out longer blips.</div>
+          <div class="im-acts">
+            <span class="ui-btn ui-btn-choice"><kbd>1</kbd> 3</span>
+            <span class="ui-btn ui-btn-choice"><kbd>2</kbd> 5</span>
+          </div>
+        </div>
+      </div>
+      <div class="im-row">
+        <span class="im-icon im-danger">×</span>
+        <div class="im-body">
+          <div class="im-line"><b>Add a region column to orders</b><span class="im-time">12m</span></div>
+          <div class="im-sub">D-3 · acme-api · <span class="danger">Migration 0042 fails on the replica: column “region” already exists</span></div>
+        </div>
+      </div>
+      <div class="im-row">
+        <span class="im-icon im-ok">✓</span>
+        <div class="im-body">
+          <div class="im-line"><b>Reindex products after the catalog import</b><span class="im-time">31m</span></div>
+          <div class="im-sub">D-5 · acme-api · Claude Code finished its turn</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Chat -->
+  <section class="feature feature-flip wrap" id="chat">
+    <div class="feature-copy">
+      <p class="kicker">Chat</p>
+      <h2>Talk to any agent from your phone.</h2>
+      <p>
+        Open a docket and you're in its chat. What you send while the agent works waits, and goes in when its turn
+        ends; <b>Send now</b> steers it mid-turn instead. Its reply comes back as a push.
+      </p>
+      <ul class="ticks">
+        <li>The same app on your phone, over Tailscale, to your user only. Add it to your Home Screen.</li>
+        <li>Kept files open on the phone too, pinned by their entry's hash.</li>
+      </ul>
+      <a class="more" href="/apps/web-phone/">Web and phone <span aria-hidden="true">→</span></a>
+    </div>
+    <div class="phones">
+      <Phone name="phone-chat" alt="Chat on the phone: your prompt, the agent's plan with a table, and a box to queue the next message while it works" />
+      <Phone name="phone-artifact" alt="A kept file open on the phone, pinned by its entry's hash" class="phone-b" />
+    </div>
+  </section>
+
+  <!-- Composer -->
+  <section class="feature wrap" id="composer">
+    <div class="feature-copy">
+      <p class="kicker">The composer</p>
+      <h2>Steer the whole docket from one box.</h2>
+      <p>
+        At the foot of a docket's Activity, a note is a note. A command reaches every agent on it, in Rex and Herdr
+        alike, and lands on the record.
+      </p>
+      <ul class="ticks">
+        <li><code>@tests</code> instructs one agent, <code>@all</code> every one. It waits if they're working.</li>
+        <li><code>/ask</code> puts a question to them, with its answers as buttons.</li>
+        <li><code>/decide</code> records a decision that stands in each of their briefs.</li>
+        <li><code>/task</code> adds another agent with that prompt.</li>
+      </ul>
+      <a class="more" href="/concepts/dockets/#the-composer">The composer <span aria-hidden="true">→</span></a>
+    </div>
+
+    <div class="panel composer-mock" role="img" aria-label="A docket's composer, drawn">
+      <div class="cm-feed">
+        <div class="cm-entry">
+          <span class="cm-av cm-you">Y</span>
+          <div><b>You</b> decided <span class="cm-dim">· 2m ago</span><div class="cm-text">Retries: 5xx and timeouts only</div></div>
+          <span class="mark mark-s">said</span>
+        </div>
+        <div class="cm-entry">
+          <span class="cm-av cm-you">Y</span>
+          <div><b>You</b> to @tests <span class="cm-dim">· Codex · queued until its turn ends</span><div class="cm-text">Cover the 429 case before the backoff change lands.</div></div>
+          <span class="mark mark-s">said</span>
+        </div>
+      </div>
+      <div class="cm-menu" role="presentation">
+        <div class="cm-item cm-on"><code>/ask</code><span>Ask the agents here: Which store? | Postgres | SQLite</span></div>
+        <div class="cm-item"><code>/decide</code><span>Record a decision (Subject: answer), or answer a question (#12 …)</span></div>
+        <div class="cm-item"><code>/task</code><span>Start another agent here with this prompt</span></div>
+        <div class="cm-item"><code>/note</code><span>A note that starts with / or @</span></div>
+      </div>
+      <div class="cm-box">
+        <span class="cm-input"><span class="cm-cmd">/ask</span> Which store for the retry queue? | Postgres | SQLite<span class="cm-caret"></span></span>
+        <span class="ui-btn ui-btn-primary">Ask</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Protocols -->
+  <section class="section wrap" id="protocols">
+    <div class="section-head">
+      <p class="kicker">Review · Build · Verify</p>
+      <h2>The work you'd otherwise babysit.</h2>
+      <p>
+        Review's and Build's agents never push, post or open a PR. Wheelhouse does, with your <code>gh</code> login, after you approve, or
+        under a standing order you wrote. Nothing ever merges.
+      </p>
+    </div>
+
+    <div class="bento">
+      <article class="card card-wide">
+        <div class="card-copy">
+          <h3>Review</h3>
+          <p>
+            A PR that requests you gets blind reviewers, a checker that merges their drafts and rates the merge risk, and a
+            post you approve. Each round's report stays with the docket.
+          </p>
+          <a class="more" href="/features/review/">How Review works <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="panel review-mock" role="img" aria-label="A review round ready to post, drawn">
+          <div class="rv-head">
+            <span class="rv-key">storefront#214</span>
+            <b>Discount rules for bundles</b>
+            <span class="rv-who">@dana · round 1</span>
+          </div>
+          <div class="rv-lanes">
+            <div class="rv-lane"><span class="ck ck-ok">✓</span><b>Claude Code</b><span>reviewed blind</span></div>
+            <div class="rv-lane"><span class="ck ck-ok">✓</span><b>Codex</b><span>reviewed blind</span></div>
+            <div class="rv-lane rv-checker"><span class="ck ck-ok">✓</span><b>Checker</b><span>merged both drafts</span><span class="tag tag-warn">Risk medium</span></div>
+          </div>
+          <div class="rv-draft">
+            <div class="rv-verdict"><span class="tag tag-danger">Request changes</span><span class="rv-dim">as it will post, from your account</span></div>
+            <p><b>Blocking</b> Two bundles that share an item both discount it, so the cart can go below cost.</p>
+            <p><b>Non-blocking</b> The rule's name reads better as “larger of the two”, as the issue says.</p>
+          </div>
+          <div class="rv-acts">
+            <span class="ui-btn ui-btn-primary">Post</span><span class="ui-btn">Preview</span><span class="ui-btn ui-btn-quiet">Dismiss</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="card card-wide">
+        <div class="card-copy">
+          <h3>Build</h3>
+          <p>
+            A docket's intent becomes a PR. A builder plans and builds, a checker checks, and you approve the plan and the
+            PR before anything reaches GitHub. Review comments and failing checks become rounds of fixes.
+          </p>
+          <a class="more" href="/features/build/">How Build works <span aria-hidden="true">→</span></a>
+        </div>
+        <ol class="flow" aria-label="A Build, step by step">
+          <li><span class="flow-n">Intent</span><span class="flow-d">What must be true when it's done</span></li>
+          <li><span class="flow-n">Plan</span><span class="flow-d">Approach, decisions, out of scope</span><span class="gate">You approve</span></li>
+          <li><span class="flow-n">Build</span><span class="flow-d">The builder implements, tests, commits</span></li>
+          <li><span class="flow-n">Check</span><span class="flow-d">The checker checks it against the plan</span></li>
+          <li><span class="flow-n">Verify</span><span class="flow-d">The hub runs your checks at the commit</span></li>
+          <li><span class="flow-n">Open PR</span><span class="flow-d">Title, body, commits, as they'll open</span><span class="gate">You approve</span></li>
+          <li><span class="flow-n">Rounds</span><span class="flow-d">Fixes, and one reply per thread</span><span class="gate">You approve</span></li>
+        </ol>
+      </article>
+
+      <article class="card">
+        <h3>Verify</h3>
+        <p>
+          The hub runs your repo's checks itself, at the commit, and records them as witnessed. A docket closes on
+          evidence, not on what an agent says.
+        </p>
+        <div class="checks" role="img" aria-label="A docket's checks, drawn">
+          <div class="check"><span class="ck ck-ok">✓</span><code>test</code><span class="ck-d">passed at 213abd3</span><span class="mark mark-w">witnessed</span></div>
+          <div class="check"><span class="ck ck-bad">×</span><code>lint</code><span class="tag">optional</span><span class="ck-d">failed, exit 1</span><span class="mark mark-w">witnessed</span></div>
+          <div class="check"><span class="ck ck-said">“</span><span class="ck-d">“All tests pass.”</span><span class="mark mark-s">said</span></div>
+        </div>
+        <a class="more" href="/features/verify/">Verify <span aria-hidden="true">→</span></a>
+      </article>
+
+      <article class="card">
+        <h3>Recap</h3>
+        <p>What happened today, this week or in 30 days, as a standup note, and the tokens all of it took, by provider and model, kept long after the tools prune their transcripts.</p>
+        <div class="recap" role="img" aria-label="A recap, drawn">
+          <p class="rc-h">Recap: this week</p>
+          <p><b>Reviews:</b> 3 reviews posted (+3 vs the period before) · 0 approved · 0 changes requested · 1 merged · median 40m from request to review · 11.4M tokens, 71% cached</p>
+          <p><b>Merged</b></p>
+          <p class="rc-li"><span class="rc-link">storefront#205</span> Cache product images at the edge: 2 rounds, low risk, @dana</p>
+          <p><b>You:</b> 1 decision, 0 approvals, 0 denied</p>
+          <p class="rc-li">D-6 Retry failed webhook deliveries: chose “3”</p>
+        </div>
+        <a class="more" href="/features/recap/">Recap <span aria-hidden="true">→</span></a>
+      </article>
+    </div>
+  </section>
+
+  <!-- Record -->
+  <section class="record-band">
+    <div class="wrap feature">
+      <div class="feature-copy">
+        <p class="kicker">The record</p>
+        <h2>A record you can check.</h2>
+        <p>
+          Each entry on a docket is signed and chained. <code>wh verify</code> shows that nothing was changed, removed or
+          reordered, every kept file included, and an exported record checks without the hub.
+        </p>
+        <ul class="marks">
+          <li><span class="mark mark-s">said</span> What an agent or a person wrote.</li>
+          <li><span class="mark mark-w">witnessed</span> What the hub saw or ran itself.</li>
+          <li><span class="mark mark-c">checkable</span> What the hub read from a source anyone can read again: a PR, an issue.</li>
+        </ul>
+        <a class="more" href="/concepts/record/">The record <span aria-hidden="true">→</span></a>
+      </div>
+      <div class="term" role="img" aria-label="wh show and wh verify in a terminal, drawn">
+        <div class="term-bar"><span class="wh-dots"><i></i><i></i><i></i></span><span>~/code/acme-api</span></div>
+        <pre><span class="t-p">$</span> wh show D-6
+D-6  Retry failed webhook deliveries
+<span class="t-dim">    in_progress · agent · head e1297e8b · 14 entries</span>
+
+  #1  09:12  open     <span class="t-w">witnessed</span>  hub    Claude Code in acme…
+  #3  09:13  note     said       owner  Retry failed webh…
+  #8  09:31  intent   said       owner  (person) A flaky…
+  #10 09:36  decision said       owner  To match the API…
+  #11 09:52  artifact said       owner  Retry design
+  #14 10:05  check    <span class="t-w">witnessed</span>  hub    test: passed at …
+
+  <span class="t-ok">✓ chain intact, 14 signatures good</span>
+
+<span class="t-p">$</span> wh verify D-6
+<span class="t-ok">✓</span> D-6    14 entries, head e1297e8b</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Runtimes -->
+  <section class="section wrap" id="runtimes">
+    <div class="section-head">
+      <p class="kicker">Rex and Herdr, together</p>
+      <h2>One list of agents, wherever they run.</h2>
+      <p>
+        Wheelhouse follows <a href="https://www.superlogical.com/rex">Rex</a> and <a href="https://herdr.dev">Herdr</a> at
+        the same time. Several agents can work one docket in both at once, and message each other across them.
+      </p>
+    </div>
+    <Window
+      name="agents"
+      title="Agents"
+      alt="The Agents view: agents in Rex's acme-api and storefront sessions and in Herdr's acme-web space, side by side, each with its state and docket"
+    />
+  </section>
+
+  <!-- Teams + keys -->
+  <section class="section wrap">
+    <div class="duo">
+      <article class="card">
+        <p class="kicker">Teams</p>
+        <h3>A wheelhouse of wheelhouses.</h3>
+        <p>
+          Share the dockets you choose with your teammates, see who's on each, people and agents alike, and let your
+          agents work with theirs across Macs, on one signed record. Your panes, credentials and approvals stay on your Mac.
+        </p>
+        <a class="more" href="/teams/overview/">How teams work <span aria-hidden="true">→</span></a>
+        <Window
+          name="team-docket"
+          title="ACME-1"
+          alt="A shared docket: a teammate's agent's message held with Deliver and Drop, its question with two answers, and its owners, members and teammates' agents in the properties"
+          sizes="(min-width: 75rem) 34rem, 100vw"
+          class="card-shot"
+        />
+      </article>
+      <article class="card keys-card">
+        <p class="kicker">Keyboard first</p>
+        <h3>Every key you'd expect.</h3>
+        <p>The same keys in Wheelhouse.app and the web app. <kbd>⌘/</kbd> lists them all.</p>
+        <dl class="keys">
+          <div><dt><kbd>⌘K</kbd></dt><dd>Search dockets and commands</dd></div>
+          <div><dt><kbd>⌥⌘K</kbd></dt><dd>The palette, over any app</dd></div>
+          <div><dt><kbd>G</kbd><kbd>I</kbd></dt><dd>Go to the Inbox</dd></div>
+          <div><dt><kbd>J</kbd><kbd>K</kbd></dt><dd>Move through a list</dd></div>
+          <div><dt><kbd>A</kbd><kbd>D</kbd></dt><dd>Approve or deny a prompt</dd></div>
+          <div><dt><kbd>1</kbd>–<kbd>6</kbd></dt><dd>Pick an agent's answer</dd></div>
+          <div><dt><kbd>C</kbd></dt><dd>New docket</dd></div>
+          <div><dt><kbd>⌘⇧↩</kbd></dt><dd>Send now, mid-turn</dd></div>
+        </dl>
+      </article>
+    </div>
+  </section>
+
+  <!-- Install -->
+  <section class="closer">
+    <div class="hero-glow hero-glow-low" aria-hidden="true"></div>
+    <div class="wrap closer-in">
+      <h2>Set it up in one command.</h2>
+      <p>
+        <code>just setup</code> builds the hub, runs it at login, installs your agents' hooks and skill, and puts
+        Wheelhouse.app in your Applications. Every agent you already have is a docket the moment it opens.
+      </p>
+      <div class="term term-install">
+        <div class="term-bar"><span class="wh-dots"><i></i><i></i><i></i></span><span>Terminal</span></div>
+        <pre>{install.map((l) => <><span class="t-p">$</span> {l}{"\n"}</>)}</pre>
+      </div>
+      <div class="cta">
+        <a class="wh-btn wh-btn-primary" href="/start/install/">Install Wheelhouse <span aria-hidden="true">→</span></a>
+        <a class="wh-btn wh-btn-ghost" href="/start/tour/">A day with it</a>
+      </div>
+    </div>
+  </section>
+</Site>

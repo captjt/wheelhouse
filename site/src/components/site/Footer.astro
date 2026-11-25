@@ -1,0 +1,64 @@
+---
+import Logo from "./Logo.astro";
+import ThemeToggle from "./ThemeToggle.astro";
+
+const cols = [
+  {
+    title: "Product",
+    links: [
+      ["Inbox and Chat", "/features/inbox-chat/"],
+      ["Review", "/features/review/"],
+      ["Build", "/features/build/"],
+      ["Verify", "/features/verify/"],
+      ["Recap", "/features/recap/"],
+      ["Teams", "/teams/overview/"],
+    ],
+  },
+  {
+    title: "Get started",
+    links: [
+      ["What is Wheelhouse", "/start/introduction/"],
+      ["Install", "/start/install/"],
+      ["A day with it", "/start/tour/"],
+      ["Rex and Herdr", "/concepts/runtimes/"],
+    ],
+  },
+  {
+    title: "Reference",
+    links: [
+      ["The wh CLI", "/reference/cli/"],
+      ["Keyboard shortcuts", "/apps/shortcuts/"],
+      ["Settings", "/reference/settings/"],
+      ["Security", "/reference/security/"],
+    ],
+  },
+];
+---
+
+<footer class="wh-footer">
+  <div class="wh-footer-in">
+    <div class="wh-footer-brand">
+      <a class="wh-brand" href="/"><Logo size={20} /><span>Wheelhouse</span></a>
+      <p>Every piece of agent work as a docket, on a record you can check.</p>
+      <ThemeToggle />
+    </div>
+    {
+      cols.map((c) => (
+        <nav class="wh-footer-col" aria-label={c.title}>
+          <h2>{c.title}</h2>
+          <ul>
+            {c.links.map(([label, href]) => (
+              <li>
+                <a href={href}>{label}</a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      ))
+    }
+  </div>
+  <div class="wh-footer-base">
+    <span>MIT License</span>
+    <a href="https://github.com/captjt/wheelhouse">GitHub</a>
+  </div>
+</footer>

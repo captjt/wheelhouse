@@ -1,0 +1,546 @@
+/* The docs: Starlight on Wheelhouse's tokens (tokens.css), with the
+ * landing page's header. Starlight's colors live in cascade layers, so these
+ * unlayered ones win in both modes; the tokens flip with data-theme, so one
+ * mapping serves light and dark.
+ *
+ * Starlight's gray scale runs from the text's end (white, gray-1) to the
+ * background's (gray-6, black). */
+
+:root {
+  --sl-font: var(--wh-sans);
+  --sl-font-mono: var(--wh-mono);
+  --sl-content-width: 44rem;
+  --sl-sidebar-width: 16.5rem;
+  --sl-line-height: 1.72;
+  --sl-nav-height: 3.75rem;
+
+  --sl-text-h1: 2.25rem;
+  --sl-text-h2: 1.55rem;
+  --sl-text-h3: 1.25rem;
+  --sl-text-h4: 1.075rem;
+  --sl-text-h5: 1rem;
+
+  --sl-color-white: var(--wh-text);
+  --sl-color-gray-1: var(--wh-text);
+  --sl-color-gray-2: var(--wh-text-2);
+  --sl-color-gray-3: var(--wh-muted);
+  --sl-color-gray-4: var(--wh-faint);
+  --sl-color-gray-5: var(--wh-line-2);
+  --sl-color-gray-6: var(--wh-sel);
+  --sl-color-gray-7: var(--wh-frame);
+  --sl-color-black: var(--wh-bg);
+
+  --sl-color-accent-low: color-mix(in oklab, var(--wh-accent) 8%, var(--wh-bg));
+  --sl-color-accent: var(--wh-accent);
+  --sl-color-accent-high: var(--wh-link);
+
+  --sl-color-orange-low: color-mix(in oklab, var(--wh-warning) 8%, var(--wh-bg));
+  --sl-color-orange: var(--wh-warning);
+  --sl-color-orange-high: color-mix(in oklab, var(--wh-warning) 55%, var(--wh-text));
+  --sl-color-green-low: color-mix(in oklab, var(--wh-success) 8%, var(--wh-bg));
+  --sl-color-green: var(--wh-success);
+  --sl-color-green-high: color-mix(in oklab, var(--wh-success) 55%, var(--wh-text));
+  --sl-color-red-low: color-mix(in oklab, var(--wh-danger) 8%, var(--wh-bg));
+  --sl-color-red: var(--wh-danger);
+  --sl-color-red-high: color-mix(in oklab, var(--wh-danger) 55%, var(--wh-text));
+  --sl-color-blue-low: var(--sl-color-accent-low);
+  --sl-color-blue: var(--wh-accent);
+  --sl-color-blue-high: var(--wh-link);
+  --sl-color-purple-low: color-mix(in oklab, oklch(62% 0.2 300) 12%, var(--wh-bg));
+  --sl-color-purple: oklch(62% 0.2 300);
+  --sl-color-purple-high: color-mix(in oklab, oklch(62% 0.2 300) 55%, var(--wh-text));
+
+  --sl-color-text: var(--wh-text-2);
+  --sl-color-text-accent: var(--wh-link);
+  --sl-color-text-invert: #fff;
+  --sl-color-bg: var(--wh-bg);
+  --sl-color-bg-nav: color-mix(in oklab, var(--wh-bg) 80%, transparent);
+  --sl-color-bg-sidebar: var(--wh-bg);
+  --sl-color-bg-inline-code: var(--wh-sel);
+  --sl-color-bg-accent: var(--wh-accent);
+  --sl-color-hairline-light: var(--wh-line);
+  --sl-color-hairline: var(--wh-line);
+  --sl-color-hairline-shade: var(--wh-line-2);
+  --sl-color-backdrop-overlay: oklch(0% 0 0 / 0.5);
+  --sl-shadow-md: var(--wh-shadow);
+  --sl-shadow-lg: var(--wh-shadow);
+}
+@media (min-width: 50em) {
+  :root {
+    --sl-text-h1: 2.6rem;
+    --sl-text-h2: 1.7rem;
+    --sl-text-h3: 1.3rem;
+    --sl-text-h4: 1.1rem;
+  }
+}
+
+body {
+  font-feature-settings: "cv11", "ss01";
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
+}
+::selection {
+  background: color-mix(in oklab, var(--wh-accent) 30%, transparent);
+}
+
+/* ---- the header ---- */
+.page > header.header {
+  backdrop-filter: saturate(1.6) blur(14px);
+  -webkit-backdrop-filter: saturate(1.6) blur(14px);
+  border-bottom-color: var(--wh-line);
+}
+.wh-hdr {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  height: 100%;
+}
+.wh-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  text-decoration: none;
+  color: var(--wh-text);
+  white-space: nowrap;
+}
+.wh-title .wh-logo {
+  color: var(--wh-brand);
+}
+.wh-title-name {
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.wh-title-docs {
+  font-size: 0.78rem;
+  font-weight: 550;
+  color: var(--wh-muted);
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid var(--wh-line-2);
+}
+.wh-hdr-nav {
+  display: none;
+  gap: 0.15rem;
+  margin-left: 0.75rem;
+}
+.wh-hdr-nav a {
+  padding: 0.35rem 0.65rem;
+  border-radius: 7px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--wh-muted);
+  text-decoration: none;
+}
+.wh-hdr-nav a:hover {
+  color: var(--wh-text);
+}
+.wh-hdr-nav a[aria-current="true"] {
+  color: var(--wh-text);
+  background: var(--wh-sel);
+}
+.wh-hdr-search {
+  display: flex;
+  margin-left: auto;
+}
+.wh-hdr-end {
+  display: none;
+  align-items: center;
+  gap: 0.9rem;
+}
+.wh-hdr-icon {
+  display: inline-flex;
+  color: var(--wh-muted);
+}
+.wh-hdr-icon:hover {
+  color: var(--wh-text);
+}
+.wh-hdr-cta {
+  display: inline-flex;
+  align-items: center;
+  height: 2.1rem;
+  padding: 0 0.85rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 550;
+  color: #fff !important;
+  text-decoration: none;
+  background: var(--wh-accent);
+  box-shadow: inset 0 1px 0 oklch(100% 0 0 / 0.18);
+  white-space: nowrap;
+}
+.wh-hdr-cta:hover {
+  background: var(--wh-accent-hover);
+}
+@media (min-width: 50rem) {
+  .wh-hdr-end {
+    display: flex;
+  }
+}
+@media (min-width: 72rem) {
+  .wh-hdr-nav {
+    display: flex;
+  }
+}
+/* the search button: a field, like the app's ⌘K */
+site-search button[data-open-modal] {
+  border-radius: 9px;
+  border-color: var(--wh-line-2);
+  background: var(--wh-main);
+  color: var(--wh-muted);
+}
+@media (min-width: 50rem) {
+  site-search button[data-open-modal] {
+    width: 15rem;
+  }
+}
+site-search button[data-open-modal]:hover {
+  border-color: var(--wh-faint);
+  color: var(--wh-text-2);
+}
+site-search kbd {
+  background: var(--wh-sel) !important;
+  border-radius: 5px;
+}
+starlight-theme-select select {
+  font-size: 0.85rem;
+}
+
+/* ---- the sidebar ---- */
+.sidebar-pane {
+  border-inline-end: 1px solid var(--wh-line);
+}
+.sidebar-content {
+  padding-top: 1.5rem;
+}
+.sidebar-content summary .group-label .large,
+.sidebar-content .large {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--wh-faint);
+}
+.sidebar-content summary {
+  padding-block: 0.15rem 0.35rem;
+}
+.sidebar-content ul ul {
+  border-inline-start: 0;
+  margin-inline-start: 0;
+  padding-inline-start: 0;
+}
+.sidebar-content ul ul li {
+  border-inline-start: 0;
+  margin-inline-start: 0;
+}
+.sidebar-content a {
+  font-size: 0.875rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 7px;
+  color: var(--wh-muted);
+}
+.sidebar-content a:hover {
+  color: var(--wh-text);
+  background: var(--wh-hover);
+}
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover,
+.sidebar-content a[aria-current="page"]:focus {
+  background: var(--wh-sel);
+  color: var(--wh-text);
+  font-weight: 550;
+}
+.sidebar-content details + details,
+.sidebar-content li + li > details {
+  margin-top: 0.6rem;
+}
+
+/* ---- the page title ---- */
+.content-panel:has(.wh-ptitle) {
+  border-top: 0;
+}
+.wh-ptitle {
+  padding-top: 1.25rem;
+}
+.wh-ptitle-section {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--wh-brand);
+}
+.wh-ptitle h1 {
+  margin: 0;
+  font-size: var(--sl-text-h1);
+  line-height: 1.08;
+  font-weight: 680;
+  letter-spacing: -0.035em;
+  font-variation-settings: "opsz" 32;
+  color: var(--wh-text);
+}
+.wh-ptitle-lead {
+  margin: 0.9rem 0 0;
+  font-size: 1.15rem;
+  line-height: 1.55;
+  color: var(--wh-muted);
+  text-wrap: pretty;
+}
+
+/* ---- the content ---- */
+.sl-markdown-content {
+  font-size: 1rem;
+}
+.sl-markdown-content :is(h2, h3, h4) {
+  color: var(--wh-text);
+  font-weight: 640;
+  letter-spacing: -0.025em;
+  font-variation-settings: "opsz" 28;
+}
+/* a hairline above each section, across the column */
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  margin-top: 2.75rem;
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--wh-line);
+}
+.sl-markdown-content h3 {
+  margin-top: 2rem;
+}
+.sl-markdown-content a:not(:where(.not-content *)) {
+  color: var(--wh-link);
+  text-decoration: none;
+  font-weight: 500;
+}
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+.sl-markdown-content strong {
+  color: var(--wh-text);
+  font-weight: 600;
+}
+.sl-markdown-content :not(pre) > code {
+  border-radius: 5px;
+  padding: 0.12em 0.38em;
+  font-size: 0.86em;
+  color: var(--wh-text);
+  border: 1px solid var(--wh-line);
+}
+.sl-markdown-content kbd {
+  font-family: var(--wh-mono);
+  font-size: 0.78em;
+  padding: 0.1em 0.45em;
+  border-radius: 5px;
+  border: 1px solid var(--wh-line-2);
+  border-bottom-width: 2px;
+  background: var(--wh-main);
+  color: var(--wh-text-2);
+}
+
+/* tables in a rounded frame */
+.sl-markdown-content table {
+  display: table;
+  width: 100%;
+  font-size: 0.9rem;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--wh-line-2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+@media (max-width: 50rem) {
+  .sl-markdown-content table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+.sl-markdown-content th {
+  background: var(--wh-frame);
+  font-weight: 600;
+  color: var(--wh-text);
+  font-size: 0.82rem;
+}
+.sl-markdown-content :is(th, td) {
+  border: 0;
+  border-bottom: 1px solid var(--wh-line);
+  padding: 0.6rem 0.85rem;
+}
+.sl-markdown-content tr:last-child td {
+  border-bottom: 0;
+}
+/* a command in the first column gets room before the prose beside it */
+.sl-markdown-content td:first-child:has(code) {
+  min-width: 15rem;
+}
+
+/* asides: a tint and a hairline */
+.starlight-aside {
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklab, var(--sl-color-asides-border) 35%, transparent);
+  border-inline-start: 3px solid var(--sl-color-asides-border);
+  padding: 0.9rem 1.1rem;
+}
+.starlight-aside__title {
+  font-size: 0.9rem;
+}
+
+/* code blocks */
+.expressive-code .frame {
+  box-shadow: none !important;
+}
+
+/* cards and link cards */
+.card {
+  --sl-card-border: var(--wh-brand);
+  --sl-card-bg: color-mix(in oklab, var(--wh-brand) 12%, transparent);
+  border-radius: 12px;
+  border-color: var(--wh-line-2) !important;
+  background: var(--wh-main);
+}
+.sl-link-card {
+  border-radius: 12px;
+  border-color: var(--wh-line-2) !important;
+  background: var(--wh-main);
+  box-shadow: none;
+  transition: border-color 0.15s;
+}
+.sl-link-card:hover {
+  border-color: var(--wh-faint) !important;
+  background: var(--wh-main);
+}
+.sl-link-card .title {
+  color: var(--wh-text);
+  font-weight: 600;
+}
+.sl-link-card .description {
+  color: var(--wh-muted);
+}
+
+/* the right-hand table of contents */
+starlight-toc h2,
+mobile-starlight-toc h2 {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--wh-faint);
+}
+starlight-toc a {
+  font-size: 0.84rem;
+  color: var(--wh-muted);
+}
+starlight-toc a:hover {
+  color: var(--wh-text);
+}
+starlight-toc a[aria-current="true"] {
+  color: var(--wh-text);
+  font-weight: 550;
+}
+.right-sidebar {
+  border-inline-start: 0;
+}
+
+/* ---- screenshots (Shot.astro) ---- */
+.wh-shot {
+  margin: 2rem 0;
+  max-width: var(--max, 100%);
+}
+.wh-shot-frame {
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--wh-frame);
+  border: 1px solid var(--wh-line-2);
+  box-shadow: 0 12px 32px var(--wh-shadow-drop);
+}
+.wh-shot-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  height: 26px;
+  padding: 0 11px;
+  border-bottom: 1px solid var(--wh-line);
+}
+.wh-shot-bar i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--wh-line-2);
+}
+.wh-shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.wh-shot.is-phone .wh-shot-frame {
+  border-radius: 30px;
+  padding: 7px;
+  background: linear-gradient(160deg, oklch(34% 0 0), oklch(16% 0 0));
+  border: 0;
+}
+.wh-shot.is-phone img {
+  border-radius: 24px;
+}
+.wh-shot figcaption {
+  margin-top: 0.7rem;
+  font-size: 0.85rem;
+  color: var(--wh-muted);
+}
+.wh-shots {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  align-items: start;
+  margin-block: 2rem;
+}
+.wh-shots .wh-shot {
+  margin: 0;
+}
+
+/* ---- the footer ---- */
+.wh-docs-footer {
+  margin-top: 4rem;
+}
+.wh-docs-footer .pagination-links a {
+  border-radius: 12px;
+  border-color: var(--wh-line-2);
+  box-shadow: none;
+  background: var(--wh-main);
+}
+.wh-docs-footer .pagination-links a:hover {
+  border-color: var(--wh-faint);
+}
+.wh-docs-footer .pagination-links .link-title {
+  color: var(--wh-text);
+  font-weight: 600;
+}
+.wh-docs-footer-base {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  margin-top: 3rem;
+  padding-block: 1.5rem;
+  border-top: 1px solid var(--wh-line);
+  font-size: 0.85rem;
+  color: var(--wh-faint);
+}
+.wh-docs-footer-base a {
+  color: var(--wh-muted);
+  text-decoration: none;
+}
+.wh-docs-footer-base a:hover {
+  color: var(--wh-text);
+}
+.wh-docs-footer-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 600;
+  margin-right: auto;
+}
+.wh-docs-footer-brand .wh-logo {
+  color: var(--wh-brand);
+}
+
+/* Windows side by side are too small to read: stack them. Phones stay in a row. */
+.wh-shots:has(.is-window) {
+  grid-template-columns: 1fr;
+}

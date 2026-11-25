@@ -1,0 +1,14 @@
+---
+// Previous and next, then a quiet footer line.
+import Pagination from "@astrojs/starlight/components/Pagination.astro";
+import Logo from "./site/Logo.astro";
+---
+
+<footer class="wh-docs-footer">
+  <Pagination />
+  <div class="wh-docs-footer-base">
+    <a href="/" class="wh-docs-footer-brand"><Logo size={16} /> Wheelhouse</a>
+    <span>MIT License</span>
+    <a href="https://github.com/captjt/wheelhouse">GitHub</a>
+  </div>
+</footer>
