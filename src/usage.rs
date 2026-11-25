@@ -301,8 +301,9 @@ fn agy_line(r: &mut Progress, line: &str) {
     push(r, Call { at, model: r.model.clone().unwrap_or_else(|| "Gemini".into()), provider: "google".into(), tokens });
 }
 
-/// One line of a Pi session: an assistant message's `usage`, whatever
-/// provider Pi called (`input` doesn't count what came from the cache).
+/// One line of a Pi session: whatever spent tokens (an assistant message,
+/// a cache warming, a compaction), whichever provider Pi called (`input`
+/// doesn't count what came from the cache).
 fn pi_line(r: &mut Progress, line: &str) {
     if !line.contains("\"usage\"") && !line.contains("\"parentSession\"") {
         return;
@@ -314,23 +315,21 @@ fn pi_line(r: &mut Progress, line: &str) {
         }
         return;
     }
-    let m = &v["message"];
-    let u = &m["usage"];
-    if v["type"] != "message" || m["role"] != "assistant" || !u.is_object() {
-        return;
-    }
-    let n = |k: &str| count(&u[k]);
-    let tokens = [n("input"), n("cacheRead"), n("cacheWrite"), n("output")];
-    if tokens.iter().all(|t| *t == 0) {
-        return;
-    }
+    let Some((tokens, model)) = agentcli::pi_usage(&v) else { return };
+    let tokens = tokens.map(|t| t.clamp(0, MAX_TOKENS));
     let Some(at) = v["timestamp"].as_str().and_then(epoch) else { return };
     if r.began.is_some_and(|b| at < b) {
         return;
     }
-    let model = m["model"].as_str().filter(|x| !x.is_empty()).unwrap_or("Pi");
-    let provider = m["provider"].as_str().filter(|x| !x.is_empty()).unwrap_or("pi");
-    push(r, Call { at, model: agentcli::pi_model_name(model), provider: provider.to_string(), tokens });
+    // An entry that names no model (a compaction) is the last one's.
+    if let Some(m) = model {
+        r.model = Some(agentcli::pi_model_name(m));
+    }
+    if let Some(p) = v["message"]["provider"].as_str().or(v["provider"].as_str()).filter(|p| !p.is_empty()) {
+        r.provider = Some(p.to_string());
+    }
+    let model = r.model.clone().unwrap_or_else(|| "Pi".into());
+    push(r, Call { at, model, provider: r.provider.clone().unwrap_or_else(|| "pi".into()), tokens });
 }
 
 /// Calls by the same model in the same minute are kept as one: a long
@@ -499,10 +498,15 @@ mod tests {
                 msg("2026-11-25T14:03:00Z", "gpt-6.2-astra", "openai-codex", usage(7)),
                 msg("2026-11-25T14:05:00Z", "anthropic/claude-sonnet-5-5", "openrouter", usage(1)),
                 msg("2026-11-25T14:06:00Z", "claude-opus-5-5", "anthropic", json!({ "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 })),
+                // Cache warming, and a compaction that names no model: the last one's.
+                json!({ "type": "usage", "kind": "cache_warm", "timestamp": "2026-11-25T14:20:00Z", "provider": "anthropic", "model": "claude-opus-5-5", "usage": { "input": 0, "output": 0, "cacheRead": 50000, "cacheWrite": 0 } }),
+                json!({ "type": "compaction", "timestamp": "2026-11-25T14:30:00Z", "summary": "…", "usage": { "input": 900, "output": 100, "cacheRead": 0, "cacheWrite": 0 } }),
             ],
         );
         let c = calls("pi", &p, 0);
-        assert_eq!(c.len(), 3, "{c:?}");
+        assert_eq!(c.len(), 5, "{c:?}");
+        assert_eq!((c[3].model.as_str(), c[3].tokens), ("Opus 5.5", [0, 50000, 0, 0]));
+        assert_eq!((c[4].model.as_str(), c[4].provider.as_str(), c[4].tokens), ("Opus 5.5", "anthropic", [900, 0, 0, 100]));
         assert_eq!((c[0].model.as_str(), c[0].provider.as_str(), c[0].tokens), ("Opus 5.5", "anthropic", [4, 6543, 10, 4]));
         assert_eq!((c[1].model.as_str(), c[1].provider.as_str()), ("GPT-6.2 Astra", "openai-codex"));
         assert_eq!((c[2].model.as_str(), c[2].provider.as_str()), ("Sonnet 5.5", "openrouter"));

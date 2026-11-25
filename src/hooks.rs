@@ -86,6 +86,11 @@ fn pi_extension(exe: &str) -> Result<String> {
     Ok(PI_EXTENSION.replacen("\"__WH__\"", &lit, 1))
 }
 
+/// The extension, calling this `wh`.
+pub fn pi_extension_text() -> Result<String> {
+    pi_extension(&wh_exe()?)
+}
+
 /// Whether a file there is ours, from its text: someone else's
 /// `wheelhouse.ts` is never written over or deleted.
 fn pi_is_ours(text: &str) -> bool {

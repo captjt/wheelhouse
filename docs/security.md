@@ -84,13 +84,16 @@ asked.
   Claude gets `--strict-mcp-config`, Antigravity denies `mcp(*)`, Pi gets
   `--no-mcp`, and Codex gets each of its servers switched off by name.
 - Pi asks before nothing, so its part of the wall is an extension
-  Wheelhouse passes it (`pi-wall.ts`, with `-e`): it refuses the denied
-  commands wherever they are in a command line, and Pi's codemode. Pi
-  won't start with an extension it can't load, so a missing wall stops
-  the pane. Its panes load no other extension (`--no-extensions`) and none
-  of a PR's own `.pi/` (`--no-approve`). An agent can still reach a denied
-  command a way the wall doesn't parse (`git -C dir push`), as it can
-  past Claude Code's: the rest of the wall is what stops it.
+  Wheelhouse passes it (`pi-wall.ts`, with `-e`): it reads each command
+  line as a shell would (quotes, heredocs, `$( )`, `bash -c`, wrappers like
+  `timeout`, git's own options) and refuses the denied commands, and Pi's
+  codemode. Pi won't start with an extension it can't load, so a missing
+  wall stops the pane. Its panes load no other extension
+  (`--no-extensions`), none of a PR's own `.pi/` (`--no-approve`), and keep
+  their sessions where Wheelhouse reads them (`--session-dir`, which a
+  PR's `sessionDir` can't move). An agent can still reach a denied command
+  a way no reading of the line shows (a script it writes, then runs), as it
+  can past Claude Code's: the rest of the wall is what stops it.
 - Witnessed checks run the repo's own code, so they get the same wall and
   only the hub's plain environment (home, user, shell, locale, PATH),
   never what a hub started by hand inherited from your terminal.

@@ -56,7 +56,7 @@ pub fn argv(cfg: &Config, s: &Spec) -> Launch {
         // Pi takes no folders (it reads and writes wherever you can), and
         // asks before nothing: the wall refuses these.
         let deny = ["git push", "gh", "wh send", "wh share", "wh reply"];
-        return agentcli::pi_launch(argv, program, args, s.resume, &deny, cfg.mcp, s.title);
+        return agentcli::pi_launch(argv, program, args, s.worktree, s.resume, &deny, cfg.mcp, s.title);
     }
     argv.push(program.clone());
     if s.agent == "claude" {
@@ -169,11 +169,16 @@ mod tests {
         assert!(a.contains("GIT_SSH_COMMAND=false"), "{a}");
         let deny = l.argv.iter().find_map(|x| x.strip_prefix("WH_PI_DENY=")).unwrap();
         assert_eq!(serde_json::from_str::<Vec<String>>(deny).unwrap(), ["git push", "gh", "wh send", "wh share", "wh reply"]);
-        assert!(a.contains(&format!("pi --session-id {} --thinking high --no-extensions --no-approve --no-mcp -e ", l.session.as_deref().unwrap())), "{a}");
+        assert!(a.contains(&format!("pi --session-id {} --session-dir ", l.session.as_deref().unwrap())), "{a}");
+        assert!(a.contains("--w-D-1-- "), "the worktree's session folder: {a}");
+        assert!(a.contains(" --thinking high --no-extensions --no-approve --no-mcp -e "), "{a}");
         assert!(a.ends_with("pi-wall.ts --name wheelhouse build D-1 builder"), "{a}");
         assert_eq!(argv(&cfg, &spec(Some("s-9"))).session.as_deref(), Some("s-9"));
         // `wall = { mcp = true }` lets a builder's MCP servers back in.
         let open = super::super::config::from_value(None, json!({ "builder": "pi", "wall": { "mcp": true } }), Some(&rc)).unwrap();
-        assert!(!argv(&open, &spec(None)).argv.contains(&"--no-mcp".to_string()));
+        let a = argv(&open, &spec(None)).argv.join(" ");
+        assert!(!a.contains("--no-mcp"), "{a}");
+        // Pi's MCP is a built-in extension, which --no-extensions would take.
+        assert!(a.contains("--no-extensions --no-approve -e builtin:mcp -e "), "{a}");
     }
 }
