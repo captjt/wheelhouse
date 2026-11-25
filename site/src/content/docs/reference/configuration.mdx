@@ -55,8 +55,11 @@ with a team, so back up `~/.local/state/wheelhouse` if you want to keep it.
 
 ## Environment variables
 
-Set these where the hub runs. For the background hub, that's what `wh up`
-installs, so set them before you run it.
+Set these where the hub runs. For the background hub, `wh up` copies them into
+its LaunchAgent, so set them before you run it. Three aren't copied, and work
+only for a hub you run yourself with `wh serve`: `WH_LUAJIT`, `WH_LINEAR_KEY`
+and `WH_WEB_DIR`. (The background hub finds `luajit` on its own PATH, and reads
+a Linear key from the Keychain.)
 
 ### Where things are
 
@@ -84,12 +87,12 @@ installs, so set them before you run it.
 
 | Variable | Default | What it is |
 | --- | --- | --- |
-| `WH_RUNTIME` | Settings → Runtimes | Where new agents open: `rex` or `herdr`. Overrides Settings |
+| `WH_RUNTIME` | Settings (Runtimes in the web app; Agents in Wheelhouse.app) | Where new agents open: `rex` or `herdr`. Overrides Settings |
 | `WH_REX` | `rex` on PATH | Rex's CLI |
 | `WH_HC` | `hc` on PATH, or `~/.local/bin/hc` | Herdr's CLI |
 | `WH_HERDR_APP` | `herdr-app` on PATH, or `~/.local/bin/herdr-app` | Herdr's app |
 | `WH_GH` | `gh` on PATH | The GitHub CLI |
-| `WH_LUAJIT` | `luajit` on PATH | LuaJIT, to read the configs |
+| `WH_LUAJIT` | `luajit` on PATH | LuaJIT, to read the configs. `wh serve` only |
 | `WH_TAILSCALE` | `tailscale` on PATH | Tailscale's CLI |
 | `WH_REVIEW_SESSION` | `wheelhouse-reviews` | The session Review's panes open in |
 | `WH_BUILD_SESSION` | `wheelhouse-builds` | The session Build's panes open in |
@@ -99,20 +102,25 @@ installs, so set them before you run it.
 | Variable | Default | What it is |
 | --- | --- | --- |
 | `WH_NOTIFY` | on | `off`: no Mac notifications or Web Push |
-| `WH_LINEAR_KEY` | the Keychain | A Linear API key. `wh setup-linear` stores one in the Keychain instead |
+| `WH_LINEAR_KEY` | the Keychain | A Linear API key, for `wh serve` only. `wh setup-linear` stores one in the Keychain, which every hub reads |
 | `WH_LINEAR_OFF` | unset | Set it to never call Linear |
 | `WH_LABEL` | `dev.wheelhouse.hub` | The LaunchAgent's label. Another one makes a second hub (below) |
-| `WH_WEB_DIR` | built in | Serve the web app from a folder on disk instead of the copy built into `wh` |
+| `WH_WEB_DIR` | built in | Serve the web app from a folder on disk instead of the copy built into `wh`. `wh serve` only |
 
 ## A second hub
 
 To run a hub beside your everyday one (to try a config, say), give it its own
-state, config, listeners and LaunchAgent label, so the two never meet:
+state, config, listeners, working folders, sessions and LaunchAgent label, so
+the two never meet:
 
 ```sh
 export WH_STATE=~/.local/state/wheelhouse-try
 export WH_CONFIG=~/.config/wheelhouse-try
 export WH_HTTP=127.0.0.1:7510 WH_TAILNET=off
+export WH_REVIEW_DATA=~/.local/share/wheelhouse-try/review
+export WH_BUILD_DATA=~/.local/share/wheelhouse-try/build
+export WH_REVIEW_CACHE=~/.cache/wheelhouse-try
+export WH_REVIEW_SESSION=wheelhouse-try-reviews WH_BUILD_SESSION=wheelhouse-try-builds
 export WH_LABEL=dev.wheelhouse.try
 wh serve
 ```

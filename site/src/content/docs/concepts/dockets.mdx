@@ -16,7 +16,10 @@ happens to a docket is an entry on its [record](/concepts/record/).
 ## How a docket opens
 
 - **You start an agent.** Type `claude`, `codex`, `agy` or `pi` in a Rex pane or
-  a Herdr terminal, and a docket appears, named by your first prompt. `/clear`
+  a Herdr terminal, and a docket appears. Claude Code's and Antigravity's hooks
+  and Pi's extension name it from your first prompt and add your prompts and
+  their turns; a Codex is followed by its pane only, so its docket keeps the
+  pane's title (unless `wh start --codex` started it, with its prompt). `/clear`
   in Claude Code (or `/new` in Pi) starts a new docket for the same pane.
 - **Wheelhouse starts one.** `wh start "Fix the flaky retry test"` opens a pane
   with Claude Code (or `--codex`, `--agy`, `--pi`) in a folder (`-C DIR`), on a

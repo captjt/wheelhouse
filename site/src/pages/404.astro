@@ -10,6 +10,7 @@ import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
     description: "This page isn't here.",
     template: "splash",
     pagefind: false,
+    head: [{ tag: "meta", attrs: { name: "robots", content: "noindex" } }],
     hero: {
       title: "Not found",
       tagline: "This page isn't here. It may have moved when the docs were reorganized.",

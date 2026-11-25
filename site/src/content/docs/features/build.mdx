@@ -212,7 +212,7 @@ again.
 | `sources.github` | `{ label = "agent" }`: labeled issues assigned to you start a Build | off |
 | `sources.linear` | `{ teams, label, cycle, skip_label }` | off |
 | `builder`, `checker` | `"claude"`, `"codex"`, `"agy"`, `"pi"`, or `{ agent, extra_args, effort }` | `"claude"` |
-| `gates` | `plan`, `preview`, `open`, `address`, `push`: `"ask"` or `"auto"`; `start` for Linear intake | `"ask"` |
+| `gates` | `plan`, `preview`, `open`, `address`, `push`: `"ask"` or `"auto"`; `start` for Linear intake | `"ask"`; `start`: label `"auto"`, cycle `"ask"` |
 | `update` | `"merge"` or `"rebase"` | `"merge"` |
 | `prereview` | `{ reviewers = { "codex" }, loops = 1 }` | off |
 | `fix_loops` | Fix rounds after the checker finds something | 2 |

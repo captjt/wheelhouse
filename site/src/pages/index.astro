@@ -44,11 +44,10 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
         name="docket"
         title="Retry failed webhook deliveries · D-6"
         alt="A docket in Wheelhouse: the Active list grouped by what needs you, and the docket beside it with its intent's acceptance boxes, the checks the hub ran, the files it kept, and its signed activity"
-        eager
         class="hero-window"
       />
 
-      <div class="float-prompt" aria-label="A permission prompt in the Inbox">
+      <div class="float-prompt" role="img" aria-label="A permission prompt in the Inbox">
         <div class="fp-head">
           <span class="fp-avatar"><Logo size={13} /></span>
           <span class="fp-who"><b>Claude Code</b> · acme-web · D-10</span>
@@ -67,7 +66,6 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
         name="phone-inbox"
         alt="The Inbox on a phone: a prompt to approve with Approve and Deny, and a question with its answers as buttons"
         class="hero-phone"
-        eager
       />
     </div>
   </section>
@@ -97,11 +95,11 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
       <a class="more" href="/features/inbox-chat/">Inbox and Chat <span aria-hidden="true">→</span></a>
     </div>
 
-    <div class="panel inbox-mock" aria-label="The Inbox, drawn">
+    <div class="panel inbox-mock" role="img" aria-label="The Inbox, drawn">
       <div class="im-head">
         <span class="im-title">Inbox</span><span class="im-count">4</span>
         <span class="spacer"></span>
-        <span class="tag tag-warn">2 waiting on you</span><span class="tag tag-danger">1 failed</span>
+        <span class="tag tag-warn">1 waiting on you</span><span class="tag tag-danger">1 failed</span>
       </div>
       <div class="im-row">
         <span class="im-icon im-warn">!</span>
@@ -114,10 +112,10 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
       <div class="im-row">
         <span class="im-icon im-info">?</span>
         <div class="im-body">
-          <div class="im-line"><b>How many retries before a delivery fails?</b><span class="im-time">5m</span></div>
-          <div class="im-sub">D-6 · acme-api · Claude Code asks</div>
+          <div class="im-line"><b>How many retries?</b><span class="im-time">5m</span></div>
+          <div class="im-sub">D-6 · acme-api · Claude Code asks: three keeps a down endpoint to four calls a minute; five rides out longer blips.</div>
           <div class="im-acts">
-            <span class="ui-btn ui-btn-choice"><kbd>1</kbd> 3, to match the API docs <em>recommended</em></span>
+            <span class="ui-btn ui-btn-choice"><kbd>1</kbd> 3</span>
             <span class="ui-btn ui-btn-choice"><kbd>2</kbd> 5</span>
           </div>
         </div>
@@ -178,7 +176,7 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
       <a class="more" href="/concepts/dockets/#the-composer">The composer <span aria-hidden="true">→</span></a>
     </div>
 
-    <div class="panel composer-mock" aria-label="A docket's composer, drawn">
+    <div class="panel composer-mock" role="img" aria-label="A docket's composer, drawn">
       <div class="cm-feed">
         <div class="cm-entry">
           <span class="cm-av cm-you">Y</span>
@@ -210,7 +208,7 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
       <p class="kicker">Review · Build · Verify</p>
       <h2>The work you'd otherwise babysit.</h2>
       <p>
-        Agents never push, post or open a PR. Wheelhouse does, with your <code>gh</code> login, after you approve, or
+        Review's and Build's agents never push, post or open a PR. Wheelhouse does, with your <code>gh</code> login, after you approve, or
         under a standing order you wrote. Nothing ever merges.
       </p>
     </div>
@@ -225,11 +223,11 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
           </p>
           <a class="more" href="/features/review/">How Review works <span aria-hidden="true">→</span></a>
         </div>
-        <div class="panel review-mock" aria-label="A review round ready to post, drawn">
+        <div class="panel review-mock" role="img" aria-label="A review round ready to post, drawn">
           <div class="rv-head">
-            <span class="rv-key">storefront#212</span>
-            <b>Retry failed webhook deliveries with backoff</b>
-            <span class="rv-who">@sam · round 1</span>
+            <span class="rv-key">storefront#214</span>
+            <b>Discount rules for bundles</b>
+            <span class="rv-who">@dana · round 1</span>
           </div>
           <div class="rv-lanes">
             <div class="rv-lane"><span class="ck ck-ok">✓</span><b>Claude Code</b><span>reviewed blind</span></div>
@@ -238,8 +236,8 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
           </div>
           <div class="rv-draft">
             <div class="rv-verdict"><span class="tag tag-danger">Request changes</span><span class="rv-dim">as it will post, from your account</span></div>
-            <p><b>Blocking</b> A 429 is retried as a 5xx, so a rate-limited endpoint gets three more calls a minute.</p>
-            <p><b>Non-blocking</b> The jitter's upper bound would read better as a named constant.</p>
+            <p><b>Blocking</b> Two bundles that share an item both discount it, so the cart can go below cost.</p>
+            <p><b>Non-blocking</b> The rule's name reads better as “larger of the two”, as the issue says.</p>
           </div>
           <div class="rv-acts">
             <span class="ui-btn ui-btn-primary">Post</span><span class="ui-btn">Preview</span><span class="ui-btn ui-btn-quiet">Dismiss</span>
@@ -273,7 +271,7 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
           The hub runs your repo's checks itself, at the commit, and records them as witnessed. A docket closes on
           evidence, not on what an agent says.
         </p>
-        <div class="checks" aria-label="A docket's checks, drawn">
+        <div class="checks" role="img" aria-label="A docket's checks, drawn">
           <div class="check"><span class="ck ck-ok">✓</span><code>test</code><span class="ck-d">passed at 213abd3</span><span class="mark mark-w">witnessed</span></div>
           <div class="check"><span class="ck ck-bad">×</span><code>lint</code><span class="tag">optional</span><span class="ck-d">failed, exit 1</span><span class="mark mark-w">witnessed</span></div>
           <div class="check"><span class="ck ck-said">“</span><span class="ck-d">“All tests pass.”</span><span class="mark mark-s">said</span></div>
@@ -284,9 +282,9 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
       <article class="card">
         <h3>Recap</h3>
         <p>What happened today, this week or in 30 days, as a standup note, and the tokens all of it took, by provider and model, kept long after the tools prune their transcripts.</p>
-        <div class="recap" aria-label="A recap, drawn">
+        <div class="recap" role="img" aria-label="A recap, drawn">
           <p class="rc-h">Recap: this week</p>
-          <p><b>Reviews:</b> 3 reviews posted · 1 merged · median 40m from request to review · 11.4M tokens, 71% cached</p>
+          <p><b>Reviews:</b> 3 reviews posted (+3 vs the period before) · 0 approved · 0 changes requested · 1 merged · median 40m from request to review · 11.4M tokens, 71% cached</p>
           <p><b>Merged</b></p>
           <p class="rc-li"><span class="rc-link">storefront#205</span> Cache product images at the edge: 2 rounds, low risk, @dana</p>
           <p><b>You:</b> 1 decision, 0 approvals, 0 denied</p>
@@ -310,11 +308,11 @@ const install = ["git clone https://github.com/captjt/wheelhouse ~/src/wheelhous
         <ul class="marks">
           <li><span class="mark mark-s">said</span> What an agent or a person wrote.</li>
           <li><span class="mark mark-w">witnessed</span> What the hub saw or ran itself.</li>
-          <li><span class="mark mark-c">checkable</span> What anyone can read again from its source: a PR, an issue, a commit.</li>
+          <li><span class="mark mark-c">checkable</span> What the hub read from a source anyone can read again: a PR, an issue.</li>
         </ul>
         <a class="more" href="/concepts/record/">The record <span aria-hidden="true">→</span></a>
       </div>
-      <div class="term" aria-label="wh show and wh verify in a terminal, drawn">
+      <div class="term" role="img" aria-label="wh show and wh verify in a terminal, drawn">
         <div class="term-bar"><span class="wh-dots"><i></i><i></i><i></i></span><span>~/code/acme-api</span></div>
         <pre><span class="t-p">$</span> wh show D-6
 D-6  Retry failed webhook deliveries

@@ -9,13 +9,10 @@ interface Props {
   name: string;
   alt: string;
   caption?: string;
-  /** Kept for the pages that set it; the size now comes from the capture. */
-  size?: "wide" | "narrow" | "phone";
-  prefer?: "light" | "dark";
 }
 
 const { name, alt, caption } = Astro.props;
-const s = shot(name);
+const s = await shot(name);
 // The Mac app's own captures are whole windows, title bar and all.
 const ownChrome = name.startsWith("mac-");
 const natural = Math.round(s.light.width / s.density);

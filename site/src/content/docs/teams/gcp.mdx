@@ -129,6 +129,22 @@ right after the first boot.
     share: `backend.tf.example` has the commands. Two operators must never
     apply from two copies of it.
 
+    `terraform.tfvars` sets only what the example passes to the module:
+    `project_id`, `region`, `zone`, `image`, `ssh_members`,
+    `image_publishers` and `kms_key`. The module takes more
+    ([`variables.tf`](https://github.com/captjt/wheelhouse/blob/main/examples/workspace/gcp/module/variables.tf)).
+    To set one, put it in the `module "workspace"` block in `main.tf`, where
+    it takes effect; in `terraform.tfvars`, Terraform only warns and ignores
+    it:
+
+    ```hcl
+    module "workspace" {
+      # …what's there…
+      machine_type  = "c4a-standard-1"
+      cloud_logging = false
+    }
+    ```
+
 2. **First apply: everything but the VM.** With `image` left out:
 
     ```sh
@@ -164,6 +180,7 @@ right after the first boot.
 
     The last line prints the image by digest. On an Apple silicon Mac, an
     amd64 build runs under emulation and takes a while. An Arm `machine_type`
+    in the `module "workspace"` block
     (`c4a-standard-1`, or `t2a-standard-1` where it's offered) lets you build
     `--platform linux/arm64` natively instead (tag it `…-arm64`).
 
@@ -235,7 +252,8 @@ gcloud compute disks snapshot wheelhouse-workspace-data --zone ZONE --snapshot-n
   digest, and `terraform apply`. The plan replaces the VM and keeps the data
   disk and the tailnet name. The hub is gone for a minute or two; members'
   hubs keep their writes in their outboxes and send them when it's back.
-- **Tailscale:** set `tailscale_image` to a newer digest, and apply.
+- **Tailscale:** set `tailscale_image` in the `module "workspace"` block to a
+  newer digest, and apply.
 - **COS:** it updates itself, and an update takes effect at the next reboot:
   `gcloud compute instances reset wheelhouse-workspace --zone ZONE` at a quiet
   moment.
@@ -258,7 +276,7 @@ To restore:
 
 ```sh
 terraform state rm module.workspace.google_compute_disk.data    # the old disk stays, untracked
-# in terraform.tfvars:
+# in main.tf's module "workspace" block (not terraform.tfvars, which ignores them):
 #   data_disk_name     = "wheelhouse-workspace-data-r1"
 #   data_disk_snapshot = "projects/PROJECT/global/snapshots/SNAPSHOT"
 terraform apply                                                   # a new disk, and a new VM on it
@@ -309,7 +327,8 @@ shared docket, and `wh verify` still checks them.
 What it doesn't do yet:
 
 - **The setup code reaches the logs.** COS sends the containers' output to
-  Cloud Logging (`cloud_logging = false` stops that, and the rest of the logs
+  Cloud Logging (`cloud_logging = false` in the `module "workspace"` block
+  stops that, and the rest of the logs
   with it). Make the workspace right after the first boot, and check
   `wh team members` says it's yours.
 - **What's shared isn't encrypted against the operators.** It's on the disk in
