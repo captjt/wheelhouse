@@ -79,7 +79,8 @@ struct RecapScreen: View {
         let r = d["reviews"], ag = d["agents"], you = d["you"]
         let posted = r["posted"].int ?? 0
         VStack(alignment: .leading, spacing: 28) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 12, alignment: .top)], spacing: 12) {
+            // Seven tiles, cost the last: they fit a row in a docket-width window.
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 12, alignment: .top)], spacing: 12) {
                 Tile(label: "Reviews posted", value: posted, delta: (posted, r["prev_posted"].int ?? 0, words.before), spark: r["per_day"].array.compactMap(\.int), since: d["since"].str)
                 Tile(label: "Approved", value: r["approved"].int ?? 0, sub: "\(pct(r["approved"].int ?? 0, posted)) of reviews")
                 Tile(label: "Changes requested", value: r["changes"].int ?? 0, sub: "\(pct(r["changes"].int ?? 0, posted)) of reviews")
@@ -88,6 +89,17 @@ struct RecapScreen: View {
                 if d["usage"]["tokens"].int != nil {
                     let u = d["usage"]
                     Tile(label: "Tokens", value: u["tokens"].int ?? 0, delta: (u["tokens"].int ?? 0, u["prev_tokens"].int ?? 0, words.before), spark: u["per_day"].array.compactMap(\.int), since: d["since"].str, format: compact, neutral: true)
+                }
+                if d["usage"]["cost"].double != nil, Cost.nothingPriced(d["usage"]) {
+                    Tile(label: "Cost", value: 0, sub: Cost.words(d["usage"], count: compact), format: { _ in "–" })
+                        .help("No model used has a price: add one under prices in settings.json")
+                } else if let cost = d["usage"]["cost"].double {
+                    // In micro-dollars, so the tile's sums and spark stay whole numbers.
+                    let u = d["usage"], unpriced = u["unpriced"]["tokens"].int ?? 0
+                    let now = Int(Cost.micros(cost))
+                    Tile(label: "Cost", value: now, sub: unpriced > 0 ? "\(compact(unpriced)) tokens unpriced" : "at API prices", delta: (now, Int(Cost.micros(u["prev_cost"].double)), words.before),
+                         spark: u["cost_per_day"].array.map { Int(Cost.micros($0.double)) }, since: d["since"].str, format: { Cost.money(micros: Int64($0)) }, neutral: true)
+                        .help("What the tokens cost at each model's API price")
                 }
             }
             let extras = [r["median_to_review"].double.map { "Median time from request to review: \(dur($0))" }, (r["tokens"].int ?? 0) > 0 ? "\(compact(r["tokens"].int ?? 0)) review tokens\(r["cached"].double.map { ", \(Int($0 * 100))% cached" } ?? "")" : nil, (r["dismissed"].int ?? 0) > 0 ? "\(r["dismissed"].int!) dismissed" : nil].compactMap { $0 }
@@ -207,6 +219,7 @@ private struct UsageView: View {
         } else {
             let line = [
                 "\(compact(total)) tokens \(words)",
+                Cost.words(u, count: compact),
                 u["cached"].double.map { "\(Int(($0 * 100).rounded()))% of input from the cache" },
                 "\(compact(u["split"]["output"].int ?? 0)) output",
                 "\(plural(models.count, "model")) from \(plural(providers.count, "provider"))",
@@ -231,10 +244,19 @@ private struct UsageView: View {
                     HStack(spacing: 6) {
                         RoundedRectangle(cornerRadius: 2).fill(providerColor(p["provider"].str)).frame(width: 8, height: 8)
                         Text(p["name"].str ?? "").foregroundStyle(K.text)
-                        Text("\(compact(p["tokens"].int ?? 0)) · \(share(p["tokens"].int ?? 0, total))").foregroundStyle(K.muted)
+                        Text("\(compact(p["tokens"].int ?? 0)) · \(share(p["tokens"].int ?? 0, total))\(p["cost"].exists ? " · \(Cost.of(p))" : "")").foregroundStyle(K.muted)
                     }
                     .font(.system(size: 12.5))
                 }
+            }
+            let unpriced = u["unpriced"]
+            if (unpriced["tokens"].int ?? 0) > 0 {
+                Text("\(compact(unpriced["tokens"].int ?? 0)) tokens unpriced, not in the cost: \(unpriced["models"].array.map { "\($0["model"].str ?? "") (\($0["provider_name"].str ?? ""))" }.joined(separator: ", "))")
+                    .font(.system(size: 12.5)).foregroundStyle(K.muted)
+                    .help("Add a price under prices in settings.json")
+            }
+            if !u["price_notes"].strings.isEmpty {
+                Text("Prices in settings.json not used: \(u["price_notes"].strings.joined(separator: "; "))").font(.system(size: 12.5)).foregroundStyle(K.error)
             }
             HStack(alignment: .top, spacing: 28) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -243,7 +265,8 @@ private struct UsageView: View {
                         let sp = m["split"]
                         let input = (sp["input"].int ?? 0) + (sp["cache_read"].int ?? 0) + (sp["cache_write"].int ?? 0)
                         let meta = [input > 0 ? "\(Int((Double(sp["cache_read"].int ?? 0) / Double(input) * 100).rounded()))% cached" : nil, "\(compact(sp["output"].int ?? 0)) out", plural(m["dockets"].int ?? 0, "docket")].compactMap { $0 }.joined(separator: " · ")
-                        row(swatch: providerColor(m["provider"].str), name: m["model"].str ?? "", sub: m["provider_name"].str, meta: meta, n: m["tokens"].int ?? 0, total: total, last: i == models.count - 1)
+                        row(swatch: providerColor(m["provider"].str), name: m["model"].str ?? "", sub: m["provider_name"].str, meta: meta, n: m["tokens"].int ?? 0, total: total, last: i == models.count - 1,
+                            cost: Cost.of(m), priced: m["cost"].exists, price: Cost.priceWords(m["price"]))
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -263,6 +286,9 @@ private struct UsageView: View {
                             }
                             .frame(height: 6)
                             Text(compact(n)).monospacedDigit().foregroundStyle(K.text).frame(minWidth: 48, alignment: .trailing)
+                            if u["work_cost"].exists {
+                                Text(Cost.money(u["work_cost"][k.0].double)).font(.system(size: 12)).monospacedDigit().foregroundStyle(K.text2).frame(minWidth: 56, alignment: .trailing)
+                            }
                             Text(share(n, total)).font(.system(size: 12)).monospacedDigit().foregroundStyle(K.muted).frame(width: 36, alignment: .trailing)
                         }
                         .font(.system(size: 13))
@@ -280,8 +306,8 @@ private struct UsageView: View {
                     let kind = x["kind"].str == "builds" ? "Build" : x["kind"].str == "reviews" ? "Review" : "Agent"
                     RecapRow(icon: AnyView(Image(systemName: x["kind"].str == "builds" ? "hammer" : x["kind"].str == "reviews" ? "arrow.triangle.pull" : "sparkles").foregroundStyle(K.accent)),
                              key: x["id"].str ?? "", title: x["title"].str ?? "",
-                             meta: [kind, x["models"].strings.joined(separator: ", "), "\(share(x["tokens"].int ?? 0, total)) of the tokens"].filter { !$0.isEmpty }.joined(separator: " · "),
-                             detail: nil, at: nil, trailing: compact(x["tokens"].int ?? 0)) {
+                             meta: [kind, x["models"].strings.joined(separator: ", "), "\(share(x["tokens"].int ?? 0, total)) of the tokens", partlyUnpriced(x)].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
+                             detail: nil, at: nil, trailing: compact(x["tokens"].int ?? 0) + (x["cost"].exists ? " · \(Cost.of(x))" : "")) {
                         if let id = x["id"].str { open(id) }
                     }
                 }
@@ -289,7 +315,13 @@ private struct UsageView: View {
         }
     }
 
-    private func row(swatch: Color, name: String, sub: String?, meta: String, n: Int, total: Int, last: Bool) -> some View {
+    /// A docket's tokens no price covers, when some others have one.
+    private func partlyUnpriced(_ x: JSON) -> String? {
+        let n = x["unpriced"].int ?? 0
+        return n > 0 && n < (x["tokens"].int ?? 0) ? "\(compact(n)) tokens unpriced" : nil
+    }
+
+    private func row(swatch: Color, name: String, sub: String?, meta: String, n: Int, total: Int, last: Bool, cost: String, priced: Bool, price: String) -> some View {
         HStack(spacing: 8) {
             RoundedRectangle(cornerRadius: 2).fill(swatch).frame(width: 8, height: 8)
             HStack(spacing: 4) {
@@ -300,6 +332,7 @@ private struct UsageView: View {
             Spacer(minLength: 8)
             Text(meta).font(.system(size: 12)).foregroundStyle(K.muted).lineLimit(1)
             Text(compact(n)).monospacedDigit().foregroundStyle(K.text).frame(minWidth: 48, alignment: .trailing)
+            Text(cost).font(.system(size: 12)).monospacedDigit().foregroundStyle(priced ? K.text2 : K.muted).frame(minWidth: 56, alignment: .trailing).help(price)
             Text(share(n, total)).font(.system(size: 12)).monospacedDigit().foregroundStyle(K.muted).frame(width: 36, alignment: .trailing)
         }
         .font(.system(size: 13))
@@ -324,6 +357,7 @@ private struct Tile: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.system(size: 12)).foregroundStyle(K.muted)
             Text(format(value)).font(.system(size: 28, weight: .semibold).monospacedDigit()).foregroundStyle(K.text)
+                .lineLimit(1).minimumScaleFactor(0.5)
             if let (now, before, words) = delta {
                 let d = now - before
                 Text("\(d > 0 ? "+" : d < 0 ? "−" : "±")\(format(abs(d))) vs \(words)").font(.system(size: 11.5)).foregroundStyle(neutral ? K.muted : d > 0 ? K.working : d < 0 ? K.error : K.faint)

@@ -29,7 +29,8 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
   rounds of fixes, with one reply per thread you approve before it posts.
   Linear issues with a label (or in your cycle) can start one.
 - **Recap.** What happened today, this week, or in 30 days, as a standup
-  note, and the tokens all of it took, by provider and model.
+  note, and the tokens all of it took, by provider and model, with what
+  they cost at each model's API price.
 - **Teams.** A wheelhouse of wheelhouses: share the dockets you choose
   with your teammates, see who's on each, people and agents alike, and let
   your agents work with theirs across Macs, on one signed record. Your

@@ -30,6 +30,7 @@ They're worked out from the config, so they always say what will happen.
 | Repos | Notes for agents (the repo's rules), the base branch, how much of the plan goes on the PR, witnessed checks ([verify.md](verify.md)), and the repo's review guide |
 | Guides & briefs | The Markdown each agent is given: edit, compare with the built-in, reset, or write a guide of your own |
 | Review | Who posts a checked review: Ask, Auto, or Auto when… (a rule, [review.md](review.md#who-posts)), for every repo and for each one; and pausing |
+| Prices | What a model's tokens cost in Recap (`"prices"` in settings.json, below) |
 
 ## Standing decisions
 
@@ -87,12 +88,59 @@ before you save.
 Whatever a save replaces, settings.json or a guide or brief, is kept in
 `~/.config/wheelhouse/.history/`, stamped with the time.
 
+## Prices
+
+Recap costs each model's tokens at its API price, per million tokens:
+`input`, `cache_read` (input read from the cache), `cache_write` (input
+written to it), `cache_write_1h` (input written to Anthropic's 1-hour
+cache) and `output`, in US dollars. Prices for Anthropic's,
+OpenAI's and Google's models are built in (`src/pricing.rs` says where
+each comes from). `prices` in settings.json sets one the hub doesn't
+have, or changes one it does, keyed by the provider as the usage names
+it (`anthropic`, `openai`, `google`, `openrouter`, `ollama`…, in any
+case) and the model's name as Recap shows it:
+
+```json
+{
+  "prices": {
+    "anthropic": { "Opus 5.5": { "cache_write_1h": 8 } },
+    "ollama": { "Llama 4": { "input": 0, "cache_read": 0, "cache_write": 0, "output": 0 } }
+  }
+}
+```
+
+A field set over a built-in price changes only that field; a model with
+no built-in price needs `input`, `cache_read`, `cache_write` and
+`output`, and its `cache_write_1h` is its `cache_write` unless set. Each
+is a number from 0 to 10,000; a change to `prices` that isn't is refused
+with the reason. A settings.json edited by hand with a bad price never
+stops Recap, or a change to anything else in Settings: that price isn't
+used, and Recap says why (the first 20 reasons), while the rest still
+count.
+
+Claude Code's transcripts say how many of a call's cache writes went to
+Anthropic's 5-minute cache (1.25× input) and how many to its 1-hour
+cache (2× input), and each is costed at its own price. The other tools'
+writes are at their provider's default: OpenAI's 30-minute cache, and
+Google's, which charges a write as input. Minutes the hub kept before it
+knew the split are read again from the transcripts once, after an
+update; those whose transcripts are already gone count as 5-minute
+writes.
+
+A model with no price is never costed at nothing: Recap lists it as
+unpriced, with its tokens, beside the cost. The cost is what the tokens
+would cost through each provider's API; on a subscription it isn't your
+bill. It doesn't count fast mode, US-only inference, the dearer prices
+for long prompts (Haiku 5.5's over 100K tokens, OpenAI's over 272K), or
+Gemini's cache storage.
+
 ## In the API
 
 - `GET /api/settings`: the standing orders, the config in force, what's
   set here (`set`), errors, and every guide and brief.
 - `POST /api/settings` with a patch: `{"build": {"gates": {"open":
-  "auto"}}}`.
+  "auto"}}}`, or `{"prices": {"anthropic": {"Opus 5.5": {"cache_write_1h":
+  8}}}}`.
 - `GET /api/settings/doc?id=guide/pr-style.md`, `POST /api/settings/doc
   {id, text}`, `POST /api/settings/doc/reset {id}`.
 

@@ -1421,7 +1421,9 @@ async fn recap(State(shared): State<Shared>, axum::extract::Query(q): axum::extr
                 live
             }
         };
-        crate::recap::finish(out, &names, &rows, &label)
+        // Prices from settings.json: one that's broken or missing leaves
+        // the built-in ones, never no recap.
+        crate::recap::finish(out, &names, &rows, &crate::pricing::Prices::load(), &label)
     })
     .await
     .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;

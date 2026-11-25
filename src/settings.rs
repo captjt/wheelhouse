@@ -6,6 +6,7 @@
 //!   they're read: a value set here wins over `build.lua` or `review.lua`,
 //!   and `null` removes one. Every change is checked by the same code that
 //!   reads the Lua, so a change that wouldn't load is refused, not written.
+//!   `prices` sets or changes what a model's tokens cost (`pricing`).
 //!   Lua stays for what's code: effort functions, agents' programs, PATH.
 //! - **Guides and briefs** are Markdown. A built-in one is replaced by a
 //!   file of the same name under `~/.config/wheelhouse/` (`briefs/review/`,
@@ -221,8 +222,12 @@ pub fn change(patch: &Value) -> Result<Value> {
             check_runtime(v)?;
             continue;
         }
+        // Checked whole, with what's already set, below.
+        if part == "prices" {
+            continue;
+        }
         if !matches!(part.as_str(), "build" | "review") {
-            bail!("settings are build, review or runtime, not {part}");
+            bail!("settings are build, review, runtime or prices, not {part}");
         }
         refused(part, v, &mut Vec::new(), &mut bad);
     }
@@ -247,10 +252,21 @@ pub fn change(patch: &Value) -> Result<Value> {
     }
     merge(&mut s, patch);
     prune(&mut s);
+    check_prices(patch, &s)?;
     check(&s)?;
     keep(&path())?;
     write(&path(), &(serde_json::to_string_pretty(&s)? + "\n"))?;
     Ok(s)
+}
+
+/// Prices, when a change touches them: all of them, as they'll be saved
+/// (`s`). A bad price written by hand doesn't stop a change to anything
+/// else; Recap goes on saying what's wrong with it.
+fn check_prices(patch: &Value, s: &Value) -> Result<()> {
+    if patch.get("prices").is_some() {
+        crate::pricing::check(&s["prices"]).map_err(|e| anyhow!("prices: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Keep a file's current text in `.history/` before it's replaced.
@@ -711,6 +727,20 @@ mod tests {
         let mut t = json!({ "build": { "repos": { "o/a": {} } } });
         prune(&mut t);
         assert_eq!(t, json!({}));
+    }
+
+    #[test]
+    fn prices_are_checked_only_when_a_change_touches_them() {
+        let bad = json!({ "prices": { "anthropic": { "Opus 5.5": { "input": -1 } } }, "runtime": "rex" });
+        // A bad price written by hand doesn't stop a change to the runtime.
+        assert!(check_prices(&json!({ "runtime": "herdr" }), &bad).is_ok());
+        // A change to prices is checked with everything that's set.
+        let err = check_prices(&json!({ "prices": { "anthropic": { "Sonnet 5.5": { "input": 2 } } } }), &bad).unwrap_err().to_string();
+        assert!(err.starts_with("prices: prices.anthropic[\"Opus 5.5\"].input is dollars per million tokens"), "{err}");
+        let fine = json!({ "prices": { "anthropic": { "Opus 5.5": { "cache_write_1h": 8 } } } });
+        assert!(check_prices(&fine, &fine).is_ok());
+        // Removing the bad one is a change to prices, and passes.
+        assert!(check_prices(&json!({ "prices": { "anthropic": { "Opus 5.5": null } } }), &json!({})).is_ok());
     }
 
     #[test]
