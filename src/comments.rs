@@ -130,21 +130,35 @@ pub fn message(docket: &str, d: &Value, body: &str) -> String {
     };
     let mut out = format!("Comment on {} {at}, in {docket}'s Changes:\n", place(d));
     if let Some(e) = d["excerpt"].as_str() {
-        let fence = if e.contains("```") { "````" } else { "```" };
+        let fence = fence_for(e);
         out.push_str(&format!("\n{fence}\n{e}\n{fence}\n"));
     }
     out.push_str(&format!("\n{body}\n"));
     out
 }
 
+/// A Markdown fence longer than any run of backticks in the code.
+pub fn fence_for(code: &str) -> String {
+    let mut longest = 0;
+    let mut run = 0;
+    for c in code.chars() {
+        run = if c == '`' { run + 1 } else { 0 };
+        longest = longest.max(run);
+    }
+    "`".repeat((longest + 1).max(3))
+}
+
 /// Every comment on a docket's diff, oldest first, for the Changes view.
-pub fn list(entries: &[(i64, Entry)]) -> Vec<Value> {
+/// `you`: the names your own entries carry (your user, your handle on a
+/// workspace); a teammate's comment is theirs.
+pub fn list(entries: &[(i64, Entry)], you: &[&str]) -> Vec<Value> {
     entries
         .iter()
         .filter(|(_, e)| e.kind == "note" && e.data["via"] == "diff" && e.data["diff"].is_object())
         .map(|(seq, e)| {
             let by = match e.actor.typ.as_str() {
-                "person" => "you".to_string(),
+                "person" if you.contains(&e.actor.id.as_str()) => "you".to_string(),
+                "person" => e.actor.id.clone(),
                 _ => e.actor.id.split('@').next().unwrap_or("").to_string(),
             };
             json!({ "seq": seq, "at": e.at, "by": by, "body": e.body, "diff": e.data["diff"] })
@@ -224,6 +238,8 @@ mod tests {
         n.excerpt = Some("```rust\nx\n```".into());
         let (d, body) = n.checked().unwrap();
         assert!(message("D-1", &d, &body).contains("````\n```rust"), "a fence inside gets a longer one");
+        assert_eq!(fence_for("a ```` b"), "`````");
+        assert_eq!(fence_for("no ticks"), "```");
         n.excerpt = Some("  \n ".into());
         assert_eq!(n.checked().unwrap().0["excerpt"], Value::Null);
     }

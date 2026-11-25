@@ -164,3 +164,13 @@ func commentPlace(_ d: JSON) -> String {
     let span = d["end_line"].int.flatMap { $0 != line ? "\(line)–\($0)" : nil } ?? "\(line)"
     return "\(d["path"].str ?? ""):\(span)\(d["side"].str == "deletions" ? " (old)" : "")"
 }
+
+/// A Markdown code fence longer than any run of backticks in the code.
+func fenceFor(_ code: String) -> String {
+    var longest = 0, run = 0
+    for c in code {
+        run = c == "`" ? run + 1 : 0
+        longest = max(longest, run)
+    }
+    return String(repeating: "`", count: max(3, longest + 1))
+}

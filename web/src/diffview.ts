@@ -127,21 +127,134 @@ export function sourceLabel(v: Pick<DiffView, "source" | "dir">): string {
 /** Two commits are one when one names the other (a short sha and a full one). */
 const sameSha = (a?: string | null, b?: string | null) => !!a && !!b && (a.startsWith(b) || b.startsWith(a));
 
-/** Whether a comment's lines are the ones shown: the new side's are the same when `to` is, the old side's when `from` is. */
-export function commentHere(c: DiffComment, v: Pick<DiffView, "from" | "to" | "head">): boolean {
-  const d = c.diff;
-  if (d.side === "deletions") return sameSha(d.from, v.from.sha);
-  if (!d.to) return v.to.ref === "work" && sameSha(d.head, v.head);
-  return sameSha(d.to, v.to.sha);
+/** A path as git writes it after `--- ` or `+++ `: `a/` or `b/` off, the tab git adds after a name with a space off, and a quoted name (`"b/a\"b.txt"`) read back. */
+export function patchName(raw: string): string {
+  let n = raw.replace(/\t.*$/, "");
+  if (n.startsWith('"') && n.endsWith('"') && n.length >= 2) n = unquote(n.slice(1, -1));
+  return n.replace(/^[ab]\//, "");
 }
 
-/** The comments on what's shown, by file and line, and those on other versions. */
-export function placeComments(comments: DiffComment[] | undefined, v: Pick<DiffView, "from" | "to" | "head" | "files">): { here: Map<string, DiffComment[]>; elsewhere: DiffComment[] } {
+/** Git's C-style quoting: `\"`, `\\`, `\t`, `\n` and octal bytes (`\303\251` is é). */
+function unquote(s: string): string {
+  const bytes: number[] = [];
+  const esc: Record<string, number> = { n: 10, t: 9, r: 13, '"': 34, "\\": 92, a: 7, b: 8, f: 12, v: 11 };
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "\\" && i + 1 < s.length) {
+      const o = /^[0-7]{3}/.exec(s.slice(i + 1));
+      if (o) {
+        bytes.push(parseInt(o[0], 8));
+        i += 3;
+        continue;
+      }
+      const e = esc[s[i + 1]];
+      if (e !== undefined) {
+        bytes.push(e);
+        i += 1;
+        continue;
+      }
+    }
+    bytes.push(...new TextEncoder().encode(ch));
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+/**
+ * Every line one side of a file shows in a unified patch, by its number: the
+ * code a comment is on, and whether its line is in the diff at all. Headers
+ * are read only between hunks, and each hunk is counted down by its lengths,
+ * so a removed `-- comment` or an added `++x` is content, never a header.
+ */
+export function sideLines(patch: string | null | undefined, path: string, side: "additions" | "deletions"): Map<number, string> {
+  const out = new Map<number, string>();
+  if (!patch) return out;
+  let inFile = false;
+  let oldName = "";
+  let oldN = 0;
+  let newN = 0;
+  let oldLeft = 0;
+  let newLeft = 0;
+  for (const raw of patch.split("\n")) {
+    if (oldLeft > 0 || newLeft > 0) {
+      if (raw.startsWith("\\")) continue;
+      const mark = raw[0];
+      const text = raw.slice(1);
+      if (mark === "+") {
+        if (inFile && side === "additions") out.set(newN, text);
+        newN++;
+        newLeft--;
+      } else if (mark === "-") {
+        if (inFile && side === "deletions") out.set(oldN, text);
+        oldN++;
+        oldLeft--;
+      } else {
+        // Context (a space, or an empty line some tools leave for a blank one).
+        if (inFile) out.set(side === "additions" ? newN : oldN, text);
+        oldN++;
+        newN++;
+        oldLeft--;
+        newLeft--;
+      }
+      continue;
+    }
+    if (raw.startsWith("diff --git ")) {
+      inFile = false;
+      continue;
+    }
+    if (raw.startsWith("--- ")) {
+      oldName = patchName(raw.slice(4));
+      continue;
+    }
+    if (raw.startsWith("+++ ")) {
+      // A deleted file's new name is /dev/null: it's known by its old one.
+      const name = raw.slice(4).replace(/\t.*$/, "") === "/dev/null" ? oldName : patchName(raw.slice(4));
+      inFile = name === path;
+      continue;
+    }
+    const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(raw);
+    if (h) {
+      oldN = Number(h[1]);
+      oldLeft = h[2] === undefined ? 1 : Number(h[2]);
+      newN = Number(h[3]);
+      newLeft = h[4] === undefined ? 1 : Number(h[4]);
+    }
+  }
+  return out;
+}
+
+/** The lines `line` to `end` of one side of a file, from a unified patch: the code a comment is on. Empty when the patch doesn't show them. */
+export function excerptOf(patch: string | null | undefined, path: string, side: "additions" | "deletions", line: number, end = line): string {
+  const lines = sideLines(patch, path, side);
+  const [lo, hi] = line <= end ? [line, end] : [end, line];
+  const out: string[] = [];
+  for (let n = lo; n <= hi; n++) if (lines.has(n)) out.push(lines.get(n)!);
+  return out.join("\n");
+}
+
+/**
+ * Whether a comment's lines are the ones shown: the new side's are the same
+ * when `to` is, the old side's when `from` is, and the working tree's while
+ * HEAD and the code it was on are the same (an agent may have changed them
+ * since). Its last line must be one the diff shows, or there's nowhere to put it.
+ */
+export function commentHere(c: DiffComment, v: Pick<DiffView, "from" | "to" | "head">, patch?: string | null): boolean {
+  const d = c.diff;
+  const same = d.side === "deletions" ? sameSha(d.from, v.from.sha) : d.to ? sameSha(d.to, v.to.sha) : v.to.ref === "work" && sameSha(d.head, v.head);
+  if (!same || patch === undefined) return same;
+  const lines = sideLines(patch, d.path, d.side);
+  const last = d.end_line ?? d.line;
+  if (!lines.has(last)) return false;
+  if (!d.to && d.side === "additions" && d.excerpt) return excerptOf(patch, d.path, d.side, d.line, last) === d.excerpt;
+  return true;
+}
+
+/** The comments on what's shown, by file, and those on other versions (or on lines this diff doesn't show). */
+export function placeComments(comments: DiffComment[] | undefined, v: Pick<DiffView, "from" | "to" | "head" | "files">, patch?: string | null): { here: Map<string, DiffComment[]>; elsewhere: DiffComment[] } {
   const here = new Map<string, DiffComment[]>();
   const elsewhere: DiffComment[] = [];
   const paths = new Set(v.files.map((f) => f.path));
   for (const c of comments ?? []) {
-    if (commentHere(c, v) && paths.has(c.diff.path)) here.set(c.diff.path, [...(here.get(c.diff.path) ?? []), c]);
+    if (paths.has(c.diff.path) && commentHere(c, v, patch)) here.set(c.diff.path, [...(here.get(c.diff.path) ?? []), c]);
     else elsewhere.push(c);
   }
   return { here, elsewhere };
@@ -152,51 +265,16 @@ export function commentPlace(d: Pick<CommentPlace, "path" | "line" | "end_line" 
   return `${d.path}:${d.end_line && d.end_line !== d.line ? `${d.line}–${d.end_line}` : d.line}${d.side === "deletions" ? " (old)" : ""}`;
 }
 
-/** The lines `line` to `end` of one side of a file, read from a unified patch: the code a comment is on. Empty when the patch doesn't show them. */
-export function excerptOf(patch: string | null | undefined, path: string, side: "additions" | "deletions", line: number, end = line): string {
-  if (!patch) return "";
-  const [lo, hi] = line <= end ? [line, end] : [end, line];
-  const out: string[] = [];
-  let inFile = false;
-  let oldName = "";
-  let oldN = 0;
-  let newN = 0;
-  for (const raw of patch.split("\n")) {
-    if (raw.startsWith("diff --git ")) {
-      inFile = false;
-      continue;
-    }
-    if (raw.startsWith("--- ")) {
-      oldName = raw.slice(4).replace(/^a\//, "");
-      continue;
-    }
-    if (raw.startsWith("+++ ")) {
-      // A deleted file's new name is /dev/null: it's known by its old one.
-      const name = raw.slice(4) === "/dev/null" ? oldName : raw.slice(4).replace(/^b\//, "");
-      inFile = name === path;
-      continue;
-    }
-    if (!inFile) continue;
-    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
-    if (h) {
-      oldN = Number(h[1]);
-      newN = Number(h[2]);
-      continue;
-    }
-    if (raw.startsWith("\\")) continue;
-    const mark = raw[0];
-    const text = raw.slice(1);
-    if (mark === " ") {
-      if (side === "additions" ? newN >= lo && newN <= hi : oldN >= lo && oldN <= hi) out.push(text);
-      oldN++;
-      newN++;
-    } else if (mark === "+") {
-      if (side === "additions" && newN >= lo && newN <= hi) out.push(text);
-      newN++;
-    } else if (mark === "-") {
-      if (side === "deletions" && oldN >= lo && oldN <= hi) out.push(text);
-      oldN++;
-    }
-  }
-  return out.join("\n");
+/** A Markdown code fence longer than any run of backticks in the code. */
+export function fenceFor(code: string): string {
+  const longest = Math.max(0, ...(code.match(/`+/g) ?? []).map((r) => r.length));
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+/** Where a drag in the gutter picked: one side's lines, low to high. A drag across sides (an old line onto its new one) is its last line alone, since the two sides' numbers don't mix. */
+export function pickedLines(range: { start: number; end: number; side?: "additions" | "deletions"; endSide?: "additions" | "deletions" }): { side: "additions" | "deletions"; line: number; end: number } {
+  const startSide = range.side ?? "additions";
+  const endSide = range.endSide ?? startSide;
+  if (endSide !== startSide) return { side: endSide, line: range.end, end: range.end };
+  return { side: startSide, line: Math.min(range.start, range.end), end: Math.max(range.start, range.end) };
 }
