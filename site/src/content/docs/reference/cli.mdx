@@ -41,6 +41,8 @@ A docket is written `D-12`, or `ACME-12` when it's shared with a team.
 | `wh set D-4 --status todo\|in_progress\|done\|dropped` | Set its status |
 | `wh set D-4 --status done --anyway --reason "…"` | Close a docket with acceptance items without evidence, on your word. The record says so |
 | `wh link D-4 ENG-142` | Link a Linear issue |
+| `wh call FILE [--title T]`, `wh call -` | A call's transcript, from a file or stdin: a call docket keeps it, and the Listener proposes what it settled for your dockets. See [Calls](/features/calls/) |
+| `wh call --again D-4` | Read a call again |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or an `https://` link with a docket. From an agent's pane, its own docket. The title defaults to the file's name |
 | `wh check D-4 [--wait]` | Run its witnessed checks now, in its worktree. `--wait` waits for the results and exits non-zero on a required failure |
 | `wh hold D-4 ["why"]` | Hold it: its protocol takes no steps until you resume it. The reason goes on the record |

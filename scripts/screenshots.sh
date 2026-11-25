@@ -144,7 +144,7 @@ export HOME="$demo/home" WH_STATE="$demo/state" WH_SOCKET="$demo/wh.sock" WH_HTT
   WH_REX="$here/fake-rex" WH_WORLD="$demo/world.json" \
   WH_HC="$here/fake-hc" WH_HC_WORLD="$demo/hc.json" WH_HERDR_APP=/usr/bin/true \
   WH_GH="$demo/gh" WH_REVIEW_CONFIG="$demo/review.lua" WH_BUILD_CONFIG="$demo/build.lua" \
-  REX_REVIEWER_STATE_DIR="$demo/reviewer" USER=you
+  REX_REVIEWER_STATE_DIR="$demo/reviewer" WH_LISTENER="$here/fake-listener" USER=you
 # Claude Code's hooks, in the made-up HOME, so the app shows them on. Never
 # your own config, even when this runs inside Claude Code.
 unset CLAUDE_CONFIG_DIR CODEX_HOME HC_TERMINAL_ID HC_SCOPE HC_TERMINAL_SOCKET
@@ -281,6 +281,15 @@ api -X POST "$base/api/dockets/$W/comments" -d "$(jq -n --arg from "$base_sha" -
   '{path: "deliver.ts", side: "additions", line: 5, from: $from, to: null, head: $head, excerpt: "  const tries = 5;", tell: false,
     body: "Cap it at **3**, as decided: five keeps a down endpoint busy for too long."}')" >/dev/null
 
+# A call: its transcript in, and the Listener's proposals (a stand-in, so
+# the shots stay the same); one applied, so both states show.
+C=$(api -X POST "$base/api/calls" -d "$(jq -n '{title: "Webhooks sync", transcript: "Dana: Where are we on the webhook retries?\nSam: Retries are 5xx and timeouts only, and three tries at most. That is settled.\nDana: Good. Can the checkout agent tell us whether the cart test covers a bundle on sale?\nSam: I will ask. Somebody should write the runbook for the outage page before Friday.\nDana: Agreed, make it its own piece of work."}')" | jq -r .docket)
+for _ in $(seq 60); do
+  [ "$(api "$base/api/dockets/$C" | jq -r '.call.listening.state')" = done ] && break
+  sleep 0.5
+done
+api -X POST "$base/api/calls/$C/proposals/1" -d '{"action": "apply"}' >/dev/null
+
 # Recap's tokens and cost: a week of made-up usage, kept the way the hub's
 # snapshots keep it (no transcripts in this world to read), one model unpriced.
 python3 - "$demo/state/wheelhouse.db" "$(api "$base/api/state" | jq -r '[.dockets[].id] | join(",")')" <<'PY'
@@ -352,6 +361,7 @@ for look in light dark; do
   shot "$base/#/d/$W" "$images/record-$look.png" "$look" desktop "$record_js"
   shot "$base/#/recap" "$images/recap-$look.png" "$look" desktop
   shot "$base/#/d/$W/changes" "$images/changes-$look.png" "$look" desktop
+  shot "$base/#/d/$C" "$images/call-$look.png" "$look" desktop 'document.querySelector(".call")?.scrollIntoView({block: "start"})'
   shot "$base/#/settings" "$images/settings-$look.png" "$look" desktop
   shot "$base/#/settings" "$images/runtimes-$look.png" "$look" desktop "$runtimes_js"
   shot "$base/#/agents" "$images/agents-$look.png" "$look" desktop

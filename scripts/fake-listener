@@ -1,0 +1,22 @@
+#!/bin/bash
+# A stand-in for the Listener (src/calls.rs) in the made-up world: it reads
+# the prompt as Claude Code would, finds the dockets it names by their
+# titles, and answers with what the demo call settled, as `claude -p
+# --output-format json` does. Never a model: the screenshots stay the same.
+prompt=$(cat)
+id_of() { printf '%s\n' "$prompt" | grep -m1 -E "^- D-[0-9]+: .*$1" | sed -E 's/^- (D-[0-9]+):.*/\1/'; }
+webhooks=$(id_of "webhook deliveries")
+checkout=$(id_of "checkout tests")
+jq -n --arg w "$webhooks" --arg c "$checkout" '{
+  type: "result", subtype: "success", is_error: false, session_id: "demo-listener", total_cost_usd: 0.04,
+  usage: { input_tokens: 4210, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 612 },
+  structured_output: { proposals: [
+    { kind: "decide", docket: $w, subject: "Retries", choice: "5xx and timeouts only, at most 3 tries",
+      quote: "Retries are 5xx and timeouts only, and three tries at most.", why: "The retries are what this docket builds." },
+    { kind: "ask", docket: $c, question: "Should the cart test cover a bundle that is also on sale?", options: ["Yes, add it", "No, out of scope"],
+      quote: "Can the checkout agent tell us whether the cart test covers a bundle on sale?", why: "The checkout tests are this docket." },
+    { kind: "task", title: "Write the runbook for the webhook outage page",
+      intent: "On-call can follow a runbook when webhook deliveries fail.\n\n## Acceptance\n- [ ] The runbook says how to replay failed deliveries\n- [ ] It is linked from the outage page",
+      quote: "Somebody should write the runbook for the outage page before Friday.", why: "No open docket covers the runbook." }
+  ] }
+}'

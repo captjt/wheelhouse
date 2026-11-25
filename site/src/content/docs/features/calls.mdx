@@ -1,0 +1,71 @@
+---
+title: Calls
+description: A call's transcript in, proposals for your dockets out. Each quotes the part of the call it came from, and nothing reaches a docket until you apply it.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Shot from "../../../components/Shot.astro";
+
+A call settles things: a decision on a piece of work, a question for whoever's
+building it, a new job nobody has filed yet. Give Wheelhouse the call's
+transcript and its **Listener** reads it against your open dockets, then
+proposes each of those things for the docket it's for, quoting the part of the
+call it came from. You **Apply**, **Edit** then apply, or **Ignore** each one.
+Nothing reaches a docket until you do.
+
+<Shot name="call" alt="A call's proposals: a decision for D-6, applied; a question for D-1's agents with two options; and a task that opens a new docket, each quoting the call, with Apply, Edit and Ignore" />
+
+## Adding a call
+
+- **In the web app:** **+** then **Call**, or **Add a call's transcript** in
+  ⌘K. Paste the transcript, drop its file on the box, or **Choose file…**
+  (`.txt`, `.vtt`, `.srt`, `.md`). Give it a title, or it's called "Call" and
+  the day.
+- **In Wheelhouse.app:** **Add a Call's Transcript…** in ⌘K.
+- **From a terminal:** `wh call notes.txt --title "Webhooks sync"`, or pipe it
+  in with `wh call -`.
+
+A call is a docket of its own. It keeps the transcript (up to 400 KB), pinned
+by its hash, and its record holds everything that follows.
+
+## What the Listener proposes
+
+| Kind | For | When you apply it |
+| --- | --- | --- |
+| **Decision** | A docket the call decided something about | It's recorded as `/decide Subject: answer` would record it: it stands under the docket's Decisions, goes in every agent's brief, and the agents on it are told |
+| **Question** | A docket whose agents should answer something | It's asked as `/ask` asks it, with the options as buttons. Their answer stands under Decisions |
+| **Task** | New work no open docket covers | It opens a docket with that title, its intent written from the call, and the quote that asked for it |
+
+Each proposal says which docket it's for, why, and quotes the call. A quote
+that isn't in the transcript, sentence by sentence, is flagged **Not in the
+transcript**: read that one twice. A decision or question for a docket the
+Listener couldn't place says **no docket yet**; pick one in **Edit**.
+
+**Edit** changes the docket and the words before applying: the subject and
+what was decided, the question and its options, or a task's title and intent.
+The call's record keeps what you changed. A proposal is answered once.
+
+## The Listener
+
+The Listener is Claude Code, run headless with **no tools, no MCP servers, no
+settings and no hooks**. It's given your open dockets (each one's title, the
+start of its intent, and its decisions in force) and the transcript, and it can
+only answer with proposals. Its answer is checked like any untrusted input:
+kinds, sizes, dockets that are really open, and quotes against the transcript.
+
+<Aside>
+The transcript is data. A line in the call that says "ignore your instructions"
+is something someone said, not an instruction, and the worst a hostile
+transcript can do is propose something you ignore. It runs on your Claude Code
+login, and the call's record says how many tokens it took.
+</Aside>
+
+The call's Activity says when it started reading, how many it proposed, and
+how many more didn't hold up. If it fails (Claude Code isn't signed in, or it
+timed out), the call says why; **Listen again** reads it again, against your
+dockets as they are now.
+
+## Coming later
+
+Capturing a call's audio on the Mac, and a Listener that steers agents while
+the call is still going.

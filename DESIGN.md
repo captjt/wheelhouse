@@ -139,6 +139,17 @@ Rex pane or Herdr terminal.
 - **It ends with the session** and moves to Done on its own. Short
   sessions (one prompt, a few minutes) collapse into one **Quick** line.
 
+### Calls (what a call settled)
+
+A call's transcript is a docket of its own (protocol `call`). Its
+Listener, Claude Code run headless with no tools, MCP servers, settings
+or hooks, reads it against the open dockets and proposes decisions,
+questions and tasks, each quoting the call. Nothing reaches a docket
+until you apply it, and applying goes through the composer's paths: a
+decision as `/decide`, a question as `/ask`, a task as a new docket with
+its intent. Phase 1 takes transcripts; capturing audio and listening
+live come later (`src/calls.rs`, `site/…/features/calls.mdx`).
+
 ### Where the protocols meet
 
 These things come only from having the protocols on one record:

@@ -249,6 +249,17 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       and owner-only API calls that need a secret agents can't read. Today
       the wall stops mistakes, not a hostile agent (docs/security.md).
 
+### Calls
+
+- [x] Phase 1: a call's transcript in, proposals out. `wh call FILE` or
+      + › Call keeps the transcript on a call docket; the Listener (Claude
+      Code headless, with no tools, MCP servers, settings or hooks) reads it
+      against the open dockets and proposes decisions, questions and tasks,
+      each quoting the call (checked against the transcript); Apply, Edit
+      or Ignore each, through the composer's own paths (`src/calls.rs`)
+- [ ] Phase 2: the call's audio captured on the Mac, and transcribed there
+- [ ] Phase 3: listening live, steering agents while the call goes on
+
 ### Changes
 
 - [x] Comments on a diff's lines: the `+` in the gutter of a docket's

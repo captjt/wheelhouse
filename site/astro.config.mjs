@@ -73,6 +73,7 @@ export default defineConfig({
             { label: "Build", slug: "features/build" },
             { label: "Verify", slug: "features/verify" },
             { label: "Recap", slug: "features/recap" },
+            { label: "Calls", slug: "features/calls" },
           ],
         },
         {
