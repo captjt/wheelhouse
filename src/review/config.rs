@@ -12,6 +12,8 @@ use super::lua;
 use super::posting::{self, Post};
 
 pub const LEVELS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// The agents Review and Build run: Codex, Claude Code, Antigravity, Pi.
+pub const AGENTS: [&str; 4] = ["codex", "claude", "agy", "pi"];
 pub const MAX_REVIEWERS: usize = 4;
 
 #[derive(Clone, Debug)]
@@ -174,8 +176,8 @@ pub fn from_value(path: PathBuf, raw: Value) -> Result<Config> {
             }
             _ => bail!("reviewers[{}] must be an agent name or a table", i + 1),
         };
-        if !matches!(agent.as_str(), "codex" | "claude" | "agy") {
-            bail!("reviewers[{}]: agent must be codex, claude or agy, not {agent}", i + 1);
+        if !AGENTS.contains(&agent.as_str()) {
+            bail!("reviewers[{}]: agent must be codex, claude, agy or pi, not {agent}", i + 1);
         }
         let ok_name = name.len() <= 12 && name.starts_with(|c: char| c.is_ascii_lowercase()) && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
         if !ok_name || name == "check" {
@@ -192,14 +194,14 @@ pub fn from_value(path: PathBuf, raw: Value) -> Result<Config> {
         Value::Object(_) => (raw["checker"]["agent"].as_str().unwrap_or("claude").to_string(), strings(&raw["checker"]["extra_args"])),
         _ => ("claude".to_string(), Vec::new()),
     };
-    if !matches!(checker.as_str(), "codex" | "claude" | "agy") {
-        bail!("checker must be codex, claude or agy, not {checker}");
+    if !AGENTS.contains(&checker.as_str()) {
+        bail!("checker must be codex, claude, agy or pi, not {checker}");
     }
     let post = posting::parse(&raw["post"], "post")?.unwrap_or(Post::Ask);
     let mut caches: Vec<String> = if raw["caches"].is_array() { strings(&raw["caches"]) } else { DEFAULT_CACHES.iter().map(|s| s.to_string()).collect() };
     caches.extend(strings(&raw["extra_caches"]));
     let mut agents = BTreeMap::new();
-    for name in ["codex", "claude", "agy"] {
+    for name in AGENTS {
         let a = &raw["agents"][name];
         agents.insert(
             name.to_string(),

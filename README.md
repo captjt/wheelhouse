@@ -5,7 +5,7 @@
 Every piece of agent work as a docket, on a record you can check.
 
 Wheelhouse follows [Rex](https://www.superlogical.com/rex) and [Herdr](https://herdr.dev), side
-by side. Every Claude Code, Codex or Antigravity agent running in a Rex pane
+by side. Every Claude Code, Codex, Antigravity or Pi agent running in a Rex pane
 or a Herdr terminal gets a **docket**: what you asked,
 what the agent answered, when it waited on you, the files it made, and how
 it ended. Each entry is signed and chained, so `wh verify` shows that
@@ -50,7 +50,7 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
 
 > Rex is in private beta. Wheelhouse needs a Rex build, or
 > [herdr-core](https://herdr.dev/core/) 0.1.20 or later, whose agents report program status (OSC 7501): Claude
-> Code, Codex and Antigravity do on their own. With both installed,
+> Code, Codex, Antigravity and Pi do on their own. With both installed,
 > Wheelhouse follows both.
 
 ## Rex and Herdr, together
@@ -211,8 +211,8 @@ every engineer's hub keeps a copy it checks entry by entry.
   `review.lua` and `build.lua`
 - [GitHub CLI](https://cli.github.com), signed in (`gh auth login`), for
   Review and Build
-- Claude Code, and Codex or Antigravity (`agy`) if you want them as
-  reviewers or builders
+- Claude Code, and Codex, Antigravity (`agy`) or [Pi](https://pi.dev) (`pi`)
+  if you want them as reviewers or builders
 - Optional: [Tailscale](https://tailscale.com) with HTTPS on, for the app
   on your phone and Web Push; `terminal-notifier`, for clickable Mac
   notifications; a Linear API key, for linking issues
@@ -227,8 +227,9 @@ just setup
 
 `just setup` builds the hub (`wh`, in `~/.cargo/bin`, with the web app
 built in), runs it at login as a LaunchAgent (`wh up`; logs with
-`wh logs`), installs Claude Code's and Antigravity's hooks (names from your
-prompts, turns with their last message, a new docket on `/clear`) and the `wheelhouse`
+`wh logs`), installs Claude Code's and Antigravity's hooks and Pi's
+extension (names from your prompts, turns with their last message, a new
+docket on `/clear` or Pi's `/new`) and the `wheelhouse`
 skill for agents, and puts Wheelhouse.app in `~/Applications`. Run it again
 after pulling to update (`just app` rebuilds only the Mac app).
 
@@ -294,7 +295,7 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh intent D-4 [TEXT\|-]` | Print a docket's intent, or set it |
 | `wh link D-4 ENG-142` | Link a Linear issue |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or a link with a docket |
-| `wh start [--codex\|--agy] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have (beside any agents already on it), in Rex (or Herdr, with `runtime` set) |
+| `wh start [--codex\|--agy\|--pi] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have (beside any agents already on it), in Rex (or Herdr, with `runtime` set) |
 | `wh join D-4 [--role R]`, `wh leave` | From an agent's pane: put it on a docket beside the agents there, or take it off its docket |
 | `wh send --to ADDR "text"`, `wh reply N "text"`, `wh whoami`, `wh name NAME` | From an agent's pane, in either runtime: message another agent (`api/builder`, `reviewer`, `herdr:wheelhouse/D-12`, `herdr:t2h`), every agent on a docket (`@D-12`), or you (`--to me`); answer; where you are; name your pane |
 | `wh team`, `wh team create\|invite\|join\|members\|share\|people\|trust\|role\|remove\|leave\|send\|drop\|sync\|follow` | Your workspace, and everything a team does with it ([docs/teams-guide.md](docs/teams-guide.md#commands)) |
@@ -308,7 +309,7 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh recap [today\|week\|30d]` | What happened, as Markdown |
 | `wh up`, `down`, `logs`, `status` | The hub at login; its log; what it sees, Rex and Herdr each |
 | `wh web [--publish]` | The app's address on your tailnet |
-| `wh hooks [install\|remove]`, `wh skill [install\|remove]` | Claude Code's and Antigravity's hooks; the agents' skill |
+| `wh hooks [install\|remove]`, `wh skill [install\|remove]` | Claude Code's and Antigravity's hooks, and Pi's extension; the agents' skill |
 | `wh setup-linear` | Store a Linear API key in the Keychain |
 | `wh completions zsh\|bash` | Tab completion, for `eval "$(wh completions zsh)"` in `~/.zshrc` |
 | `wh import rex-reviewer` | Move over from rex-reviewer, once |
@@ -365,7 +366,8 @@ odd setups.
 - **The hub** (`wh serve`) follows Rex's and Herdr's events and mirrors
   their sessions, panes and each agent's program status
   ([docs/runtimes.md](docs/runtimes.md)). An agent pane gets a docket;
-  Claude Code's and Antigravity's hooks add your prompts and their turns.
+  Claude Code's and Antigravity's hooks, and Pi's extension, add your
+  prompts and their turns.
 - **The record** is SQLite: one signed, chained entry per thing that
   happened, and each docket's state folded from its entries. Files are kept
   once, by hash. Keys are Ed25519, one per signer, on this Mac.

@@ -117,7 +117,7 @@ export const liveWord = (state?: string | null) =>
 
 // An agent's avatar: a rounded square with the app's mark.
 export function AppAvatar({ app, size = 18 }: { app?: string | null; size?: number }) {
-  const letter = app === "codex" ? "X" : app === "claude-code" ? "C" : app === "agy" ? "A" : "A";
+  const letter = app === "codex" ? "X" : app === "claude-code" ? "C" : app === "pi" ? "π" : "A";
   return (
     <span className={`avatar avatar-app avatar-${app || "agent"}`} style={{ width: size, height: size, fontSize: size * 0.55 }} title={app || "agent"}>
       {letter}

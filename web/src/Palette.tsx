@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { agentLabel, appName, get, liveAgents, quick, paneRuntime, post, spawnRuntime, type Docket } from "./api";
+import { agentLabel, appName, get, liveAgents, quick, paneRuntime, post, spawnRuntime, startAppFor, startApps, type Docket, type StartApp } from "./api";
 import { LinearPicker } from "./Linear";
 import { IconActive, IconAgents, IconDone, IconEye, IconIssue, IconInbox, IconLayers, IconMonitor, IconMoon, IconPause, IconPlay, IconPlus, IconSettings, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
 import { AttentionIcon } from "./Verify";
@@ -81,7 +81,7 @@ export function Palette({
       if (d.hold) out.push({ id: "resume", group: d.id, label: `Resume: it's on hold (${d.hold})`, icon: <IconPlay size={15} />, keywords: "hold unhold resume", run: () => void hub.resume(d.id).catch(() => {}) });
       else out.push({ id: "hold", group: d.id, label: "Hold…", icon: <IconPause size={15} />, keywords: "hold pause stop wait", run: () => hub.setDialog({ kind: "hold", id: d.id }) });
       out.push({ id: "checks", group: d.id, label: "Run checks", icon: <IconShield size={15} />, keywords: "verify test lint witnessed", run: () => void hub.runChecks(d.id).catch(() => {}) });
-      if (canStartAgent(d)) out.push({ id: "start-agent", group: d.id, label: startLabel(d), icon: <IconAgents size={15} />, keywords: "agent claude codex agy antigravity start pane work", run: () => hub.setDialog({ kind: "agent", id: d.id }) });
+      if (canStartAgent(d)) out.push({ id: "start-agent", group: d.id, label: startLabel(d), icon: <IconAgents size={15} />, keywords: "agent claude codex agy antigravity pi start pane work", run: () => hub.setDialog({ kind: "agent", id: d.id }) });
     }
     // What else needs a look: held, failing, quiet, closed on your word.
     for (const a of attentionShown(hub.state?.attention, asks.map((i) => ({ docket: i.d.id, kind: i.kind }))))
@@ -89,7 +89,7 @@ export function Palette({
         out.push({ id: `at-${a.docket}-${a.kind}`, group: "Attention", label: `${a.docket} · ${a.text}`, icon: <AttentionIcon kind={a.kind} size={15} />, keywords: `${a.title} ${a.kind}`, run: () => go(`/d/${a.docket}`) });
     out.push(
       { id: "new", group: "Create", label: "New docket", icon: <IconPlus size={15} />, hint: <Kbd>C</Kbd>, run: onNew },
-      { id: "new-agent", group: "Create", label: "Start an agent on a new docket", icon: <IconAgents size={15} />, keywords: "claude codex agy antigravity start run", run: () => onNewAgent() },
+      { id: "new-agent", group: "Create", label: "Start an agent on a new docket", icon: <IconAgents size={15} />, keywords: "claude codex agy antigravity pi start run", run: () => onNewAgent() },
       { id: "new-linear", group: "Create", label: "New docket from a Linear issue", icon: <IconIssue size={15} />, keywords: "linear issue import", run: () => onNewLinear() },
       { id: "inbox", group: "Go to", label: "Inbox", icon: <IconInbox size={15} />, hint: <><Kbd>G</Kbd><Kbd>I</Kbd></>, run: () => go("/inbox") },
       { id: "active", group: "Go to", label: "Active dockets", icon: <IconActive size={15} />, hint: <><Kbd>G</Kbd><Kbd>A</Kbd></>, run: () => go("/view/active") },
@@ -202,7 +202,7 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
   const d = hub.byId.get(id);
   const [folders, setFolders] = useState<string[]>([]);
   const [cwd, setCwd] = useState(d?.agent?.cwd ?? "");
-  const [app, setApp] = useState<"claude-code" | "codex" | "agy">(d?.agent?.app === "codex" ? "codex" : d?.agent?.app === "agy" ? "agy" : "claude-code");
+  const [app, setApp] = useState<StartApp>(startAppFor(d?.agent?.app));
   const [note, setNote] = useState(`Read wh brief ${id}, then work on its intent.`);
   const [busy, setBusy] = useState(false);
   const others = liveAgents(d);
@@ -221,7 +221,7 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
     post<{ docket: string; pane?: string; others?: number }>("/api/agents/start", { app, cwd: cwd.trim(), prompt: note.trim() || undefined, docket: id }).then(
       (r) => {
         const n = r.others ?? 0;
-        toast(`${app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : "Claude Code"} is on ${id}, in ${r.pane ?? `wheelhouse/${id}`}${n ? `, beside ${n} other agent${n > 1 ? "s" : ""}` : ""}`);
+        toast(`${appName(app)} is on ${id}, in ${r.pane ?? `wheelhouse/${id}`}${n ? `, beside ${n} other agent${n > 1 ? "s" : ""}` : ""}`);
         hub.reload();
         onClose();
       },
@@ -267,17 +267,7 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
       </div>
       <div className="nd-row">
         <label className="nd-label">Agent</label>
-        <div className="seg">
-          <button className={app === "claude-code" ? "on" : ""} onClick={() => setApp("claude-code")}>
-            Claude Code
-          </button>
-          <button className={app === "codex" ? "on" : ""} onClick={() => setApp("codex")}>
-            Codex
-          </button>
-          <button className={app === "agy" ? "on" : ""} onClick={() => setApp("agy")}>
-            Antigravity
-          </button>
-        </div>
+        <AppPicker app={app} onPick={setApp} />
       </div>
       <div className="nd-foot">
         <span className="muted small">A new tab in {spawnRuntime(hub.state)}'s wheelhouse session, named {id}. The agent works on this docket and reads its intent.</span>
@@ -290,12 +280,25 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
   );
 }
 
+/** Which agent to start: one button each. */
+function AppPicker({ app, onPick }: { app: StartApp; onPick: (a: StartApp) => void }) {
+  return (
+    <div className="seg">
+      {startApps.map((a) => (
+        <button key={a} className={app === a ? "on" : ""} onClick={() => onPick(a)}>
+          {appName(a)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function NewDocket({ onClose, linear, agent }: { onClose: () => void; linear?: boolean; agent?: boolean }) {
   const hub = useHub();
   const toast = useToast();
   const [mode, setMode] = useState<"blank" | "linear" | "agent">(agent ? "agent" : linear ? "linear" : "blank");
   const [cwd, setCwd] = useState("");
-  const [app, setApp] = useState<"claude-code" | "codex" | "agy">("claude-code");
+  const [app, setApp] = useState<StartApp>("claude-code");
   const folders = Array.from(new Set((hub.state?.dockets ?? []).map((d) => d.agent?.cwd).filter((c): c is string => !!c && !c.includes("/.local/share/")))).sort();
   const [opening, setOpening] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -340,7 +343,7 @@ export function NewDocket({ onClose, linear, agent }: { onClose: () => void; lin
       setBusy(true);
       post<{ docket: string }>("/api/agents/start", { app, cwd: cwd.trim(), prompt: note, title: title || undefined }).then(
         (r) => {
-          toast(`${r.docket}: ${app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : "Claude Code"} started in wheelhouse/${r.docket}`);
+          toast(`${r.docket}: ${appName(app)} started in wheelhouse/${r.docket}`);
           hub.reload();
           onClose();
           go(`/d/${r.docket}`);
@@ -374,17 +377,7 @@ export function NewDocket({ onClose, linear, agent }: { onClose: () => void; lin
         </div>
         <div className="nd-row">
           <label className="nd-label">Agent</label>
-          <div className="seg">
-            <button className={app === "claude-code" ? "on" : ""} onClick={() => setApp("claude-code")}>
-              Claude Code
-            </button>
-            <button className={app === "codex" ? "on" : ""} onClick={() => setApp("codex")}>
-              Codex
-            </button>
-            <button className={app === "agy" ? "on" : ""} onClick={() => setApp("agy")}>
-              Antigravity
-            </button>
-          </div>
+          <AppPicker app={app} onPick={setApp} />
         </div>
         <div className="nd-foot">
           <span className="muted small">A new tab in {spawnRuntime(hub.state)}'s wheelhouse session, named after the docket.</span>

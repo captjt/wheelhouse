@@ -78,11 +78,22 @@ asked.
 - The panes Review and Build start have no Linear key and no SSH agent.
   Their `GH_TOKEN` is a token that works nowhere: with none at all, `gh
   auth token` would read yours from the Keychain and hand it out. Every
-  `git push` is rewritten to a URL that fails. Build's Claude Code also
-  can't run `git push`, `gh` or `wh send`. No agent Review or Build starts
-  has MCP servers (unless Build's `wall.mcp` is on): Claude gets
-  `--strict-mcp-config`, Antigravity denies `mcp(*)`, and Codex gets each
-  of its servers switched off by name.
+  `git push` is rewritten to a URL that fails. Build's Claude Code,
+  Antigravity and Pi also can't run `git push`, `gh` or `wh send`. No agent
+  Review or Build starts has MCP servers (unless Build's `wall.mcp` is on):
+  Claude gets `--strict-mcp-config`, Antigravity denies `mcp(*)`, Pi gets
+  `--no-mcp`, and Codex gets each of its servers switched off by name.
+- Pi asks before nothing, so its part of the wall is an extension
+  Wheelhouse passes it (`pi-wall.ts`, with `-e`): it reads each command
+  line as a shell would (quotes, heredocs, `$( )`, `bash -c`, wrappers like
+  `timeout`, git's own options) and refuses the denied commands, and Pi's
+  codemode. Pi won't start with an extension it can't load, so a missing
+  wall stops the pane. Its panes load no other extension
+  (`--no-extensions`), none of a PR's own `.pi/` (`--no-approve`), and keep
+  their sessions where Wheelhouse reads them (`--session-dir`, which a
+  PR's `sessionDir` can't move). An agent can still reach a denied command
+  a way no reading of the line shows (a script it writes, then runs), as it
+  can past Claude Code's: the rest of the wall is what stops it.
 - Witnessed checks run the repo's own code, so they get the same wall and
   only the hub's plain environment (home, user, shell, locale, PATH),
   never what a hub started by hand inherited from your terminal.

@@ -63,7 +63,7 @@ pub fn canonical_app(app: &str) -> &str {
 
 /// Agents Wheelhouse tracks.
 pub fn is_agent_app(app: &str) -> bool {
-    matches!(app, "claude-code" | "codex" | "agy")
+    matches!(app, "claude-code" | "codex" | "agy" | "pi")
 }
 
 pub fn app_name(app: &str) -> &str {
@@ -71,6 +71,7 @@ pub fn app_name(app: &str) -> &str {
         "claude-code" => "Claude Code",
         "codex" => "Codex",
         "agy" | "antigravity" => "Antigravity",
+        "pi" => "Pi",
         other => other,
     }
 }
@@ -141,6 +142,7 @@ impl Pane {
                 Some("claude") => Some("claude-code"),
                 Some("codex") => Some("codex"),
                 Some("agy") => Some("agy"),
+                Some("pi") => Some("pi"),
                 _ => None,
             })
     }
@@ -299,11 +301,23 @@ impl Mirror {
     }
 }
 
+/// Runtimes whose process name hides the program they run: Pi is `node`.
+const INTERPRETERS: [&str; 2] = ["node", "bun"];
+
+/// An agent an interpreter runs, by the name it was started as: Rex says
+/// `argv0`, Herdr `argv`. Only agents Wheelhouse knows this way are named,
+/// so `node server.js` stays `node`.
+fn launcher(fg: &Value) -> Option<String> {
+    let argv0 = fg["argv0"].as_str().or_else(|| fg["argv"][0].as_str())?;
+    let base = argv0.rsplit('/').next().unwrap_or(argv0);
+    (base == "pi").then(|| base.to_string())
+}
+
 fn set_process(p: &mut Pane, fg: &Value) {
     if fg.is_null() {
         return;
     }
-    p.process = s(&fg["name"]);
+    p.process = s(&fg["name"]).map(|name| launcher(fg).filter(|_| INTERPRETERS.contains(&name.as_str())).unwrap_or(name));
     if let Some(cwd) = s(&fg["cwd"]) {
         p.process_cwd = Some(cwd);
         p.refresh_cwd();
@@ -388,5 +402,36 @@ mod tests {
         );
         assert_eq!(m.panes["d"].app(), Some("agy"));
         assert!(m.panes["d"].is_agent());
+    }
+
+    #[test]
+    fn pi_is_an_agent_though_its_process_is_node() {
+        let mut m = Mirror::default();
+        // Before it reports: Rex names the process `node`, started as `pi`;
+        // Herdr gives its argv.
+        let rex = json!({ "foreground": { "name": "node", "argv0": "pi", "cwd": "/w" } });
+        let herdr = json!({ "foreground": { "name": "node", "argv": ["/Users/you/.local/bin/pi", ""], "cwd": "/w" } });
+        let server = json!({ "foreground": { "name": "node", "argv0": "node", "argv": ["node", "server.js"], "cwd": "/w" } });
+        let impostor = json!({ "foreground": { "name": "zsh", "argv0": "pi", "cwd": "/w" } });
+        m.apply_pane_status("s", "a", vec![], Some(&rex), None);
+        m.apply_pane_status("s", "b", vec![], Some(&herdr), None);
+        m.apply_pane_status("s", "c", vec![], Some(&server), None);
+        m.apply_pane_status("s", "d", vec![], Some(&impostor), None);
+        assert_eq!(m.panes["a"].app(), Some("pi"));
+        assert_eq!(m.panes["b"].app(), Some("pi"));
+        assert!(m.panes["a"].is_agent() && m.panes["b"].is_agent());
+        assert_eq!(m.panes["c"].process.as_deref(), Some("node"));
+        assert!(!m.panes["c"].is_agent(), "a node server isn't an agent");
+        assert!(!m.panes["d"].is_agent(), "only an interpreter's argv0 counts");
+        // Once it reports, its own status says so (OSC 7501 `pi`).
+        m.apply_pane_status(
+            "s",
+            "e",
+            vec![Record { state: "working".into(), app: Some("pi".into()), ..Default::default() }],
+            Some(&json!({ "foreground": { "name": "node" } })),
+            None,
+        );
+        assert_eq!(m.panes["e"].app(), Some("pi"));
+        assert_eq!(app_name("pi"), "Pi");
     }
 }

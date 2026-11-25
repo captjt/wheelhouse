@@ -1,6 +1,6 @@
 //! Tokens spent, by when each model call happened, which model and which
 //! provider: read from the agents' own transcripts (Claude Code's, Codex's
-//! rollouts, Antigravity's), so every kind of work counts, not just
+//! rollouts, Antigravity's, Pi's sessions), so every kind of work counts, not just
 //! reviews. Each file is read once and then only for what it appended.
 //! Nothing here is stored or goes on the record.
 
@@ -59,6 +59,9 @@ struct Progress {
     /// Claude Code: a forked subagent's file begins with a copy of the call
     /// that spawned it, which is its parent's.
     forked: bool,
+    /// Pi: a forked or cloned session's file begins with a copy of its
+    /// parent's messages, from before it began: when it began.
+    began: Option<i64>,
 }
 
 fn cache() -> &'static Mutex<HashMap<PathBuf, Progress>> {
@@ -186,6 +189,7 @@ fn read_lines(app: &str, r: &mut Progress, mut from: impl BufRead) -> u64 {
             "claude" => claude_line(r, &line),
             "codex" => codex_line(r, &line),
             "agy" => agy_line(r, &line),
+            "pi" => pi_line(r, &line),
             _ => {}
         }
     }
@@ -295,6 +299,37 @@ fn agy_line(r: &mut Progress, line: &str) {
     }
     let Some(at) = v["created_at"].as_str().and_then(epoch) else { return };
     push(r, Call { at, model: r.model.clone().unwrap_or_else(|| "Gemini".into()), provider: "google".into(), tokens });
+}
+
+/// One line of a Pi session: whatever spent tokens (an assistant message,
+/// a cache warming, a compaction), whichever provider Pi called (`input`
+/// doesn't count what came from the cache).
+fn pi_line(r: &mut Progress, line: &str) {
+    if !line.contains("\"usage\"") && !line.contains("\"parentSession\"") {
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(line) else { return };
+    if v["type"] == "session" {
+        if v["parentSession"].as_str().is_some_and(|p| !p.is_empty()) {
+            r.began = v["timestamp"].as_str().and_then(epoch);
+        }
+        return;
+    }
+    let Some((tokens, model)) = agentcli::pi_usage(&v) else { return };
+    let tokens = tokens.map(|t| t.clamp(0, MAX_TOKENS));
+    let Some(at) = v["timestamp"].as_str().and_then(epoch) else { return };
+    if r.began.is_some_and(|b| at < b) {
+        return;
+    }
+    // An entry that names no model (a compaction) is the last one's.
+    if let Some(m) = model {
+        r.model = Some(agentcli::pi_model_name(m));
+    }
+    if let Some(p) = v["message"]["provider"].as_str().or(v["provider"].as_str()).filter(|p| !p.is_empty()) {
+        r.provider = Some(p.to_string());
+    }
+    let model = r.model.clone().unwrap_or_else(|| "Pi".into());
+    push(r, Call { at, model, provider: r.provider.clone().unwrap_or_else(|| "pi".into()), tokens });
 }
 
 /// Calls by the same model in the same minute are kept as one: a long
@@ -446,6 +481,49 @@ mod tests {
         );
         let c = calls("agy", &p, 0);
         assert_eq!((c[0].model.as_str(), c[0].provider.as_str(), c[0].tokens), ("Gemini 4 Neon", "google", [120, 300, 0, 15]));
+    }
+
+    #[test]
+    fn pi_counts_each_assistant_message_but_not_a_forks_copied_ones() {
+        let dir = scratch("pi");
+        let usage = |i: i64| json!({ "input": i, "output": 4, "cacheRead": 6543, "cacheWrite": 10, "totalTokens": 0, "cost": { "total": 0.01 } });
+        let msg = |at: &str, model: &str, provider: &str, u: Value| json!({ "type": "message", "id": "a1", "parentId": null, "timestamp": at, "message": { "role": "assistant", "model": model, "provider": provider, "usage": u, "stopReason": "stop" } });
+        let p = write(
+            &dir,
+            "2026-11-25T14-01-08-166Z_01a21302.jsonl",
+            &[
+                json!({ "type": "session", "version": 3, "id": "01a21302", "timestamp": "2026-11-25T14:01:08.166Z", "cwd": "/w" }),
+                json!({ "type": "message", "id": "u1", "timestamp": "2026-11-25T14:01:14Z", "message": { "role": "user", "content": [{ "type": "text", "text": "usage" }] } }),
+                msg("2026-11-25T14:01:16.701Z", "claude-opus-5-5", "anthropic", usage(4)),
+                msg("2026-11-25T14:03:00Z", "gpt-6.2-astra", "openai-codex", usage(7)),
+                msg("2026-11-25T14:05:00Z", "anthropic/claude-sonnet-5-5", "openrouter", usage(1)),
+                msg("2026-11-25T14:06:00Z", "claude-opus-5-5", "anthropic", json!({ "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 })),
+                // Cache warming, and a compaction that names no model: the last one's.
+                json!({ "type": "usage", "kind": "cache_warm", "timestamp": "2026-11-25T14:20:00Z", "provider": "anthropic", "model": "claude-opus-5-5", "usage": { "input": 0, "output": 0, "cacheRead": 50000, "cacheWrite": 0 } }),
+                json!({ "type": "compaction", "timestamp": "2026-11-25T14:30:00Z", "summary": "…", "usage": { "input": 900, "output": 100, "cacheRead": 0, "cacheWrite": 0 } }),
+            ],
+        );
+        let c = calls("pi", &p, 0);
+        assert_eq!(c.len(), 5, "{c:?}");
+        assert_eq!((c[3].model.as_str(), c[3].tokens), ("Opus 5.5", [0, 50000, 0, 0]));
+        assert_eq!((c[4].model.as_str(), c[4].provider.as_str(), c[4].tokens), ("Opus 5.5", "anthropic", [900, 0, 0, 100]));
+        assert_eq!((c[0].model.as_str(), c[0].provider.as_str(), c[0].tokens), ("Opus 5.5", "anthropic", [4, 6543, 10, 4]));
+        assert_eq!((c[1].model.as_str(), c[1].provider.as_str()), ("GPT-6.2 Astra", "openai-codex"));
+        assert_eq!((c[2].model.as_str(), c[2].provider.as_str()), ("Sonnet 5.5", "openrouter"));
+
+        // A fork: its parent's messages come first, copied, from before it began.
+        let f = write(
+            &dir,
+            "2026-11-25T15-00-00-000Z_01a21399.jsonl",
+            &[
+                json!({ "type": "session", "version": 3, "id": "01a21399", "timestamp": "2026-11-25T15:00:00Z", "cwd": "/w", "parentSession": p.to_string_lossy() }),
+                msg("2026-11-25T14:01:16.701Z", "claude-opus-5-5", "anthropic", usage(4)),
+                msg("2026-11-25T15:00:30Z", "claude-opus-5-5", "anthropic", usage(9)),
+            ],
+        );
+        let c = calls("pi", &f, 0);
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!(c[0].tokens[0], 9);
     }
 
     #[test]

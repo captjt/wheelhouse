@@ -2,7 +2,7 @@
 // which agent an entry was.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentLabel, agentOfEntry, agentsOn, entryBlock, liveAgents, type Docket, type DocketAgent, type Live } from "../src/api.ts";
+import { agentLabel, agentOfEntry, agentsOn, appName, appOfName, entryBlock, liveAgents, startAppFor, startApps, type Docket, type DocketAgent, type Live } from "../src/api.ts";
 
 const live = (block: string, state: string): Live => ({ block, state, app: "claude-code", rex_session: "wheelhouse", pane: block });
 const agent = (block: string, o: Partial<DocketAgent> = {}): DocketAgent => ({
@@ -45,4 +45,15 @@ test("an entry names its agent by pane, or falls back to the docket's", () => {
   assert.equal(agentOfEntry(d, { data: {} }), undefined, "an old entry on a docket that's had several: no one's in particular");
   const one = docket({ agents: [agent("block:1")], agent: agent("block:1") });
   assert.equal(agentOfEntry(one, { data: {} })?.block, "block:1", "an old entry on a docket with one: its agent");
+});
+
+test("each agent Wheelhouse starts has its name, and a message's name gives its app back", () => {
+  assert.deepEqual(startApps.map(appName), ["Claude Code", "Codex", "Antigravity", "Pi"]);
+  for (const a of startApps) assert.equal(appOfName(appName(a)), a);
+  assert.equal(appOfName(null), "claude-code");
+  // A new agent on a docket is the kind already there.
+  assert.equal(startAppFor("pi"), "pi");
+  assert.equal(startAppFor("antigravity"), "agy");
+  assert.equal(startAppFor("rex"), "claude-code");
+  assert.equal(startAppFor(undefined), "claude-code");
 });
