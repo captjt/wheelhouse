@@ -6,6 +6,7 @@
 //!   they're read: a value set here wins over `build.lua` or `review.lua`,
 //!   and `null` removes one. Every change is checked by the same code that
 //!   reads the Lua, so a change that wouldn't load is refused, not written.
+//!   `prices` sets or changes what a model's tokens cost (`pricing`).
 //!   Lua stays for what's code: effort functions, agents' programs, PATH.
 //! - **Guides and briefs** are Markdown. A built-in one is replaced by a
 //!   file of the same name under `~/.config/wheelhouse/` (`briefs/review/`,
@@ -169,6 +170,7 @@ fn lua_raw() -> Result<(Value, Value)> {
 /// Whether `s` (all of settings.json) loads with the Lua under it.
 pub fn check(s: &Value) -> Result<()> {
     check_runtime(&s["runtime"])?;
+    crate::pricing::check(&s["prices"])?;
     let (rraw, braw) = lua_raw()?;
     let review = if rraw.is_null() {
         if s["review"].as_object().is_some_and(|o| !o.is_empty()) {
@@ -221,8 +223,12 @@ pub fn change(patch: &Value) -> Result<Value> {
             check_runtime(v)?;
             continue;
         }
+        // Checked whole, with what's already set, below.
+        if part == "prices" {
+            continue;
+        }
         if !matches!(part.as_str(), "build" | "review") {
-            bail!("settings are build, review or runtime, not {part}");
+            bail!("settings are build, review, runtime or prices, not {part}");
         }
         refused(part, v, &mut Vec::new(), &mut bad);
     }

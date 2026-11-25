@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { get } from "./api";
 import { AppAvatar, IconBuild, IconChart, IconClipboard, IconExternal, IconPR, StatusIcon } from "./icons";
+import { costOf, money, moneyDelta, priceWords, type Price } from "./cost";
 import { ago, useHub } from "./live";
 import { RiskChip } from "./Reviews";
 import { InlineMd, useToast } from "./ui";
@@ -58,16 +59,24 @@ type RecapData = {
 };
 
 type Split = { input: number; cache_read: number; cache_write: number; output: number };
+type Work = { agents: number; builds: number; reviews: number };
+/** Tokens, and their cost in US dollars at API prices (src/pricing.rs). `unpriced` counts the tokens of models with no price, which the cost leaves out. */
 type Usage = {
   tokens: number;
   prev_tokens: number;
   split: Split;
   cached?: number | null;
   per_day: number[];
-  providers: { provider: string; name: string; tokens: number }[];
-  models: { model: string; provider: string; provider_name: string; tokens: number; split: Split; dockets: number }[];
-  work: { agents: number; builds: number; reviews: number };
-  dockets: { id: string; title: string; kind: string; tokens: number; models: string[] }[];
+  providers: { provider: string; name: string; tokens: number; cost?: number; unpriced?: number }[];
+  models: { model: string; provider: string; provider_name: string; tokens: number; split: Split; dockets: number; cost?: number | null; unpriced?: number; price?: Price | null }[];
+  work: Work;
+  dockets: { id: string; title: string; kind: string; tokens: number; models: string[]; cost?: number; unpriced?: number }[];
+  cost?: number;
+  prev_cost?: number;
+  cost_per_day?: number[];
+  work_cost?: Work;
+  unpriced?: { tokens: number; prev_tokens: number; models: { model: string; provider: string; provider_name: string; tokens: number }[] };
+  price_notes?: string[];
 };
 
 type Period = "today" | "week" | "30d";
@@ -223,6 +232,7 @@ function UsageSection({ u, words }: { u: Usage; words: string }) {
       <p className="rc-line">
         {[
           `${compact(u.tokens)} tokens ${words}`,
+          u.cost != null && `${money(u.cost)} at API prices`,
           u.cached != null && `${Math.round(u.cached * 100)}% of input from the cache`,
           `${compact(u.split.output)} output`,
           `${u.models.length} model${u.models.length === 1 ? "" : "s"} from ${u.providers.length} provider${u.providers.length === 1 ? "" : "s"}`,
@@ -243,10 +253,20 @@ function UsageSection({ u, words }: { u: Usage; words: string }) {
         {u.providers.map((p) => (
           <span key={p.provider} className="rc-legend-item">
             <span className="rc-swatch" style={{ background: color(p.provider) }} />
-            {p.name} <span className="muted">{compact(p.tokens)} · {share(p.tokens, u.tokens)}</span>
+            {p.name}{" "}
+            <span className="muted">
+              {compact(p.tokens)} · {share(p.tokens, u.tokens)}
+              {p.cost != null && ` · ${costOf(p)}`}
+            </span>
           </span>
         ))}
       </div>
+      {(u.unpriced?.tokens ?? 0) > 0 && (
+        <p className="rc-line" title="Add a price under prices in settings.json">
+          {compact(u.unpriced!.tokens)} tokens unpriced, not in the cost: {u.unpriced!.models.map((m) => `${m.model} (${m.provider_name})`).join(", ")}
+        </p>
+      )}
+      {(u.price_notes?.length ?? 0) > 0 && <p className="rc-line rc-warn">Prices in settings.json not used: {u.price_notes!.join("; ")}</p>}
       <div className="rc-cols">
         <div className="rc-group">
           <div className="rc-group-head">Models</div>
@@ -266,6 +286,9 @@ function UsageSection({ u, words }: { u: Usage; words: string }) {
                   <span className="rc-row-num" role="cell">
                     {compact(m.tokens)}
                   </span>
+                  <span className={`rc-row-cost${m.cost == null ? " muted" : ""}`} role="cell" title={priceWords(m.price)}>
+                    {costOf(m)}
+                  </span>
                   <span className="rc-row-pct muted" role="cell">
                     {share(m.tokens, u.tokens)}
                   </span>
@@ -283,6 +306,7 @@ function UsageSection({ u, words }: { u: Usage; words: string }) {
                 <span style={{ width: `${(u.work[w.key] / workMax) * 100}%` }} />
               </span>
               <span className="rc-row-num">{compact(u.work[w.key])}</span>
+              {u.work_cost && <span className="rc-row-cost">{money(u.work_cost[w.key])}</span>}
               <span className="rc-row-pct muted">{share(u.work[w.key], u.tokens)}</span>
             </div>
           ))}
@@ -297,10 +321,20 @@ function UsageSection({ u, words }: { u: Usage; words: string }) {
                 <span className="rc-pr-key">{d.id}</span>
                 <span className="rc-pr-title">{d.title}</span>
                 <span className="spacer" />
-                <span className="rc-pr-at rc-row-num">{compact(d.tokens)}</span>
+                <span className="rc-pr-at rc-row-num">
+                  {compact(d.tokens)}
+                  {d.cost != null && <span className="muted"> · {costOf(d)}</span>}
+                </span>
               </span>
               <span className="rc-pr-meta">
-                {[WORK.find((w) => w.key === d.kind)?.label.replace(/s$/, ""), d.models.join(", "), `${share(d.tokens, u.tokens)} of the tokens`].filter(Boolean).join(" · ")}
+                {[
+                  WORK.find((w) => w.key === d.kind)?.label.replace(/s$/, ""),
+                  d.models.join(", "),
+                  `${share(d.tokens, u.tokens)} of the tokens`,
+                  d.unpriced && d.cost != null && d.unpriced < d.tokens ? `${compact(d.unpriced)} tokens unpriced` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               </span>
             </span>
           </a>
@@ -407,6 +441,15 @@ export function RecapView() {
                 <Tile label="Tokens" value={compact(data.usage.tokens)}>
                   <Delta now={data.usage.tokens} before={data.usage.prev_tokens} words={meta.before} format={compact} neutral />
                   <Spark values={data.usage.per_day} since={data.since} what="tokens" format={compact} />
+                </Tile>
+              )}
+              {data.usage?.cost != null && (
+                <Tile label="Cost" value={money(data.usage.cost)}>
+                  <span className="rc-delta">{`${moneyDelta(data.usage.cost, data.usage.prev_cost)} vs ${meta.before}`}</span>
+                  <span className="rc-sub" title="What the tokens cost at each model's API price">
+                    {(data.usage.unpriced?.tokens ?? 0) > 0 ? `${compact(data.usage.unpriced!.tokens)} tokens unpriced` : "at API prices"}
+                  </span>
+                  <Spark values={data.usage.cost_per_day ?? []} since={data.since} what="spent" format={money} />
                 </Tile>
               )}
             </div>

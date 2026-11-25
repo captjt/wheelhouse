@@ -31,6 +31,7 @@ mod mirror;
 mod notify;
 mod paths;
 mod preview;
+mod pricing;
 mod push;
 mod recap;
 mod record;
