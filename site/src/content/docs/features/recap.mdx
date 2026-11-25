@@ -1,15 +1,16 @@
 ---
 title: Recap
-description: What happened today, this week or in the last 30 days, as a standup note, and the tokens all of it took, by provider and model.
+description: What happened today, this week or in the last 30 days, as a standup note, and the tokens all of it took, by provider and model, with what they cost at API prices.
 ---
 
 import Shot from "../../../components/Shot.astro";
 
 **Recap** reads the record back to you: what your agents did, what got reviewed
-and merged, what you decided, and the tokens all of it took. Pick **Today**,
+and merged, what you decided, and the tokens all of it took and what they cost.
+Pick **Today**,
 **This week** or **30 days**. The headline numbers are set against the period before.
 
-<Shot name="recap" alt="Recap for this week: tiles for reviews posted, approved, changes requested, PRs merged and agent turns, each against the week before; then the PRs merged and waiting on their authors with their merge risk, the agents' finished work, and your decisions" />
+<Shot name="recap" alt="Recap for this week: tiles for reviews posted, approved, changes requested, PRs merged, agent turns, tokens and cost, each against the week before; then the tokens by provider with their cost, one local model unpriced, and the models, kinds of work and dockets that took the most, each with its cost" />
 
 ## What it shows
 
@@ -27,6 +28,9 @@ and merged, what you decided, and the tokens all of it took. Pick **Today**,
   model, per day, by kind of work, and the dockets that took the most. They're
   read from the agents' own transcripts (Claude Code, Codex, Antigravity and
   Pi), by when each call was made.
+- **Cost.** What those tokens cost at each model's API price, beside them
+  everywhere: in total and per day, by provider, model, kind of work and
+  docket. See [Cost](#cost).
 
 ## As a standup note
 
@@ -56,6 +60,36 @@ It prints the same Markdown:
 - D-41 Retry failed webhooks: chose “5xx + timeouts”
 ```
 
+With tokens in the period, it adds a **Tokens:** line, and a **Cost:** line
+by provider, model and kind of work:
+
+```md
+**Cost:** $145.90 at API prices (+$12.40 vs the period before) · Anthropic $107.92 (Opus 5.5 $107.88, Haiku 5.5 $0.05) · OpenAI $35.19 (GPT-6.2 Sol $14.17, GPT-6.2 Astra $21.02) · Google $2.79 · agents $38.02, reviews $107.88 · 2M tokens unpriced: Llama 4 (Ollama)
+```
+
+## Cost
+
+Each model's tokens are costed at its API price, per million tokens: input,
+input read from the cache, input written to it, and output. Prices for
+Anthropic's, OpenAI's and Google's models are built in, from each provider's
+own pricing page, and change on the day a provider says they do.
+
+- **Cache writes by the cache they went to.** Claude Code's transcripts say
+  whether a write went to Anthropic's 5-minute cache (1.25× input) or its
+  1-hour one (2× input), and each is costed at its own price. Claude Code
+  writes almost everything to the 1-hour cache. Other tools' writes are at
+  their provider's default.
+- **Never a guess.** A model the hub has no price for, such as a local one or
+  one through a reseller (OpenRouter, Pi's `openai-codex`), is shown as
+  **unpriced** with its tokens. It's never counted as $0, and when nothing is
+  priced Recap says so.
+- **Your own prices.** Set or change any model's price under `prices` in
+  `settings.json`, one field or all of them. See
+  [Settings](/reference/settings/#prices).
+- **API prices, not your bill.** On a subscription, it's what the same work
+  would cost through the API. It doesn't count fast mode, US-only inference,
+  the dearer prices for very long prompts, or Gemini's cache storage.
+
 ## Limits
 
 Tokens come from the agents' own transcripts. The tools prune those (Claude
@@ -66,4 +100,6 @@ month-old week still adds up after its transcripts are gone. A transcript that
 moved counts once. The first snapshot takes everything on disk, so tokens reach
 back to the oldest transcript you had when the hub first ran.
 
-Recap counts tokens, not cost.
+Minutes the hub kept before it knew which cache a write went to are read again
+once, after an update; those whose transcripts are already gone are costed as
+5-minute writes, a little under what they cost.

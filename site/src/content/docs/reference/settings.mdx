@@ -134,6 +134,40 @@ Settings won't change those. Edit `review.lua` or `build.lua`. See
 [Configuration](/reference/configuration/).
 </Aside>
 
+## Prices
+
+Recap costs tokens at each model's API price (see
+[Recap](/features/recap/#cost)). Prices for Anthropic's, OpenAI's and Google's
+models are built in. `prices` in `settings.json` sets a price the hub doesn't
+have, or changes one it does, in US dollars per million tokens. Each model is
+keyed by its provider (`anthropic`, `openai`, `google`, `openrouter`,
+`ollama`…, in any case) and its name as Recap shows it:
+
+```json
+{
+  "prices": {
+    "anthropic": { "Opus 5.5": { "cache_write_1h": 8 } },
+    "ollama": { "Llama 4": { "input": 0, "cache_read": 0, "cache_write": 0, "output": 0 } }
+  }
+}
+```
+
+| Field | What it prices |
+| --- | --- |
+| `input` | Input not read from the cache |
+| `cache_read` | Input read from the cache |
+| `cache_write` | Input written to the cache (Anthropic's 5-minute cache) |
+| `cache_write_1h` | Input written to Anthropic's 1-hour cache. Others: as `cache_write` |
+| `output` | Output, reasoning included |
+
+- Over a built-in price, a field changes only that field.
+- A model with no built-in price needs `input`, `cache_read`, `cache_write`
+  and `output`.
+- Each is a number from 0 to 10,000. A change to `prices` that isn't is
+  refused with the reason.
+- A price written by hand that's wrong never stops Recap or a change to
+  anything else: it isn't used, and Recap says why.
+
 ## The Mac app's own preferences
 
 Wheelhouse.app adds General (appearance, the menu bar icon, ⌥⌘K, open at
