@@ -481,6 +481,8 @@ struct StartAgentSheet: View {
         Task {
             if await store.startAgent(app: app, cwd: dir, prompt: note.trimmingCharacters(in: .whitespacesAndNewlines), title: nil, docket: id) != nil {
                 store.reload()
+                // The composer's /task that asked for it is done with.
+                if prompt != nil { NotificationCenter.default.post(name: .taskStarted, object: id) }
                 dismiss()
             } else {
                 busy = false

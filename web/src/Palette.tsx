@@ -223,6 +223,8 @@ export function StartAgent({ id, prompt, onClose }: { id: string; prompt?: strin
       (r) => {
         const n = r.others ?? 0;
         toast(`${appName(app)} is on ${id}, in ${r.pane ?? `wheelhouse/${id}`}${n ? `, beside ${n} other agent${n > 1 ? "s" : ""}` : ""}`);
+        // The composer's /task that asked for it is done with.
+        if (prompt) window.dispatchEvent(new CustomEvent("wh-task-started", { detail: id }));
         hub.reload();
         onClose();
       },

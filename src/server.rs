@@ -540,6 +540,28 @@ struct Standing {
 /// Make a docket's decision standing for its repo: it joins the repo's
 /// notes, which every later brief there includes, reviewers' too.
 async fn standing(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<Standing>) -> ApiResult {
+    make_standing(&shared, &id, &req.key)
+}
+
+/// The message a question on the record was asked by, as this hub knows
+/// it, when it's to or from you. On a shared docket each hub numbers its
+/// own copy, so it's found by the question's entry; on this hub's own, by
+/// its number.
+fn question_message(core: &crate::hub::Core, docket: &str, q: &crate::decisions::Decision) -> anyhow::Result<Option<crate::store::Message>> {
+    let mine = |m: &crate::store::Message| m.to_addr == crate::messages::ME || m.from_addr == crate::messages::ME;
+    if !docket.starts_with("D-") {
+        let Some(e) = &q.entry else { return Ok(None) };
+        return Ok(core.store.messages_where("entry = ?1 AND docket = ?2", rusqlite::params![e, docket])?.into_iter().find(mine));
+    }
+    let Some(n) = q.message else { return Ok(None) };
+    Ok(core.store.message(n)?.filter(|m| mine(m) && m.docket.as_deref() == Some(docket)))
+}
+
+/// Make a decision on a docket standing for its repo: its rule goes in the
+/// repo's notes (replacing one for the same question), so every later
+/// brief there carries it.
+fn make_standing(shared: &Shared, id: &str, key: &str) -> ApiResult {
+    let (id, req) = (id.to_string(), Standing { key: key.to_string() });
     let (d, repo) = {
         let core = shared.lock();
         let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
@@ -563,7 +585,7 @@ async fn standing(State(shared): State<Shared>, Path(id): Path<String>, Json(req
         return Err(fail(StatusCode::CONFLICT, "it has no answer yet"));
     }
     let rule = crate::decisions::rule(&d, &id);
-    let view = settings_now(&shared);
+    let view = settings_now(shared);
     let mut patch = json!({});
     for part in ["build", "review"] {
         let Some(r) = view[part]["config"]["repos"].get(&repo) else { continue };
@@ -783,8 +805,9 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
                     .filter(|a| agents::docket_of(&core, &a.agent.block).as_deref() == Some(id.as_str()))
                     .filter_map(|a| {
                         let p = core.mirror.panes.get(&a.agent.block)?;
-                        let shown = format!("{} ({})", if p.label.is_empty() { &a.agent.pane } else { &p.label }, crate::mirror::app_name(&a.agent.app));
-                        Some((a.agent.block.clone(), crate::compose::names(&p.label, a.role.as_deref(), &a.agent.app), shown))
+                        let names = crate::compose::names(&[&p.label, &a.agent.pane], a.role.as_deref(), &a.agent.app);
+                        let shown = format!("{} ({})", names.first().map(|n| format!("@{n}")).unwrap_or_default(), crate::mirror::app_name(&a.agent.app));
+                        Some((a.agent.block.clone(), names, shown))
                     })
                     .collect();
                 crate::compose::targets(&to, &here).map_err(conflict)?.into_iter().map(|(b, _, shown)| (b.clone(), shown.clone())).collect()
@@ -812,29 +835,65 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
             Ok(Json(json!({ "did": "asked", "message": m.id, "options": m.options })))
         }
         Command::Decide { key, subject, choice, text } => {
-            let mut core = shared.lock();
-            let ds = crate::decisions::of_stored(&core.store.entries(&id).map_err(internal)?);
-            if let Some(q) = crate::compose::question_for(&ds, key.as_deref(), subject.as_deref()) {
-                // Your answer to it: by its key, the words after the key.
-                let by_key = key.as_deref() == Some(q.key.as_str());
-                let answer = if by_key { text.strip_prefix(q.key.as_str()).unwrap_or(&text).trim().to_string() } else { choice.clone() };
-                let (n, key) = (q.message.unwrap_or_default(), q.key.clone());
-                let me = crate::messages::caller(&core, None);
-                let m = crate::messages::reply(&mut core, &me, n, &answer, None).map_err(conflict)?;
-                return Ok(Json(json!({ "did": "answered", "key": key, "message": m.id, "choice": m.choice })));
-            }
-            if subject.as_deref().is_some_and(|s| s.len() > crate::compose::MAX_SUBJECT) {
-                return Err(fail(StatusCode::BAD_REQUEST, "a decision's subject is one short line"));
-            }
-            let s = core.append(&id, "decision", &Who::Owner, Some(text), json!({ "via": "composer", "subject": subject, "choice": choice })).map_err(internal)?;
-            let line = match &subject {
-                Some(sub) => format!("Decided on {id}: {sub}: {choice}"),
-                None => format!("Decided on {id}: {choice}"),
+            let (out, restand) = {
+                let mut core = shared.lock();
+                let ds = crate::decisions::of_stored(&core.store.entries(&id).map_err(internal)?);
+                let found = crate::compose::question_for(&ds, key.as_deref(), subject.as_deref());
+                if let Some(q) = found
+                    && let Some(m) = question_message(&core, &id, q).map_err(internal)?
+                {
+                    // Your answer to it: by its key, the words after the key.
+                    let by_key = key.as_deref() == Some(q.key.as_str());
+                    let answer = if by_key { text.strip_prefix(q.key.as_str()).unwrap_or(&text).trim().to_string() } else { choice.clone() };
+                    let qkey = q.key.clone();
+                    let me = crate::messages::caller(&core, None);
+                    let r = crate::messages::reply(&mut core, &me, m.id, &answer, None).map_err(conflict)?;
+                    // A question you put to several agents: the others hear the answer too.
+                    let mut told = Vec::new();
+                    if m.from_addr == crate::messages::ME
+                        && let (Some(seq), Some(entry)) = (r.seq, r.entry.clone())
+                    {
+                        let line = format!("Answered on {id}: {}: {}", q.question, r.choice.as_deref().unwrap_or(&answer));
+                        told = crate::messages::tell(&mut core, &id, &line, &line, seq, &entry, r.to_block.as_deref()).unwrap_or_else(|e| {
+                            say!("couldn't tell {id}'s agents the answer: {e:#}");
+                            Vec::new()
+                        });
+                    }
+                    return Ok(Json(json!({ "did": "answered", "key": qkey, "message": r.id, "choice": r.choice, "told": told })));
+                }
+                if let Some(k) = key.as_deref().filter(|_| found.is_none()) {
+                    return Err(fail(
+                        StatusCode::BAD_REQUEST,
+                        format!("no question on {id} is {k}: Decisions lists them (a Build's are D1, D2…). For a decision of your own, write /decide Subject: answer"),
+                    ));
+                }
+                if let Some(q) = found.filter(|q| key.as_deref() == Some(q.key.as_str())) {
+                    return Err(fail(StatusCode::CONFLICT, format!("{} was between agents, not to or from you", q.key)));
+                }
+                let okey = crate::decisions::own_key(subject.as_deref().unwrap_or(&choice));
+                // Decided again: a rule that stood for it in a repo's notes is replaced.
+                let restand = ds.iter().find(|x| x.key == okey).filter(|x| x.answer.as_deref() != Some(choice.as_str())).and_then(|x| x.standing.clone()).is_some();
+                let s = core.append(&id, "decision", &Who::Owner, Some(text), json!({ "via": "composer", "subject": subject, "choice": choice })).map_err(internal)?;
+                let line = match &subject {
+                    Some(sub) => format!("Decided on {id}: {sub}: {choice}"),
+                    None => format!("Decided on {id}: {choice}"),
+                };
+                let body = format!("{line}\n\nIt stands under Decisions in force in `wh brief`: work from it.");
+                // It's on the record already: telling the agents never undoes it.
+                let told = crate::messages::tell(&mut core, &id, &format!("Decided: {}", subject.as_deref().unwrap_or(&choice)), &body, s.seq, &s.id, None).unwrap_or_else(|e| {
+                    say!("couldn't tell {id}'s agents of the decision: {e:#}");
+                    Vec::new()
+                });
+                (json!({ "did": "decided", "key": okey, "seq": s.seq, "told": told }), restand.then_some(okey))
             };
-            let body = format!("{line}\n\nIt stands under Decisions in force in `wh brief`: work from it.");
-            let told = crate::messages::tell(&mut core, &id, &format!("Decided: {}", subject.as_deref().unwrap_or(&choice)), &body, s.seq, &s.id).map_err(internal)?;
-            let key = crate::decisions::own_key(subject.as_deref().unwrap_or(&choice));
-            Ok(Json(json!({ "did": "decided", "key": key, "seq": s.seq, "told": told })))
+            let mut out = out;
+            if let Some(k) = restand {
+                match make_standing(&shared, &id, &k) {
+                    Ok(v) => out["standing"] = v["repo"].clone(),
+                    Err((_, Json(e))) => out["standing_error"] = e["error"].clone(),
+                }
+            }
+            Ok(Json(out))
         }
     }
 }
@@ -1899,6 +1958,12 @@ mod tests {
         core.mirror.panes.get_mut("b1").unwrap().label = "builder".into();
         agents::reconcile(&mut core, ["b1".to_string()]);
         let d = agents::docket_of(&core, "b1").expect("the builder's docket");
+        // A second agent, at work beside it, as `tests`.
+        let rec = crate::mirror::Record { state: "working".into(), app: Some("codex".into()), ..Default::default() };
+        core.mirror.apply_pane_status("s1", "b2", vec![rec], Some(&json!({ "foreground": { "name": "codex", "cwd": "/w" } })), None);
+        core.mirror.panes.get_mut("b2").unwrap().label = "my tests".into();
+        agents::reconcile(&mut core, ["b2".to_string()]);
+        agents::join(&mut core, "b2", &d, Some("tests")).unwrap();
         let shared = Shared::new(core);
         let app = router(shared.clone());
         let uri = format!("/api/dockets/{d}/compose");
@@ -1914,7 +1979,10 @@ mod tests {
         assert_eq!(shared.lock().store.queued_prompts(Some(&d)).unwrap().len(), 1);
         let (st, v) = compose("@reviewer look").await;
         assert_eq!(st, StatusCode::CONFLICT);
-        assert!(v["error"].as_str().unwrap().contains("builder (Claude Code)"), "{v}");
+        assert!(v["error"].as_str().unwrap().contains("@builder (Claude Code)") && v["error"].as_str().unwrap().contains("/note"), "{v}");
+        // A pane's name with a space, as the apps suggest it.
+        let (st, v) = compose("@my-tests look at the flaky one").await;
+        assert_eq!((st, v["sent"][0]["to"].as_str()), (StatusCode::OK, Some("@my-tests (Codex)")), "{v}");
 
         // Ask the agents, then decide it by its words.
         let (st, v) = compose("/ask Which store? | Postgres | SQLite").await;
@@ -1924,11 +1992,18 @@ mod tests {
         assert_eq!((st, v["did"].as_str(), v["choice"].as_str()), (StatusCode::OK, Some("answered"), Some("Postgres")), "{v}");
         let to_builder = shared.lock().store.message(v["message"].as_i64().unwrap()).unwrap().unwrap();
         assert_eq!((to_builder.reply_to, to_builder.to_block.as_deref()), (Some(asked), Some("b1")));
+        // Asked of both: the one the answer didn't go to hears it too.
+        assert_eq!(v["told"].as_array().map(Vec::len), Some(1), "{v}");
+        // A key no question has is said, not taken for a decision.
+        let (st, v) = compose("/decide #9999 Postgres").await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(v["error"].as_str().unwrap().contains("no question"), "{v}");
+        assert!(compose("/decide Retries: 5xx\nbecause").await.0 == StatusCode::BAD_REQUEST);
 
         // A decision of your own: on the record once, and told to the builder.
         let (st, v) = compose("/decide Retries: 5xx and timeouts only").await;
         assert_eq!((st, v["did"].as_str()), (StatusCode::OK, Some("decided")), "{v}");
-        assert_eq!(v["told"].as_array().unwrap().len(), 1);
+        assert_eq!(v["told"].as_array().unwrap().len(), 2, "both agents on it");
         let ds = crate::decisions::of_stored(&shared.lock().store.entries(&d).unwrap());
         let mine = ds.iter().find(|x| x.question == "Retries").unwrap();
         assert_eq!((mine.answer.as_deref(), mine.by.as_deref(), mine.key.as_str()), (Some("5xx and timeouts only"), Some("you"), v["key"].as_str().unwrap()));

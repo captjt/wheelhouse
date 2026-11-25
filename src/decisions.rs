@@ -32,6 +32,9 @@ pub struct Decision {
     pub at: Option<String>,
     /// The repo it stands for, once you made it standing.
     pub standing: Option<String>,
+    /// The id of the entry that asked it (or, for one of yours, that
+    /// decided it), when read from the store: the same on every hub.
+    pub entry: Option<String>,
 }
 
 impl Decision {
@@ -57,11 +60,18 @@ pub fn rule(d: &Decision, docket: &str) -> String {
 }
 
 /// Notes with the rule added under "Standing decisions", or `None` when
-/// it's there already.
+/// it's there already. A rule for the same question (`- Question? `)
+/// that's there is replaced: the newer answer stands.
 pub fn with_rule(notes: &str, rule: &str) -> Option<String> {
     let notes = notes.trim_end();
     if notes.contains(rule) {
         return None;
+    }
+    if let Some(q) = rule.find("? ").map(|i| &rule[..i + 2]).filter(|q| q.starts_with("- ") && q.len() > 4)
+        && notes.lines().any(|l| l.starts_with(q))
+    {
+        let out: Vec<&str> = notes.lines().map(|l| if l.starts_with(q) { rule } else { l }).collect();
+        return Some(format!("{}\n", out.join("\n")));
     }
     Some(if notes.contains("## Standing decisions") {
         format!("{notes}\n{rule}\n")
@@ -159,6 +169,7 @@ fn fold<'a>(entries: impl Iterator<Item = (Option<&'a str>, &'a Entry)>) -> Vec<
                         by: None,
                         at: None,
                         standing: was.as_ref().and_then(|w| w.standing.clone()),
+                        entry: id.map(str::to_string),
                     },
                 );
             }
@@ -185,7 +196,9 @@ fn fold<'a>(entries: impl Iterator<Item = (Option<&'a str>, &'a Entry)>) -> Vec<
                 if !by_key.contains_key(&key) {
                     order.push(key.clone());
                 }
-                let standing = by_key.remove(&key).and_then(|w| w.standing);
+                // A new answer isn't the rule that stood: it's made standing
+                // again (the composer does, replacing the rule).
+                let standing = by_key.remove(&key).filter(|w| w.answer.as_deref() == Some(choice)).and_then(|w| w.standing);
                 by_key.insert(
                     key.clone(),
                     Decision {
@@ -200,6 +213,7 @@ fn fold<'a>(entries: impl Iterator<Item = (Option<&'a str>, &'a Entry)>) -> Vec<
                         by: Some(who(e)),
                         at: Some(e.at.clone()),
                         standing,
+                        entry: id.map(str::to_string),
                     },
                 );
             }
@@ -264,6 +278,7 @@ mod tests {
             by: Some("you".into()),
             at: Some("2026-11-18T01:00:00Z".into()),
             standing: None,
+            entry: None,
         };
         let r = rule(&d, "D-6");
         assert_eq!(r, "- How many retries? 3: To match the API docs. (Decided on D-6, November 18.)");
@@ -271,6 +286,12 @@ mod tests {
         let once = with_rule("Run just check.", &r).unwrap();
         assert_eq!(once, format!("Run just check.\n\n## Standing decisions\n\n{r}\n"));
         assert_eq!(with_rule(&once, &r), None, "not twice");
+        // Decided again: the rule for that question is replaced, not added to.
+        let mut again = d.clone();
+        again.answer = Some("5".into());
+        let r2 = rule(&again, "D-6");
+        let replaced = with_rule(&once, &r2).unwrap();
+        assert_eq!(replaced, format!("Run just check.\n\n## Standing decisions\n\n{r2}\n"));
         let r2 = "- Base? main. (Decided on D-7.)";
         assert_eq!(with_rule(&once, r2).unwrap(), format!("{once}{r2}\n"));
     }
@@ -380,6 +401,15 @@ mod tests {
         assert_eq!(brief(&ds), "- retries?: **5xx and timeouts** (you)\n- **Use Postgres** (you)\n");
         let r = rule(&ds[1], "D-6");
         assert!(r.starts_with("- Use Postgres. (Decided on D-6"), "{r}");
+
+        // Made standing, then decided again: the new answer isn't standing yet.
+        let mut es = es;
+        es.push(e("standing", "person", "you", None, json!({ "repo": "acme/api", "key": own_key("Retries") }), "2026-11-25T10:05:00Z"));
+        assert_eq!(of(&es)[0].standing.as_deref(), Some("acme/api"));
+        es.push(mine(Some("Retries"), "5xx and timeouts", "2026-11-25T10:06:00Z"));
+        assert_eq!(of(&es)[0].standing.as_deref(), Some("acme/api"), "the same answer still stands");
+        es.push(mine(Some("Retries"), "every non-2xx", "2026-11-25T10:07:00Z"));
+        assert_eq!(of(&es)[0].standing, None, "a new answer is made standing again");
     }
 
     #[test]

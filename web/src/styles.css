@@ -1413,6 +1413,9 @@ code {
 .compose-sugg button:hover {
   background: var(--hover);
 }
+.compose-warn {
+  color: var(--blocked);
+}
 .composer-bar {
   display: flex;
   align-items: center;

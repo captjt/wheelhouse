@@ -1,5 +1,10 @@
 import Foundation
 
+extension Notification.Name {
+    /// An agent the composer's `/task` asked for started (the docket's id).
+    static let taskStarted = Notification.Name("WheelhouseTaskStarted")
+}
+
 /// The composer on a docket's Activity (src/compose.rs reads what's sent):
 /// a note, `@agent` to instruct one, `/ask`, `/decide`, `/task`. Here is
 /// only what the box shows while you type, as web/src/compose.ts does.
@@ -64,9 +69,32 @@ enum Compose {
     /// What an agent answers to after `@`: its pane's name, else its role,
     /// else its app (src/compose.rs `names`).
     static func atName(pane: String, role: String?, app: String) -> String {
-        if !pane.isEmpty { return pane.lowercased() }
-        if let r = role?.trimmingCharacters(in: .whitespaces), !r.isEmpty { return r.split(separator: " ").joined(separator: "-").lowercased() }
+        let form = { (s: String) in s.split(whereSeparator: \.isWhitespace).joined(separator: "-").lowercased() }
+        if !pane.trimmingCharacters(in: .whitespaces).isEmpty { return form(pane) }
+        if let r = role?.trimmingCharacters(in: .whitespaces), !r.isEmpty { return form(r) }
         return app == "claude-code" ? "claude" : app.lowercased()
+    }
+
+    /// Something the hub would refuse, said before you send it; `blocked`
+    /// when sending can't work.
+    static func warning(_ text: String, agents: [(pane: String, role: String?, app: String)]) -> (text: String, blocked: Bool)? {
+        let t = text.drop(while: { $0.isWhitespace })
+        guard let (sigil, word) = head(text), t.dropFirst().contains(where: { $0.isWhitespace }) else { return nil }
+        let w = word.lowercased()
+        if sigil == "/", !w.isEmpty, w.allSatisfy({ $0.isASCII && $0.isLetter }), !commands.contains(where: { $0.word == w }) {
+            return ("There's no /\(w): try /ask, /decide, /task, or /note to keep it as a note", true)
+        }
+        if sigil == "@", kind(text) == .instruct, !["all", "agents", "everyone"].contains(w) {
+            if agents.isEmpty { return ("No agent is on this docket now: /note keeps it as a note", true) }
+            let known = agents.contains { a in
+                atName(pane: a.pane, role: a.role, app: a.app) == w
+                    || (a.role ?? "").lowercased().split(separator: " ").contains { String($0) == w }
+                    || atName(pane: "", role: nil, app: a.app) == w
+                    || (a.app == "claude-code" && w == "claude-code")
+            }
+            if !known { return ("No agent here is @\(w): /note keeps it as a note", false) }
+        }
+        return nil
     }
 
     /// While only the first word is typed: the commands `/` could be, or the

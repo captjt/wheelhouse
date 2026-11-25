@@ -777,6 +777,7 @@ struct Composer: View {
         let kind = Compose.kind(text)
         let agents = d.onAgents.filter { $0.live != nil }.map { (pane: $0.pane, role: $0.role, app: $0.app) }
         let sugg = Compose.suggestions(text, agents: agents, docket: d.id)
+        let warn = Compose.warning(text, agents: agents)
         VStack(alignment: .leading, spacing: 8) {
             if !sugg.isEmpty {
                 VStack(alignment: .leading, spacing: 1) {
@@ -797,18 +798,21 @@ struct Composer: View {
             }
             Editor(text: $text, placeholder: "Leave a note… (Markdown) · @agent, /ask, /decide, /task", minHeight: 40, maxHeight: 240, onSubmit: send)
             HStack {
-                Text(Compose.hint(kind, d.id)).font(.system(size: 11.5)).foregroundStyle(K.faint)
+                Text(warn?.text ?? Compose.hint(kind, d.id)).font(.system(size: 11.5)).foregroundStyle(warn == nil ? K.faint : K.blocked)
                 Spacer()
                 Button(action: send) { Text("\(Compose.button(kind))  ⌘↩") }
                     .buttonStyle(.borderedProminent)
                     .tint(K.accent)
                     .controlSize(.small)
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy || warn?.blocked == true)
             }
         }
         .padding(12)
         .background(K.elev, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(K.line))
+        .onReceive(NotificationCenter.default.publisher(for: .taskStarted)) { n in
+            if n.object as? String == d.id, Compose.kind(text) == .task { text = "" }
+        }
     }
 
     private func send() {
@@ -817,10 +821,12 @@ struct Composer: View {
         busy = true
         Task {
             if let r = await store.compose(d.id, t) {
-                text = ""
+                // A task's text stays until its sheet starts the agent: cancelling it loses nothing.
                 if r["did"].str == "task" {
                     nav.startingPrompt = r["prompt"].str
                     nav.starting = d.id
+                } else {
+                    text = ""
                 }
             }
             busy = false

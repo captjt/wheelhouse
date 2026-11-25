@@ -53,7 +53,23 @@ export function composeHint(k: ComposeKind, id: string): string {
 
 /** What an agent answers to after `@`: its pane's name, else its role, else its app (src/compose.rs `names`). */
 export const atName = (a: DocketAgent): string =>
-  (a.pane || a.role?.replace(/\s+/g, "-") || (a.app === "claude-code" ? "claude" : a.app)).toLowerCase();
+  (a.pane.trim() || a.role?.trim() || (a.app === "claude-code" ? "claude" : a.app)).split(/\s+/).join("-").toLowerCase();
+
+/** Something the hub would refuse, said before you send it; `blocked` when sending can't work. */
+export function composeWarning(text: string, d?: Docket | null): { text: string; blocked: boolean } | null {
+  const m = /^([/@])(\S*)\s/.exec(text.trimStart());
+  if (!m) return null;
+  const word = m[2].toLowerCase();
+  if (m[1] === "/" && /^[a-z]+$/.test(word) && !COMMANDS.some((c) => c.word === word))
+    return { text: `There's no /${word}: try /ask, /decide, /task, or /note to keep it as a note`, blocked: true };
+  if (m[1] === "@" && composeKind(text) === "instruct" && !["all", "agents", "everyone"].includes(word)) {
+    const agents = liveAgents(d);
+    if (!agents.length) return { text: "No agent is on this docket now: /note keeps it as a note", blocked: true };
+    if (!agents.some((a) => atName(a) === word || a.role?.toLowerCase().split(/\s+/).includes(word) || atName({ ...a, pane: "", role: null }) === word || (a.app === "claude-code" && word === "claude-code")))
+      return { text: `No agent here is @${word}: /note keeps it as a note`, blocked: false };
+  }
+  return null;
+}
 
 export type Suggestion = { insert: string; label: string; sub: string };
 
