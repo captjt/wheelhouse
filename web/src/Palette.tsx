@@ -196,14 +196,15 @@ export function Palette({
 }
 
 /** Start an agent on a docket you already have, in a new pane: beside any agents already on it. */
-export function StartAgent({ id, onClose }: { id: string; onClose: () => void }) {
+export function StartAgent({ id, prompt, onClose }: { id: string; prompt?: string; onClose: () => void }) {
   const hub = useHub();
   const toast = useToast();
   const d = hub.byId.get(id);
   const [folders, setFolders] = useState<string[]>([]);
   const [cwd, setCwd] = useState(d?.agent?.cwd ?? "");
   const [app, setApp] = useState<StartApp>(startAppFor(d?.agent?.app));
-  const [note, setNote] = useState(`Read wh brief ${id}, then work on its intent.`);
+  // From the composer's /task: what to do, after reading the docket's brief.
+  const [note, setNote] = useState(prompt ? `Read wh brief ${id}, then: ${prompt}` : `Read wh brief ${id}, then work on its intent.`);
   const [busy, setBusy] = useState(false);
   const others = liveAgents(d);
   useEffect(() => {
@@ -222,6 +223,8 @@ export function StartAgent({ id, onClose }: { id: string; onClose: () => void })
       (r) => {
         const n = r.others ?? 0;
         toast(`${appName(app)} is on ${id}, in ${r.pane ?? `wheelhouse/${id}`}${n ? `, beside ${n} other agent${n > 1 ? "s" : ""}` : ""}`);
+        // The composer's /task that asked for it is done with.
+        if (prompt) window.dispatchEvent(new CustomEvent("wh-task-started", { detail: id }));
         hub.reload();
         onClose();
       },

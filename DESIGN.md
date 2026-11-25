@@ -221,8 +221,10 @@ Needs you: D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
 
 - **Activity:** the timeline, each entry with its mark. Asks are cards
   with their buttons. The composer is at the bottom: a plain message is a
-  note, `@builder` instructs that agent, and `/decide`, `/ask`, and
-  `/task` write those entries.
+  note, `@builder` instructs that agent (`@all`, every one on it), `/ask`
+  asks them (options after `|`), `/decide` records your decision and
+  tells them (or answers a question by its key), and `/task` adds an
+  agent with that prompt. Built: `src/compose.rs`.
 - **Plan**, for Build: the plan as approved, every version, and each
   decision with who chose it or that the recommendation stood.
   **Review**, for Review: each reviewer's draft, the checked review, and

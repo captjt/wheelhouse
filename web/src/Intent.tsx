@@ -243,10 +243,10 @@ export function DecisionsSection({ decisions, docket, repo }: { decisions: Decis
       </div>
       <ul className="dec-list">
         {decisions.map((d) => (
-          <li key={d.key} className={`dec${d.answer ? "" : " open"}`} title={`Asked by ${d.asked_by}, ${stamp(d.asked_at)}${d.options.length ? `\nOptions: ${d.options.join(" · ")}` : ""}`}>
+          <li key={d.key} className={`dec${d.answer ? "" : " open"}`} title={`${d.message == null ? `Decided by ${d.asked_by}` : `${d.key} · asked by ${d.asked_by}`}, ${stamp(d.asked_at)}${d.options.length ? `\nOptions: ${d.options.join(" · ")}` : ""}${!d.answer ? `\nAnswer it in the composer: /decide ${d.key} …` : ""}`}>
             <span className="dec-mark">{d.answer ? "✓" : "?"}</span>
-            <span className="dec-q">{d.question}</span>
-            <span className="dec-arrow">→</span>
+            {d.question && <span className="dec-q">{d.question}</span>}
+            {d.question && <span className="dec-arrow">→</span>}
             <span className="dec-a">{d.answer ?? "waiting on you"}</span>
             <span className="dec-by">
               {d.answer ? (d.by === "stood" ? "the recommendation stood" : d.by === "you" ? "you" : d.by) : ""}
