@@ -29,7 +29,8 @@ serve=""
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
 images="$root/docs/images"
-demo=$(mktemp -d)
+# Its real path (macOS puts temp folders under a /var that links to /private/var): paths under HOME read as ~.
+demo=$(cd "$(mktemp -d)" && pwd -P)
 port=${PORT:-7438}
 base="http://127.0.0.1:$port"
 hub=""
@@ -252,6 +253,57 @@ api -X POST "$base/api/build/settings" -d '{"paused": true}' >/dev/null || true
 "$wh" check "$W" --wait >/dev/null || true
 "$wh" hold "$M" "Waiting on the DBA's review of the migration" >/dev/null
 
+# Changes: the webhook docket's branch, one commit and an edit not yet
+# committed, and a comment on the line the agent should change.
+(
+  cd "$demo/home/code/acme-api"
+  git update-ref refs/remotes/origin/main main && git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+  git checkout --quiet -b eng-142-retry-failed-webhooks
+  cat >deliver.ts <<'TS'
+export function deliver() {}
+
+/** Retry a failed delivery: 5xx and timeouts only, with backoff. */
+export async function retry(send: () => Promise<Response>) {
+  const tries = 5;
+  for (let i = 0; i < tries; i++) {
+    const r = await send();
+    if (r.ok || (r.status >= 400 && r.status < 500)) return r;
+    await sleep(250 * 2 ** i);
+  }
+}
+TS
+  git commit --quiet -am "feat: retry failed deliveries"
+  printf '\nconst sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));\n' >>deliver.ts
+)
+base_sha=$(git -C "$demo/home/code/acme-api" rev-parse main)
+head_sha=$(git -C "$demo/home/code/acme-api" rev-parse HEAD)
+api -X POST "$base/api/dockets/$W/comments" -d "$(jq -n --arg from "$base_sha" --arg head "$head_sha" \
+  '{path: "deliver.ts", side: "additions", line: 5, from: $from, to: null, head: $head, excerpt: "  const tries = 5;", tell: false,
+    body: "Cap it at **3**, as decided: five keeps a down endpoint busy for too long."}')" >/dev/null
+
+# Recap's tokens and cost: a week of made-up usage, kept the way the hub's
+# snapshots keep it (no transcripts in this world to read), one model unpriced.
+python3 - "$demo/state/wheelhouse.db" "$(api "$base/api/state" | jq -r '[.dockets[].id] | join(",")')" <<'PY'
+import random, sqlite3, sys, time
+db, ids = sqlite3.connect(sys.argv[1]), sys.argv[2].split(",")
+random.seed(7)
+now = int(time.time()) // 60 * 60
+plan = [("anthropic", "Opus 5.5", 9_000_000), ("anthropic", "Opus 5.5", 5_000_000), ("openai", "GPT-6.2 Sol", 4_000_000),
+        ("openai", "GPT-6.2 Astra", 1_500_000), ("google", "Gemini 4 Neon", 600_000), ("anthropic", "Haiku 5.5", 200_000), ("ollama", "Llama 4", 300_000)]
+for n, (provider, model, per_day) in enumerate(plan):
+    docket = ids[n % len(ids)]
+    for day in range(7):
+        for k in range(6):
+            minute = now - day * 86400 - k * 3600 - random.randint(0, 50) * 60
+            t = int(per_day / 6 * random.uniform(0.5, 1.5))
+            write = int(t * 0.06)
+            db.execute("INSERT OR REPLACE INTO usage (file, minute, provider, model, docket, input, cache_read, cache_write, output, write_1h) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       (f"demo:{n}", minute, provider, model, docket, int(t * 0.02), int(t * 0.9), write, int(t * 0.02), int(write * 0.95) if provider == "anthropic" else 0))
+for k in ("usage.snapshot", "usage.snapshot_ran"):
+    db.execute("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)", (k, str(now)))
+db.commit()
+PY
+
 # Herdr: the acme-web space, beside Rex's sessions, last, so its dockets
 # come after the others (D-8, D-9).
 ms() { echo $(( ($(date +%s) - $1 * 60) * 1000 )); }
@@ -299,6 +351,7 @@ for look in light dark; do
   shot "$base/#/reviews" "$images/reviews-$look.png" "$look" desktop
   shot "$base/#/d/$W" "$images/record-$look.png" "$look" desktop "$record_js"
   shot "$base/#/recap" "$images/recap-$look.png" "$look" desktop
+  shot "$base/#/d/$W/changes" "$images/changes-$look.png" "$look" desktop
   shot "$base/#/settings" "$images/settings-$look.png" "$look" desktop
   shot "$base/#/settings" "$images/runtimes-$look.png" "$look" desktop "$runtimes_js"
   shot "$base/#/agents" "$images/agents-$look.png" "$look" desktop

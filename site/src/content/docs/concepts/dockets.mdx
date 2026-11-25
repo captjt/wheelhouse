@@ -40,7 +40,7 @@ happens to a docket is an entry on its [record](/concepts/record/).
 | **Agents** | Every agent on it, in Rex or Herdr, each by its pane, with **Open**, its screen, and a way to message it. |
 | **Files** | What the work made and you'll want later: a plan, a report, a screenshot, a link to a Claude artifact. Each is pinned by its hash. |
 | **Links** | The Linear issue or GitHub PR it came from, read again from the source. |
-| **Changes** | For a docket with code on this Mac: the files its agent touched and their diff, from the base or any point on its record. |
+| **Changes** | For a docket with code on this Mac: the files its agent touched and their diff, from the base or any point on its record, with your [comments on its lines](#changes). |
 | **Verify** | Its checks, their results at each commit, and whether its record is intact. |
 
 ## The intent
@@ -82,6 +82,35 @@ A decision stands for its docket. To make it stand for the whole repo, press
 **Make standing for acme/api** beside it under **Decisions**: its rule goes in
 the repo's notes, so every later brief there carries it.
 </Aside>
+
+## Changes
+
+A docket with code on this Mac shows what it changed: **+N −M** on its page,
+and the whole diff in **Changes** (`D` on the docket in the web app, ⇧⌘D in
+Wheelhouse.app). Compare from the base, or any point on its record such as a
+round's head or a checked commit, to HEAD, a later point, or what isn't
+committed yet. It's split or unified, highlighted, with the files listed beside
+it.
+
+<Shot name="changes" alt="A docket's Changes: deliver.ts against the base, with a comment of yours under line 5, and a count of 1 beside the file in the list" />
+
+### Comments on a line
+
+Hover a line and click the **+** in its gutter, or drag it across several
+lines. A box opens under them. Write what should change (Markdown), and
+**Comment** (⌘↩).
+
+- It goes on the record as a note of yours, with what it's on: the file, the
+  side (the new lines or the old), the lines, the commits compared, and the
+  code it was on. It reads on its own after the lines move.
+- The agents on the docket are told, unless you untick **Tell**: a message
+  with the place, the code and your words, between their turns.
+- It shows under its lines on the version it was written on. On any other,
+  it's listed above the diff with **Show**, which compares what it was written
+  on. One on uncommitted changes says **changed since** once the agent has
+  changed those lines.
+- Each file in the list counts its comments, and the Activity shows each one
+  with its code.
 
 ## Files a docket keeps
 
