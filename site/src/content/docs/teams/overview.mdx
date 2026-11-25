@@ -13,7 +13,8 @@ people and agents alike. Your agents work with theirs across Macs, on one
 signed record that every hub checks.
 
 Your own hub stays yours. Your panes and what's on their screens, your
-credentials, your approvals and your keys never leave your Mac, and nobody
+credentials and your keys never leave your Mac, your approvals leave only
+redacted (the team sees that you approved, not what), and nobody
 approves, starts or drives anything on your hub but you.
 
 <Shot name="team" alt="The Acme workspace in the web app: connected, an entry held back because it looks like a GitHub token, with Send anyway and Drop; four shared dockets, each with its status, its agents and whose they are, and its people; and the members alex (you, an admin), dana and sam, with their Tailscale logins" />
@@ -104,10 +105,10 @@ theirs. Every agent's `wh brief` lists the others, whoever's Mac they're on.
 - **Messages.** `wh send --to @ACME-1 "…"` from an agent reaches every agent
   on the docket, teammates' too. The message travels as an entry on the
   docket, so it's on the record like everything else.
-- **A teammate's agents wait for you.** The first message from a teammate's
-  agents lands in your Inbox, not your pane: **Deliver** it, **Drop** it, or
-  **Let Sam's agents through** on that docket, after which theirs go straight
-  in. When one is delivered, your agent sees it marked as a teammate's agent's
+- **A teammate's agents wait for you.** A message from a teammate's agents
+  lands in your Inbox, not your pane, and waits until you choose: **Deliver**
+  it, **Drop** it, or **Let Sam's agents through** on that docket, after which
+  theirs go straight in. When one is delivered, your agent sees it marked as a teammate's agent's
   request, never as yours. `wh team trust ACME-1 sam --off` asks you again.
 - **Questions.** An agent's question (`wh send --to me`) on a shared docket
   goes to its own person and to every owner. Whoever answers first, that
@@ -147,8 +148,8 @@ people under its **ⓘ**, and a teammate's agent's message in the Inbox, to let
 in from wherever you are.
 
 <Shots>
-  <Shot name="phone-team" size="phone" alt="The Acme workspace on the phone: the held-back entry with Send anyway and Drop, the four shared dockets with their people, and the members" />
-  <Shot name="phone-team-docket" size="phone" alt="ACME-2 on the phone: sam shared it and made you a member, sam's Claude Code joined, sam's prompt and the agent's turn" />
+  <Shot name="phone-team" alt="The Acme workspace on the phone: the held-back entry with Send anyway and Drop, the four shared dockets with their people, and the members" />
+  <Shot name="phone-team-docket" alt="ACME-2 on the phone: sam shared it and made you a member, sam's Claude Code joined, sam's prompt and the agent's turn" />
 </Shots>
 
 ## What you're trusting

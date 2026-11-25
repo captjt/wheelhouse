@@ -7,16 +7,19 @@ default:
 deps:
     cd ./web && npm ci --no-audit --no-fund
 
-# The docs site (site/, wheelhouse.0utlaw.xyz): its types, and a build
-# that fails on any warning.
+# The docs site (site/, wheelhouse.0utlaw.xyz): its packages on a Node
+# they support, its types (a warning fails), the CSP's tests, a build that
+# fails on any warning, and every built page's CSP checked against it.
 check-site:
     #!/usr/bin/env bash
     set -euo pipefail
     cd ./site
-    npm ci --no-audit --no-fund
-    npx astro check
+    npm ci --no-audit --no-fund --engine-strict
+    npm run check
+    npm test
     out=$(npm run build 2>&1) || { echo "$out"; exit 1; }
     if grep -E '\[WARN\]|\[ERROR\]' <<<"$out"; then echo "site: the build warned"; exit 1; fi
+    npm run --silent check-csp
     echo "site: built $(grep -oE '[0-9]+ page\(s\)' <<<"$out")"
 
 # The docs site with hot reload on :4321.

@@ -45,7 +45,7 @@ isn't the only prompt waiting in that pane (a subagent's included).
 - Where a prompt is shown cut short (a banner, a menu, the palette, an Inbox
   row), Approve is offered only for one short line. Anything longer opens
   where it's shown whole.
-- The Mac's banner buttons work only on an unlocked Mac.
+- The Mac's banner **Approve** and **Deny** work only on an unlocked Mac.
 
 ### What agents and PRs write can't run in the app
 
@@ -74,7 +74,7 @@ content security policy.
 
 ### Only the hub writes to GitHub, and only what you approved
 
-- **Agents' panes have no way to push.** The panes Review and Build start have
+- **Review's and Build's panes aren't set up to push.** The panes they start have
   no Linear key and no SSH agent, and a GitHub token that works nowhere. Every
   `git push` is rewritten to a URL that fails. Build's Claude Code,
   Antigravity and Pi also can't run `git push`, `gh` or `wh send`.
@@ -107,10 +107,12 @@ database and the socket are 0600.
 
 ### Agents joining dockets
 
-Any agent on this Mac can join an open docket with `wh join`. That's the same
-trust any agent already has to note on any docket, since the hub holds every
-key on this Mac. Every join and leave is on the record, so you can see who
-joined and when. Review's and Build's dockets refuse joins: their panes are the
+Any agent on this Mac can join an open docket that isn't on hold with
+`wh join`. That's the same trust any agent already has to note on any docket,
+since the hub holds every key on this Mac. The hub can't tell which pane a
+local call came from, so an agent could also move another agent's pane, or
+take it off a docket. What catches that is the record: every join and leave is
+on it, so you can see who joined and when. Review's and Build's dockets refuse joins: their panes are the
 protocol's. A message from another agent carries no more authority than any
 other text, and the agents' instructions say so.
 

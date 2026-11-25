@@ -28,8 +28,9 @@ they choose, and their agents work together across Macs.
 ## What you get
 
 - **A docket for every agent.** Every agent in a Rex pane or a Herdr terminal
-  gets one: what you asked, what the agent answered, when it waited on you, the
-  files it made, and how it ended.
+  gets one: when it worked and when it waited on you, the files it made, and how
+  it ended. For Claude Code, Antigravity and Pi, also what you asked and what
+  the agent answered.
 - **One Inbox.** Permission prompts, questions with answers as buttons,
   failures, finished turns and reviews ready to post, from every agent, on the
   Mac, in the menu bar, in a notification or on your phone.
@@ -53,11 +54,14 @@ they choose, and their agents work together across Macs.
 2. **Agents do, you decide.** Agents ask only what only you can decide. A
    question comes with options and a recommendation, and the agent keeps
    working on the recommendation while it waits.
-3. **Nothing goes outward without you.** Agents never push, post, or open a
-   PR. Wheelhouse does those things for them after you approve, or under a
-   standing order you wrote. Nothing ever merges.
+3. **Nothing goes outward without you.** Review's and Build's agents don't
+   push, post, or open a PR. Wheelhouse does those things for them after you
+   approve, or under a standing order your config sets. Nothing ever merges.
+   (An agent you start by hand in your own pane runs as you, with your logins:
+   see [Security](/reference/security/).)
 4. **Every claim says how it's known.** An entry is *said*, *witnessed* or
-   *checkable*. A docket can't be closed on what was said.
+   *checkable*. A docket with acceptance boxes closes on evidence, not on what
+   was said, unless you close it on your word, with a reason, on the record.
 5. **The runtime holds the panes.** Panes live in Rex or Herdr. Wheelhouse
    never draws a terminal: **Open** takes you to the pane.
 6. **Answer from anywhere.** The window, the menu bar, a notification, the
@@ -73,7 +77,7 @@ they choose, and their agents work together across Macs.
 | **Entry** | One signed, append-only record in a docket's log. A correction is a new entry that names the one it replaces. |
 | **Protocol** | The playbook a docket follows: **Agent** (one you started by hand), **Review** or **Build**. |
 | **Ask** | Something that waits on you: a permission prompt, a question, a gate, a failure, a message. Your Inbox is your open asks. |
-| **Standing order** | A rule you wrote: when something happens, do something. "When a PR in acme/api requests me, Review it." |
+| **Standing order** | A rule your config sets, shown as a sentence in Settings: when something happens, do something. "When a PR in acme/api requests me, Review it." |
 | **Runtime** | The terminal multiplexer an agent's pane is in: Rex or Herdr. |
 | **Hub** | `wh serve`: the process on your Mac that follows the runtimes, keeps the record and serves the apps. |
 

@@ -22,7 +22,7 @@
   --wh-text: oklch(97% 0 0);
   --wh-text-2: oklch(86% 0 0);
   --wh-muted: oklch(70.8% 0 0);
-  --wh-faint: oklch(55.6% 0 0);
+  --wh-faint: oklch(63% 0 0); /* kumo placeholder, lifted to AA as text */
 
   --wh-accent: color-mix(in oklab, oklch(57.72% 0.2324 260), black 10%);
   --wh-accent-hover: oklch(48.8% 0.243 264.376);
@@ -59,7 +59,7 @@
   --wh-text: oklch(21% 0.006 285.885);
   --wh-text-2: oklch(36% 0 0);
   --wh-muted: oklch(52% 0 0);
-  --wh-faint: oklch(70.8% 0 0);
+  --wh-faint: oklch(54% 0 0); /* kumo placeholder, darkened to AA as text */
 
   --wh-accent: oklch(57.72% 0.2324 260);
   --wh-accent-soft: oklch(93.2% 0.032 255.6 / 0.65);

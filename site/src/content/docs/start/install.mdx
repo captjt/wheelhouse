@@ -118,15 +118,16 @@ just setup
 
 ## Review and Build
 
-Both are off until you set them up, each with a small Lua file in
-`~/.config/wheelhouse/`:
+Both read a small Lua file in `~/.config/wheelhouse/` for your repos. Review is
+off until you turn it on; Build is on as soon as either file lists a repo:
 
 - **Review:** copy
   [examples/review.lua](https://github.com/captjt/wheelhouse/blob/main/examples/review.lua)
   to `~/.config/wheelhouse/review.lua` and list your repos and their checkouts.
   `wh review on` checks it and turns Review on, paused; `wh review resume`
   starts it.
-- **Build:** copy
+- **Build:** uses `review.lua`'s repos as they are. To change something for
+  Build, or to build in a repo you don't review, copy
   [examples/build.lua](https://github.com/captjt/wheelhouse/blob/main/examples/build.lua)
   to `~/.config/wheelhouse/build.lua`. Then press **Build it** on a docket with
   an intent, or run `wh build start D-12`.

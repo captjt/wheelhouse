@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import csp from "./src/integrations/csp.mjs";
+import prune from "./src/integrations/prune.mjs";
 
 // The repo's root: screenshots come from ../docs/images, one source for the
 // README and the site.
@@ -23,6 +24,8 @@ export default defineConfig({
       description:
         "Every piece of agent work as a docket, on a record you can check. Talk to your agents, review PRs, build issues, and check what happened, from your Mac or your phone.",
       favicon: "/favicon.svg",
+      // In the phone's menu; the header draws its own link on wider screens.
+      social: [{ icon: "github", label: "GitHub", href: "https://github.com/captjt/wheelhouse" }],
       customCss: ["@fontsource-variable/inter/opsz.css", "./src/styles/tokens.css", "./src/styles/theme.css"],
       components: {
         Header: "./src/components/Header.astro",
@@ -99,7 +102,9 @@ export default defineConfig({
         },
       ],
     }),
-    // After Starlight: a CSP per page, from its own inline scripts and styles.
+    // After Starlight: drop the captures no page shows, then a CSP per page,
+    // from its own inline scripts and styles.
+    prune(),
     csp(),
   ],
 });

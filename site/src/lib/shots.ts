@@ -5,8 +5,10 @@
 // the build.
 import type { ImageMetadata } from "astro";
 
-const images = import.meta.glob<ImageMetadata>("../../../docs/images/*.png", { eager: true, import: "default" });
-const find = (file: string): ImageMetadata | undefined => images[`../../../docs/images/${file}.png`];
+// Not eager: each page loads only the captures it shows, so the build ships
+// no image nothing uses.
+const images = import.meta.glob<ImageMetadata>("../../../docs/images/*.png", { import: "default" });
+const find = (file: string): Promise<ImageMetadata> | undefined => images[`../../../docs/images/${file}.png`]?.();
 
 export type Shot = {
   light: ImageMetadata;
@@ -16,9 +18,9 @@ export type Shot = {
   phone: boolean;
 };
 
-export function shot(name: string): Shot {
-  const light = find(`${name}-light`) ?? find(name);
-  const dark = find(`${name}-dark`) ?? find(name);
+export async function shot(name: string): Promise<Shot> {
+  const light = await (find(`${name}-light`) ?? find(name));
+  const dark = await (find(`${name}-dark`) ?? find(name));
   if (!light || !dark) throw new Error(`no screenshot "${name}" in docs/images`);
   const phone = light.height > light.width * 1.5;
   // The web app's captures are 2x (2880 wide), its phone ones 3x; the Mac
