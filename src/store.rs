@@ -173,6 +173,12 @@ fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN preview TEXT")?;
     }
     conn.execute_batch("CREATE INDEX IF NOT EXISTS entries_id ON entries(docket, id)")?;
+    // The first `usage` (keyed by path) never shipped: it's derived, so it's
+    // made again, and the next snapshot keeps everything on disk anew.
+    if has("usage", "path")? {
+        conn.execute_batch("DROP TABLE usage; DELETE FROM meta WHERE k LIKE 'usage.%';")?;
+        conn.execute_batch(SCHEMA)?;
+    }
     if !has("messages", "entry")? {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN entry TEXT; CREATE INDEX IF NOT EXISTS messages_entry ON messages(entry)")?;
     }
@@ -616,21 +622,27 @@ impl Store {
         }
     }
 
-    /// Keep what a transcript's calls came to, a minute at a time, in one
-    /// transaction: a minute read again (the file grew, or was written
-    /// over) replaces what was kept for it. Rows are never removed here, so
-    /// a transcript that's gone still counts.
+    /// Keep what transcripts' calls came to, a minute at a time, in one
+    /// transaction. A minute of a transcript read again replaces all that
+    /// was kept for that minute, every model's (the file grew, or a model
+    /// is named differently now), so it never counts twice. Minutes not in
+    /// `rows` are never removed, so a transcript that's gone still counts.
+    /// `rows` must hold each of its (transcript, minute)s whole.
     pub fn put_usage(&mut self, rows: &[crate::usage::Row]) -> Result<()> {
         let tx = self.conn.transaction()?;
         {
-            let mut st = tx.prepare(
+            let mut clear = tx.prepare("DELETE FROM usage WHERE file = ?1 AND minute = ?2")?;
+            let mut put = tx.prepare(
                 "INSERT INTO usage (file, minute, provider, model, docket, input, cache_read, cache_write, output) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT (file, minute, provider, model) DO UPDATE SET docket = ?5, input = ?6, cache_read = ?7, cache_write = ?8, output = ?9
-                 WHERE (docket, input, cache_read, cache_write, output) IS NOT (?5, ?6, ?7, ?8, ?9)",
+                 ON CONFLICT (file, minute, provider, model) DO UPDATE SET docket = ?5, input = ?6, cache_read = ?7, cache_write = ?8, output = ?9",
             )?;
+            let mut cleared: std::collections::HashSet<(&str, i64)> = std::collections::HashSet::new();
             for r in rows {
+                if cleared.insert((r.file.as_str(), r.minute)) {
+                    clear.execute(params![r.file, r.minute])?;
+                }
                 let [i, cr, cw, o] = r.tokens;
-                st.execute(params![r.file, r.minute, r.provider, r.model, r.docket, i, cr, cw, o])?;
+                put.execute(params![r.file, r.minute, r.provider, r.model, r.docket, i, cr, cw, o])?;
             }
         }
         tx.commit()?;
@@ -660,5 +672,38 @@ impl Store {
         let mut st = self.conn.prepare("SELECT keyid, name FROM keys ORDER BY added_at")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_usage_table_is_made_again_and_its_snapshot_forgotten() {
+        let dir = std::env::temp_dir().join(format!("wh-store-usage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("wheelhouse.db");
+        {
+            let c = Connection::open(&db).unwrap();
+            c.execute_batch(
+                "CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+                 INSERT INTO meta VALUES ('usage.snapshot', '1800000000'), ('other', 'kept');
+                 CREATE TABLE usage (path TEXT NOT NULL, minute INTEGER NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, docket TEXT NOT NULL,
+                   input INTEGER NOT NULL, cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL, output INTEGER NOT NULL, PRIMARY KEY (path, minute, provider, model));
+                 INSERT INTO usage VALUES ('/a.jsonl', 60, 'anthropic', 'Opus 5.5', 'D-1', 1, 0, 0, 0);",
+            )
+            .unwrap();
+        }
+        let mut s = Store::open(&db).unwrap();
+        assert_eq!(s.meta_get("usage.snapshot").unwrap(), None, "the next snapshot keeps everything anew");
+        assert_eq!(s.meta_get("other").unwrap().as_deref(), Some("kept"));
+        let r = crate::usage::Row { file: "claude:a.jsonl".into(), minute: 60, provider: "anthropic".into(), model: "Opus 5.5".into(), docket: "D-1".into(), tokens: [2, 0, 0, 0] };
+        s.put_usage(std::slice::from_ref(&r)).unwrap();
+        assert_eq!(s.usage_between(0, 120).unwrap(), vec![r]);
+        drop(s);
+        // Opened again: nothing more to do.
+        assert_eq!(Store::open(&db).unwrap().usage_between(0, 120).unwrap().len(), 1);
     }
 }

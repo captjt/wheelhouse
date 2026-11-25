@@ -124,7 +124,12 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, Progress>> {
 /// on, and isn't read; nor is one that's gone. `None` when it couldn't be
 /// read (or not all of it), so a caller doesn't take that for no calls.
 pub fn calls(app: &str, path: &Path, from: i64) -> Option<Vec<Call>> {
-    let meta = std::fs::metadata(path).ok();
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => Some(m),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        // There, but not to be looked at (a folder it can't search): not read.
+        Err(_) => return None,
+    };
     let written = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
     if written.is_some_and(|w| w < from) {
         return Some(Vec::new());
