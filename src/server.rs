@@ -1219,20 +1219,26 @@ async fn recap(State(shared): State<Shared>, axum::extract::Query(q): axum::extr
     };
     let gathered = {
         let core = shared.lock();
-        crate::recap::gather(&core, &since, &until).and_then(|g| Ok((g, crate::recap::bounds(&core, &since, &until)?)))
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        crate::recap::gather(&core, &since, &until).and_then(|g| Ok((g, crate::recap::bounds(&core, &since, &until, now)?)))
     };
     let ((out, work, names), (from, read_from, to)) = gathered.map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
-    // The tokens come from the agents' transcripts: read off the hub's lock,
-    // kept in the store, and counted from what it keeps (which outlasts
-    // the transcripts).
-    let rows = tokio::task::spawn_blocking(move || crate::recap::read(&work, read_from)).await.map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
-    let kept = crate::recap::keep(&shared, &rows).and_then(|()| shared.lock().store.usage_between(from, to));
-    let kept = kept.unwrap_or_else(|e| {
-        // The store failed: count what was just read (less than a snapshot kept).
-        say!("Recap couldn't use the kept tokens: {e:#}");
-        rows
-    });
-    let v = tokio::task::spawn_blocking(move || crate::recap::finish(out, &names, &kept, &label)).await.map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    // The tokens: what the store keeps (it outlasts the transcripts), with
+    // what was written since the last snapshot read over it, off the lock.
+    let v = tokio::task::spawn_blocking(move || {
+        let live = crate::recap::read(&work, read_from).rows;
+        let kept = shared.lock().store.usage_between(from, to);
+        let rows = match kept {
+            Ok(kept) => crate::recap::merge(kept, live),
+            Err(e) => {
+                say!("Recap couldn't read the kept tokens, so it counts what's on disk: {e:#}");
+                live
+            }
+        };
+        crate::recap::finish(out, &names, &rows, &label)
+    })
+    .await
+    .map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
     Ok(Json(v))
 }
 
