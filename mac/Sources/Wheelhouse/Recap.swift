@@ -79,7 +79,8 @@ struct RecapScreen: View {
         let r = d["reviews"], ag = d["agents"], you = d["you"]
         let posted = r["posted"].int ?? 0
         VStack(alignment: .leading, spacing: 28) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 12, alignment: .top)], spacing: 12) {
+            // Seven tiles, cost the last: they fit a row in a docket-width window.
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), spacing: 12, alignment: .top)], spacing: 12) {
                 Tile(label: "Reviews posted", value: posted, delta: (posted, r["prev_posted"].int ?? 0, words.before), spark: r["per_day"].array.compactMap(\.int), since: d["since"].str)
                 Tile(label: "Approved", value: r["approved"].int ?? 0, sub: "\(pct(r["approved"].int ?? 0, posted)) of reviews")
                 Tile(label: "Changes requested", value: r["changes"].int ?? 0, sub: "\(pct(r["changes"].int ?? 0, posted)) of reviews")
@@ -356,6 +357,7 @@ private struct Tile: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.system(size: 12)).foregroundStyle(K.muted)
             Text(format(value)).font(.system(size: 28, weight: .semibold).monospacedDigit()).foregroundStyle(K.text)
+                .lineLimit(1).minimumScaleFactor(0.5)
             if let (now, before, words) = delta {
                 let d = now - before
                 Text("\(d > 0 ? "+" : d < 0 ? "−" : "±")\(format(abs(d))) vs \(words)").font(.system(size: 11.5)).foregroundStyle(neutral ? K.muted : d > 0 ? K.working : d < 0 ? K.error : K.faint)
