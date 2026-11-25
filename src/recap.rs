@@ -453,14 +453,24 @@ fn read_part(p: &Plan, lo: usize, hi: usize, from: i64) -> Read {
 /// more (a snapshot reads every docket's transcripts, and may have
 /// counted a call the period's work doesn't reach).
 pub fn merge(kept: Vec<crate::usage::Row>, live: Vec<crate::usage::Row>) -> Vec<crate::usage::Row> {
-    let mut by: HashMap<(String, i64, String, String), crate::usage::Row> = HashMap::new();
-    for r in kept.into_iter().chain(live) {
-        let k = (r.file.clone(), r.minute, r.provider.clone(), r.model.clone());
-        if by.get(&k).is_none_or(|was| r.total() >= was.total()) {
-            by.insert(k, r);
+    // Whole minutes of a transcript, every model's: a model named
+    // differently now is the same calls, not more.
+    type Minute = (String, i64);
+    let group = |rows: Vec<crate::usage::Row>| {
+        let mut by: HashMap<Minute, Vec<crate::usage::Row>> = HashMap::new();
+        for r in rows {
+            by.entry((r.file.clone(), r.minute)).or_default().push(r);
+        }
+        by
+    };
+    let total = |rs: &[crate::usage::Row]| rs.iter().fold(0i64, |a, r| a.saturating_add(r.total()));
+    let mut by = group(kept);
+    for (k, rs) in group(live) {
+        if by.get(&k).is_none_or(|was| total(&rs) >= total(was)) {
+            by.insert(k, rs);
         }
     }
-    let mut out: Vec<crate::usage::Row> = by.into_values().collect();
+    let mut out: Vec<crate::usage::Row> = by.into_values().flatten().collect();
     out.sort_by(|a, b| (a.minute, &a.file, &a.provider, &a.model).cmp(&(b.minute, &b.file, &b.provider, &b.model)));
     out
 }
@@ -665,14 +675,27 @@ fn snapshot(shared: &crate::hub::Shared, from: i64, now: i64) -> Result<(usize, 
 /// where the last snapshot's mark stood (`from` plus the slack).
 fn mark_after(now: i64, from: i64, failed: Option<i64>) -> i64 {
     let floor = from.saturating_add(SNAPSHOT_SLACK).min(now);
+    // One that's failed for a week (no zstd, a file it can't open) stops
+    // holding every later read back: it's said in the log each time.
+    let failed = failed.filter(|w| now.saturating_sub(*w) < GIVE_UP);
     failed.map_or(now, |w| now.min(w.saturating_add(SNAPSHOT_SLACK)).max(floor))
 }
 
+/// How long a transcript that can't be read holds the mark back.
+const GIVE_UP: i64 = 7 * 86400;
+
 /// Keep rows in the store a batch at a time, so a long snapshot never
-/// holds the hub's lock for long.
+/// holds the hub's lock for long. A batch ends only between minutes: each
+/// replaces its minutes whole.
 fn keep(shared: &crate::hub::Shared, rows: &[crate::usage::Row]) -> Result<()> {
-    for batch in rows.chunks(2000) {
-        shared.lock().store.put_usage(batch)?;
+    let mut start = 0;
+    while start < rows.len() {
+        let mut end = (start + 2000).min(rows.len());
+        while end < rows.len() && (rows[end].file.as_str(), rows[end].minute) == (rows[end - 1].file.as_str(), rows[end - 1].minute) {
+            end += 1;
+        }
+        shared.lock().store.put_usage(&rows[start..end])?;
+        start = end;
     }
     Ok(())
 }
@@ -1041,6 +1064,12 @@ mod tests {
         core.store.put_usage(&rows_of(&spans[..1], &grown)).unwrap();
         assert_eq!(usage(&w, &names(), &core.store.usage_between(from, to).unwrap())["tokens"], 42);
 
+        // A model named differently now: the minute is replaced whole, not added to.
+        let mut renamed = rows_of(&spans[..1], &grown);
+        renamed.iter_mut().for_each(|r| r.model = "Opus 5.5 (1M)".into());
+        core.store.put_usage(&renamed).unwrap();
+        assert_eq!(usage(&w, &names(), &core.store.usage_between(from, to).unwrap())["tokens"], 42);
+
         // Then c.jsonl is pruned: nothing reads it, and its tokens still count.
         let kept = core.store.usage_between(from, to).unwrap();
         let u = usage(&w, &names(), &merge(kept, rows_of(&spans[..1], &grown)));
@@ -1072,6 +1101,10 @@ mod tests {
         assert_eq!(merge(vec![row("a", "D-2", 9)], vec![row("a", "D-1", 5)]), vec![row("a", "D-2", 9)]);
         // Only kept (a pruned transcript), or only read: each counts once.
         assert_eq!(merge(vec![row("a", "D-1", 5)], vec![row("b", "D-1", 7)]), vec![row("a", "D-1", 5), row("b", "D-1", 7)]);
+        // A model named differently since: the same minute, counted once.
+        let mut renamed = row("a", "D-1", 5);
+        renamed.model = "Opus 5.5 (1M)".into();
+        assert_eq!(merge(vec![row("a", "D-1", 5)], vec![renamed.clone()]), vec![renamed]);
     }
 
     #[test]
@@ -1121,12 +1154,33 @@ mod tests {
         let mark = mark_after(100 * day, 97 * day, Some(98 * day));
         assert_eq!(mark, 100 * day);
         assert!(read_from(0, Some(mark)) <= 98 * day);
-        let mark = mark_after(110 * day, 97 * day, Some(98 * day));
+        let mark = mark_after(104 * day, 97 * day, Some(98 * day));
         assert_eq!(read_from(0, Some(mark)), 98 * day);
         // Never behind the last mark (day 99), even for an older file.
-        assert_eq!(mark_after(110 * day, 97 * day, Some(90 * day)), 99 * day);
+        assert_eq!(mark_after(102 * day, 97 * day, Some(96 * day)), 99 * day);
         // The first snapshot (from 0) that fails holds at the file's day.
-        assert_eq!(read_from(0, Some(mark_after(110 * day, 0, Some(50 * day)))), 50 * day);
+        assert_eq!(read_from(0, Some(mark_after(105 * day, 0, Some(100 * day)))), 100 * day);
+        // One that's failed for a week no longer holds anything back.
+        assert_eq!(mark_after(110 * day, 97 * day, Some(98 * day)), 110 * day);
+    }
+
+    #[test]
+    fn a_batch_never_splits_a_minute_it_replaces() {
+        let shared = crate::hub::Shared::new(test_core());
+        let row = |minute: i64, model: &str| crate::usage::Row {
+            file: "claude:a.jsonl".into(),
+            minute,
+            provider: "anthropic".into(),
+            model: model.into(),
+            docket: "D-1".into(),
+            tokens: [1, 0, 0, 0],
+        };
+        // 1,999 minutes, then one with four models across where a batch would end.
+        let mut rows: Vec<_> = (0..1999).map(|m| row(m * 60, "Opus 5.5")).collect();
+        rows.extend(["Opus 5.5", "Haiku 5.5", "Sonnet 5.5", "Fable 5.2"].map(|m| row(1999 * 60, m)));
+        keep(&shared, &rows).unwrap();
+        assert_eq!(shared.lock().store.usage_between(1999 * 60, 2000 * 60).unwrap().len(), 4);
+        assert_eq!(shared.lock().store.usage_between(0, i64::MAX).unwrap().len(), 2003);
     }
 
     #[test]
