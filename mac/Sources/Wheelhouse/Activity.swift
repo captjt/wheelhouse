@@ -182,6 +182,13 @@ struct ActivityRow: View {
                 return .comment(writerAvatar, writer, verb, e.body ?? "", e.actorType == "person" ? "you" : nil)
             }
             if data["via"].str == "prompt" { return .comment(you, youName, "asked \(agent)", e.body ?? "", "you") }
+            // A comment on a diff's lines (src/comments.rs): where, what it says, and the code it's on.
+            if data["via"].str == "diff", data["diff"].object != nil {
+                let ex = data["diff"]["excerpt"].str ?? ""
+                let fence = fenceFor(ex)
+                let code = ex.isEmpty ? "" : "\n\n\(fence)\n\(ex)\n\(fence)"
+                return .comment(you, youName, "commented on \(commentPlace(data["diff"]))", "\(e.body ?? "")\(code)", mate == nil ? "you" : nil)
+            }
             if data["via"].str == "message" { return .comment(.hub, "rex-inbox", "delivered a message", e.body ?? "", nil) }
             if e.actorType == "agent" { return .comment(app, agent, "noted", e.body ?? "", nil) }
             return .comment(you, youName, "noted", e.body ?? "", mate == nil ? "you" : nil)

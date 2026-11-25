@@ -50,6 +50,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/check", post(run_checks))
         .route("/api/dockets/{id}/screen", get(screen))
         .route("/api/dockets/{id}/diff", get(docket_diff))
+        .route("/api/dockets/{id}/comments", post(comment))
         .route("/api/dockets/{id}/send", post(send))
         .route("/api/dockets/{id}/queue/{q}/cancel", post(unqueue))
         .route("/api/dockets/{id}/approve", post(approve))
@@ -669,7 +670,39 @@ async fn docket_diff(State(shared): State<Shared>, Path(id): Path<String>, axum:
     }
     let ask = crate::diffs::Ask { from: q.from, to: q.to, path: q.path, old_path: q.old_path, stat: matches!(q.stat.as_deref(), Some("1" | "true")) };
     ask.check().map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
-    crate::diffs::diff(&shared, &id, &ask).await.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
+    let mut v = crate::diffs::diff(&shared, &id, &ask).await.map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))?;
+    // Its comments, every version's: the app shows those on what it shows.
+    if !ask.stat {
+        let core = shared.lock();
+        let stored = core.store.entries(&id).map_err(internal)?;
+        let numbered: Vec<(i64, crate::record::Entry)> = stored.iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+        let handle = core.team.as_ref().map(|t| t.config.handle.clone());
+        let you: Vec<&str> = std::iter::once(core.owner.as_str()).chain(handle.as_deref()).collect();
+        v["comments"] = json!(crate::comments::list(&numbered, &you));
+    }
+    Ok(Json(v))
+}
+
+/// A comment on a diff's lines: a note of yours on the record, and the
+/// agents on the docket told (`crate::comments`).
+async fn comment(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<crate::comments::New>) -> ApiResult {
+    let (diff, body) = req.checked().map_err(bad)?;
+    let mut core = shared.lock();
+    if core.store.state(&id).map_err(internal)?.is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
+    }
+    let s = core.append(&id, "note", &Who::Owner, Some(body.clone()), json!({ "via": "diff", "diff": diff })).map_err(internal)?;
+    // It's on the record: telling the agents never undoes it.
+    let told = if req.tell {
+        let text = crate::comments::message(&id, &diff, &body);
+        crate::messages::tell(&mut core, &id, &format!("Comment on {}", crate::comments::place(&diff)), &text, s.seq, &s.id, None).unwrap_or_else(|e| {
+            say!("couldn't tell {id}'s agents of a comment: {e:#}");
+            Vec::new()
+        })
+    } else {
+        Vec::new()
+    };
+    Ok(Json(json!({ "seq": s.seq, "told": told })))
 }
 
 #[derive(Deserialize)]
@@ -2035,6 +2068,43 @@ mod tests {
         assert_eq!(compose("/decied 5xx").await.0, StatusCode::BAD_REQUEST);
         assert_eq!(compose("  ").await.0, StatusCode::BAD_REQUEST);
         assert_eq!(post_json(&app, "/api/dockets/D-999/compose", json!({ "text": "hi" })).await.0, StatusCode::NOT_FOUND);
+        assert!(shared.lock().verify(&d).unwrap().ok);
+    }
+
+    #[tokio::test]
+    async fn a_comment_on_a_line_goes_on_the_record_and_to_the_agent() {
+        let mut core = crate::hub::test_core();
+        let fg = json!({ "foreground": { "name": "claude", "cwd": "/w" } });
+        let rec = crate::mirror::Record { state: "working".into(), app: Some("claude-code".into()), ..Default::default() };
+        core.mirror.apply_pane_status("s1", "b1", vec![rec], Some(&fg), None);
+        agents::reconcile(&mut core, ["b1".to_string()]);
+        let d = agents::docket_of(&core, "b1").unwrap();
+        let shared = Shared::new(core);
+        let app = router(shared.clone());
+        let uri = format!("/api/dockets/{d}/comments");
+        let c = json!({ "path": "src/retry.rs", "side": "additions", "line": 12, "from": "4e1d9a0", "to": "9f2c41ab", "excerpt": "let tries = 5;", "body": "Cap it at 3." });
+        let (st, v) = post_json(&app, &uri, c.clone()).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        assert_eq!(v["told"].as_array().map(Vec::len), Some(1));
+        let stored = shared.lock().store.entries(&d).unwrap();
+        let e = stored.iter().rev().find_map(|s| s.entry().ok().filter(|e| e.data["via"] == "diff")).unwrap();
+        assert_eq!((e.kind.as_str(), e.body.as_deref(), e.data["diff"]["line"].as_i64()), ("note", Some("Cap it at 3."), Some(12)));
+        let m = shared.lock().store.messages_where("to_block = 'b1'", []).unwrap();
+        assert!(m.last().unwrap().body.contains("Comment on src/retry.rs:12 at 9f2c41a") && m.last().unwrap().body.contains("let tries = 5;"));
+        // Not told when asked not to; refused when it isn't one; and no docket.
+        let mut quiet = c.clone();
+        quiet["tell"] = json!(false);
+        assert_eq!(post_json(&app, &uri, quiet).await.1["told"], json!([]));
+        let mut bad = c.clone();
+        bad["path"] = json!("../../.ssh/id_ed25519");
+        assert_eq!(post_json(&app, &uri, bad).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(post_json(&app, "/api/dockets/D-999/comments", c).await.0, StatusCode::NOT_FOUND);
+        let numbered: Vec<(i64, crate::record::Entry)> = shared.lock().store.entries(&d).unwrap().iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+        let owner = shared.lock().owner.clone();
+        let listed = crate::comments::list(&numbered, &[owner.as_str()]);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0]["by"], "you");
+        assert_eq!(crate::comments::list(&numbered, &["sam"])[0]["by"], owner.as_str(), "a teammate's is theirs");
         assert!(shared.lock().verify(&d).unwrap().ok);
     }
 

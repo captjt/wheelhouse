@@ -61,6 +61,7 @@ struct ChatView: View {
             case "note":
                 if x["via"].str == "prompt" { put(.you(e.seq, e.at, e.body ?? "", note: false, to: who), by) }
                 else if x["message"].exists, e.actorType == "agent" { put(.agent(e.seq, e.at, "\(x["subject"].str.map { "**\($0)**\n\n" } ?? "")\(e.body ?? "")", app: app, who: who, ask: nil, subject: nil), by) }
+                else if e.actorType == "person", x["via"].str == "diff", x["diff"].object != nil { put(.you(e.seq, e.at, "On `\(commentPlace(x["diff"]))`: \(e.body ?? "")", note: true, to: nil), nil) }
                 else if e.actorType == "person", !x["message"].exists { put(.you(e.seq, e.at, e.body ?? "", note: true, to: nil), nil) }
             case "question":
                 put(.agent(e.seq, e.at, e.body ?? "", app: app, who: who, ask: x["options"].strings, subject: x["subject"].str), by)
