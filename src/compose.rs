@@ -23,6 +23,9 @@ use anyhow::{Result, bail};
 pub const MAX_SUBJECT: usize = 200;
 /// Anything typed is at most this long: what a pane takes in one paste.
 pub const MAX_TEXT: usize = 16_000;
+/// A decision is one line, at most this long: it goes in every brief, and
+/// made standing, in a repo's notes.
+pub const MAX_DECISION: usize = 500;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -119,6 +122,9 @@ fn ask(rest: &str) -> Result<Command> {
 }
 
 fn decide(rest: &str) -> Result<Command> {
+    if rest.contains('\n') || rest.len() > MAX_DECISION {
+        bail!("a decision is one line of at most {MAX_DECISION} characters: say why in a note");
+    }
     let (first, after) = split_word(rest);
     let key = is_key(first).then(|| first.to_string()).filter(|_| !after.trim().is_empty());
     // `Subject: what stands`, when the subject is one short line.
@@ -160,12 +166,19 @@ pub fn question_for<'a>(ds: &'a [crate::decisions::Decision], key: Option<&str>,
     ds.iter().rev().find(|d| d.message.is_some() && same_words(&d.question, s))
 }
 
-/// The names an agent on a docket answers to after `@`: its pane's name,
-/// its role and each word of it, and its app's short names.
-pub fn names(pane: &str, role: Option<&str>, app: &str) -> Vec<String> {
-    let mut out = vec![pane.to_lowercase()];
+/// A name as `@` takes it: lowercase, spaces as `-` (a pane `my builder`
+/// is `@my-builder`).
+pub fn at_form(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join("-").to_lowercase()
+}
+
+/// The names an agent on a docket answers to after `@`: its pane's names
+/// (the one it has now, and the one it joined with), its role and each
+/// word of it, and its app's short names.
+pub fn names(panes: &[&str], role: Option<&str>, app: &str) -> Vec<String> {
+    let mut out: Vec<String> = panes.iter().map(|p| at_form(p)).collect();
     if let Some(r) = role.map(str::trim).filter(|r| !r.is_empty()) {
-        out.push(r.to_lowercase().replace(' ', "-"));
+        out.push(at_form(r));
         out.extend(r.split_whitespace().map(str::to_lowercase));
     }
     out.extend(
@@ -180,7 +193,8 @@ pub fn names(pane: &str, role: Option<&str>, app: &str) -> Vec<String> {
         .map(|s| s.to_string()),
     );
     out.retain(|n| !n.is_empty());
-    out.dedup();
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|n| seen.insert(n.clone()));
     out
 }
 
@@ -199,7 +213,7 @@ pub fn targets<'a>(to: &str, agents: &'a [(String, Vec<String>, String)]) -> Res
     if found.is_empty() {
         let mut here: Vec<&str> = agents.iter().map(|a| a.2.as_str()).collect();
         here.dedup();
-        bail!("no agent here is @{to}. On this docket: {} (or @all)", here.join(", "));
+        bail!("no agent here is @{to}. On this docket: {} (or @all). To leave a note that starts with @, begin it with /note", here.join(", "));
     }
     Ok(found)
 }
@@ -256,6 +270,8 @@ mod tests {
         assert_eq!(d("/decide ship at 10:30"), (None, None, "ship at 10:30".into()));
         assert_eq!(d("/decide #12"), (None, None, "#12".into()));
         assert_eq!(d("/decide Dashboards"), (None, None, "Dashboards".into()));
+        assert!(parse("/decide Retries: 5xx\nbecause the API says so").unwrap_err().to_string().contains("one line"));
+        assert!(parse(&format!("/decide {}", "x".repeat(MAX_DECISION + 1))).is_err());
     }
 
     fn q(key: &str, question: &str, message: Option<i64>) -> crate::decisions::Decision {
@@ -271,6 +287,7 @@ mod tests {
             by: None,
             at: None,
             standing: None,
+            entry: None,
         }
     }
 
@@ -288,9 +305,9 @@ mod tests {
     #[test]
     fn at_names_an_agent_by_pane_role_or_app() {
         let a = vec![
-            ("b1".to_string(), names("D-12", Some("Build builder"), "claude-code"), "D-12 (Claude Code)".to_string()),
-            ("b2".to_string(), names("D-12-2", Some("tests"), "codex"), "D-12-2 (Codex)".to_string()),
-            ("b3".to_string(), names("planner", None, "claude-code"), "planner (Claude Code)".to_string()),
+            ("b1".to_string(), names(&["D-12", "D-12"], Some("Build builder"), "claude-code"), "D-12 (Claude Code)".to_string()),
+            ("b2".to_string(), names(&["D-12-2"], Some("tests"), "codex"), "D-12-2 (Codex)".to_string()),
+            ("b3".to_string(), names(&["my planner", "D-14"], None, "claude-code"), "my planner (Claude Code)".to_string()),
         ];
         let blocks = |to: &str| targets(to, &a).unwrap().into_iter().map(|t| t.0.as_str()).collect::<Vec<_>>();
         assert_eq!(blocks("builder"), ["b1"]);
@@ -298,11 +315,13 @@ mod tests {
         assert_eq!(blocks("tests"), ["b2"]);
         assert_eq!(blocks("codex"), ["b2"]);
         assert_eq!(blocks("d-12-2"), ["b2"]);
-        assert_eq!(blocks("planner"), ["b3"]);
+        assert_eq!(blocks("my-planner"), ["b3"], "a pane's name with a space");
+        assert_eq!(blocks("d-14"), ["b3"], "the name it joined with");
+        assert_eq!(names(&["D-12", "D-12"], None, "codex"), ["d-12", "codex"], "each once");
         assert_eq!(blocks("claude"), ["b1", "b3"]);
         assert_eq!(blocks("all"), ["b1", "b2", "b3"]);
         let e = targets("reviewer", &a).unwrap_err().to_string();
-        assert!(e.contains("no agent here is @reviewer") && e.contains("D-12-2 (Codex)"), "{e}");
+        assert!(e.contains("no agent here is @reviewer") && e.contains("D-12-2 (Codex)") && e.contains("/note"), "{e}");
         assert!(targets("all", &[]).unwrap_err().to_string().contains("no agent is on this docket"));
     }
 }

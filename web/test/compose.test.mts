@@ -2,7 +2,7 @@
 // and `@` complete to, and what the hub's answer says (src/compose.rs).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { atName, composeButton, composeHint, composeKind, composeToast, suggestions } from "../src/compose.ts";
+import { atName, composeButton, composeHint, composeKind, composeToast, composeWarning, suggestions } from "../src/compose.ts";
 import type { Docket, DocketAgent, Live } from "../src/api.ts";
 
 const live = (block: string): Live => ({ block, state: "idle", app: "claude-code", rex_session: "wheelhouse", pane: block });
@@ -51,4 +51,19 @@ test("what the hub did, in a toast", () => {
   assert.equal(composeToast({ did: "answered", key: "#3", message: 9, choice: "Postgres" })?.text, "Answered #3: Postgres");
   assert.equal(composeToast({ did: "decided", key: "=ab", seq: 4, told: ["wheelhouse/D-12"] })?.text, "Decided, and told wheelhouse/D-12");
   assert.match(composeToast({ did: "decided", key: "=ab", seq: 4, told: [] })!.text, /next one reads it in its brief/);
+});
+
+test("what the hub would refuse is said before it's sent", () => {
+  const d = docket([agent("block:1", { pane: "my builder", role: "Build builder" }), agent("block:2", { pane: "", role: "tests", app: "codex" })]);
+  assert.deepEqual(suggestions("@", d).map((s) => s.label), ["@my-builder", "@tests", "@all"], "a name with a space, as the hub takes it");
+  assert.deepEqual(composeWarning("/decied 5xx", d), { text: "There's no /decied: try /ask, /decide, /task, or /note to keep it as a note", blocked: true });
+  assert.equal(composeWarning("/decide 5xx", d), null);
+  assert.equal(composeWarning("/tmp/x is full", d), null, "a path is a note");
+  assert.equal(composeWarning("@my-builder go", d), null);
+  assert.equal(composeWarning("@builder go", d), null, "a word of its role");
+  assert.equal(composeWarning("@codex go", d), null, "its app");
+  assert.equal(composeWarning("@all go", d), null);
+  assert.deepEqual(composeWarning("@sam can you look", d), { text: "No agent here is @sam: /note keeps it as a note", blocked: false });
+  assert.equal(composeWarning("@sam can you look", docket([]))?.blocked, true);
+  assert.equal(composeWarning("@builder", d), null, "only once there's more than the name");
 });

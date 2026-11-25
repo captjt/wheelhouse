@@ -334,3 +334,18 @@ private func docket(_ json: String) throws -> Docket { Docket(j: try JSON.parse(
     #expect(Compose.toast(JSON(any: ["did": "answered", "key": "#3", "message": 9, "choice": "Postgres"]))?.text == "Answered #3: Postgres")
     #expect(Compose.toast(JSON(any: ["did": "decided", "key": "=ab", "seq": 4, "told": ["wheelhouse/D-12"]]))?.text == "Decided, and told wheelhouse/D-12")
 }
+
+@Test func composerSaysWhatTheHubWouldRefuse() {
+    let agents: [(pane: String, role: String?, app: String)] = [("my builder", "Build builder", "claude-code"), ("", "tests", "codex")]
+    #expect(Compose.suggestions("@", agents: agents, docket: "D-12").map(\.label) == ["@my-builder", "@tests", "@all"])
+    #expect(Compose.warning("/decied 5xx", agents: agents)?.blocked == true)
+    #expect(Compose.warning("/decide 5xx", agents: agents) == nil)
+    #expect(Compose.warning("/tmp/x is full", agents: agents) == nil)
+    #expect(Compose.warning("@my-builder go", agents: agents) == nil)
+    #expect(Compose.warning("@builder go", agents: agents) == nil)
+    #expect(Compose.warning("@codex go", agents: agents) == nil)
+    #expect(Compose.warning("@all go", agents: agents) == nil)
+    #expect(Compose.warning("@sam can you look", agents: agents)?.text == "No agent here is @sam: /note keeps it as a note")
+    #expect(Compose.warning("@sam can you look", agents: [])?.blocked == true)
+    #expect(Compose.warning("@builder", agents: agents) == nil)
+}

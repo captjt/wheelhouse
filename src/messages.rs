@@ -188,8 +188,11 @@ fn own_agents(core: &Core, docket: &str, but: Option<&str>) -> Result<Vec<(Strin
 /// record (a decision from the composer): a message to each, delivered
 /// between turns, placed at that entry rather than adding one of its own.
 /// Returns who it went to; none when no agent is on it now.
-pub fn tell(core: &mut Core, docket: &str, subject: &str, body: &str, seq: i64, entry: &str) -> Result<Vec<String>> {
-    let to = own_agents(core, docket, None)?;
+pub fn tell(core: &mut Core, docket: &str, subject: &str, body: &str, seq: i64, entry: &str, but: Option<&str>) -> Result<Vec<String>> {
+    let me = caller(core, None);
+    // Not one that has too many of yours waiting already: it's on the
+    // record, and in the brief, either way.
+    let to: Vec<(String, String)> = own_agents(core, docket, but)?.into_iter().filter(|(addr, b)| waiting_room(core, &me, b, addr).is_ok()).collect();
     // Its first line, cut to fit: the entry is on the record already, so
     // telling never fails on its words.
     let line = subject.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
@@ -286,6 +289,7 @@ fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<Str
         m.seq = Some(s.seq);
         core.store.set_message_place(m.id, docket, s.seq)?;
         core.store.set_message_entry(m.id, &s.id)?;
+        m.entry = Some(s.id.clone());
         let _ = core.events.send(json!({ "type": "message", "id": m.id, "to_block": m.to_block, "to": m.to_addr }));
     }
     let mut first = sent.swap_remove(0);
@@ -359,6 +363,7 @@ pub fn send(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, b
         m.seq = Some(s.seq);
         core.store.set_message_place(m.id, d, s.seq)?;
         core.store.set_message_entry(m.id, &s.id)?;
+        m.entry = Some(s.id.clone());
     }
     let _ = core.events.send(json!({ "type": "message", "id": m.id, "to_block": m.to_block, "to": m.to_addr }));
     Ok(m)
@@ -391,6 +396,7 @@ pub fn ask(core: &mut Core, docket: &str, subject: &str, body: &str, options: Ve
     m.seq = Some(s.seq);
     core.store.set_message_place(m.id, docket, s.seq)?;
     core.store.set_message_entry(m.id, &s.id)?;
+    m.entry = Some(s.id.clone());
     let _ = core.events.send(json!({ "type": "message", "id": m.id, "to": ME }));
     Ok(m)
 }
@@ -468,6 +474,7 @@ pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option
         m.seq = Some(s.seq);
         core.store.set_message_place(m.id, &d, s.seq)?;
         core.store.set_message_entry(m.id, &s.id)?;
+        m.entry = Some(s.id.clone());
     }
     let _ = core.events.send(json!({ "type": "message", "id": m.id, "to_block": m.to_block, "to": m.to_addr, "reply_to": id }));
     // Your answer to a teammate's message waiting for you to let it in.

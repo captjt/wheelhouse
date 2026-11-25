@@ -27,7 +27,7 @@ import { IconAgents, IconPause, IconPlay } from "./icons";
 import { SubagentsSection } from "./Subagents";
 import { IconCode } from "./icons";
 import { diffPath, type DiffView } from "./diffview";
-import { composeButton, composeHint, composeKind, composeToast, suggestions, type ComposeResult, type Suggestion } from "./compose";
+import { composeButton, composeHint, composeKind, composeToast, composeWarning, suggestions, type ComposeResult, type Suggestion } from "./compose";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
   const hub = useHub();
@@ -954,6 +954,12 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
   const [pick, setPick] = useState(0);
   const kind = composeKind(text);
   const sugg = suggestions(text, d);
+  const warn = composeWarning(text, d);
+  useEffect(() => {
+    const done = (e: Event) => (e as CustomEvent<string>).detail === d.id && setText((t) => (composeKind(t) === "task" ? "" : t));
+    window.addEventListener("wh-task-started", done);
+    return () => window.removeEventListener("wh-task-started", done);
+  }, [d.id]);
   const complete = (s: Suggestion) => (setText(s.insert), setPick(0));
   const send = () => {
     const t = text.trim();
@@ -961,9 +967,10 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
     setBusy(true);
     post<ComposeResult>(`/api/dockets/${encodeURIComponent(d.id)}/compose`, { text: t }).then(
       (r) => {
-        setText("");
         setBusy(false);
+        // A task's text stays until its dialog starts the agent: cancelling it loses nothing.
         if (r.did === "task") hub.setDialog({ kind: "agent", id: d.id, prompt: r.prompt });
+        else setText("");
         const said = composeToast(r);
         if (said) toast(said.text, said.error ? "error" : undefined);
         onDone();
@@ -998,9 +1005,9 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
         }}
       />
       <div className="composer-bar">
-        <span className="muted small">{composeHint(kind, d.id)}</span>
+        <span className={warn ? "small compose-warn" : "muted small"}>{warn?.text ?? composeHint(kind, d.id)}</span>
         <span className="spacer" />
-        <button className="btn btn-primary btn-small" disabled={!text.trim() || busy} onClick={send}>
+        <button className="btn btn-primary btn-small" disabled={!text.trim() || busy || !!warn?.blocked} onClick={send}>
           {composeButton(kind)} <Kbd>⌘↩</Kbd>
         </button>
       </div>
