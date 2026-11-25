@@ -242,7 +242,8 @@ Needs you: D1 · Retries for 4xx?   [5xx + timeouts] [Every non-2xx]
   posted and their verdicts, PRs your agents opened and merged, decisions
   you made and recommendations that stood, tokens across all the work by
   provider, model and kind of work (read from the agents' own
-  transcripts, by when each call was made), and time from request to
+  transcripts, by when each call was made, and kept in the store so they
+  outlast the transcripts), and time from request to
   merge. **Copy as Markdown** turns it into a
   standup note.
 - **Settings:** repos, trackers, agents per role, hosts, and standing

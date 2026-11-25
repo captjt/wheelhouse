@@ -2,7 +2,9 @@
 //! provider: read from the agents' own transcripts (Claude Code's, Codex's
 //! rollouts, Antigravity's, Pi's sessions), so every kind of work counts, not just
 //! reviews. Each file is read once and then only for what it appended.
-//! Nothing here is stored or goes on the record.
+//! What the calls come to is kept in the store, a minute at a time
+//! (`Row`), so it outlasts the transcripts (Claude Code's go after 30
+//! days). None of it goes on the record.
 
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -20,6 +22,9 @@ const MAX_LINE: usize = 16 << 20;
 const MAX_TOKENS: i64 = 100_000_000;
 /// A file no recap has asked for in this long is forgotten.
 const FORGET: Duration = Duration::from_secs(6 * 3600);
+/// A file last written this long ago is forgotten once read: what it came
+/// to is in the store, and it isn't read again (see `recap::read_from`).
+const SETTLED: Duration = Duration::from_secs(3 * 86400);
 
 /// One model call's tokens: `[input, cache_read, cache_write, output]`,
 /// input not counting what came from the cache.
@@ -35,6 +40,50 @@ pub struct Call {
 }
 
 impl Call {
+    #[cfg(test)]
+    pub fn total(&self) -> i64 {
+        self.tokens.iter().fold(0i64, |a, t| a.saturating_add(*t))
+    }
+}
+
+/// What a transcript is known by in the store, the same wherever its tool
+/// moves it: Codex archives a rollout into another folder (and compresses
+/// it), and Claude Code's session can be found in another project's
+/// folder. Its file's name carries its id; a subagent's is under its
+/// session's, and Antigravity's is named by its conversation's folder.
+pub fn file_key(app: &str, path: &Path) -> String {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    let parent = |p: &Path, up: usize| p.ancestors().nth(up).and_then(name);
+    let file = name(path).unwrap_or_default();
+    let file = file.strip_suffix(".zst").unwrap_or(&file).to_string();
+    let id = match app {
+        "claude" if parent(path, 1).as_deref() == Some("subagents") => parent(path, 2).map(|s| format!("{s}/{file}")),
+        // brain/<conversation>/.system_generated/logs/transcript.jsonl
+        "agy" => parent(path, 3),
+        "claude" | "codex" | "pi" => Some(file.clone()),
+        _ => None,
+    };
+    match id.filter(|i| !i.is_empty()) {
+        Some(i) => format!("{app}:{i}"),
+        None => format!("{app}:{}", path.to_string_lossy()),
+    }
+}
+
+/// A transcript's calls in one minute, by one model, kept in the store with
+/// the docket they count for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Row {
+    /// The transcript's `file_key`.
+    pub file: String,
+    /// Unix seconds, the minute's start.
+    pub minute: i64,
+    pub provider: String,
+    pub model: String,
+    pub docket: String,
+    pub tokens: [i64; 4],
+}
+
+impl Row {
     pub fn total(&self) -> i64 {
         self.tokens.iter().fold(0i64, |a, t| a.saturating_add(*t))
     }
@@ -72,12 +121,18 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, Progress>> {
 /// The calls in a transcript of `app` (`claude`, `codex`, `agy`), read
 /// again only from where it was last read, and only when it changed. A
 /// file last written before `from` (unix seconds) has no calls from then
-/// on, and isn't read.
-pub fn calls(app: &str, path: &Path, from: i64) -> Vec<Call> {
-    let meta = std::fs::metadata(path).ok();
+/// on, and isn't read; nor is one that's gone. `None` when it couldn't be
+/// read (or not all of it), so a caller doesn't take that for no calls.
+pub fn calls(app: &str, path: &Path, from: i64) -> Option<Vec<Call>> {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => Some(m),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        // There, but not to be looked at (a folder it can't search): not read.
+        Err(_) => return None,
+    };
     let written = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
     if written.is_some_and(|w| w < from) {
-        return Vec::new();
+        return Some(Vec::new());
     }
     let Some(meta) = meta else {
         // An archived Codex rollout: read whole, once.
@@ -86,7 +141,7 @@ pub fn calls(app: &str, path: &Path, from: i64) -> Vec<Call> {
         if app == "codex" && z.is_file() && zw.is_none_or(|w| w >= from) {
             return archived(&z);
         }
-        return Vec::new();
+        return Some(Vec::new());
     };
     let (len, mtime) = (meta.len(), meta.modified().ok());
     let ino = std::os::unix::fs::MetadataExt::ino(&meta);
@@ -97,26 +152,32 @@ pub fn calls(app: &str, path: &Path, from: i64) -> Vec<Call> {
         r = Progress { ino, ..Default::default() };
     }
     r.used = Some(Instant::now());
+    let mut whole = true;
     if r.offset < len || r.mtime != mtime {
-        if let Ok(mut f) = std::fs::File::open(path)
-            && f.seek(SeekFrom::Start(r.offset)).is_ok()
-        {
-            let left = len - r.offset;
-            let read = read_lines(app, &mut r, std::io::BufReader::new(f.take(left)));
-            r.offset += read;
+        match std::fs::File::open(path) {
+            Ok(f) if (&f).seek(SeekFrom::Start(r.offset)).is_ok() => {
+                let left = len - r.offset;
+                let (read, ok) = read_lines(app, &mut r, std::io::BufReader::new(f.take(left)));
+                r.offset += read;
+                whole = ok;
+            }
+            _ => whole = false,
         }
-        r.mtime = mtime;
+        // Not marked as read up to now unless it was: it's read again.
+        if whole {
+            r.mtime = mtime;
+        }
     }
     let out = r.calls.clone();
     cache().lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_path_buf(), r);
-    out
+    whole.then_some(out)
 }
 
-fn archived(z: &Path) -> Vec<Call> {
+fn archived(z: &Path) -> Option<Vec<Call>> {
     let key = z.to_path_buf();
     if let Some(r) = cache().lock().unwrap_or_else(|e| e.into_inner()).get_mut(&key) {
         r.used = Some(Instant::now());
-        return r.calls.clone();
+        return Some(r.calls.clone());
     }
     let mut r = Progress { used: Some(Instant::now()), ..Default::default() };
     let child = std::process::Command::new("zstd")
@@ -127,38 +188,47 @@ fn archived(z: &Path) -> Vec<Call> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn();
-    if let Ok(mut c) = child {
-        if let Some(out) = c.stdout.take() {
-            read_lines("codex", &mut r, std::io::BufReader::new(out));
-        }
-        let _ = c.wait();
+    // No zstd, or it failed: not read, and not remembered as read.
+    let mut c = child.ok()?;
+    let ok = c.stdout.take().is_some_and(|out| read_lines("codex", &mut r, std::io::BufReader::new(out)).1);
+    let exited = c.wait().is_ok_and(|s| s.success());
+    if !ok || !exited {
+        return None;
     }
     let calls = r.calls.clone();
     cache().lock().unwrap_or_else(|e| e.into_inner()).insert(key, r);
-    calls
+    Some(calls)
 }
 
-/// Forget the files no recap has asked for lately.
+/// Forget the files no recap has asked for lately, and the ones nothing
+/// has written to in days.
 pub fn forget_stale() {
-    cache().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, r| r.used.is_some_and(|u| u.elapsed() < FORGET));
+    let settled = SystemTime::now().checked_sub(SETTLED);
+    cache().lock().unwrap_or_else(|e| e.into_inner()).retain(|_, r| r.used.is_some_and(|u| u.elapsed() < FORGET) && !matches!((r.mtime, settled), (Some(m), Some(s)) if m < s));
 }
 
 fn epoch(at: &str) -> Option<i64> {
     crate::time::parse(at).map(|t| t.unix_timestamp())
 }
 
-/// Reads whole lines, one at a time, and says how many bytes they were: a
+/// Reads whole lines, one at a time, and says how many bytes they were
+/// and whether reading went without an error: a
 /// line still being written (no newline yet) is left for next time. A line
 /// that isn't UTF-8 is read as well as it can be, never the end of the
 /// file; one longer than `MAX_LINE` is passed over without being held.
-fn read_lines(app: &str, r: &mut Progress, mut from: impl BufRead) -> u64 {
-    let (mut done, mut buf) = (0u64, Vec::new());
+fn read_lines(app: &str, r: &mut Progress, mut from: impl BufRead) -> (u64, bool) {
+    let (mut done, mut buf, mut ok) = (0u64, Vec::new(), true);
     loop {
         buf.clear();
         let (mut n, mut long) = (0usize, false);
         let ended = loop {
             let chunk = match from.fill_buf() {
-                Ok([]) | Err(_) => break false,
+                Ok([]) => break false,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
+                    ok = false;
+                    break false;
+                }
                 Ok(c) => c,
             };
             let (take, end) = match chunk.iter().position(|b| *b == b'\n') {
@@ -178,7 +248,7 @@ fn read_lines(app: &str, r: &mut Progress, mut from: impl BufRead) -> u64 {
             }
         };
         if !ended {
-            return done;
+            return (done, ok);
         }
         done += n as u64;
         if long {
@@ -427,7 +497,7 @@ mod tests {
                 json!({ "type": "assistant", "timestamp": "2026-11-20T17:00:07Z", "message": { "id": "m0", "model": "<synthetic>", "usage": usage } }),
             ],
         );
-        let c = calls("claude", &p, 0);
+        let c = calls("claude", &p, 0).unwrap();
         assert_eq!(c, vec![Call { at: 1_795_194_005, model: "Opus 5.5".into(), provider: "anthropic".into(), tokens: [10, 100, 5, 20] }]);
 
         // A later response, a minute on, and a line still being written.
@@ -437,7 +507,7 @@ mod tests {
             let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
             write!(f, "{{\"type\":\"assistant\",\"message\":{{\"usage\"").unwrap();
         }
-        let c = calls("claude", &p, 0);
+        let c = calls("claude", &p, 0).unwrap();
         assert_eq!(c.len(), 2);
         assert_eq!((c[1].model.as_str(), c[1].total()), ("Sonnet 5.5", 135));
     }
@@ -463,7 +533,7 @@ mod tests {
                 count("2026-11-24T02:10:41Z", [50, 0, 2], [50, 0, 2]),
             ],
         );
-        let c = calls("codex", &p, 0);
+        let c = calls("codex", &p, 0).unwrap();
         assert_eq!(c.iter().map(|c| c.tokens).collect::<Vec<_>>(), vec![[200, 100, 0, 7], [20, 300, 0, 13], [50, 0, 0, 2]]);
         assert!(c.iter().all(|c| c.model == "GPT-6.2 Astra" && c.provider == "openai"));
     }
@@ -479,7 +549,7 @@ mod tests {
                 json!({ "type": "PLANNER_RESPONSE", "created_at": "2026-11-23T23:57:36Z", "model": "gemini-4-neon-high", "input_tokens": 120, "cache_read_tokens": "300", "output_tokens": 15 }),
             ],
         );
-        let c = calls("agy", &p, 0);
+        let c = calls("agy", &p, 0).unwrap();
         assert_eq!((c[0].model.as_str(), c[0].provider.as_str(), c[0].tokens), ("Gemini 4 Neon", "google", [120, 300, 0, 15]));
     }
 
@@ -503,7 +573,7 @@ mod tests {
                 json!({ "type": "compaction", "timestamp": "2026-11-25T14:30:00Z", "summary": "…", "usage": { "input": 900, "output": 100, "cacheRead": 0, "cacheWrite": 0 } }),
             ],
         );
-        let c = calls("pi", &p, 0);
+        let c = calls("pi", &p, 0).unwrap();
         assert_eq!(c.len(), 5, "{c:?}");
         assert_eq!((c[3].model.as_str(), c[3].tokens), ("Opus 5.5", [0, 50000, 0, 0]));
         assert_eq!((c[4].model.as_str(), c[4].provider.as_str(), c[4].tokens), ("Opus 5.5", "anthropic", [900, 0, 0, 100]));
@@ -521,7 +591,7 @@ mod tests {
                 msg("2026-11-25T15:00:30Z", "claude-opus-5-5", "anthropic", usage(9)),
             ],
         );
-        let c = calls("pi", &f, 0);
+        let c = calls("pi", &f, 0).unwrap();
         assert_eq!(c.len(), 1, "{c:?}");
         assert_eq!(c[0].tokens[0], 9);
     }
@@ -533,25 +603,25 @@ mod tests {
         let p =
             write(&dir, "s.jsonl", &[json!({ "type": "assistant", "timestamp": "2026-11-20T17:00:05Z", "message": { "id": "m1", "model": "claude-opus-5-5", "usage": usage } })]);
         let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64;
-        assert!(calls("claude", &p, now + 3600).is_empty());
-        assert_eq!(calls("claude", &p, now - 3600).len(), 1);
+        assert!(calls("claude", &p, now + 3600).unwrap().is_empty());
+        assert_eq!(calls("claude", &p, now - 3600).unwrap().len(), 1);
     }
 
     #[test]
     fn a_missing_rewritten_or_garbled_transcript_doesnt_stop_the_count() {
         let dir = scratch("bad");
-        assert!(calls("claude", &dir.join("gone.jsonl"), 0).is_empty());
-        assert!(calls("codex", &dir.join("gone.jsonl"), 0).is_empty(), "no archived rollout either");
+        assert!(calls("claude", &dir.join("gone.jsonl"), 0).unwrap().is_empty());
+        assert!(calls("codex", &dir.join("gone.jsonl"), 0).unwrap().is_empty(), "no archived rollout either");
         let line = |id: &str, at: &str| json!({ "type": "assistant", "timestamp": at, "message": { "id": id, "model": "claude-opus-5-5", "usage": { "input_tokens": 1, "output_tokens": 1 } } });
         let p = dir.join("s.jsonl");
         // Not JSON, then not UTF-8, then a call: the call still counts.
         let mut bytes = b"{not json\n\xff\xfe\"usage\"\n".to_vec();
         bytes.extend(format!("{}\n", line("m1", "2026-11-20T17:00:05Z")).bytes());
         std::fs::write(&p, &bytes).unwrap();
-        assert_eq!(calls("claude", &p, 0).len(), 1);
+        assert_eq!(calls("claude", &p, 0).unwrap().len(), 1);
         // Rewritten shorter (a new session in its place): read again from the start.
         std::fs::write(&p, format!("{}\n", line("m9", "2026-11-21T09:00:00Z"))).unwrap();
-        let c = calls("claude", &p, 0);
+        let c = calls("claude", &p, 0).unwrap();
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].at, secs("2026-11-21T09:00:00Z"));
     }
@@ -574,7 +644,7 @@ mod tests {
                 json!({ "type": "assistant", "timestamp": "2026-11-20T17:03:00Z", "message": { "id": "own", "model": "claude-opus-5-5", "usage": usage } }),
             ],
         );
-        let c = calls("claude", &p, 0);
+        let c = calls("claude", &p, 0).unwrap();
         assert_eq!((c.len(), c[0].at), (1, secs("2026-11-20T17:03:00Z")));
     }
 
@@ -592,8 +662,35 @@ mod tests {
         let ok = json!({ "type": "assistant", "timestamp": "2026-11-20T17:09:05Z", "message": { "id": "m2", "model": "claude-opus-5-5", "usage": { "input_tokens": 3, "output_tokens": 4 } } });
         text.push_str(&format!("{ok}\n"));
         std::fs::write(&p, text).unwrap();
-        let c = calls("claude", &p, 0);
+        let c = calls("claude", &p, 0).unwrap();
         assert_eq!(c.iter().map(|c| c.tokens).collect::<Vec<_>>(), vec![[0, 0, 0, MAX_TOKENS], [3, 0, 0, 4]]);
+    }
+
+    #[test]
+    fn a_transcript_is_known_by_its_id_wherever_it_moves() {
+        let k = |app: &str, p: &str| file_key(app, Path::new(p));
+        assert_eq!(k("codex", "/h/.codex/sessions/2026/11/20/rollout-x-01a1.jsonl"), "codex:rollout-x-01a1.jsonl");
+        assert_eq!(k("codex", "/h/.codex/archived_sessions/rollout-x-01a1.jsonl.zst"), "codex:rollout-x-01a1.jsonl");
+        assert_eq!(k("claude", "/h/.claude/projects/-a/5e1f.jsonl"), k("claude", "/h/.claude/projects/-b/5e1f.jsonl"));
+        assert_eq!(k("claude", "/h/.claude/projects/-a/5e1f/subagents/agent-a1.jsonl"), "claude:5e1f/agent-a1.jsonl");
+        assert_eq!(k("agy", "/h/.gemini/antigravity/brain/c0ffee/.system_generated/logs/transcript.jsonl"), "agy:c0ffee");
+        assert_eq!(k("pi", "/h/.pi/agent/sessions/--w--/2026-11-25T14-01-08-166Z_01a2.jsonl"), "pi:2026-11-25T14-01-08-166Z_01a2.jsonl");
+        assert_eq!(k("other", "/x/y.jsonl"), "other:/x/y.jsonl");
+    }
+
+    #[test]
+    fn a_file_that_cant_be_read_isnt_taken_for_one_with_no_calls() {
+        let dir = scratch("unreadable");
+        // A folder where the transcript should be: it opens, and reading fails.
+        let d = dir.join("s.jsonl");
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(calls("claude", &d, 0), None);
+        assert_eq!(calls("claude", &d, 0), None, "tried again, not remembered as read");
+        // An archived rollout zstd can't read (or no zstd): not read, and not cached.
+        let p = dir.join("rollout.jsonl");
+        std::fs::write(dir.join("rollout.jsonl.zst"), b"not zstd").unwrap();
+        assert_eq!(calls("codex", &p, 0), None);
+        assert!(!cache().lock().unwrap().contains_key(&dir.join("rollout.jsonl.zst")));
     }
 
     #[test]
