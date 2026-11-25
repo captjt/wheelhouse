@@ -18,6 +18,7 @@ mod checks;
 mod client;
 mod complete;
 mod decisions;
+mod diffs;
 mod doctor;
 mod evidence;
 

@@ -62,6 +62,14 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       agent asked, the answer that stands, and who gave it
 - [x] The readable record: open it in the app, see who signed each entry,
       and check every kept file against its hash
+- [x] Changes: every docket with code shows what it changed, `+N −M` on
+      its page and in full on its Changes view (`D`), drawn with Pierre's
+      diffs (highlighted, split or unified, a file list, folded context).
+      Compare from the base, or any point on the record (a round's head, a
+      checked commit), to HEAD, a later point, or what isn't committed. It
+      reads a Build's or Review's worktree, or the agent's folder; once the
+      worktree goes, the repo's checkout, then the patches kept with checks
+      (`GET /api/dockets/{id}/diff`, `src/diffs.rs`)
 
 ### Review ([review.md](review.md))
 
@@ -161,6 +169,8 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       ⌘K, in the web app's look and words
 - [x] Dockets in windows of their own; kept files in Quick Look, checked
       against their hash first; a file dropped on a docket is kept with it
+- [x] A docket's Changes in a window of its own (⇧⌘D, or its `+N −M`
+      chip): the hub's own diff page in a web view, the app's only one
 - [x] The menu bar: the wheel, orange with a count, and a panel to answer
       what needs you in place
 - [x] Notifications with their answers on the banner: Approve and Deny, a
@@ -220,6 +230,13 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       Build's agents in Claude Code's sandbox (or a separate macOS user),
       and owner-only API calls that need a secret agents can't read. Today
       the wall stops mistakes, not a hostile agent (docs/security.md).
+
+### Changes
+
+- [ ] Comments on a diff's lines, on the record (Pierre's annotations), and
+      sent to the agent as a note
+- [ ] Unchanged context expanded in place, from the file at each side
+- [ ] Comparing two dockets' work: two agents who tried the same issue
 
 ### Elsewhere
 

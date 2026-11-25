@@ -317,6 +317,7 @@ struct Chips: View {
             if store.state?.task(for: d.id) != nil {
                 HStack(spacing: 5) { Image(systemName: "hammer"); Text("Building") }.modifier(ChipLook())
             }
+            ChangesChip(d: d)
             if d.hold != nil {
                 HStack(spacing: 5) { Image(systemName: "pause.circle"); Text("On hold") }.modifier(ChipLook(tint: K.blocked))
                     .help(d.hold ?? "")

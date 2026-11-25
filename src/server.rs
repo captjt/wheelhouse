@@ -48,6 +48,7 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/standing", post(standing))
         .route("/api/dockets/{id}/check", post(run_checks))
         .route("/api/dockets/{id}/screen", get(screen))
+        .route("/api/dockets/{id}/diff", get(docket_diff))
         .route("/api/dockets/{id}/send", post(send))
         .route("/api/dockets/{id}/queue/{q}/cancel", post(unqueue))
         .route("/api/dockets/{id}/approve", post(approve))
@@ -625,6 +626,27 @@ async fn screen(State(shared): State<Shared>, Path(id): Path<String>, axum::extr
     };
     let text = crate::runtime::for_id(&block).capture(&session, &block, 400).await.map_err(internal)?;
     Ok(Json(json!({ "text": text, "live": live, "at": crate::time::now_ms() })))
+}
+
+#[derive(Deserialize)]
+struct DiffQuery {
+    from: Option<String>,
+    to: Option<String>,
+    path: Option<String>,
+    old_path: Option<String>,
+    /// `1` or `true`: the files and counts, no patch.
+    stat: Option<String>,
+}
+
+/// A docket's code changes: from its base (or any point on its record) to
+/// its HEAD, a later point, or what isn't committed yet (`crate::diffs`).
+async fn docket_diff(State(shared): State<Shared>, Path(id): Path<String>, axum::extract::Query(q): axum::extract::Query<DiffQuery>) -> ApiResult {
+    if shared.lock().store.state(&id).map_err(internal)?.is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
+    }
+    let ask = crate::diffs::Ask { from: q.from, to: q.to, path: q.path, old_path: q.old_path, stat: matches!(q.stat.as_deref(), Some("1" | "true")) };
+    ask.check().map_err(|e| fail(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
+    crate::diffs::diff(&shared, &id, &ask).await.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
 }
 
 #[derive(Deserialize)]

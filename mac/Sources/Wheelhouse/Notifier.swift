@@ -221,6 +221,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 enum Windows {
     static var openWindow: ((String) -> Void)?
     static var openDocket: ((String) -> Void)?
+    /// A docket's Changes window (Changes.swift).
+    static var openChanges: ((String) -> Void)?
 
     /// The main window, to the front: reopened if it was closed.
     static func showMain() {
