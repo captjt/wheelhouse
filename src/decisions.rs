@@ -32,6 +32,9 @@ pub struct Decision {
     pub at: Option<String>,
     /// The repo it stands for, once you made it standing.
     pub standing: Option<String>,
+    /// The id of the entry that asked it (or, for one of yours, that
+    /// decided it), when read from the store: the same on every hub.
+    pub entry: Option<String>,
 }
 
 impl Decision {
@@ -50,15 +53,25 @@ pub fn rule(d: &Decision, docket: &str) -> String {
     let q = d.question.trim().trim_end_matches(['?', '.', ':']).trim();
     let a = d.answer.as_deref().unwrap_or("").trim().trim_end_matches('.');
     let note = d.note.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(|n| format!(": {}.", n.trim_end_matches('.'))).unwrap_or_else(|| ".".into());
+    if q.is_empty() {
+        return format!("- {a}{note} (Decided on {docket}{day}.)");
+    }
     format!("- {q}? {a}{note} (Decided on {docket}{day}.)")
 }
 
 /// Notes with the rule added under "Standing decisions", or `None` when
-/// it's there already.
+/// it's there already. A rule for the same question (`- Question? `)
+/// that's there is replaced: the newer answer stands.
 pub fn with_rule(notes: &str, rule: &str) -> Option<String> {
     let notes = notes.trim_end();
     if notes.contains(rule) {
         return None;
+    }
+    if let Some(q) = rule.find("? ").map(|i| &rule[..i + 2]).filter(|q| q.starts_with("- ") && q.len() > 4)
+        && notes.lines().any(|l| l.starts_with(q))
+    {
+        let out: Vec<&str> = notes.lines().map(|l| if l.starts_with(q) { rule } else { l }).collect();
+        return Some(format!("{}\n", out.join("\n")));
     }
     Some(if notes.contains("## Standing decisions") {
         format!("{notes}\n{rule}\n")
@@ -67,6 +80,15 @@ pub fn with_rule(notes: &str, rule: &str) -> Option<String> {
     } else {
         format!("{notes}\n\n## Standing decisions\n\n{rule}\n")
     })
+}
+
+/// A decision of your own is known by its subject (or, with none, its
+/// words): `=` and the first 8 hex of their sha256, the same on every hub.
+pub fn own_key(words: &str) -> String {
+    use sha2::Digest;
+    let norm = words.trim().trim_end_matches(['?', '.', ':', '!']).split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    let h = sha2::Sha256::digest(norm.as_bytes());
+    format!("={}", h.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>())
 }
 
 fn first_line(s: &str) -> String {
@@ -147,6 +169,7 @@ fn fold<'a>(entries: impl Iterator<Item = (Option<&'a str>, &'a Entry)>) -> Vec<
                         by: None,
                         at: None,
                         standing: was.as_ref().and_then(|w| w.standing.clone()),
+                        entry: id.map(str::to_string),
                     },
                 );
             }
@@ -163,6 +186,36 @@ fn fold<'a>(entries: impl Iterator<Item = (Option<&'a str>, &'a Entry)>) -> Vec<
                 if let Some(x) = d["key"].as_str().and_then(|k| by_key.get_mut(k)) {
                     x.standing = d["repo"].as_str().map(str::to_string);
                 }
+            }
+            // One of yours, from the composer (`/decide`): no question
+            // asked it, and the newest for a subject stands.
+            "decision" if d["via"] == "composer" && d["replies_to"].is_null() && d["answers"].is_null() => {
+                let Some(choice) = d["choice"].as_str().map(str::trim).filter(|c| !c.is_empty()) else { continue };
+                let subject = d["subject"].as_str().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("");
+                let key = own_key(if subject.is_empty() { choice } else { subject });
+                if !by_key.contains_key(&key) {
+                    order.push(key.clone());
+                }
+                // A new answer isn't the rule that stood: it's made standing
+                // again (the composer does, replacing the rule).
+                let standing = by_key.remove(&key).filter(|w| w.answer.as_deref() == Some(choice)).and_then(|w| w.standing);
+                by_key.insert(
+                    key.clone(),
+                    Decision {
+                        key,
+                        question: subject.to_string(),
+                        options: Vec::new(),
+                        asked_by: who(e),
+                        asked_at: e.at.clone(),
+                        message: None,
+                        answer: Some(choice.to_string()),
+                        note: None,
+                        by: Some(who(e)),
+                        at: Some(e.at.clone()),
+                        standing,
+                        entry: id.map(str::to_string),
+                    },
+                );
             }
             "decision" | "note" => {
                 let by_entry = d["answers"].as_str().and_then(|a| key_of_entry.get(a));
@@ -190,6 +243,10 @@ pub fn brief(ds: &[Decision]) -> String {
             Some(b) => b.to_string(),
             None => "?".into(),
         };
+        if d.question.trim().is_empty() {
+            out.push_str(&format!("- **{}** ({by})\n", d.answer.as_deref().unwrap_or("")));
+            continue;
+        }
         out.push_str(&format!(
             "- {}: **{}** ({by}){}\n",
             d.question,
@@ -221,6 +278,7 @@ mod tests {
             by: Some("you".into()),
             at: Some("2026-11-18T01:00:00Z".into()),
             standing: None,
+            entry: None,
         };
         let r = rule(&d, "D-6");
         assert_eq!(r, "- How many retries? 3: To match the API docs. (Decided on D-6, November 18.)");
@@ -228,6 +286,12 @@ mod tests {
         let once = with_rule("Run just check.", &r).unwrap();
         assert_eq!(once, format!("Run just check.\n\n## Standing decisions\n\n{r}\n"));
         assert_eq!(with_rule(&once, &r), None, "not twice");
+        // Decided again: the rule for that question is replaced, not added to.
+        let mut again = d.clone();
+        again.answer = Some("5".into());
+        let r2 = rule(&again, "D-6");
+        let replaced = with_rule(&once, &r2).unwrap();
+        assert_eq!(replaced, format!("Run just check.\n\n## Standing decisions\n\n{r2}\n"));
         let r2 = "- Base? main. (Decided on D-7.)";
         assert_eq!(with_rule(&once, r2).unwrap(), format!("{once}{r2}\n"));
     }
@@ -310,6 +374,42 @@ mod tests {
         assert!(b.contains("- PR #12: **Merge** (you). \"but squash it\""));
         assert!(b.contains("- Retry cap?: **3** (the recommendation, approved with the plan)"));
         assert!(b.contains("- Rename the flag?: waiting on an answer (Yes / No)"));
+    }
+
+    #[test]
+    fn your_own_decisions_stand_newest_per_subject() {
+        let mine = |subject: Option<&str>, choice: &str, at: &str| {
+            let mut data = json!({ "via": "composer", "choice": choice });
+            if let Some(s) = subject {
+                data["subject"] = json!(s);
+            }
+            e("decision", "person", "you", Some(choice), data, at)
+        };
+        let es = vec![
+            mine(Some("Retries"), "5xx only", "2026-11-25T10:00:00Z"),
+            mine(None, "Use Postgres", "2026-11-25T10:01:00Z"),
+            mine(Some("retries?"), "5xx and timeouts", "2026-11-25T10:02:00Z"),
+            // Not one of yours from the composer: a reply's, and a malformed one.
+            e("decision", "person", "you", Some("x"), json!({ "choice": "x" }), "2026-11-25T10:03:00Z"),
+            mine(Some("Empty"), "  ", "2026-11-25T10:04:00Z"),
+        ];
+        let ds = of(&es);
+        assert_eq!(ds.len(), 2, "{ds:?}");
+        assert_eq!((ds[0].question.as_str(), ds[0].answer.as_deref(), ds[0].by.as_deref()), ("retries?", Some("5xx and timeouts"), Some("you")));
+        assert_eq!(ds[0].key, own_key("Retries"), "the same subject, however it's written");
+        assert_eq!((ds[1].question.as_str(), ds[1].answer.as_deref()), ("", Some("Use Postgres")));
+        assert_eq!(brief(&ds), "- retries?: **5xx and timeouts** (you)\n- **Use Postgres** (you)\n");
+        let r = rule(&ds[1], "D-6");
+        assert!(r.starts_with("- Use Postgres. (Decided on D-6"), "{r}");
+
+        // Made standing, then decided again: the new answer isn't standing yet.
+        let mut es = es;
+        es.push(e("standing", "person", "you", None, json!({ "repo": "acme/api", "key": own_key("Retries") }), "2026-11-25T10:05:00Z"));
+        assert_eq!(of(&es)[0].standing.as_deref(), Some("acme/api"));
+        es.push(mine(Some("Retries"), "5xx and timeouts", "2026-11-25T10:06:00Z"));
+        assert_eq!(of(&es)[0].standing.as_deref(), Some("acme/api"), "the same answer still stands");
+        es.push(mine(Some("Retries"), "every non-2xx", "2026-11-25T10:07:00Z"));
+        assert_eq!(of(&es)[0].standing, None, "a new answer is made standing again");
     }
 
     #[test]

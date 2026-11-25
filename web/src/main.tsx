@@ -289,7 +289,7 @@ function App() {
       {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} onClose={() => setCreating(false)} />}
       {hub.dialog?.kind === "refused" && <RefusedDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
       {hub.dialog?.kind === "hold" && <HoldDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
-      {hub.dialog?.kind === "agent" && <StartAgent key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
+      {hub.dialog?.kind === "agent" && <StartAgent key={`${hub.dialog.id}:${hub.dialog.prompt ?? ""}`} id={hub.dialog.id} prompt={hub.dialog.prompt} onClose={closeDialog} />}
     </>
   );
 

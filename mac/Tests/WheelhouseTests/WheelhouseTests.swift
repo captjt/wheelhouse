@@ -292,3 +292,60 @@ private func docket(_ json: String) throws -> Docket { Docket(j: try JSON.parse(
     #expect(startApp(for: "rex") == "claude-code")
     #expect(reviewAgents.map(appName) == ["Claude Code", "Codex", "Antigravity", "Pi"])
 }
+
+// ---- the composer (Compose.swift, as web/src/compose.ts) ----
+
+@Test func composerReadsWhatYouType() {
+    #expect(Compose.kind("Looks right.") == .note)
+    #expect(Compose.kind("@builder run it") == .instruct)
+    #expect(Compose.kind("  /ask Which? | a | b") == .ask)
+    #expect(Compose.kind("/DECIDE Retries: 5xx") == .decide)
+    #expect(Compose.kind("/task write tests") == .task)
+    #expect(Compose.kind("/note @all isn't one") == .note)
+    // A path, a lone @, and an @ that isn't a name are notes.
+    #expect(Compose.kind("/tmp/x is full") == .note)
+    #expect(Compose.kind("@ noon") == .note)
+    #expect(Compose.kind("@sam's idea") == .note)
+    #expect(Compose.kind("/decied 5xx") == .note, "the hub says it's a slip")
+    #expect(Compose.button(.task) == "Add an Agent…")
+    #expect(Compose.hint(.decide, "D-12").contains("agents on D-12 are told"))
+}
+
+@Test func composerCompletesCommandsAndAgents() {
+    #expect(Compose.suggestions("/", agents: [], docket: "D-12").map(\.label) == ["/ask", "/decide", "/task", "/note"])
+    #expect(Compose.suggestions("/de", agents: [], docket: "D-12").map(\.insert) == ["/decide "])
+    #expect(Compose.suggestions("/decide Retries", agents: [], docket: "D-12").isEmpty)
+    let agents: [(pane: String, role: String?, app: String)] = [("builder", "Build builder", "claude-code"), ("", "tests", "codex")]
+    #expect(Compose.suggestions("@", agents: agents, docket: "D-12").map(\.label) == ["@builder", "@tests", "@all"])
+    #expect(Compose.suggestions("@", agents: agents, docket: "D-12")[1].sub == "Codex · tests")
+    #expect(Compose.suggestions("@b", agents: agents, docket: "D-12").map(\.insert) == ["@builder "])
+    #expect(Compose.suggestions("@", agents: [("D-12", nil, "claude-code")], docket: "D-12").map(\.label) == ["@d-12"])
+    #expect(Compose.atName(pane: "", role: nil, app: "claude-code") == "claude")
+}
+
+@Test func composerSaysWhatTheHubDid() {
+    #expect(Compose.toast(JSON(any: ["did": "note", "seq": 3])) == nil)
+    #expect(Compose.toast(JSON(any: ["did": "task", "prompt": "x"])) == nil)
+    let q = Compose.toast(JSON(any: ["did": "instructed", "sent": [["to": "builder (Claude Code)", "ok": true, "queued": true]]]))
+    #expect(q?.text == "Queued for builder (Claude Code)" && q?.error == false)
+    let some = Compose.toast(JSON(any: ["did": "instructed", "sent": [["to": "a", "ok": true], ["to": "b", "ok": false, "error": "the pane closed"]]]))
+    #expect(some?.text == "Sent to a; not b (the pane closed)" && some?.error == true)
+    #expect(Compose.toast(JSON(any: ["did": "asked", "message": 7, "options": ["Postgres", "SQLite"]]))?.text == "Asked the agents (#7): Postgres / SQLite")
+    #expect(Compose.toast(JSON(any: ["did": "answered", "key": "#3", "message": 9, "choice": "Postgres"]))?.text == "Answered #3: Postgres")
+    #expect(Compose.toast(JSON(any: ["did": "decided", "key": "=ab", "seq": 4, "told": ["wheelhouse/D-12"]]))?.text == "Decided, and told wheelhouse/D-12")
+}
+
+@Test func composerSaysWhatTheHubWouldRefuse() {
+    let agents: [(pane: String, role: String?, app: String)] = [("my builder", "Build builder", "claude-code"), ("", "tests", "codex")]
+    #expect(Compose.suggestions("@", agents: agents, docket: "D-12").map(\.label) == ["@my-builder", "@tests", "@all"])
+    #expect(Compose.warning("/decied 5xx", agents: agents)?.blocked == true)
+    #expect(Compose.warning("/decide 5xx", agents: agents) == nil)
+    #expect(Compose.warning("/tmp/x is full", agents: agents) == nil)
+    #expect(Compose.warning("@my-builder go", agents: agents) == nil)
+    #expect(Compose.warning("@builder go", agents: agents) == nil)
+    #expect(Compose.warning("@codex go", agents: agents) == nil)
+    #expect(Compose.warning("@all go", agents: agents) == nil)
+    #expect(Compose.warning("@sam can you look", agents: agents)?.text == "No agent here is @sam: /note keeps it as a note")
+    #expect(Compose.warning("@sam can you look", agents: [])?.blocked == true)
+    #expect(Compose.warning("@builder", agents: agents) == nil)
+}
