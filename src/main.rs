@@ -166,13 +166,15 @@ enum Cmd {
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Start Claude Code, Codex or Antigravity on a new docket, in a folder,
-    /// with a prompt; --docket D-12 works on that docket instead.
+    /// Start Claude Code, Codex, Antigravity or Pi on a new docket, in a
+    /// folder, with a prompt; --docket D-12 works on that docket instead.
     Start {
         #[arg(long)]
         codex: bool,
         #[arg(long, conflicts_with = "codex")]
         agy: bool,
+        #[arg(long, conflicts_with_all = ["codex", "agy"])]
+        pi: bool,
         #[arg(long)]
         docket: Option<String>,
         #[arg(short = 'C', long, default_value = ".", value_hint = clap::ValueHint::DirPath)]
@@ -481,7 +483,7 @@ fn main() {
         Some(Cmd::Intent { docket, text }) => intent(&normalize(&docket), text),
         Some(Cmd::Brief { docket }) => brief(docket.as_deref().map(normalize)),
         Some(Cmd::SetupLinear) => linear::setup(),
-        Some(Cmd::Start { codex, agy, docket, dir, title, prompt }) => {
+        Some(Cmd::Start { codex, agy, pi, docket, dir, title, prompt }) => {
             let cwd = std::fs::canonicalize(&dir).map(|p| p.to_string_lossy().into_owned()).unwrap_or(dir);
             let prompt = match prompt.as_deref() {
                 Some("-") => text_or_stdin(prompt.clone()).ok(),
@@ -491,6 +493,8 @@ fn main() {
                 ("codex", "Codex")
             } else if agy {
                 ("agy", "Antigravity")
+            } else if pi {
+                ("pi", "Pi")
             } else {
                 ("claude-code", "Claude Code")
             };
@@ -1106,6 +1110,14 @@ fn skill(action: Option<&str>) -> Result<()> {
     let shared = home.join(".agents/skills");
     let homes: Vec<std::path::PathBuf> = [".claude/skills", ".codex/skills", ".gemini/config/skills"].iter().map(|d| home.join(d)).filter(|d| d.is_dir()).collect();
     let source = if shared.is_dir() { shared.join("wheelhouse") } else { home.join(".claude/skills/wheelhouse") };
+    // Pi reads ~/.agents/skills itself: a link in its own folder too would
+    // be the skill twice. Without that folder, it gets a link.
+    let pi = hooks::pi_agent_dir();
+    let pi_link = pi.join("skills/wheelhouse");
+    let pi_linked = || {
+        pi_link.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+            && std::fs::read_link(&pi_link).is_ok_and(|t| t == source || t == home.join(".claude/skills/wheelhouse"))
+    };
     match action.unwrap_or("show") {
         "show" => print!("{SKILL}"),
         "install" => {
@@ -1120,9 +1132,21 @@ fn skill(action: Option<&str>) -> Result<()> {
                         println!("linked {}", paths::tilde(&link.to_string_lossy()));
                     }
                 }
+                if pi_linked() {
+                    std::fs::remove_file(&pi_link)?;
+                    println!("unlinked {}: Pi reads {}", paths::tilde(&pi_link.to_string_lossy()), paths::tilde(&shared.to_string_lossy()));
+                }
+            } else if pi.is_dir() && pi_link.symlink_metadata().is_err() {
+                std::fs::create_dir_all(pi.join("skills"))?;
+                std::os::unix::fs::symlink(&source, &pi_link)?;
+                println!("linked {}", paths::tilde(&pi_link.to_string_lossy()));
             }
         }
         "remove" => {
+            if pi_linked() {
+                std::fs::remove_file(&pi_link)?;
+                println!("unlinked {}", paths::tilde(&pi_link.to_string_lossy()));
+            }
             for h in &homes {
                 let link = h.join("wheelhouse");
                 if link.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
@@ -1351,7 +1375,8 @@ fn status() -> Result<()> {
         println!("  {:<8} {}", r["title"].as_str().unwrap_or("?"), runtime_line(r));
     }
     println!("  agents   {} · dockets {} open, {} in all", v["agents"], v["dockets"]["open"], v["dockets"]["all"]);
-    let on: Vec<&str> = [("claude-code", "Claude Code"), ("agy", "Antigravity")].into_iter().filter(|(app, _)| hooks::installed_for(app)).map(|(_, name)| name).collect();
+    let on: Vec<&str> =
+        [("claude-code", "Claude Code"), ("agy", "Antigravity"), ("pi", "Pi")].into_iter().filter(|(app, _)| hooks::installed_for(app)).map(|(_, name)| name).collect();
     println!("  hooks    {}", if on.is_empty() { "off: wh hooks install".to_string() } else { format!("{} on", on.join(", ")) });
     match v["tailnet"]["url"].as_str() {
         Some(u) => println!("  tailnet  {u} (answers {}) · publish with wh web --publish", v["tailnet"]["owner"].as_str().unwrap_or("?")),

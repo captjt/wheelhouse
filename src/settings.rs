@@ -508,6 +508,7 @@ fn app(agent: &str) -> &'static str {
     match agent {
         "codex" => "Codex",
         "agy" => "Antigravity",
+        "pi" => "Pi",
         _ => "Claude Code",
     }
 }

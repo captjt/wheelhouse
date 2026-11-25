@@ -90,7 +90,10 @@ Builders and checkers can't reach outward. In their panes:
   are cleared, and `.tmp/` is ignored by git.
 - Claude Code is denied `git push`, `gh`, and `wh send|share|reply`, and runs
   with no MCP servers (`--strict-mcp-config`), so a tracker or GitHub
-  connector can't route around the wall.
+  connector can't route around the wall. Antigravity is denied the same,
+  and so is Pi, by Wheelhouse's wall extension (Pi has no permission
+  prompts), with `--no-mcp`, no other extensions, and none of the repo's
+  own `.pi/`.
 
 Only the hub writes outward, with your sign-ins, and only after your
 approval. Opening refuses when:
@@ -133,7 +136,7 @@ the hub at another file. Settings, in the apps, changes what isn't code
 | `repos["owner/name"]` | `checkout`, `notes`, `base`, `plan` (`"full"`, `"summary"`, `false`), and `checks`: witnessed checks the hub runs itself ([verify.md](verify.md)). A repo in `review.lua` is already listed; `checkout` is required only for one that isn't. | `review.lua`'s repos |
 | `sources.github` | `{ label = "agent" }`: open issues assigned to you, in Build's repos, with the label start a Build | off |
 | `sources.linear` | `{ teams, label, cycle, skip_label }`: Linear issues assigned to you start a Build or are offered one (below) | off |
-| `builder`, `checker` | `"claude"`, `"codex"`, `"agy"`, or `{ agent, extra_args, effort }` | `"claude"`, `"claude"` |
+| `builder`, `checker` | `"claude"`, `"codex"`, `"agy"`, `"pi"`, or `{ agent, extra_args, effort }` | `"claude"`, `"claude"` |
 | `gates` | `plan`, `preview`, `open`, `address`, `push`: `"ask"` or `"auto"`; `start = { label, cycle }` for Linear intake | `"ask"`; `start`: label `"auto"`, cycle `"ask"` |
 | `update` | how a round brings the branch up to date with its base: `"merge"`, or `"rebase"` (pushed with a lease) | `"merge"` |
 | `prereview` | `{ reviewers = { "codex" }, loops = 1 }`: reviewers who review the branch blind before the PR opens; `loops` is how many times they may send it back | off |

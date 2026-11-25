@@ -282,3 +282,13 @@ private func docket(_ json: String) throws -> Docket { Docket(j: try JSON.parse(
     #expect(Store.blockQuery("b1") == "?block=b1")
     #expect(Store.blockQuery("herdr:t2 x") == "?block=herdr%3At2%20x")
 }
+
+@Test func namesEachAgentItStartsAndFindsItAgainByName() {
+    #expect(startApps.map(appName) == ["Claude Code", "Codex", "Antigravity", "Pi"])
+    for a in startApps { #expect(appOfName(appName(a)) == a) }
+    #expect(appOfName(nil) == "claude-code")
+    #expect(startApp(for: "pi") == "pi")
+    #expect(startApp(for: "antigravity") == "agy")
+    #expect(startApp(for: "rex") == "claude-code")
+    #expect(reviewAgents.map(appName) == ["Claude Code", "Codex", "Antigravity", "Pi"])
+}

@@ -1437,6 +1437,47 @@ mod tests {
     }
 
     #[test]
+    fn a_pi_pane_is_an_agent_and_its_extension_reports_like_claude_codes_hooks() {
+        let mut core = test_core();
+        // Pi's process is `node`; it reports its own status as `pi`.
+        let fg = json!({ "foreground": { "name": "node", "argv0": "pi", "cwd": "/Users/you/git/api" } });
+        let pi = |state: &str| vec![Record { state: state.into(), app: Some("pi".into()), effective_app: Some("pi".into()), ..Default::default() }];
+        core.mirror.apply_pane_status("s1", "p1", pi("idle"), Some(&fg), None);
+        reconcile(&mut core, ["p1".to_string()]);
+        let d = docket_of(&core, "p1").unwrap();
+        assert_eq!(core.store.state(&d).unwrap().unwrap().title, "Pi in git/api");
+
+        // What src/pi-extension.ts sends.
+        hook(&mut core, "SessionStart", "pi", "p1", &json!({ "session_id": "01a21302-9d46", "cwd": "/Users/you/git/api", "source": "startup" })).unwrap();
+        hook(&mut core, "UserPromptSubmit", "pi", "p1", &json!({ "session_id": "01a21302-9d46", "prompt": "Add Pi support" })).unwrap();
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert_eq!((st.title.as_str(), st.session.as_deref(), st.prompts), ("Add Pi support", Some("01a21302-9d46"), 1));
+
+        core.mirror.apply_pane_status("s1", "p1", pi("working"), Some(&fg), None);
+        reconcile(&mut core, ["p1".to_string()]);
+        hook(&mut core, "Stop", "pi", "p1", &json!({ "session_id": "01a21302-9d46", "last_assistant_message": "Pi is **in**." })).unwrap();
+        core.mirror.apply_pane_status("s1", "p1", pi("done"), Some(&fg), None);
+        reconcile(&mut core, ["p1".to_string()]);
+        let st = core.store.state(&d).unwrap().unwrap();
+        assert_eq!((st.turns, st.last_turn.as_deref()), (1, Some("Pi is **in**.")));
+
+        // /new is a new session: the next work is a docket of its own.
+        hook(&mut core, "SessionStart", "pi", "p1", &json!({ "session_id": "01a21399", "cwd": "/Users/you/git/api", "source": "clear" })).unwrap();
+        let d2 = docket_of(&core, "p1").unwrap();
+        assert_ne!(d2, d);
+        // /resume brings the first session, and its docket, back.
+        hook(&mut core, "SessionStart", "pi", "p1", &json!({ "session_id": "01a21302-9d46", "cwd": "/Users/you/git/api", "source": "resume" })).unwrap();
+        assert_eq!(docket_of(&core, "p1").unwrap(), d);
+        // Quit, then `pi -c` in a new pane (the extension says "resume"):
+        // the same docket again.
+        release(&mut core, "p1", "pane closed").unwrap();
+        core.mirror.apply_pane_status("s1", "p2", pi("idle"), Some(&fg), None);
+        reconcile(&mut core, ["p2".to_string()]);
+        hook(&mut core, "SessionStart", "pi", "p2", &json!({ "session_id": "01a21302-9d46", "cwd": "/Users/you/git/api", "source": "resume" })).unwrap();
+        assert_eq!(docket_of(&core, "p2").unwrap(), d);
+    }
+
+    #[test]
     fn agy_hooks_track_session_dedupe_prompts_and_read_transcript_on_stop() {
         let mut core = test_core();
         let fg = json!({ "foreground": { "name": "agy", "cwd": "/Users/you/git/api" } });

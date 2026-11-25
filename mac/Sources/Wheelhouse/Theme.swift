@@ -45,6 +45,7 @@ enum K {
     static let claude = Color(nsColor: rgb(0xd97757))
     static let codex = Color(nsColor: rgb(0x3b3d44))
     static let agy = Color(nsColor: rgb(0x4f6ef7))
+    static let pi = Color(nsColor: rgb(0x0f8f84))
     /// Codex's, readable on a dark background too (for OpenAI in charts).
     static let codexInk = dyn(0x52545c, 0xcdced3)
 
@@ -176,13 +177,13 @@ private struct Pulse: View {
     }
 }
 
-/// An agent's app: Claude Code's coral C, Codex's slate X, Antigravity's blue A.
+/// An agent's app: Claude Code's coral C, Codex's slate X, Antigravity's blue A, Pi's teal π.
 struct AppAvatar: View {
     let app: String?
     var size: CGFloat = 18
     var body: some View {
-        let letter = app == "codex" ? "X" : app == "claude-code" || app == "claude" ? "C" : "A"
-        let fill = app == "codex" ? K.codex : app == "claude-code" || app == "claude" ? K.claude : app == "agy" ? K.agy : K.faint
+        let letter = app == "codex" ? "X" : app == "claude-code" || app == "claude" ? "C" : app == "pi" ? "π" : "A"
+        let fill = app == "codex" ? K.codex : app == "claude-code" || app == "claude" ? K.claude : app == "agy" ? K.agy : app == "pi" ? K.pi : K.faint
         RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
             .fill(fill)
             .overlay(Text(letter).font(.system(size: size * 0.55, weight: .semibold)).foregroundStyle(.white))

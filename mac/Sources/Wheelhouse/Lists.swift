@@ -475,7 +475,7 @@ struct AgentsScreen: View {
             : Dictionary(grouping: agents) { $0.rexSession.isEmpty ? "—" : $0.rexSession }.map { ($0.key, $0.value) }.sorted { $0.key < $1.key }
         Group {
             if store.state != nil && agents.isEmpty {
-                ContentUnavailableView("No agents running", systemImage: "terminal", description: Text("Every Claude Code, Codex and Antigravity pane in \(store.state?.followed ?? "Rex") shows up here, live."))
+                ContentUnavailableView("No agents running", systemImage: "terminal", description: Text("Every Claude Code, Codex, Antigravity and Pi pane in \(store.state?.followed ?? "Rex") shows up here, live."))
             } else {
                 SplitPane {
                     List(selection: Binding<String?>(get: { nav.selected(.agents) }, set: { nav.select($0, in: .agents) })) {

@@ -4,6 +4,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  AGENTS,
+  agentLabel,
   briefVars,
   checkProblem,
   checkValue,
@@ -149,4 +151,10 @@ test("a posting rule's form reads from the rule and saves as one, or says what's
   assert.deepEqual(whenValue({ ...d, maxLines: "40.5" }), { error: "Lines: a whole number, 1 or more." });
   assert.deepEqual(whenValue({ ...d, maxLines: "0" }), { error: "Lines: a whole number, 1 or more." });
   assert.match((whenValue({ approve: false, risk: "", maxLines: " ", authors: "", labels: ",", notTouching: "" }) as { error: string }).error, /choose Auto/);
+});
+
+test("Review and Build run each agent the hub takes, under its own name", () => {
+  // src/review/config.rs AGENTS
+  assert.deepEqual(AGENTS.map((a) => a.key).sort(), ["agy", "claude", "codex", "pi"]);
+  assert.equal(agentLabel("pi"), "Pi");
 });

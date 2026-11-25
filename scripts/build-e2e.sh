@@ -79,7 +79,7 @@ return {
     checks = { test = "! grep -q TODO deliver.ts", lint = { run = "echo 'style: one nit' >&2; exit 1", required = false } },
   } },
   sources = { linear = { teams = { ENG = "acme/api" }, label = "agent", cycle = true, skip_label = "no-agent" } },
-  prereview = { reviewers = { "codex" } },
+  prereview = { reviewers = { "codex", "pi" } },
 }
 EOF
 # Linear: a stand-in server, with no issues until the last part.
@@ -197,6 +197,9 @@ ok "test failed at the first commit (kept, witnessed), went back, and was fixed"
 step "pre-review: a blind reviewer sends it back, then passes it"
 until_ "pre-review starts" '.phase == "prereview" and .prereview.n == 1'
 [ -f "$wt/.tmp/tasks/prereview-codex.md" ] || fail "the pre-reviewer has no brief"
+[ -f "$wt/.tmp/tasks/prereview-pi.md" ] || fail "Pi, the second pre-reviewer, has no brief"
+echo '{"event": "APPROVE", "summary": "Reads fine.", "findings": []}' >"$wt/.tmp/prereview/1/pi.json"
+echo REVIEWED >"$wt/.tmp/prereview/1/pi.status"
 cat >"$wt/.tmp/prereview/1/codex.json" <<'EOF'
 {"event": "REQUEST_CHANGES", "summary": "Retries never stop on a down endpoint.", "findings": [
   {"id": "B1", "severity": "blocking", "path": "deliver.ts", "line": 1, "what": "Nothing caps the retries.", "evidence": "a probe against a dead endpoint loops", "fix": "Stop after the third."}]}
@@ -211,6 +214,8 @@ checked "The cap holds."
 until_ "the reviewer looks again" '.phase == "prereview" and .prereview.n == 2'
 echo '{"event": "APPROVE", "summary": "Capped at three; looks right.", "findings": []}' >"$wt/.tmp/prereview/2/codex.json"
 echo REVIEWED >"$wt/.tmp/prereview/2/codex.status"
+echo '{"event": "APPROVE", "summary": "Still fine.", "findings": []}' >"$wt/.tmp/prereview/2/pi.json"
+echo REVIEWED >"$wt/.tmp/prereview/2/pi.status"
 until_ "the PR reaches its gate" '.phase == "open_gate"'
 id=$(ask_id "Open PR")
 api "$base/api/messages/$id" | jq -e '.body | contains("Pre-review 2: 0 blocking, 0 non-blocking")' >/dev/null || fail "the open gate doesn't say how pre-review went"

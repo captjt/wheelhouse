@@ -373,7 +373,7 @@ struct MessageCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 7) {
-                if m.from == "wheelhouse" { HubAvatar(size: 18) } else { AppAvatar(app: m.fromApp == "Codex" ? "codex" : m.fromApp == "Antigravity" ? "agy" : "claude-code", size: 18) }
+                if m.from == "wheelhouse" { HubAvatar(size: 18) } else { AppAvatar(app: appOfName(m.fromApp), size: 18) }
                 Text(m.who).font(.system(size: 12.5, weight: .semibold))
                 Text(m.options.isEmpty ? "wrote to you" : "asks you").foregroundStyle(K.muted)
                 if let s = m.subject { Text("· \(s)").foregroundStyle(K.text2).lineLimit(1) }

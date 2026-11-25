@@ -93,7 +93,7 @@ struct PaletteOverlay: View {
             }
             out.append(Command(id: "checks", group: d.id, label: "Run checks", symbol: "checklist", hint: "⇧⌘U", keywords: "verify test lint witnessed") { Task { await store.runChecks(d.id) } })
             if d.canStartAgent {
-                out.append(Command(id: "start-agent", group: d.id, label: d.onAgents.isEmpty ? "Start an agent…" : "Add an agent…", symbol: "terminal", hint: "⇧⌘A", keywords: "agent claude codex agy antigravity start pane work") { reveal(); nav.starting = d.id })
+                out.append(Command(id: "start-agent", group: d.id, label: d.onAgents.isEmpty ? "Start an agent…" : "Add an agent…", symbol: "terminal", hint: "⇧⌘A", keywords: "agent claude codex agy antigravity pi start pane work") { reveal(); nav.starting = d.id })
             }
             for s in Status.allCases where s != d.status {
                 out.append(Command(id: "st-\(s.rawValue)", group: d.id, label: "Move to \(s.label)", status: s, keywords: "status") { store.setStatus(d.id, s, undo: d.status) })
@@ -103,7 +103,7 @@ struct PaletteOverlay: View {
         }
         out += [
             Command(id: "new", group: "Create", label: "New docket", symbol: "square.and.pencil", hint: "⌘N") { reveal(); nav.creating = .blank },
-            Command(id: "new-agent", group: "Create", label: "Start an agent on a new docket", symbol: "terminal", hint: "⇧⌘N", keywords: "claude codex agy antigravity start run") { reveal(); nav.creating = .agent },
+            Command(id: "new-agent", group: "Create", label: "Start an agent on a new docket", symbol: "terminal", hint: "⇧⌘N", keywords: "claude codex agy antigravity pi start run") { reveal(); nav.creating = .agent },
             Command(id: "new-linear", group: "Create", label: "New docket from a Linear issue", symbol: "circle.hexagongrid", keywords: "linear issue import") { reveal(); nav.creating = .linear },
         ]
         for (i, (p, key)) in Place.order.enumerated() {
@@ -334,9 +334,7 @@ struct NewDocketSheet: View {
                 GridRow {
                     Text("Agent").foregroundStyle(.secondary)
                     Picker("", selection: $app) {
-                        Text("Claude Code").tag("claude-code")
-                        Text("Codex").tag("codex")
-                        Text("Antigravity").tag("agy")
+                        ForEach(startApps, id: \.self) { Text(appName($0)).tag($0) }
                     }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                 }
@@ -431,9 +429,7 @@ struct StartAgentSheet: View {
                 GridRow {
                     Text("Agent").foregroundStyle(.secondary)
                     Picker("", selection: $app) {
-                        Text("Claude Code").tag("claude-code")
-                        Text("Codex").tag("codex")
-                        Text("Antigravity").tag("agy")
+                        ForEach(startApps, id: \.self) { Text(appName($0)).tag($0) }
                     }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                 }
@@ -456,7 +452,7 @@ struct StartAgentSheet: View {
         .task {
             if note.isEmpty { note = "Read wh brief \(id), then work on its intent." }
             if let a = d?.agent {
-                app = a.app == "codex" ? "codex" : a.app == "agy" ? "agy" : "claude-code"
+                app = startApp(for: a.app)
                 if cwd.isEmpty, let c = a.cwd { cwd = shortPath(c) }
             }
             let f = await store.folders(for: id)

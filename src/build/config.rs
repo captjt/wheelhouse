@@ -121,8 +121,8 @@ fn role(v: &Value, field: &str, default: &str) -> Result<Role> {
         Value::Object(_) => Role { agent: v["agent"].as_str().unwrap_or(default).to_string(), extra_args: strings(&v["extra_args"]), effort: v["effort"].clone() },
         _ => Role { agent: default.to_string(), extra_args: Vec::new(), effort: Value::Null },
     };
-    if !matches!(r.agent.as_str(), "claude" | "codex" | "agy") {
-        bail!("{field} is claude, codex or agy, not {}", r.agent);
+    if !crate::review::config::AGENTS.contains(&r.agent.as_str()) {
+        bail!("{field} is claude, codex, agy or pi, not {}", r.agent);
     }
     Ok(r)
 }
@@ -212,7 +212,7 @@ pub fn from_value(path: Option<PathBuf>, raw: Value, review: Option<&crate::revi
         _ => None,
     };
     let mut agents = review.map(|r| r.agents.clone()).unwrap_or_default();
-    for name in ["codex", "claude", "agy"] {
+    for name in crate::review::config::AGENTS {
         let a = &raw["agents"][name];
         if a.is_object() {
             agents.insert(

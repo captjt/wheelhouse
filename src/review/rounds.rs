@@ -462,6 +462,7 @@ fn app_of(agent: &str) -> &'static str {
     match agent {
         "claude" => "claude-code",
         "agy" => "agy",
+        "pi" => "pi",
         _ => "codex",
     }
 }
