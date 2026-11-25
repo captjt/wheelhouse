@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { get } from "./api";
 import { AppAvatar, IconBuild, IconChart, IconClipboard, IconExternal, IconPR, StatusIcon } from "./icons";
-import { costOf, money, moneyDelta, priceWords, type Price } from "./cost";
+import { COST_FLOOR, costOf, costWords, money, moneyDelta, nothingPriced, priceWords, sparkTop, type Price } from "./cost";
 import { ago, useHub } from "./live";
 import { RiskChip } from "./Reviews";
 import { InlineMd, useToast } from "./ui";
@@ -58,7 +58,7 @@ type RecapData = {
   usage?: Usage;
 };
 
-type Split = { input: number; cache_read: number; cache_write: number; output: number };
+type Split = { input: number; cache_read: number; cache_write: number; output: number; cache_write_1h?: number };
 type Work = { agents: number; builds: number; reviews: number };
 /** Tokens, and their cost in US dollars at API prices (src/pricing.rs). `unpriced` counts the tokens of models with no price, which the cost leaves out. */
 type Usage = {
@@ -107,12 +107,12 @@ function Delta({ now, before, words, format = String, neutral = false }: { now: 
 }
 
 /** A per-day sparkline: the past in the muted ink, today in the accent. */
-function Spark({ values, since, what, format = String }: { values: number[]; since: string; what: string; format?: (n: number) => string }) {
+function Spark({ values, since, what, format = String, floor = 1 }: { values: number[]; since: string; what: string; format?: (n: number) => string; floor?: number }) {
   const [hover, setHover] = useState<number | null>(null);
   if (values.length < 2) return null;
   const W = 160;
   const H = 28;
-  const max = Math.max(1, ...values);
+  const max = sparkTop(values, floor);
   const x = (i: number) => (i / (values.length - 1)) * (W - 6) + 3;
   const y = (v: number) => H - 4 - (v / max) * (H - 8);
   const pts = values.map((v, i) => `${x(i)},${y(v)}`).join(" ");
@@ -232,7 +232,7 @@ function UsageSection({ u, words }: { u: Usage; words: string }) {
       <p className="rc-line">
         {[
           `${compact(u.tokens)} tokens ${words}`,
-          u.cost != null && `${money(u.cost)} at API prices`,
+          costWords(u, compact),
           u.cached != null && `${Math.round(u.cached * 100)}% of input from the cache`,
           `${compact(u.split.output)} output`,
           `${u.models.length} model${u.models.length === 1 ? "" : "s"} from ${u.providers.length} provider${u.providers.length === 1 ? "" : "s"}`,
@@ -443,15 +443,20 @@ export function RecapView() {
                   <Spark values={data.usage.per_day} since={data.since} what="tokens" format={compact} />
                 </Tile>
               )}
-              {data.usage?.cost != null && (
-                <Tile label="Cost" value={money(data.usage.cost)}>
-                  <span className="rc-delta">{`${moneyDelta(data.usage.cost, data.usage.prev_cost)} vs ${meta.before}`}</span>
-                  <span className="rc-sub" title="What the tokens cost at each model's API price">
-                    {(data.usage.unpriced?.tokens ?? 0) > 0 ? `${compact(data.usage.unpriced!.tokens)} tokens unpriced` : "at API prices"}
-                  </span>
-                  <Spark values={data.usage.cost_per_day ?? []} since={data.since} what="spent" format={money} />
-                </Tile>
-              )}
+              {data.usage?.cost != null &&
+                (nothingPriced(data.usage) ? (
+                  <Tile label="Cost" value="–">
+                    <span className="rc-sub">{costWords(data.usage, compact)}</span>
+                  </Tile>
+                ) : (
+                  <Tile label="Cost" value={money(data.usage.cost)}>
+                    <span className="rc-delta">{`${moneyDelta(data.usage.cost, data.usage.prev_cost)} vs ${meta.before}`}</span>
+                    <span className="rc-sub" title="What the tokens cost at each model's API price">
+                      {(data.usage.unpriced?.tokens ?? 0) > 0 ? `${compact(data.usage.unpriced!.tokens)} tokens unpriced` : "at API prices"}
+                    </span>
+                    <Spark values={data.usage.cost_per_day ?? []} since={data.since} what="spent" format={money} floor={COST_FLOOR} />
+                  </Tile>
+                ))}
             </div>
             {(r!.median_to_review != null || r!.tokens > 0 || r!.dismissed > 0) && (
               <div className="rc-line">

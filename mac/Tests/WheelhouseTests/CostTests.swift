@@ -44,4 +44,19 @@ private func json(_ s: String) throws -> JSON { try JSON.parse(Data(s.utf8)) }
         == "Per million tokens: $4 input, $0.2 from the cache, $5 to the cache, $20 output")
     #expect(Cost.priceWords(try json(#"{"input": 0.075, "cache_read": 0, "cache_write": 0, "output": 1, "source": "settings"}"#)).hasSuffix("$1 output (from settings.json)"))
     #expect(Cost.priceWords(.null) == "No price: add one under prices in settings.json")
+    #expect(Cost.priceWords(try json(#"{"input": 4, "cache_read": 0.2, "cache_write": 5, "cache_write_1h": 8, "output": 20, "source": "built-in"}"#))
+        == "Per million tokens: $4 input, $0.2 from the cache, $5 to the cache, $8 to the 1-hour cache, $20 output")
+    #expect(!Cost.priceWords(try json(#"{"input": 3, "cache_read": 0.15, "cache_write": 3, "cache_write_1h": 3, "output": 15}"#)).contains("1-hour"))
+}
+
+@Test func nothingPricedIsSaidAsUnpricedNeverZero() throws {
+    let count = { (n: Int) in "\(n / 1_000_000)M" }
+    let all = try json(#"{"tokens": 5000000, "cost": 0, "unpriced": {"tokens": 5000000}}"#)
+    #expect(Cost.nothingPriced(all))
+    #expect(Cost.words(all, count: count) == "unpriced, 5M tokens with no price")
+    let some = try json(#"{"tokens": 6000000, "cost": 4, "unpriced": {"tokens": 5000000}}"#)
+    #expect(!Cost.nothingPriced(some))
+    #expect(Cost.words(some, count: count) == "$4.00 at API prices")
+    #expect(!Cost.nothingPriced(try json(#"{"tokens": 0, "cost": 0, "unpriced": {"tokens": 0}}"#)))
+    #expect(Cost.words(try json(#"{"tokens": 10}"#), count: count) == nil, "an older hub with no cost")
 }

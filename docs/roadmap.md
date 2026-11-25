@@ -171,7 +171,8 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       the tokens cost at API prices, beside them: in all, by provider,
       model, kind of work, day and docket, and against the period before.
       Prices are built in from Anthropic's, OpenAI's and Google's lists
-      (cache writes at each provider's default TTL) and can be set or
+      (Claude Code's writes to the 5-minute and 1-hour caches each at
+      their own price, other tools' at their default) and can be set or
       changed in settings.json (`prices`); a model with no price is listed
       with its tokens as unpriced, never costed at nothing
 - [x] The phone app, from the Home Screen: a tab bar, swipe back, rows that

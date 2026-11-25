@@ -63,6 +63,22 @@ enum Cost {
             return "$\(v == v.rounded() ? String(Int64(v)) : String(v))"
         }
         let from = p["source"].str == "settings" ? " (from settings.json)" : ""
-        return "Per million tokens: \(d("input")) input, \(d("cache_read")) from the cache, \(d("cache_write")) to the cache, \(d("output")) output\(from)"
+        // Only Anthropic's 1-hour cache costs more to write to than its 5-minute one.
+        let hour = p["cache_write_1h"].double.map { $0 != (p["cache_write"].double ?? 0) } == true ? ", \(d("cache_write_1h")) to the 1-hour cache" : ""
+        return "Per million tokens: \(d("input")) input, \(d("cache_read")) from the cache, \(d("cache_write")) to the cache\(hour), \(d("output")) output\(from)"
+    }
+
+    /// Nothing has a price: every token is unpriced, so there's no cost to
+    /// give, not a cost of $0.
+    static func nothingPriced(_ u: JSON) -> Bool {
+        let off = u["unpriced"]["tokens"].int ?? 0
+        return off > 0 && off >= (u["tokens"].int ?? 0)
+    }
+
+    /// The cost in the Tokens line: `$12.34 at API prices`, or `unpriced,
+    /// 5M tokens with no price`.
+    static func words(_ u: JSON, count: (Int) -> String) -> String? {
+        if nothingPriced(u) { return "unpriced, \(count(u["unpriced"]["tokens"].int ?? 0)) tokens with no price" }
+        return u["cost"].double.map { "\(money($0)) at API prices" }
     }
 }

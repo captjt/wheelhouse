@@ -504,22 +504,25 @@ struct Span {
 fn attribute<'a>(ids: &[String], spans: &[&Span], calls: impl Fn(usize) -> Option<&'a [crate::usage::Call]>, key: impl Fn(usize) -> Option<String>) -> Vec<crate::usage::Row> {
     use std::collections::{BTreeMap, HashSet};
     let mut seen: HashSet<(usize, usize)> = HashSet::new();
-    // (file, minute, provider, model) → (docket, tokens)
+    // (file, minute, provider, model) → (docket, tokens, 1-hour writes)
     type Minute = (usize, i64, String, String);
-    let mut rows: BTreeMap<Minute, (usize, [i64; 4])> = BTreeMap::new();
+    let mut rows: BTreeMap<Minute, (usize, [i64; 4], i64)> = BTreeMap::new();
     for sp in spans {
         for (j, c) in calls(sp.file).into_iter().flatten().enumerate() {
             if c.at < sp.from || sp.until.is_some_and(|u| c.at > u) || !seen.insert((sp.file, j)) {
                 continue;
             }
-            let r = rows.entry((sp.file, c.at.div_euclid(60) * 60, c.provider.clone(), c.model.clone())).or_insert((sp.docket, [0; 4]));
+            let r = rows.entry((sp.file, c.at.div_euclid(60) * 60, c.provider.clone(), c.model.clone())).or_insert((sp.docket, [0; 4], 0));
             for (t, n) in r.1.iter_mut().zip(c.tokens) {
                 *t = t.saturating_add(n);
             }
+            r.2 = r.2.saturating_add(c.write_1h);
         }
     }
     rows.into_iter()
-        .filter_map(|((file, minute, provider, model), (d, tokens))| Some(crate::usage::Row { file: key(file)?, minute, provider, model, docket: ids.get(d)?.clone(), tokens }))
+        .filter_map(|((file, minute, provider, model), (d, tokens, write_1h))| {
+            Some(crate::usage::Row { file: key(file)?, minute, provider, model, docket: ids.get(d)?.clone(), tokens, write_1h })
+        })
         .collect()
 }
 
@@ -535,11 +538,12 @@ fn usage(w: &Window, names: &Names, kept: &[crate::usage::Row], prices: &crate::
     let prev = w.before();
     let (mut total, mut prev_total) = (0i64, 0i64);
     let (mut spend, mut prev_spend) = (Spend::default(), Spend::default());
-    let mut split = [0i64; 4];
+    // The four fields, then the writes that went to the 1-hour cache.
+    let mut split = [0i64; 5];
     let mut per_day = vec![0i64; w.days()];
     let mut cost_per_day = vec![Spend::default(); w.days()];
     // (provider, model) → (fields, dockets, cost, the price last used)
-    type Model<'a> = ([i64; 4], HashSet<&'a str>, Spend, Option<Price>);
+    type Model<'a> = ([i64; 5], HashSet<&'a str>, Spend, Option<Price>);
     let mut models: BTreeMap<(String, String), Model> = BTreeMap::new();
     let mut kinds: BTreeMap<&str, (i64, Spend)> = BTreeMap::new();
     let mut dockets: BTreeMap<&str, (i64, Spend, BTreeMap<String, i64>)> = BTreeMap::new();
@@ -547,7 +551,7 @@ fn usage(w: &Window, names: &Names, kept: &[crate::usage::Row], prices: &crate::
     for r in kept {
         let n = r.total();
         let price = prices.at(&r.provider, &r.model, r.minute);
-        let cost = price.map(|p| p.cost(r.tokens));
+        let cost = price.map(|p| p.cost(r.tokens, r.write_1h));
         if prev.has_secs(r.minute) {
             prev_total = prev_total.saturating_add(n);
             prev_spend.add(cost, n);
@@ -558,7 +562,8 @@ fn usage(w: &Window, names: &Names, kept: &[crate::usage::Row], prices: &crate::
         total = total.saturating_add(n);
         spend.add(cost, n);
         let m = models.entry((r.provider.clone(), r.model.clone())).or_default();
-        for (k, t) in r.tokens.iter().enumerate() {
+        let hour = r.write_1h.clamp(0, r.tokens[2].max(0));
+        for (k, t) in r.tokens.iter().chain([&hour]).enumerate() {
             split[k] = split[k].saturating_add(*t);
             m.0[k] = m.0[k].saturating_add(*t);
         }
@@ -583,13 +588,13 @@ fn usage(w: &Window, names: &Names, kept: &[crate::usage::Row], prices: &crate::
         let dm = d.2.entry(r.model.clone()).or_default();
         *dm = dm.saturating_add(n);
     }
-    let fields = |t: [i64; 4]| json!({ "input": t[0], "cache_read": t[1], "cache_write": t[2], "output": t[3] });
+    let fields = |t: [i64; 5]| json!({ "input": t[0], "cache_read": t[1], "cache_write": t[2], "output": t[3], "cache_write_1h": t[4] });
     let mut by_provider: BTreeMap<String, (i64, Spend)> = BTreeMap::new();
     let mut unpriced: Vec<Value> = Vec::new();
     let mut model_list: Vec<Value> = models
         .into_iter()
         .map(|((provider, model), (t, ds, c, price))| {
-            let n: i64 = t.iter().fold(0i64, |a, x| a.saturating_add(*x));
+            let n: i64 = t[..4].iter().fold(0i64, |a, x| a.saturating_add(*x));
             let p = by_provider.entry(provider.clone()).or_default();
             p.0 = p.0.saturating_add(n);
             p.1.merge(c);
@@ -789,11 +794,27 @@ fn cost_of(x: &Value) -> String {
 }
 
 /// What the period's tokens cost, by provider and model and kind of work,
-/// and the models with no price, whose tokens the cost leaves out.
+/// and the models with no price, whose tokens the cost leaves out. When
+/// none has a price, it says so, never "$0".
 fn cost_line(us: &Value) -> String {
     let micros = |v: &Value| crate::pricing::usd_micros(v.as_f64().unwrap_or(0.0));
+    let off = us["unpriced"]["tokens"].as_i64().unwrap_or(0);
+    let which: Vec<String> = us["unpriced"]["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|m| format!("{} ({})", m["model"].as_str().unwrap_or(""), m["provider_name"].as_str().unwrap_or("")))
+        .collect();
+    if off > 0 && off >= us["tokens"].as_i64().unwrap_or(0) {
+        return format!("**Cost:** unpriced, {} tokens with no price: {}\n", compact(off), which.join(", "));
+    }
     let d = micros(&us["cost"]).saturating_sub(micros(&us["prev_cost"]));
-    let mut line = vec![format!("{} at API prices ({}{} vs the period before)", usd(&us["cost"]), if d >= 0 { "+" } else { "−" }, crate::pricing::money(d.saturating_abs()))];
+    let sign = match d {
+        d if d > 0 => "+",
+        d if d < 0 => "−",
+        _ => "±",
+    };
+    let mut line = vec![format!("{} at API prices ({sign}{} vs the period before)", usd(&us["cost"]), crate::pricing::money(d.saturating_abs()))];
     let models = us["models"].as_array().cloned().unwrap_or_default();
     for p in us["providers"].as_array().into_iter().flatten() {
         let mine: Vec<String> = models
@@ -813,14 +834,7 @@ fn cost_line(us: &Value) -> String {
     if !kinds.is_empty() {
         line.push(kinds.join(", "));
     }
-    let off = us["unpriced"]["tokens"].as_i64().unwrap_or(0);
     if off > 0 {
-        let which: Vec<String> = us["unpriced"]["models"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|m| format!("{} ({})", m["model"].as_str().unwrap_or(""), m["provider_name"].as_str().unwrap_or("")))
-            .collect();
         line.push(format!("{} tokens unpriced: {}", compact(off), which.join(", ")));
     }
     format!("**Cost:** {}\n", line.join(" · "))
@@ -1058,7 +1072,7 @@ mod tests {
     }
 
     fn call(at: &str, model: &str, provider: &str, tokens: [i64; 4]) -> crate::usage::Call {
-        crate::usage::Call { at: OffsetDateTime::parse(at, &Rfc3339).unwrap().unix_timestamp(), model: model.into(), provider: provider.into(), tokens }
+        crate::usage::Call { at: OffsetDateTime::parse(at, &Rfc3339).unwrap().unix_timestamp(), model: model.into(), provider: provider.into(), tokens, write_1h: 0 }
     }
 
     fn names() -> Names {
@@ -1100,7 +1114,7 @@ mod tests {
         let u = usage_of(&w, &names(), &rows);
         assert_eq!(u["tokens"], 310);
         assert_eq!(u["prev_tokens"], 1007);
-        assert_eq!(u["split"], json!({ "input": 65, "cache_read": 110, "cache_write": 10, "output": 125 }));
+        assert_eq!(u["split"], json!({ "input": 65, "cache_read": 110, "cache_write": 10, "output": 125, "cache_write_1h": 0 }));
         assert_eq!(
             u["providers"],
             json!([
@@ -1110,7 +1124,7 @@ mod tests {
         );
         // Opus 5.5: 10 in at $4, 80 cached at $0.20, 10 written at $5, 100 out at $20 a million.
         assert_eq!(u["models"][0]["cost"], 0.002106);
-        assert_eq!(u["models"][0]["price"], json!({ "input": 4.0, "cache_read": 0.2, "cache_write": 5.0, "output": 20.0, "source": "built-in" }));
+        assert_eq!(u["models"][0]["price"], json!({ "input": 4.0, "cache_read": 0.2, "cache_write": 5.0, "output": 20.0, "cache_write_1h": 8.0, "source": "built-in" }));
         assert_eq!((u["cost"].as_f64(), u["prev_cost"].as_f64()), (Some(0.003378), Some(0.008028)));
         assert_eq!(u["cost_per_day"], json!([0.002106, 0.001212, 0.00006, 0.0, 0.0, 0.0, 0.0]));
         assert_eq!(u["work_cost"], json!({ "agents": 0.002166, "builds": 0.0, "reviews": 0.001212 }));
@@ -1156,6 +1170,7 @@ mod tests {
             model: model.into(),
             docket: docket.into(),
             tokens,
+            write_1h: 0,
         };
         let m = 1_000_000;
         let rows = vec![
@@ -1235,12 +1250,61 @@ mod tests {
                 model: "Haiku 5.5".into(),
                 docket: "D-1".into(),
                 tokens: [1, 0, 0, 0],
+                write_1h: 0,
             })
             .collect();
         let u = usage_of(&w, &names(), &rows);
         assert_eq!(u["cost"], 0.000144);
         assert_eq!(u["models"][0]["cost"], 0.000144);
         assert_eq!(u["dockets"][0]["cost"], 0.000144);
+    }
+
+    #[test]
+    fn writes_to_the_1_hour_cache_cost_their_own_price() {
+        let at = |s: &str| OffsetDateTime::parse(s, &Rfc3339).unwrap().unix_timestamp();
+        let m = 1_000_000;
+        // Two calls in a minute: their 1-hour writes add up in the row.
+        let mut a = call("2026-11-10T06:00:01Z", "Opus 5.5", "anthropic", [0, 0, 600_000, 0]);
+        a.write_1h = 500_000;
+        let mut b = call("2026-11-10T06:00:30Z", "Opus 5.5", "anthropic", [0, 0, 400_000, 0]);
+        b.write_1h = 400_000;
+        let rows = rows_of(&[Span { docket: 0, file: 0, from: 0, until: None }], &[vec![a, b]]);
+        assert_eq!((rows.len(), rows[0].tokens[2], rows[0].write_1h, rows[0].minute), (1, m, 900_000, at("2026-11-10T06:00:00Z")));
+        let w = window("2026-11-10T00:00:00Z", "2026-11-11T00:00:00Z").unwrap();
+        let u = usage_of(&w, &names(), &rows);
+        // 100,000 at $5 a million (5 minutes) and 900,000 at $8 (an hour).
+        assert_eq!(u["cost"], 7.7);
+        assert_eq!(u["split"]["cache_write"], m);
+        assert_eq!(u["split"]["cache_write_1h"], 900_000);
+        assert_eq!(u["models"][0]["split"]["cache_write_1h"], 900_000);
+        assert_eq!(u["models"][0]["price"]["cache_write_1h"], 8.0);
+        // Kept and read back from the store: the same.
+        let mut core = test_core();
+        core.store.put_usage(&rows).unwrap();
+        assert_eq!(usage_of(&w, &names(), &core.store.usage_between(0, i64::MAX).unwrap())["cost"], 7.7);
+    }
+
+    #[test]
+    fn nothing_priced_says_unpriced_not_nothing() {
+        let w = window("2026-11-10T00:00:00Z", "2026-11-11T00:00:00Z").unwrap();
+        let row = |at: &str, provider: &str, model: &str, n: i64| crate::usage::Row {
+            file: "pi:a.jsonl".into(),
+            minute: OffsetDateTime::parse(at, &Rfc3339).unwrap().unix_timestamp(),
+            provider: provider.into(),
+            model: model.into(),
+            docket: "D-1".into(),
+            tokens: [n, 0, 0, 0],
+            write_1h: 0,
+        };
+        let md = |u: Value| markdown(&json!({ "reviews": {}, "agents": {}, "builds": {}, "you": {}, "usage": u }), "today");
+        let u = usage_of(&w, &names(), &[row("2026-11-10T06:00:00Z", "ollama", "Llama 4", 5_000_000)]);
+        assert_eq!((u["cost"].as_f64(), u["unpriced"]["tokens"].as_i64()), (Some(0.0), Some(5_000_000)));
+        let text = md(u);
+        assert!(text.contains("\n**Cost:** unpriced, 5M tokens with no price: Llama 4 (Ollama)\n"), "{text}");
+        assert!(!text.contains("$0"), "{text}");
+        // The same cost as the period before: ±$0, as the apps say it.
+        let u = usage_of(&w, &names(), &[row("2026-11-09T06:00:00Z", "anthropic", "Opus 5.5", 1_000_000), row("2026-11-10T06:00:00Z", "anthropic", "Opus 5.5", 1_000_000)]);
+        assert!(md(u).contains("\n**Cost:** $4.00 at API prices (±$0 vs the period before)"));
     }
 
     #[test]
@@ -1256,8 +1320,15 @@ mod tests {
         ]];
         let rows = rows_of(&[Span { docket: 0, file: 0, from: 0, until: Some(at("2026-11-10T08:00:00Z")) }], &read);
         let minute = at("2026-11-10T06:00:00Z");
-        let row =
-            |model: &str, tokens| crate::usage::Row { file: "claude:a.jsonl".into(), minute, provider: "anthropic".into(), model: model.into(), docket: "D-1".into(), tokens };
+        let row = |model: &str, tokens| crate::usage::Row {
+            file: "claude:a.jsonl".into(),
+            minute,
+            provider: "anthropic".into(),
+            model: model.into(),
+            docket: "D-1".into(),
+            tokens,
+            write_1h: 0,
+        };
         assert_eq!(rows, vec![row("Haiku 5.5", [2, 0, 0, 2]), row("Opus 5.5", [4, 0, 0, 4])]);
     }
 
@@ -1311,6 +1382,7 @@ mod tests {
             model: "Opus 5.5".into(),
             docket: docket.into(),
             tokens: [n, 0, 0, 0],
+            write_1h: 0,
         };
         // The file grew since the snapshot: what's read now wins.
         assert_eq!(merge(vec![row("a", "D-1", 5)], vec![row("a", "D-1", 9)]), vec![row("a", "D-1", 9)]);
@@ -1391,6 +1463,7 @@ mod tests {
             model: model.into(),
             docket: "D-1".into(),
             tokens: [1, 0, 0, 0],
+            write_1h: 0,
         };
         // 1,999 minutes, then one with four models across where a batch would end.
         let mut rows: Vec<_> = (0..1999).map(|m| row(m * 60, "Opus 5.5")).collect();

@@ -1,5 +1,6 @@
 //! What the agents' tokens cost: each model's price per million tokens,
-//! for input, input read from the cache, input written to it, and output.
+//! for input, input read from the cache, input written to it (to
+//! Anthropic's 5-minute cache, and to its 1-hour one), and output.
 //! Built in from each provider's own price list, and set or changed in
 //! settings.json (`prices`). A model with no price is left unpriced, never
 //! guessed: Recap says how many tokens that leaves out.
@@ -19,12 +20,17 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 /// A model's price: micro-dollars per million tokens, in the order a
-/// `usage::Row` counts tokens.
+/// `usage::Row` counts tokens, then a write to the 1-hour cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Price(pub [i64; 4]);
+pub struct Price(pub [i64; 5]);
 
 /// The fields of a price, as settings.json and the usage JSON name them.
-pub const FIELDS: [&str; 4] = ["input", "cache_read", "cache_write", "output"];
+pub const FIELDS: [&str; 5] = ["input", "cache_read", "cache_write", "output", "cache_write_1h"];
+/// The fields a model with no built-in price must set: a write to the
+/// 1-hour cache costs what `cache_write` does unless it's set too.
+const NEEDED: usize = 4;
+/// At most this many notes about settings.json's prices are kept.
+const MAX_NOTES: usize = 20;
 
 /// No model costs more than this, in dollars per million tokens: a bigger
 /// price is a slip (cents typed as dollars, a price per token).
@@ -36,10 +42,15 @@ const MAX_NAME: usize = 200;
 
 impl Price {
     /// What tokens `[input, cache_read, cache_write, output]` cost, in
-    /// pico-dollars. Exact: an i64 count times an i64 price always fits an
-    /// i128, and a negative count (never kept) costs nothing.
-    pub fn cost(&self, tokens: [i64; 4]) -> i128 {
-        tokens.iter().zip(self.0).fold(0i128, |a, (n, p)| a.saturating_add(i128::from((*n).max(0)) * i128::from(p)))
+    /// pico-dollars, `write_1h` of the writes at the 1-hour cache's price
+    /// and the rest at the 5-minute one's. Exact: an i64 count times an
+    /// i64 price always fits an i128, and a negative count (never kept)
+    /// costs nothing.
+    pub fn cost(&self, tokens: [i64; 4], write_1h: i64) -> i128 {
+        let written = tokens[2].max(0);
+        let hour = write_1h.clamp(0, written);
+        let counts = [tokens[0], tokens[1], written - hour, tokens[3], hour];
+        counts.iter().zip(self.0).fold(0i128, |a, (n, p)| a.saturating_add(i128::from((*n).max(0)) * i128::from(p)))
     }
 
     /// Dollars per million tokens, for the apps.
@@ -64,15 +75,18 @@ const JAN_1_2027: i64 = 1_798_761_600;
 
 /// Each built-in price: provider, the model's name as `usage` makes it,
 /// when it takes effect (unix seconds; `None` for always), and dollars per
-/// million tokens `[input, cache_read, cache_write, output]`.
+/// million tokens `[input, cache_read, cache_write, output]`. A write to
+/// the 1-hour cache is 2× input for Anthropic's models (its price list
+/// says so for every one) and `cache_write` for the rest, whose writes
+/// never say they went there.
 ///
 /// Where each comes from, read 2026-11-25:
 ///
 /// - **Anthropic:** platform.claude.com/docs/en/about-claude/pricing.
-///   Cache writes are priced at the 5-minute TTL's rate (1.25× input), the
-///   API's default: the store keeps how many tokens were written, not to
-///   which cache. Work that asked for the 1-hour TTL (2× input) costs
-///   more; set `cache_write` in settings.json for it.
+///   `cache_write` is a write to the 5-minute cache (1.25× input), and
+///   `cache_write_1h` one to the 1-hour cache (2× input): Claude Code's
+///   transcripts say how many of a call's writes went to each. A write
+///   kept before the store knew the split counts as a 5-minute one.
 ///   Claude Haiku 5.5 is at its price for prompts up to 100,000 tokens;
 ///   longer ones cost 5× and the store can't tell them apart. Fast mode
 ///   and US-only inference (`inference_geo`) aren't counted either.
@@ -152,7 +166,7 @@ type Key = (String, String);
 struct Set {
     provider: String,
     model: String,
-    fields: [Option<i64>; 4],
+    fields: [Option<i64>; 5],
 }
 
 /// Every model's price, and what settings.json changed.
@@ -171,7 +185,9 @@ impl Prices {
     pub fn built_in() -> Prices {
         let mut table: HashMap<Key, Vec<(i64, Price)>> = HashMap::new();
         for (provider, model, from, d) in BUILT_IN {
-            table.entry((provider.to_string(), model.to_string())).or_default().push((from.unwrap_or(i64::MIN), Price(d.map(micros))));
+            let [i, r, w, o] = d.map(micros);
+            let hour = if *provider == "anthropic" { i.saturating_mul(2) } else { w };
+            table.entry((provider.to_string(), model.to_string())).or_default().push((from.unwrap_or(i64::MIN), Price([i, r, w, o, hour])));
         }
         for v in table.values_mut() {
             v.sort_by_key(|(from, _)| *from);
@@ -183,13 +199,19 @@ impl Prices {
     /// can't be used is left out and said in `notes`; the rest still counts.
     pub fn with(over: &Value) -> Prices {
         let mut p = Prices::built_in();
-        let (sets, notes) = parse(over);
-        p.notes = notes;
+        let (sets, mut notes) = parse(over);
         for s in sets {
             if let Err(e) = p.apply(s) {
-                p.notes.push(e);
+                notes.push(e);
             }
         }
+        // A settings.json gone wrong says what's wrong, not a thousand times.
+        if notes.len() > MAX_NOTES {
+            let more = notes.len() - MAX_NOTES;
+            notes.truncate(MAX_NOTES);
+            notes.push(format!("and {more} more"));
+        }
+        p.notes = notes;
         p
     }
 
@@ -219,25 +241,26 @@ impl Prices {
                 }
             }
             None => {
-                let [Some(a), Some(b), Some(c), Some(d)] = s.fields else {
-                    return Err(format!("{} has no built-in price, so its price needs all of {}", at(&key.0, &key.1), FIELDS.join(", ")));
+                let [Some(a), Some(b), Some(c), Some(d), hour] = s.fields else {
+                    return Err(format!("{} has no built-in price, so its price needs all of {}", at(&key.0, &key.1), FIELDS[..NEEDED].join(", ")));
                 };
-                self.table.insert(key.clone(), vec![(i64::MIN, Price([a, b, c, d]))]);
+                self.table.insert(key.clone(), vec![(i64::MIN, Price([a, b, c, d, hour.unwrap_or(c)]))]);
             }
         }
         self.set.insert(key);
         Ok(())
     }
 
-    /// A model's price at a time (unix seconds), if it has one.
+    /// A model's price at a time (unix seconds), if it has one. Providers
+    /// match whatever their case.
     pub fn at(&self, provider: &str, model: &str, t: i64) -> Option<Price> {
-        let dated = self.table.get(&(provider.to_string(), model.to_string()))?;
+        let dated = self.table.get(&(provider.to_lowercase(), model.to_string()))?;
         dated.iter().rev().find(|(from, _)| *from <= t).or(dated.first()).map(|(_, p)| *p)
     }
 
     /// Where a model's price comes from: `settings` or `built-in`.
     pub fn source(&self, provider: &str, model: &str) -> &'static str {
-        if self.set.contains(&(provider.to_string(), model.to_string())) { "settings" } else { "built-in" }
+        if self.set.contains(&(provider.to_lowercase(), model.to_string())) { "settings" } else { "built-in" }
     }
 }
 
@@ -247,7 +270,8 @@ fn at(provider: &str, model: &str) -> String {
 }
 
 /// settings.json's `prices`, `{ provider: { model: { field: dollars } } }`:
-/// what can be used, and what can't, with why.
+/// what can be used, and what can't, with why. A provider is matched
+/// whatever its case: `Anthropic` is `anthropic`.
 fn parse(v: &Value) -> (Vec<Set>, Vec<String>) {
     let (mut sets, mut bad) = (Vec::new(), Vec::new());
     let Some(providers) = v.as_object() else {
@@ -276,7 +300,7 @@ fn parse(v: &Value) -> (Vec<Set>, Vec<String>) {
                 continue;
             }
             match price(&here, fields) {
-                Ok(f) => sets.push(Set { provider: provider.clone(), model: model.clone(), fields: f }),
+                Ok(f) => sets.push(Set { provider: provider.to_lowercase(), model: model.clone(), fields: f }),
                 Err(e) => bad.push(e),
             }
         }
@@ -285,9 +309,9 @@ fn parse(v: &Value) -> (Vec<Set>, Vec<String>) {
 }
 
 /// One model's fields: each a price in dollars per million tokens.
-fn price(here: &str, v: &Value) -> std::result::Result<[Option<i64>; 4], String> {
+fn price(here: &str, v: &Value) -> std::result::Result<[Option<i64>; 5], String> {
     let Some(o) = v.as_object() else { return Err(format!("{here} is an object of {}, not {}", FIELDS.join(", "), kind(v))) };
-    let mut out = [None; 4];
+    let mut out = [None; 5];
     for (k, x) in o {
         let Some(i) = FIELDS.iter().position(|f| f == k) else {
             return Err(format!("{here} has {k}, which isn't a price: they're {}", FIELDS.join(", ")));
@@ -410,18 +434,39 @@ mod tests {
     fn each_field_at_its_own_price() {
         let p = Prices::built_in();
         let opus = p.at("anthropic", "Opus 5.5", 0).unwrap();
-        assert_eq!(opus, Price([4 * M, 200_000, 5 * M, 20 * M]));
+        assert_eq!(opus, Price([4 * M, 200_000, 5 * M, 20 * M, 8 * M]));
         // A million of each: $4 + $0.20 + $5 + $20.
-        assert_eq!(opus.cost([M, 0, 0, 0]), 4 * 10i128.pow(12));
-        assert_eq!(opus.cost([0, M, 0, 0]), 2 * 10i128.pow(11));
-        assert_eq!(opus.cost([0, 0, M, 0]), 5 * 10i128.pow(12));
-        assert_eq!(opus.cost([0, 0, 0, M]), 20 * 10i128.pow(12));
-        assert_eq!(opus.cost([M, M, M, M]), 29_200_000 * 10i128.pow(6));
+        assert_eq!(opus.cost([M, 0, 0, 0], 0), 4 * 10i128.pow(12));
+        assert_eq!(opus.cost([0, M, 0, 0], 0), 2 * 10i128.pow(11));
+        assert_eq!(opus.cost([0, 0, M, 0], 0), 5 * 10i128.pow(12));
+        assert_eq!(opus.cost([0, 0, 0, M], 0), 20 * 10i128.pow(12));
+        assert_eq!(opus.cost([M, M, M, M], 0), 29_200_000 * 10i128.pow(6));
         // One token of Haiku 5.5's input is a tenth of a micro-dollar, kept exactly.
-        assert_eq!(p.at("anthropic", "Haiku 5.5", 0).unwrap().cost([1, 0, 0, 0]), 100_000);
-        assert_eq!(p.at("openai", "GPT-6.2 Astra", 0).unwrap(), Price([8 * M, 400_000, 10 * M, 40 * M]));
-        assert_eq!(p.at("google", "Gemini 4 Neon", 0).unwrap(), Price([3 * M, 150_000, 3 * M, 15 * M]));
-        assert_eq!(opus.cost([-5, 0, 0, 0]), 0, "a negative count costs nothing");
+        assert_eq!(p.at("anthropic", "Haiku 5.5", 0).unwrap().cost([1, 0, 0, 0], 0), 100_000);
+        assert_eq!(p.at("openai", "GPT-6.2 Astra", 0).unwrap(), Price([8 * M, 400_000, 10 * M, 40 * M, 10 * M]));
+        assert_eq!(p.at("google", "Gemini 4 Neon", 0).unwrap(), Price([3 * M, 150_000, 3 * M, 15 * M, 3 * M]));
+        assert_eq!(opus.cost([-5, 0, 0, 0], 0), 0, "a negative count costs nothing");
+    }
+
+    #[test]
+    fn writes_to_the_1_hour_cache_cost_twice_input() {
+        let p = Prices::built_in();
+        let opus = p.at("anthropic", "Opus 5.5", 0).unwrap();
+        // A million written, 900,000 of them to the 1-hour cache: 100,000 at $5 and 900,000 at $8.
+        assert_eq!(opus.cost([0, 0, M, 0], 900_000), (500_000 + 7_200_000) * 10i128.pow(6));
+        assert_eq!(opus.cost([0, 0, M, 0], M), 8 * 10i128.pow(12));
+        // Never more 1-hour writes than writes, never fewer than none.
+        assert_eq!(opus.cost([0, 0, M, 0], 5 * M), 8 * 10i128.pow(12));
+        assert_eq!(opus.cost([0, 0, M, 0], -7), 5 * 10i128.pow(12));
+        assert_eq!(opus.cost([0, 0, -3, 0], 10), 0);
+        // Every Anthropic model's 1-hour write is 2× its input, as its list says.
+        for (provider, model, from, d) in BUILT_IN {
+            let price = p.at(provider, model, from.unwrap_or(0)).unwrap();
+            let want = if *provider == "anthropic" { micros(d[0]) * 2 } else { micros(d[2]) };
+            assert_eq!(price.0[4], want, "{provider} {model}");
+        }
+        assert_eq!(p.at("anthropic", "Fable 5.2", 0).unwrap().0[4], 16 * M);
+        assert_eq!(p.at("anthropic", "Haiku 5.5", 0).unwrap().0[4], 200_000);
     }
 
     #[test]
@@ -454,21 +499,27 @@ mod tests {
     #[test]
     fn settings_change_a_field_or_add_a_model() {
         let p = Prices::with(&json!({
-            "anthropic": { "Opus 5.5": { "cache_write": 8 } },
+            "anthropic": { "Opus 5.5": { "cache_write_1h": 9 } },
             "ollama": { "Llama 4": { "input": 0, "cache_read": 0, "cache_write": 0, "output": 0 } },
-            "openrouter": { "Sonnet 5.5": { "input": 2.1, "cache_read": 0.105, "cache_write": 2.625, "output": 10.5 } },
+            "OpenRouter": { "Sonnet 5.5": { "input": 2.1, "cache_read": 0.105, "cache_write": 2.625, "output": 10.5, "cache_write_1h": 4.2 } },
+            "together": { "Kimi K3": { "input": 1, "cache_read": 0.1, "cache_write": 1.25, "output": 4 } },
             "google": { "Gemini 4 Carbon": { "output": 12 } },
         }));
         assert!(p.notes.is_empty(), "{:?}", p.notes);
-        // The 1-hour TTL's writes, the rest still built in.
-        assert_eq!(p.at("anthropic", "Opus 5.5", 0), Some(Price([4 * M, 200_000, 8 * M, 20 * M])));
+        // One field changed, the rest still built in.
+        assert_eq!(p.at("anthropic", "Opus 5.5", 0), Some(Price([4 * M, 200_000, 5 * M, 20 * M, 9 * M])));
         assert_eq!(p.source("anthropic", "Opus 5.5"), "settings");
         assert_eq!(p.source("anthropic", "Sonnet 5.5"), "built-in");
-        assert_eq!(p.at("ollama", "Llama 4", 0), Some(Price([0; 4])), "free is a price");
-        assert_eq!(p.at("openrouter", "Sonnet 5.5", 0), Some(Price([2_100_000, 105_000, 2_625_000, 10_500_000])));
+        assert_eq!(p.at("ollama", "Llama 4", 0), Some(Price([0; 5])), "free is a price");
+        // A provider in any case is the one the usage names.
+        assert_eq!(p.at("openrouter", "Sonnet 5.5", 0), Some(Price([2_100_000, 105_000, 2_625_000, 10_500_000, 4_200_000])));
+        assert_eq!(p.at("OpenRouter", "Sonnet 5.5", 0), p.at("openrouter", "Sonnet 5.5", 0));
+        assert_eq!(p.source("OPENROUTER", "Sonnet 5.5"), "settings");
+        // A new model's 1-hour write is its cache_write unless it says.
+        assert_eq!(p.at("together", "Kimi K3", 0).unwrap().0[4], 1_250_000);
         // A field set over a dated price is set at every date.
-        assert_eq!(p.at("google", "Gemini 4 Carbon", 0).unwrap().0, [2 * M, 100_000, 2 * M, 12 * M]);
-        assert_eq!(p.at("google", "Gemini 4 Carbon", DEC_1_2026).unwrap().0, [4 * M, 200_000, 4 * M, 12 * M]);
+        assert_eq!(p.at("google", "Gemini 4 Carbon", 0).unwrap().0, [2 * M, 100_000, 2 * M, 12 * M, 2 * M]);
+        assert_eq!(p.at("google", "Gemini 4 Carbon", DEC_1_2026).unwrap().0, [4 * M, 200_000, 4 * M, 12 * M, 4 * M]);
     }
 
     #[test]
@@ -501,6 +552,16 @@ mod tests {
         assert!(check(&json!([1])).is_err());
         let long = "x".repeat(MAX_NAME + 1);
         assert!(check(&json!({ "anthropic": { long: { "input": 1 } } })).is_err());
+        assert!(check(&json!({ "anthropic": { "Opus 5.5": { "cache_write_1h": -8 } } })).is_err());
+    }
+
+    #[test]
+    fn a_settings_json_gone_wrong_says_so_briefly() {
+        let many: Map<String, Value> = (0..50).map(|i| (format!("Model {i}"), json!({ "input": -1 }))).collect();
+        let p = Prices::with(&json!({ "acme": many.clone() }));
+        assert_eq!(p.notes.len(), MAX_NOTES + 1);
+        assert_eq!(p.notes.last().unwrap(), "and 30 more");
+        assert!(check(&json!({ "acme": many })).is_err());
     }
 
     #[test]
@@ -510,7 +571,7 @@ mod tests {
         // each, a micro-dollar together. Rounding each would make it zero.
         let mut s = Spend::default();
         for _ in 0..10 {
-            s.add(Some(haiku.cost([1, 0, 0, 0])), 1);
+            s.add(Some(haiku.cost([1, 0, 0, 0], 0)), 1);
         }
         assert_eq!(s.micros(), 1);
         assert_eq!(Spend { pico: 499_999, unpriced: 0 }.micros(), 0);
@@ -518,10 +579,10 @@ mod tests {
         s.add(None, 7);
         assert_eq!((s.micros(), s.unpriced), (1, 7));
         // Billions of tokens at the dearest price don't overflow.
-        let dear = Price([micros(MAX_PRICE); 4]);
+        let dear = Price([micros(MAX_PRICE); 5]);
         let mut big = Spend::default();
         for _ in 0..1000 {
-            big.add(Some(dear.cost([i64::MAX; 4])), i64::MAX);
+            big.add(Some(dear.cost([i64::MAX; 4], i64::MAX / 2)), i64::MAX);
         }
         assert!(big.pico > 0 && big.micros() == i64::MAX);
         big.add(None, i64::MAX);
