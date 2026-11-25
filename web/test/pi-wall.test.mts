@@ -56,6 +56,20 @@ test("a builder's denied commands are refused wherever they are in the line", as
     "wh send --to me hi",
     "wh share 5173",
     "wh reply 3 ok",
+    // Wrappers, and what a shell or git reads before the command.
+    "timeout 60 gh pr create",
+    "timeout -k 5 60 git push",
+    "stdbuf -oL gh run watch",
+    "xargs -P 4 gh issue close",
+    "bash --norc -c 'gh pr list'",
+    "bash -e -c 'gh pr list'",
+    "bash -o pipefail -c 'git push'",
+    "git --no-pager push",
+    "git -C sub push",
+    "git -c push.default=current push",
+    'echo "token: $(gh auth token)"',
+    "bash <<'EOF'\ngh pr create --fill\nEOF",
+    "diff <(gh api /user) /dev/null",
   ];
   for (const c of blocked) {
     const r = call("bash", { command: c });
@@ -73,6 +87,15 @@ test("a builder's denied commands are refused wherever they are in the line", as
     "wh brief",
     "wh note D-1 'pushed nothing'",
     "wh attach report.md",
+    // Words that only mention one: quoted, in a heredoc's body, or a comment.
+    'git commit -m "docs: say why (gh can\'t run here)"',
+    "git commit -F - <<'EOF'\nfix\n\ngh issue 12; wh send is the hub's\nEOF",
+    "cat > scripts/release.sh <<'EOF'\ngh release create v1\ngit push --tags\nEOF\nchmod +x scripts/release.sh",
+    'grep -rn "; gh " .',
+    "grep -n 'wh send' README.md",
+    "command -v gh",
+    "cargo test # then git push",
+    "printf '%s\\n' \"git push\"",
   ];
   for (const c of fine) assert.equal(call("bash", { command: c }), undefined, c);
   // Tools that run no command, and other tools' commands, alike.

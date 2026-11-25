@@ -308,7 +308,7 @@ pub fn reviewer(cfg: &Config, l: &ReviewerLaunch) -> Launch {
         // Pi takes no folders: it reads and writes wherever you can. No
         // MCP: a reviewer reads the PR, and a tracker's or a cluster's tools
         // would route around the wall.
-        return pi_launch(argv, program(cfg, l.agent), args, l.resume, &[], false, l.title);
+        return pi_launch(argv, program(cfg, l.agent), args, l.worktree, l.resume, &[], false, l.title);
     }
     argv.push(program(cfg, l.agent));
     if l.agent == "claude" {
@@ -369,7 +369,7 @@ pub fn checker(cfg: &Config, worktree: &Path, others: &[PathBuf], effort: Option
     if agent == "pi" {
         // Pi asks before nothing: preview runs, dismiss never, post only on auto.
         let deny: &[&str] = if auto { &["wh review dismiss"] } else { &["wh review dismiss", "wh review post"] };
-        return pi_launch(argv, program(cfg, agent), args, None, deny, false, title);
+        return pi_launch(argv, program(cfg, agent), args, worktree, None, deny, false, title);
     }
     argv.push(program(cfg, agent));
     if agent == "claude" {
@@ -432,25 +432,49 @@ pub fn pi_wall() -> PathBuf {
     p
 }
 
-/// Pi behind the wall, after `env` and its settings (`argv`): a session
-/// chosen up front (or `resume`d by its id), no extensions but Wheelhouse's
-/// (yours and a PR's own `.pi/` could route around the wall), no MCP
-/// servers unless `mcp`, and the commands in `deny` refused.
-pub fn pi_launch(mut argv: Vec<String>, program: String, args: Vec<String>, resume: Option<&str>, deny: &[&str], mcp: bool, title: &str) -> Launch {
+/// Pi's record hooks for Review's and Build's panes: Wheelhouse's own copy,
+/// never the one in Pi's folder (a hand-edited one that won't load would
+/// stop every pane, since Pi won't start without an `-e` extension).
+fn pi_hooks() -> Option<PathBuf> {
+    if cfg!(test) || !crate::hooks::pi_installed() {
+        return None;
+    }
+    let text = crate::hooks::pi_extension_text().ok()?;
+    let p = super::data_dir().join("pi-hooks.ts");
+    if std::fs::read_to_string(&p).ok().as_deref() != Some(text.as_str()) {
+        super::write_atomic(&p, &text).ok()?;
+    }
+    Some(p)
+}
+
+/// Pi behind the wall, in worktree `wt`, after `env` and its settings
+/// (`argv`): a session chosen up front (or `resume`d by its id) and kept
+/// where Wheelhouse reads it, no extensions but Wheelhouse's (yours and a
+/// PR's own `.pi/` could route around the wall), no MCP servers unless
+/// `mcp`, and the commands in `deny` refused.
+#[allow(clippy::too_many_arguments)]
+pub fn pi_launch(mut argv: Vec<String>, program: String, args: Vec<String>, wt: &Path, resume: Option<&str>, deny: &[&str], mcp: bool, title: &str) -> Launch {
     let session = resume.map(str::to_string).unwrap_or_else(uuid_v4);
     argv.push(format!("WH_PI_DENY={}", json!(deny)));
     argv.push(program);
     // `--session-id`: this folder's session with that id, made if it's new.
+    // `--session-dir` beats `PI_CODING_AGENT_SESSION_DIR` and any
+    // `sessionDir` setting, a PR's own `.pi/settings.json` included (Pi
+    // reads that one before it decides trust).
     argv.extend(["--session-id".to_string(), session.clone()]);
+    argv.extend(["--session-dir".to_string(), pi_project(&pi_sessions_root(), wt).display().to_string()]);
     argv.extend(args);
     argv.extend(["--no-extensions".to_string(), "--no-approve".to_string()]);
-    if !mcp {
+    // Pi's MCP is a built-in extension: `--no-extensions` takes it too.
+    if mcp {
+        argv.extend(["-e".to_string(), "builtin:mcp".to_string()]);
+    } else {
         argv.push("--no-mcp".into());
     }
     // Wheelhouse's own: the record's hooks (when installed), then the wall,
     // last, so it sees each command as it will run.
-    if !cfg!(test) && crate::hooks::pi_installed() {
-        argv.extend(["-e".to_string(), crate::hooks::pi_extension_path().display().to_string()]);
+    if let Some(h) = pi_hooks() {
+        argv.extend(["-e".to_string(), h.display().to_string()]);
     }
     argv.extend(["-e".to_string(), pi_wall().display().to_string()]);
     argv.extend(["--name".to_string(), title.to_string()]);
@@ -486,10 +510,35 @@ pub fn pi_session_id(file: &Path) -> Option<&str> {
 }
 
 /// The file of Pi session `id`: in `cwd`'s folder, else in any folder (a
-/// session resumed from another folder stays in its first).
+/// session resumed from another folder stays in its first), else in a
+/// folder you told Pi to keep sessions in, where they lie flat.
 pub fn pi_transcript(root: &Path, cwd: &Path, id: &str) -> Option<PathBuf> {
+    pi_transcript_in(root, &pi_session_dirs(cwd), cwd, id)
+}
+
+fn pi_transcript_in(root: &Path, flat: &[PathBuf], cwd: &Path, id: &str) -> Option<PathBuf> {
     let in_dir = |d: &Path| std::fs::read_dir(d).ok()?.filter_map(Result::ok).map(|e| e.path()).find(|p| pi_session_id(p) == Some(id) && p.is_file());
-    in_dir(&pi_project(root, cwd)).or_else(|| std::fs::read_dir(root).ok()?.filter_map(Result::ok).find_map(|e| in_dir(&e.path())))
+    in_dir(&pi_project(root, cwd)).or_else(|| std::fs::read_dir(root).ok()?.filter_map(Result::ok).find_map(|e| in_dir(&e.path()))).or_else(|| flat.iter().find_map(|d| in_dir(d)))
+}
+
+/// The folders you told Pi to keep sessions in, for `cwd`:
+/// `PI_CODING_AGENT_SESSION_DIR`, then `sessionDir` in Pi's settings (a
+/// relative one is from the folder Pi ran in).
+pub fn pi_session_dirs(cwd: &Path) -> Vec<PathBuf> {
+    let setting = std::fs::read_to_string(crate::hooks::pi_agent_dir().join("settings.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v["sessionDir"].as_str().map(str::to_string));
+    std::env::var("PI_CODING_AGENT_SESSION_DIR")
+        .ok()
+        .into_iter()
+        .chain(setting)
+        .filter(|d| !d.trim().is_empty())
+        .map(|d| {
+            let p = crate::paths::expand(&d);
+            if p.is_absolute() { p } else { cwd.join(p) }
+        })
+        .collect()
 }
 
 /// A model's name for people, from the id Pi called it by, whichever
@@ -531,9 +580,12 @@ pub fn pi_read(file: &Path) -> PiRead {
             Some("session") if v["parentSession"].as_str().is_some_and(|p| !p.is_empty()) => began = v["timestamp"].as_str().map(str::to_string),
             Some("model_change") => r.model = v["modelId"].as_str().map(pi_model_name),
             Some("thinking_level_change") => r.effort = v["thinkingLevel"].as_str().map(str::to_string),
-            Some("message") if v["message"]["role"] == "assistant" => {
-                let m = &v["message"];
-                if let Some(id) = m["model"].as_str().filter(|x| !x.is_empty()) {
+            _ => {
+                let Some((u, model)) = pi_usage(&v) else { continue };
+                if v["type"] == "message"
+                    && v["message"]["role"] == "assistant"
+                    && let Some(id) = model
+                {
                     r.model = Some(pi_model_name(id));
                 }
                 let copied = match (began.as_deref(), v["timestamp"].as_str()) {
@@ -541,14 +593,29 @@ pub fn pi_read(file: &Path) -> PiRead {
                     _ => false,
                 };
                 if !copied {
-                    let n = |k: &str| m["usage"][k].as_i64().unwrap_or(0).clamp(0, 100_000_000);
-                    add(&mut r.tokens, [n("input"), n("cacheRead"), n("cacheWrite"), n("output")]);
+                    add(&mut r.tokens, u);
                 }
             }
-            _ => {}
         }
     }
     r
+}
+
+/// The tokens a Pi session entry spent (`[input, cache_read, cache_write,
+/// output]`) and the model it names, if any: an assistant message's, a
+/// tool's that called a model, a `usage` entry's (cache warming), a
+/// compaction's or a branch summary's. All count in Pi's own totals.
+pub fn pi_usage(v: &Value) -> Option<([i64; 4], Option<&str>)> {
+    let (u, model) = match v["type"].as_str()? {
+        "message" => (&v["message"]["usage"], v["message"]["model"].as_str()),
+        _ => (&v["usage"], v["model"].as_str()),
+    };
+    if !u.is_object() {
+        return None;
+    }
+    let n = |k: &str| u[k].as_i64().or_else(|| u[k].as_str().and_then(|s| s.parse().ok())).unwrap_or(0).clamp(0, 100_000_000);
+    let t = [n("input"), n("cacheRead"), n("cacheWrite"), n("output")];
+    t.iter().any(|x| *x > 0).then_some((t, model.filter(|m| !m.is_empty())))
 }
 
 /// A Pi session's file, by its folder and id.
@@ -1140,12 +1207,11 @@ mod tests {
         let id = l.session.clone().unwrap();
         assert!(a.starts_with("env -u LINEAR_API_KEY -u WH_LINEAR_KEY -u SSH_AUTH_SOCK GH_TOKEN=wheelhouse-wall-no-token"), "{a}");
         // The deny list goes to the wall through env, before the program.
-        assert!(
-            a.contains(&format!(
-                " WH_PI_DENY=[] /bin/pi --session-id {id} --model anthropic/claude-opus-5-5 -e /x/provider.ts --thinking high --no-extensions --no-approve --no-mcp -e "
-            )),
-            "{a}"
-        );
+        assert!(a.contains(&format!(" WH_PI_DENY=[] /bin/pi --session-id {id} --session-dir ")), "{a}");
+        // Kept where Wheelhouse reads it, whatever a PR's .pi/settings.json says.
+        let dir = l.argv.iter().position(|x| x == "--session-dir").map(|i| l.argv[i + 1].clone()).unwrap();
+        assert_eq!(PathBuf::from(&dir), pi_project(&pi_sessions_root(), &wt));
+        assert!(a.contains(" --model anthropic/claude-opus-5-5 -e /x/provider.ts --thinking high --no-extensions --no-approve --no-mcp -e "), "{a}");
         assert!(l.argv.windows(2).any(|w| w[0] == "-e" && w[1].ends_with("pi-wall.ts")), "{a}");
         assert!(a.ends_with("pi-wall.ts --name wheelhouse review o/api#7"), "the wall is the last extension: {a}");
         assert!(!a.contains("--add-dir"), "Pi takes no folders: {a}");
@@ -1162,6 +1228,21 @@ mod tests {
     }
 
     #[test]
+    fn a_pi_session_kept_in_a_folder_you_chose_is_found_there() {
+        let dir = std::env::temp_dir().join(format!("wh-pi-flat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (root, flat) = (dir.join("sessions"), dir.join("mine"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&flat).unwrap();
+        let f = flat.join("2026-11-25T14-00-00-000Z_s-7.jsonl");
+        std::fs::write(&f, "{}\n").unwrap();
+        assert_eq!(pi_transcript_in(&root, std::slice::from_ref(&flat), Path::new("/w"), "s-7"), Some(f));
+        assert_eq!(pi_transcript_in(&root, &[], Path::new("/w"), "s-7"), None);
+        assert_eq!(pi_transcript_in(&root, &[flat], Path::new("/w"), "s-8"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_pi_sessions_model_effort_and_tokens_come_from_its_file() {
         let dir = std::env::temp_dir().join(format!("wh-pi-read-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1174,10 +1255,13 @@ mod tests {
             json!({ "type": "thinking_level_change", "thinkingLevel": "xhigh" }),
             json!({ "type": "message", "timestamp": "2026-11-25T15:01:00Z", "message": { "role": "user", "content": "go" } }),
             json!({ "type": "message", "timestamp": "2026-11-25T15:02:00Z", "message": { "role": "assistant", "model": "claude-opus-5-5", "usage": u(4) } }),
+            json!({ "type": "usage", "kind": "cache_warm", "timestamp": "2026-11-25T15:20:00Z", "model": "claude-haiku-5-5", "usage": { "cacheRead": 1000 } }),
         ];
         std::fs::write(&f, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\nnot json\n").unwrap();
         let r = pi_read(&f);
-        assert_eq!(r, PiRead { model: Some("Opus 5.5".into()), effort: Some("xhigh".into()), tokens: [4, 100, 10, 2] }, "the fork's copied call isn't its own");
+        // The fork's copied call isn't its own; a cache warming is, but it
+        // isn't the model the session runs.
+        assert_eq!(r, PiRead { model: Some("Opus 5.5".into()), effort: Some("xhigh".into()), tokens: [4, 1100, 10, 2] });
         assert_eq!(pi_read(&dir.join("missing.jsonl")), PiRead::default());
         assert_eq!(pi_model_name("openrouter/google/gemini-4-neon"), "Gemini 4 Neon");
         assert_eq!(pi_model_name("qwen3-coder"), "qwen3-coder");

@@ -64,19 +64,18 @@ fn rfc3339(secs: i64) -> Option<String> {
 }
 
 /// The docket's agents, from its record: each claim, until its pane's
-/// release. A docket opened for an agent names it in `open`, as the fold
-/// reads it: that's its first claim (a hook can open the docket, session
-/// and all, before the pane is seen, and then no `claim` follows). One
-/// opened without a session, then claimed with one, is one claim.
+/// release. A docket a hook opened, session and all, before its pane was
+/// seen names the agent in `open`, and no `claim` follows: that `open` is
+/// its claim. One opened without a session isn't: matched by its folder,
+/// it would take the sessions of every other pane there.
 pub fn claims(entries: &[Entry]) -> Vec<Claim> {
-    // (pane, from an `open` with no session, the claim)
-    let mut out: Vec<(Option<String>, bool, Claim)> = Vec::new();
+    let mut out: Vec<(Option<String>, Claim)> = Vec::new();
     for e in entries {
         let d = &e.data;
         match e.kind.as_str() {
             "open" | "claim" => {
                 let a = &d["agent"];
-                if !a.is_object() {
+                if !a.is_object() || (e.kind == "open" && d["session"].as_str().is_none_or(str::is_empty)) {
                     continue;
                 }
                 let app = match a["app"].as_str() {
@@ -90,29 +89,21 @@ pub fn claims(entries: &[Entry]) -> Vec<Claim> {
                 let Some(from) = epoch(&e.at) else { continue };
                 let label = d["role"].as_str().or(a["pane"].as_str()).unwrap_or(app).to_string();
                 let session = d["session"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
-                let block = a["block"].as_str().map(str::to_string);
-                let mut from = from;
-                // The pane's session, claimed after the docket was opened for
-                // it: the same claim, from when it was opened.
-                if e.kind == "claim"
-                    && session.is_some()
-                    && let Some(i) = out.iter().rposition(|(blk, opened, c)| *opened && block.is_some() && *blk == block && c.until.is_none() && c.app == app)
-                {
-                    from = from.min(out.remove(i).2.from);
-                }
-                let opened = e.kind == "open" && session.is_none();
-                out.push((block, opened, Claim { app: app.into(), label, cwd: crate::paths::expand(cwd), session, round: d["round"].as_i64(), from, until: None }));
+                out.push((
+                    a["block"].as_str().map(str::to_string),
+                    Claim { app: app.into(), label, cwd: crate::paths::expand(cwd), session, round: d["round"].as_i64(), from, until: None },
+                ));
             }
             "release" => {
                 let (Some(b), Some(at)) = (d["block"].as_str(), epoch(&e.at)) else { continue };
-                if let Some((_, _, c)) = out.iter_mut().rev().find(|(blk, _, c)| blk.as_deref() == Some(b) && c.until.is_none()) {
+                if let Some((_, c)) = out.iter_mut().rev().find(|(blk, c)| blk.as_deref() == Some(b) && c.until.is_none()) {
                     c.until = Some(at);
                 }
             }
             _ => {}
         }
     }
-    out.into_iter().map(|(_, _, c)| c).collect()
+    out.into_iter().map(|(_, c)| c).collect()
 }
 
 /// Of the claims in `cwd` for `app`, the one a session that began at `t`
@@ -724,33 +715,29 @@ mod tests {
     }
 
     #[test]
-    fn a_docket_opened_for_an_agent_names_it_once() {
+    fn a_docket_a_hook_opened_names_its_agent_in_the_open() {
         let pane = |app: &str, b: &str| json!({ "app": app, "block": b, "pane": "D-1", "cwd": "/w" });
         // A hook opened it, session and all, before the pane was seen: no claim follows.
         let cs = claims(&[entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "agent", "agent": pane("pi", "p1"), "session": "s-1", "source": "startup" }))]);
         assert_eq!(cs.len(), 1);
         assert_eq!((cs[0].app.as_str(), cs[0].session.as_deref()), ("pi", Some("s-1")));
 
-        // Opened for the pane, then its session claimed: one claim, from the open.
+        // Opened for the pane, then its session claimed: the claim alone.
         let cs = claims(&[
             entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "agent", "agent": pane("claude-code", "b1") })),
             entry("claim", "2026-11-25T14:00:02Z", json!({ "session": "s-2", "source": "startup", "agent": pane("claude-code", "b1") })),
             entry("release", "2026-11-25T15:00:00Z", json!({ "block": "b1", "reason": "pane closed" })),
         ]);
         assert_eq!(cs.len(), 1, "{cs:?}");
-        assert_eq!((cs[0].session.as_deref(), cs[0].from, cs[0].until), (Some("s-2"), epoch("2026-11-25T14:00:00Z").unwrap(), epoch("2026-11-25T15:00:00Z")));
+        assert_eq!((cs[0].session.as_deref(), cs[0].until), (Some("s-2"), epoch("2026-11-25T15:00:00Z")));
 
-        // Codex has no hooks: the open is all there is, found by its folder.
-        let cs = claims(&[entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "agent", "agent": pane("codex", "b2") }))]);
-        assert_eq!((cs.len(), cs[0].session.as_deref()), (1, None));
-
-        // A docket you opened has no agent; another pane's claim isn't this one's.
+        // Opened with no session (Codex, or no hooks): matched by folder, it
+        // would take another pane's sessions there, so it isn't a claim.
         let cs = claims(&[
+            entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "agent", "agent": pane("codex", "b2") })),
             entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "none" })),
-            entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "agent", "agent": pane("pi", "p1") })),
-            entry("claim", "2026-11-25T14:05:00Z", json!({ "session": "s-3", "source": "join", "agent": pane("pi", "p2") })),
         ]);
-        assert_eq!(cs.iter().map(|c| c.session.as_deref()).collect::<Vec<_>>(), [None, Some("s-3")]);
+        assert!(cs.is_empty(), "{cs:?}");
     }
 
     #[test]
