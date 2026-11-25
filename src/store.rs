@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS usage (  -- derived: each transcript's model calls by
   cache_read INTEGER NOT NULL,
   cache_write INTEGER NOT NULL,
   output INTEGER NOT NULL,
+  write_1h INTEGER NOT NULL DEFAULT 0,  -- of cache_write, what went to Anthropic's 1-hour cache
   PRIMARY KEY (file, minute, provider, model)
 );
 CREATE INDEX IF NOT EXISTS usage_minute ON usage(minute);
@@ -178,6 +179,14 @@ fn migrate(conn: &Connection) -> Result<()> {
     if has("usage", "path")? {
         conn.execute_batch("DROP TABLE usage; DELETE FROM meta WHERE k LIKE 'usage.%';")?;
         conn.execute_batch(SCHEMA)?;
+    }
+    // Which cache a write went to costs differently (pricing.rs). Minutes
+    // kept before this column don't know: the snapshot's mark is dropped
+    // (not when it last ran), so the next one reads everything on disk
+    // again and replaces them. A transcript already pruned keeps its
+    // minutes, costed at the 5-minute cache's price.
+    if !has("usage", "write_1h")? {
+        conn.execute_batch("BEGIN; ALTER TABLE usage ADD COLUMN write_1h INTEGER NOT NULL DEFAULT 0; DELETE FROM meta WHERE k = 'usage.snapshot'; COMMIT;")?;
     }
     if !has("messages", "entry")? {
         conn.execute_batch("ALTER TABLE messages ADD COLUMN entry TEXT; CREATE INDEX IF NOT EXISTS messages_entry ON messages(entry)")?;
@@ -633,8 +642,8 @@ impl Store {
         {
             let mut clear = tx.prepare("DELETE FROM usage WHERE file = ?1 AND minute = ?2")?;
             let mut put = tx.prepare(
-                "INSERT INTO usage (file, minute, provider, model, docket, input, cache_read, cache_write, output) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT (file, minute, provider, model) DO UPDATE SET docket = ?5, input = ?6, cache_read = ?7, cache_write = ?8, output = ?9",
+                "INSERT INTO usage (file, minute, provider, model, docket, input, cache_read, cache_write, output, write_1h) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT (file, minute, provider, model) DO UPDATE SET docket = ?5, input = ?6, cache_read = ?7, cache_write = ?8, output = ?9, write_1h = ?10",
             )?;
             let mut cleared: std::collections::HashSet<(&str, i64)> = std::collections::HashSet::new();
             for r in rows {
@@ -642,7 +651,7 @@ impl Store {
                     clear.execute(params![r.file, r.minute])?;
                 }
                 let [i, cr, cw, o] = r.tokens;
-                put.execute(params![r.file, r.minute, r.provider, r.model, r.docket, i, cr, cw, o])?;
+                put.execute(params![r.file, r.minute, r.provider, r.model, r.docket, i, cr, cw, o, r.write_1h])?;
             }
         }
         tx.commit()?;
@@ -651,9 +660,9 @@ impl Store {
 
     /// The kept usage from `from` up to `until` (unix seconds).
     pub fn usage_between(&self, from: i64, until: i64) -> Result<Vec<crate::usage::Row>> {
-        let mut st = self
-            .conn
-            .prepare("SELECT file, minute, provider, model, docket, input, cache_read, cache_write, output FROM usage WHERE minute >= ?1 AND minute < ?2 ORDER BY minute, file")?;
+        let mut st = self.conn.prepare(
+            "SELECT file, minute, provider, model, docket, input, cache_read, cache_write, output, write_1h FROM usage WHERE minute >= ?1 AND minute < ?2 ORDER BY minute, file",
+        )?;
         let rows = st.query_map(params![from, until], |r| {
             Ok(crate::usage::Row {
                 file: r.get(0)?,
@@ -662,6 +671,7 @@ impl Store {
                 model: r.get(3)?,
                 docket: r.get(4)?,
                 tokens: [r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?],
+                write_1h: r.get(9)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -699,11 +709,52 @@ mod tests {
         let mut s = Store::open(&db).unwrap();
         assert_eq!(s.meta_get("usage.snapshot").unwrap(), None, "the next snapshot keeps everything anew");
         assert_eq!(s.meta_get("other").unwrap().as_deref(), Some("kept"));
-        let r = crate::usage::Row { file: "claude:a.jsonl".into(), minute: 60, provider: "anthropic".into(), model: "Opus 5.5".into(), docket: "D-1".into(), tokens: [2, 0, 0, 0] };
+        let r = crate::usage::Row {
+            file: "claude:a.jsonl".into(),
+            minute: 60,
+            provider: "anthropic".into(),
+            model: "Opus 5.5".into(),
+            docket: "D-1".into(),
+            tokens: [2, 0, 0, 0],
+            write_1h: 0,
+        };
         s.put_usage(std::slice::from_ref(&r)).unwrap();
         assert_eq!(s.usage_between(0, 120).unwrap(), vec![r]);
         drop(s);
         // Opened again: nothing more to do.
         assert_eq!(Store::open(&db).unwrap().usage_between(0, 120).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn minutes_kept_before_the_1_hour_writes_are_read_again() {
+        let dir = std::env::temp_dir().join(format!("wh-store-write-1h-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("wheelhouse.db");
+        {
+            let c = Connection::open(&db).unwrap();
+            c.execute_batch(
+                "CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+                 INSERT INTO meta VALUES ('usage.snapshot', '1800000000'), ('usage.snapshot_ran', '1800000000');
+                 CREATE TABLE usage (file TEXT NOT NULL, minute INTEGER NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, docket TEXT NOT NULL,
+                   input INTEGER NOT NULL, cache_read INTEGER NOT NULL, cache_write INTEGER NOT NULL, output INTEGER NOT NULL, PRIMARY KEY (file, minute, provider, model));
+                 INSERT INTO usage VALUES ('claude:a.jsonl', 60, 'anthropic', 'Opus 5.5', 'D-1', 1, 0, 900, 0);",
+            )
+            .unwrap();
+        }
+        let mut s = Store::open(&db).unwrap();
+        assert_eq!(s.meta_get("usage.snapshot").unwrap(), None, "the next snapshot reads everything on disk again");
+        assert_eq!(s.meta_get("usage.snapshot_ran").unwrap().as_deref(), Some("1800000000"), "when it last ran stays");
+        let kept = s.usage_between(0, 120).unwrap();
+        assert_eq!((kept[0].tokens, kept[0].write_1h), ([1, 0, 900, 0], 0), "kept, not knowing its split");
+        // Read again: the minute is replaced, with its split.
+        let mut r = kept[0].clone();
+        r.write_1h = 800;
+        s.put_usage(std::slice::from_ref(&r)).unwrap();
+        assert_eq!(s.usage_between(0, 120).unwrap(), vec![r]);
+        s.meta_set("usage.snapshot", "1800000100").unwrap();
+        drop(s);
+        // Opened again: the mark a later snapshot set stays.
+        assert_eq!(Store::open(&db).unwrap().meta_get("usage.snapshot").unwrap().as_deref(), Some("1800000100"));
     }
 }
