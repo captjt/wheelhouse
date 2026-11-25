@@ -1,0 +1,137 @@
+---
+title: Configuration
+description: Where Wheelhouse keeps its record, its config files and its working state, and the environment variables that move them.
+---
+
+import { Aside, FileTree } from "@astrojs/starlight/components";
+
+Everything has a default. Most people never set any of this: `just setup`
+and [Settings](/reference/settings/) cover the everyday. This page is for
+running a second hub, tests, and odd setups.
+
+## Files
+
+<FileTree>
+
+- ~/.config/wheelhouse/ your config
+  - review.lua Review's repos, reviewers, checker and posting
+  - build.lua Build's repos, sources, agents, gates and checks
+  - settings.json what Settings changed, laid over the Lua
+  - guides/ your guides, replacing built-in ones of the same name
+  - briefs/
+    - build/ your briefs for Build's agents
+    - review/ your briefs for Review's agents
+  - .history/ whatever a save in Settings replaced, stamped with the time
+- ~/.local/state/wheelhouse/ the record, keys, kept files and socket (0700)
+  - wh.sock the CLI's and the hooks' socket
+- ~/.local/share/wheelhouse/
+  - review/ each PR's working state
+  - build/ each Build's working state
+- ~/.cache/wheelhouse/ shared caches Review's and Build's agents write to (Cargo's, so far)
+- ~/Library/Logs/wheelhouse.log the background hub's log (`wh logs`)
+
+</FileTree>
+
+`review.lua` and `build.lua` are Lua files that return a table. Wheelhouse
+reads them with LuaJIT (`brew install luajit`), so effort and guides can be
+functions. The hub reads a file again whenever it changes. `wh review` and
+`wh build` say what they read, or what's wrong with it.
+
+Copy the examples to start:
+
+```sh
+mkdir -p ~/.config/wheelhouse
+cp examples/review.lua ~/.config/wheelhouse/review.lua
+cp examples/build.lua ~/.config/wheelhouse/build.lua
+```
+
+[Review](/features/review/) and [Build](/features/build/) describe their keys.
+
+<Aside>
+Your state folder is readable only by you (0700). The keys, the database and
+the socket are 0600. The record lives only here, apart from dockets you share
+with a team, so back up `~/.local/state/wheelhouse` if you want to keep it.
+</Aside>
+
+## Environment variables
+
+Set these where the hub runs. For the background hub, `wh up` copies them into
+its LaunchAgent, so set them before you run it. Three aren't copied, and work
+only for a hub you run yourself with `wh serve`: `WH_LUAJIT`, `WH_LINEAR_KEY`
+and `WH_WEB_DIR`. (The background hub finds `luajit` on its own PATH, and reads
+a Linear key from the Keychain.)
+
+### Where things are
+
+| Variable | Default | What it is |
+| --- | --- | --- |
+| `WH_STATE` | `~/.local/state/wheelhouse` | The record, keys, kept files and socket |
+| `WH_SOCKET` | `$WH_STATE/wh.sock` | The CLI's and hooks' socket |
+| `WH_CONFIG` | `~/.config/wheelhouse` | The config folder: settings, `review.lua`, `build.lua`, guides and briefs |
+| `WH_REVIEW_CONFIG` | `$WH_CONFIG/review.lua` | Review's config |
+| `WH_BUILD_CONFIG` | `$WH_CONFIG/build.lua` | Build's config |
+| `WH_SETTINGS` | `$WH_CONFIG/settings.json` | What Settings changed, laid over the Lua |
+| `WH_REVIEW_DATA` | `~/.local/share/wheelhouse/review` | Review's working state, per PR |
+| `WH_BUILD_DATA` | `~/.local/share/wheelhouse/build` | Build's working state, per docket |
+| `WH_REVIEW_CACHE` | `~/.cache/wheelhouse` | Shared caches the agents write to (Cargo's, so far) |
+
+### Where it listens
+
+| Variable | Default | What it is |
+| --- | --- | --- |
+| `WH_HTTP` | `127.0.0.1:7500` | The app. `off` for none |
+| `WH_TAILNET` | `127.0.0.1:7501` | The listener `wh web --publish` serves on your tailnet. `off` for none |
+| `WH_WORKSPACE_HTTP` | `127.0.0.1:7700` | A workspace hub's listener (`wh serve --workspace`). See [Start a workspace](/teams/start/) |
+
+### What it runs
+
+| Variable | Default | What it is |
+| --- | --- | --- |
+| `WH_RUNTIME` | Settings (Runtimes in the web app; Agents in Wheelhouse.app) | Where new agents open: `rex` or `herdr`. Overrides Settings |
+| `WH_REX` | `rex` on PATH | Rex's CLI |
+| `WH_HC` | `hc` on PATH, or `~/.local/bin/hc` | Herdr's CLI |
+| `WH_HERDR_APP` | `herdr-app` on PATH, or `~/.local/bin/herdr-app` | Herdr's app |
+| `WH_GH` | `gh` on PATH | The GitHub CLI |
+| `WH_LUAJIT` | `luajit` on PATH | LuaJIT, to read the configs. `wh serve` only |
+| `WH_TAILSCALE` | `tailscale` on PATH | Tailscale's CLI |
+| `WH_REVIEW_SESSION` | `wheelhouse-reviews` | The session Review's panes open in |
+| `WH_BUILD_SESSION` | `wheelhouse-builds` | The session Build's panes open in |
+
+### What it does
+
+| Variable | Default | What it is |
+| --- | --- | --- |
+| `WH_NOTIFY` | on | `off`: no Mac notifications or Web Push |
+| `WH_LINEAR_KEY` | the Keychain | A Linear API key, for `wh serve` only. `wh setup-linear` stores one in the Keychain, which every hub reads |
+| `WH_LINEAR_OFF` | unset | Set it to never call Linear |
+| `WH_LABEL` | `dev.wheelhouse.hub` | The LaunchAgent's label. Another one makes a second hub (below) |
+| `WH_WEB_DIR` | built in | Serve the web app from a folder on disk instead of the copy built into `wh`. `wh serve` only |
+
+## A second hub
+
+To run a hub beside your everyday one (to try a config, say), give it its own
+state, config, listeners, working folders, sessions and LaunchAgent label, so
+the two never meet:
+
+```sh
+export WH_STATE=~/.local/state/wheelhouse-try
+export WH_CONFIG=~/.config/wheelhouse-try
+export WH_HTTP=127.0.0.1:7510 WH_TAILNET=off
+export WH_REVIEW_DATA=~/.local/share/wheelhouse-try/review
+export WH_BUILD_DATA=~/.local/share/wheelhouse-try/build
+export WH_REVIEW_CACHE=~/.cache/wheelhouse-try
+export WH_REVIEW_SESSION=wheelhouse-try-reviews WH_BUILD_SESSION=wheelhouse-try-builds
+export WH_LABEL=dev.wheelhouse.try
+wh serve
+```
+
+With `WH_LABEL` set, `wh up` runs it at login as its own LaunchAgent, and
+refuses unless `WH_STATE` and `WH_HTTP` are set too, so it never starts on the
+everyday hub's record or port. Its log is `~/Library/Logs/<label>.log`. Point
+Wheelhouse.app at it in Settings → Hub.
+
+<Aside type="caution">
+A second hub still follows the same Rex and Herdr, so it sees your real
+agents. To keep it away from them, point `WH_REX` and `WH_HC` at something
+that isn't your runtime.
+</Aside>
