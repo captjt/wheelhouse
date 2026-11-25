@@ -1,0 +1,238 @@
+---
+title: Build
+description: A docket's intent becomes a pull request. A builder plans and builds, a checker checks, and you approve the plan, the PR, and every round of fixes before anything reaches GitHub.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Build turns a docket into a pull request. The docket's **intent** is the spec:
+what must be true when it's done, and what's out of scope. A Linear or GitHub
+issue seeds it, or you write it yourself on any docket. Two agents work it in
+Rex or Herdr: a **builder** plans and builds, and a **checker** checks the work
+against the plan. You approve the plan, answer the decisions, and approve the PR
+before it opens. The PR opens from your GitHub account.
+
+Once it's open, Build follows it: review comments, failing checks and a base
+that moved become rounds of fixes, with one reply per thread that you approve
+before it posts.
+
+## Set it up
+
+<Steps>
+
+1. Have a review config or a build config that lists your repos. Both are Lua,
+   read with LuaJIT (`brew install luajit`). Build uses the repos in
+   `~/.config/wheelhouse/review.lua` already. To change something for Build, or
+   to build in a repo you don't review, copy the example from your clone of
+   Wheelhouse:
+
+   ```sh
+   cp examples/build.lua ~/.config/wheelhouse/build.lua
+   ```
+
+2. Sign in to GitHub with `gh auth login`. The hub opens PRs with your login.
+
+3. For Linear issues, run `wh setup-linear` once. It stores a Linear API key in
+   the Keychain.
+
+</Steps>
+
+Build is on from the start (`wh build pause` stops new Builds). `wh build` says
+what's wrong with the config, if anything.
+
+A small config:
+
+```lua title="~/.config/wheelhouse/build.lua"
+return {
+  repos = {
+    ["acme/api"] = {
+      checkout = "~/code/acme-api",
+      notes = "Run `just test` before committing. Keep handlers thin; logic goes in services/.",
+      base = "main",
+      -- Checks the hub runs itself at each commit the checker passes.
+      checks = {
+        test = "just test",
+        lint = { run = "just lint", required = false },
+      },
+    },
+  },
+
+  -- Open GitHub issues assigned to you, with this label, start a Build.
+  sources = { github = { label = "agent" } },
+
+  builder = "claude",
+  checker = "claude",
+
+  -- "ask" waits for you; "auto" goes on without asking.
+  gates = { plan = "ask", preview = "ask", open = "ask", address = "ask", push = "ask" },
+
+  pr = { draft = true },
+}
+```
+
+The full example, with every key commented, is
+[examples/build.lua](https://github.com/captjt/wheelhouse/blob/main/examples/build.lua).
+**Settings** in the apps changes gates, agents, notes and checks without
+editing the file; see [Settings](/reference/settings/).
+
+## Start a Build
+
+| | |
+| --- | --- |
+| **Build it** on a docket | Build a docket from its intent. |
+| `wh build start D-12` | The same, from a terminal. |
+| `wh build start acme/api#45` | Build a GitHub issue (its URL works too). |
+| `wh build start ENG-142` | Build a Linear issue. |
+| `--repo acme/api` | Which repo, when Build has more than one. |
+
+Issues can start Builds on their own too: GitHub issues assigned to you with a
+label (`sources.github`), and Linear issues by label or by cycle
+([below](#linear-intake)).
+
+## How it goes
+
+Every step that needs you is a message with buttons: in the Inbox, on the
+docket, as a notification and on your phone.
+
+| Phase | What happens | You |
+| --- | --- | --- |
+| **Plan** | The builder reads the code and the intent, then writes a plan, or says it isn't ready. | **Proceed** or **Drop**, when it isn't ready |
+| **Decisions** | Each open question is a message with its options, the builder's recommendation first. | Pick one, or answer in your own words |
+| **Plan gate** | The plan: Intent, Acceptance, Decisions, Approach, Out of scope, Notes. | **Approve**, **Revise** or **Discard** |
+| **Build** | The builder implements, tests, commits and drafts the PR. | |
+| **Check** | The checker checks the branch against the plan. Its findings go back to the builder, up to two fix rounds. | |
+| **Verify** | The hub runs the repo's checks itself, at that commit. A required one that fails goes back to the builder. | |
+| **Pre-review** | With `prereview` set, reviewers review the branch blind before it opens. | |
+| **Preview** | When there's something to see, the builder shares it on your tailnet. | **Looks right** or **Needs work** |
+| **Open gate** | The PR as it will open: title, body, commits, the check, and how the checks went. | **Open PR**, **Needs changes** or **Discard** |
+| **Open** | Wheelhouse pushes the checked head and opens a draft PR with the plan. | |
+
+Approving the plan **is** approving the intent: its Intent, Acceptance and Out of
+scope become the docket's intent, a new version on the record, signed as you.
+
+An answer can be a button, a number (`2`), a button and a note
+(`2, but cap it at 3`), or your own words. **Revise**, **Needs work** and
+**Needs changes** take words. An answer to an ask that's moved on changes
+nothing.
+
+## After it opens
+
+Build follows the PR until it merges or closes. Each poll reads it the way a
+person answering by hand would:
+
+- review threads not resolved, whose last comment isn't yours;
+- review bodies, and comments from people (not bots), that you haven't
+  answered;
+- checks that failed on the PR's head, once every check has finished;
+- the base, when the PR is behind it or conflicts with it.
+
+Something new is an ask, with each thing on a line. **Address it** starts a
+round; **Not now** sets these aside, and anything newer asks again.
+
+In a round, the builder reopens in its own session, so it remembers the work.
+It fixes what's valid with a test, leaves what isn't and says why, finds each
+failing check's cause in its log, brings the branch up to date with the base,
+and drafts one reply per thread. The checker checks the fixes, and that each
+reply is true to the change it names.
+
+Then the **push gate** shows the round's commits and every reply exactly as it
+will post. **Push and reply** pushes, posts the replies from your account, and
+asks the reviewers for another look. What posts is what you saw: if the replies
+change after you're asked, or the branch moves, nothing goes out. **Drop the
+round** throws its commits away. Threads are never resolved for you: the
+reviewers do that.
+
+Each person's review and comment on the PR also comes home to the docket, so it
+reads as the whole story, and the next round starts from there.
+
+<Aside>
+A round merges the base in by default, never a force-push. With
+`update = "rebase"`, it rebases instead and pushes with a lease: only over the
+head the round started from, never over anyone's newer commits.
+</Aside>
+
+## The wall
+
+Builders and checkers can't reach outward. In their panes, `gh` is signed out,
+there's no Linear key and no SSH agent, every push URL is one that can't work,
+and Claude Code runs with no MCP servers, so a GitHub or tracker connector can't
+route around it. Antigravity and Pi are walled the same way.
+
+Only the hub writes outward, with your sign-ins, and only after your approval.
+Opening is refused when:
+
+- the branch is the base;
+- HEAD isn't the head the checker checked and you approved;
+- any commit carries the agents' scratch files (`.tmp/`);
+- the PR has no title or body, or the body speaks in the first person;
+- the branch on GitHub has commits this one doesn't (never a force-push).
+
+An open PR on the branch is reused, never duplicated.
+
+## Pre-review
+
+With `prereview = { reviewers = { "codex" } }`, reviewers review the branch
+blind once the checker passes it, before the open gate, held to what counts as
+blocking in a review. Nothing is posted. Blocking findings send the branch back
+to the builder and through the checker again, up to `loops` times (1 by
+default). What's left is listed at the open gate, so you decide with it in front
+of you.
+
+Each pre-reviewer costs a review's worth of tokens per look, so it's off until
+you name them.
+
+## Linear intake
+
+`sources.linear` takes in Linear issues assigned to you, in the teams it maps to
+repos:
+
+```lua
+sources = {
+  linear = {
+    teams = { ENG = "acme/api" },  -- each team, and the repo it builds into
+    label = "agent",               -- an issue with it starts a Build
+    cycle = true,                  -- an issue in your active cycle is offered one
+    skip_label = "no-agent",       -- an issue with it is left alone
+  },
+},
+gates = { start = { label = "auto", cycle = "ask" } },
+```
+
+With the label, an issue starts a Build on Linear's branch name, with its
+description as the intent and "Closes ENG-142" on the PR. In your active cycle,
+it's offered instead: a docket made from the issue, with **Build it** or
+**Not this one**. Each issue is handled once; one you pass on isn't offered
+again.
+
+## The config
+
+| Key | What | Default |
+| --- | --- | --- |
+| `repos["owner/name"]` | `checkout`, `notes`, `base`, `plan` (`"full"`, `"summary"`, `false`), and `checks` ([Verify](/features/verify/)) | `review.lua`'s repos |
+| `sources.github` | `{ label = "agent" }`: labeled issues assigned to you start a Build | off |
+| `sources.linear` | `{ teams, label, cycle, skip_label }` | off |
+| `builder`, `checker` | `"claude"`, `"codex"`, `"agy"`, `"pi"`, or `{ agent, extra_args, effort }` | `"claude"` |
+| `gates` | `plan`, `preview`, `open`, `address`, `push`: `"ask"` or `"auto"`; `start` for Linear intake | `"ask"`; `start`: label `"auto"`, cycle `"ask"` |
+| `update` | `"merge"` or `"rebase"` | `"merge"` |
+| `prereview` | `{ reviewers = { "codex" }, loops = 1 }` | off |
+| `fix_loops` | Fix rounds after the checker finds something | 2 |
+| `max_decisions` | Decisions a plan may leave open at once | 3 |
+| `max_tasks` | Builds working at once (one waiting on you doesn't count) | 2 |
+| `poll_seconds` | How often to check GitHub for issues and open PRs | 180 |
+| `pr` | `{ draft = true, reviewers = { "dana" } }` | a draft, no reviewers |
+| `branch_prefix` | For dockets and GitHub issues | `"wh/"` |
+| `guides` | `plan`, `build`, `check` (added to the briefs), `pr_style`, `plan_format` (replace the built-in ones) | |
+| `effort` | `{ build = …, check = … }`: a level, or a function of the Build | the agent's own |
+| `wall` | `{ mcp = true }` turns MCP servers back on for builders and checkers | off |
+
+`plan = "summary"` is for a public repo whose issues are private: the PR carries
+the plan in the builder's own words instead of the full plan.
+
+## Commands
+
+| | |
+| --- | --- |
+| `wh build` | Every Build, its phase, and what needs you. |
+| `wh build start D-12\|acme/api#45\|ENG-142` | Start one. |
+| `wh build discard D-12` | Stop a Build. Its branch stays. |
+| `wh build pause`, `resume` | Stop or restart new Builds. |

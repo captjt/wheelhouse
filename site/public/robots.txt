@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://wheelhouse.0utlaw.xyz/sitemap-index.xml
