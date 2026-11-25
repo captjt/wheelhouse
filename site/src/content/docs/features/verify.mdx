@@ -1,0 +1,134 @@
+---
+title: Verify
+description: Checks the hub runs itself, at the commit, recorded as witnessed. A docket with acceptance items closes on evidence, not on what an agent says.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Shot from "../../../components/Shot.astro";
+
+An agent saying "tests pass" is something it *said*. Verify is how a docket's
+work comes to rest on more than that: checks the hub runs and watches, a checker
+whose judgment is its own, and a rule that keeps a docket from closing on words
+alone.
+
+Each docket's **Verify** section shows where it stands, and the Inbox's
+**Attention** list gathers what needs a look.
+
+<Shot name="mac-verify" alt="A docket's Verify section: done rests on test passing at its commit, witnessed; lint failed but is optional; each check's output a click away" />
+
+## Witnessed checks
+
+List a repo's own checks with it in `build.lua`, or in Settings → Repos:
+
+```lua title="~/.config/wheelhouse/build.lua"
+repos = {
+  ["acme/api"] = {
+    checkout = "~/code/acme-api",
+    checks = {
+      test = "pnpm test",                                -- required
+      lint = { run = "pnpm lint", required = false },    -- only informs
+      e2e = { run = "pnpm e2e", timeout = 1800 },        -- seconds; 1200 by default
+    },
+  },
+},
+```
+
+The hub runs each one itself, with your login shell, in the docket's worktree (a
+Build's) or its agent's folder (when that's inside one of your repos). It runs
+behind the same wall as the agents: no GitHub or Linear tokens, no SSH agent, a
+signed-out `gh`, and every push sent nowhere. `WH_CHECK=1` is set, if a script
+wants to know.
+
+Each run goes on the record, written by the hub, so it's **witnessed**. It says:
+
+- the command, and whether it's required;
+- the exact commit it ran at, and whether the folder had uncommitted changes
+  (then it covered more than the commit, and doesn't count as passing it);
+- the change it covered, from the Build's base to that commit, kept by hash;
+- its exit (none when it timed out), how long it took, and the end of its
+  output, kept by hash.
+
+Run them by hand with **Run checks** on the docket, or:
+
+```sh
+wh check D-12          # start them
+wh check D-12 --wait   # print each result; exits non-zero when a required one fails
+```
+
+### In a Build
+
+The checks run after the checker passes the branch, at that commit, before
+pre-review and the gates. Then:
+
+- A required check that fails goes back to the builder with the end of its
+  output, as a fix round.
+- The PR doesn't open, and an address round doesn't push, unless the required
+  checks passed at exactly the commit going out. The open and push gates say
+  how they went.
+- **Open PR** or **Push and reply** over a failing check goes ahead on your
+  word, and your approval records what failed.
+- An `auto` open gate waits for passing checks. It never opens over a failure
+  on its own.
+
+## The checker's verdict
+
+A Build's checker writes its verdict as its own entry, signed for its session.
+The record shows that judgment as *said* by the checker, not witnessed by the
+hub. The entry says whether the checker was **independent**: in a session and
+pane other than the builder's.
+
+## The rule for done
+
+A docket whose intent has acceptance items (task boxes) closes only on
+evidence:
+
+- **witnessed:** its required checks all passed at one commit, or its PR
+  merged;
+- **checkable:** its Linear issue is completed, or its review is on GitHub.
+
+Without any of these, setting it done is refused, and says why. You can still
+close it on your word, with a reason: **Close on your word** in the app, or
+
+```sh
+wh set D-12 --status done --anyway --reason "Covered by the wiki page"
+```
+
+The record keeps the reason, and the docket shows it was closed on your word.
+Dockets without acceptance items close as they always have.
+
+<Aside type="tip">
+Agents know this rule. The `wheelhouse` skill tells them that a docket closes on
+evidence, so they don't set it done themselves; they tell you what's left.
+</Aside>
+
+## Hold
+
+```sh
+wh hold D-12 "Waiting on the DBA"
+wh hold D-12 --off
+```
+
+A held docket takes no step in Build or Review, polls included, until you take
+the hold off. The reason is on the record and on the docket.
+
+## Attention
+
+What needs a look beyond your asks, worst first, in the Inbox and from
+`wh attention`:
+
+| Kind | When |
+| --- | --- |
+| **Build**, **Review** | A protocol stopped and needs you: an error, a stall, a refusal. |
+| **Failing** | A required check fails on an open docket. |
+| **Held** | On hold, with the reason. |
+| **Long** | An agent has worked over an hour without finishing a turn. |
+| **Quiet** | Nothing for a week, and no agent on it. |
+| **Your word** | Closed on your word, in the last week. |
+
+## What it doesn't promise
+
+A witnessed check proves the command ran at that commit and how it exited. It
+doesn't prove the tests are good ones. A checker's verdict is a second agent's
+judgment, not a proof. Today every agent of one app shares a signing key, so a
+verdict's independence rests on its session, not its key. See
+[Security](/reference/security/).

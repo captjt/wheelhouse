@@ -1,0 +1,82 @@
+---
+title: A day with it
+description: What working with Wheelhouse looks like, from the first prompt on your phone to Friday's recap.
+---
+
+import { CardGrid, LinkCard } from "@astrojs/starlight/components";
+import Shot from "../../../components/Shot.astro";
+import Shots from "../../../components/Shots.astro";
+
+You run agents all day: some you start by hand, some Review and Build start for
+you. Wheelhouse keeps each on a docket and brings you only what needs you.
+Here's a day.
+
+## Morning, on the phone
+
+There are three asks in the Inbox. You approve ENG-142's plan, answer an
+agent's question with a tap on one of its options, and post the review of
+api#341. The agents carry on. Nothing reached GitHub that you didn't approve.
+
+<Shots>
+  <Shot name="phone-inbox" alt="The Inbox on the phone: a prompt to approve and a question with its answers as buttons" />
+  <Shot name="phone-active" alt="Active on the phone: the dockets in flight, grouped by what needs you" />
+</Shots>
+
+## A PR requests your review
+
+A docket opens for it. Three agents review it in a tab of their own, in Rex or
+Herdr, without seeing each other's drafts. A checker merges what they found and
+rates the merge risk. You get a notification for the checked review, with
+**Post Review** and **Preview**. See [Review](/features/review/).
+
+## You type `claude` in a pane
+
+A docket appears, named by your prompt. You don't open it, and you don't need
+to. When the agent finishes, its last message is on the docket as its turn. You
+mark it done, or give it an intent and make it a Build.
+
+<Shot name="mac-chat" alt="Chat with an agent: your prompt, its plan with a table, the files it kept, and a box to queue the next message while it works" />
+
+## An agent hits a prompt
+
+It wants to run the migration tests. You're in another app, so you approve it
+from the notification, or the menu bar, or ⌥⌘K. Before a key goes in, the hub
+reads the prompt again from the pane and checks it's still the one you saw.
+
+<Shots>
+  <Shot name="mac-menubar" alt="The menu bar panel: a prompt to approve, a question with its two answers as buttons, a failed migration, and a finished turn" />
+  <Shot name="mac-quick" alt="⌥⌘K over any app: what needs you first, then Create and your dockets" />
+</Shots>
+
+## An agent needs a decision
+
+It asks with `wh send --to me`: the question, its options as buttons with its
+recommendation first, and what it's doing meanwhile. It keeps working on the
+recommendation. You answer when you get to it, and the answer goes into its
+pane between turns.
+
+## You're away from your desk
+
+You open the agent's docket on your phone and tell it to cover the 4xx case too.
+It's mid-turn, so the message waits and goes in when the turn ends. Its reply
+comes back as a push.
+
+## Before you close a docket
+
+The docket's intent has acceptance boxes. It closes on evidence: its repo's
+checks, run by the hub at the commit, or its PR merged. An agent saying "tests
+pass" isn't enough. See [Verify](/features/verify/).
+
+## Friday
+
+You open Recap for the week: reviews posted and their verdicts, PRs your agents
+opened and merged, the decisions you made and what you chose, and the
+tokens it all took, by provider and model. **Copy as Markdown** makes it a
+standup note.
+
+<Shot name="recap" alt="Recap: what happened this week, with reviews, PRs, decisions and tokens by provider and model" />
+
+<CardGrid>
+  <LinkCard title="Dockets" description="What a docket holds, and how its status moves." href="/concepts/dockets/" />
+  <LinkCard title="Inbox and Chat" description="What needs you, and talking to agents." href="/features/inbox-chat/" />
+</CardGrid>

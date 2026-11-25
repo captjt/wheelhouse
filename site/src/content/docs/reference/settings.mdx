@@ -1,0 +1,141 @@
+---
+title: Settings
+description: What Wheelhouse does on its own, as sentences, and how to change it. Standing orders, runtimes, gates, agents, repos, guides and briefs.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Shot from "../../../components/Shot.astro";
+import Shots from "../../../components/Shots.astro";
+
+Settings is in both apps: ⌘, in Wheelhouse.app, or `G` then `S` in the web
+app. It shows what Wheelhouse does on its own, as sentences, and lets you
+change it.
+
+<Shot name="settings" alt="The web app's Settings: the standing orders as sentences, then each gate" />
+
+## Standing orders
+
+The first thing Settings shows is each rule that starts work without you, and
+how that work runs. For example:
+
+- *When a PR in acme/api requests you, Review it with Claude Code and Codex,
+  check with Claude Code, and post it if it approves and its merge risk is
+  low, or else ask you.*
+- *In acme/docs, a checked review posts itself.*
+- *When an ENG issue assigned to you is labeled `agent`, build it with Claude
+  Code, check with Codex, and ask you at plan and open.*
+- *Before a PR in acme/api opens or a round pushes, run `test` and `lint` at
+  that commit myself, and hold it until `test` passes.*
+
+They're worked out from the config, so they always say what will happen.
+
+<Shots>
+  <Shot name="mac-settings-orders" alt="Settings, Standing Orders: what Wheelhouse does on its own, as sentences, with Review's and Build's switches and each gate as Ask or Auto" />
+  <Shot name="mac-settings-agents" alt="Settings, Runtimes and Agents: where new agents open and each runtime's state, above Build's and Review's agents" />
+</Shots>
+
+## What you can change
+
+| Section | What's in it |
+| --- | --- |
+| **Standing orders** | What Wheelhouse does on its own, as sentences: Review's and Build's switches, and who posts a checked review for every repo (Ask, Auto, or When… a rule holds) |
+| **Runtimes** | Where new agents open, Rex or Herdr, and whether each runtime is followed. Agents already running stay where they are. In Wheelhouse.app, it's under **Agents** |
+| **Gates** | Each of Build's gates: ask you, or go ahead |
+| **Agents** | Build's builder, checker and pre-reviewers, fix rounds, whether PRs open as drafts, and how a round brings in the base (merge, or rebase); Review's reviewers and checker |
+| **Repos** | Notes for agents (the repo's rules), the base branch, how much of the plan goes on the PR, witnessed checks, the repo's review guide, and who posts its reviews when it differs from every repo's |
+| **Guides & briefs** | The Markdown each agent is given: edit it, compare it with the built-in, reset it, or write a guide of your own |
+
+### Build's gates
+
+Each gate is **Ask** (it waits for you) or **Auto** (it goes ahead).
+
+| Gate | When it asks |
+| --- | --- |
+| `start` | A labeled issue would start a Build. Auto by default |
+| `start_cycle` | An issue in your Linear cycle is offered a Build. Ask by default |
+| `plan` | The builder's plan is ready |
+| `preview` | There's something to see, shared on your tailnet |
+| `open` | The PR is ready to open, as it will open |
+| `address` | The open PR has review comments, failing checks, or a base that moved |
+| `push` | A round's commits and replies are ready to push and post |
+
+Every gate but `start` asks by default. See [Build](/features/build/).
+
+### Repos
+
+A repo's **notes** go into every brief in that repo: the builder's, the
+checker's and the reviewers'. Use them for the repo's rules: "Run `just check`
+before you commit."
+
+Its **checks** are the commands the hub runs itself, at the commit, and records
+as witnessed. Each is required (a failure holds the PR or the round) or only
+informs. See [Verify](/features/verify/).
+
+### Standing decisions
+
+A decision you answered on one docket can stand for its repo. **Make
+standing** on the decision adds it to the repo's notes, under "Standing
+decisions", with where it was decided:
+
+```
+- How many retries? 3: To match the API docs. (Decided on D-6, November 18.)
+```
+
+Every later brief in that repo carries it. Settings → Repos shows and edits
+it, and the docket keeps an entry saying you made it so.
+
+### Guides and briefs
+
+<Shot name="mac-settings-guides" alt="Settings, Guides and Briefs: built-in guides and each protocol's briefs beside the Markdown editor, with Compare with Built-in" />
+
+Guides and briefs are what each agent is told. A brief uses `{{VARIABLES}}`
+the hub fills in. A broken one changes what every agent is told, so
+**Compare with Built-in** before you save. **Reset** sets yours aside and
+brings back the built-in one.
+
+## Where it's kept
+
+What you change in Settings is saved to `~/.config/wheelhouse/settings.json`,
+shaped like the Lua configs and laid over them as they're read:
+
+```json
+{
+  "build": {
+    "gates": { "open": "auto" },
+    "repos": { "acme/api": { "notes": "Run just check before you commit.", "checks": { "test": "cargo test" } } }
+  },
+  "review": {
+    "repos": { "acme/api": { "guides": { "review": "~/.config/wheelhouse/guides/api-review.md" } } }
+  }
+}
+```
+
+- A value here wins over `build.lua` or `review.lua`. **Use build.lua's**
+  takes it back out, and the file's value returns.
+- Review's posting rule is replaced whole, not key by key. Setting it ends a
+  `wh review post-mode` override.
+- A check `build.lua` lists can be turned off here; Settings writes it as
+  `false`.
+- Every change is checked by the same code that reads the Lua. One that
+  wouldn't load is refused with the reason, and nothing is written.
+
+Guides and briefs are files. Yours replace a built-in one of the same name
+under `~/.config/wheelhouse/`: `guides/`, `briefs/build/` and
+`briefs/review/`. A guide of your own can't be removed while a config still
+names it.
+
+Whatever a save replaces, `settings.json` or a guide or brief, is kept in
+`~/.config/wheelhouse/.history/`, stamped with the time.
+
+<Aside>
+Lua keeps what's code or reaches outside: effort functions, agents' programs
+and arguments, PATH, caches and the wall around Review's and Build's agents.
+Settings won't change those. Edit `review.lua` or `build.lua`. See
+[Configuration](/reference/configuration/).
+</Aside>
+
+## The Mac app's own preferences
+
+Wheelhouse.app adds General (appearance, the menu bar icon, ⌥⌘K, open at
+login), Notifications (and the sound pack) and Hub. See
+[Wheelhouse.app](/apps/mac/#settings).

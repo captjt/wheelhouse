@@ -1,0 +1,143 @@
+---
+title: Install
+description: What Wheelhouse needs, how to build and run the hub, and the first things to set up.
+---
+
+import { Aside, Steps, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+Wheelhouse runs on your Mac. You build it from source, and one command sets
+up the rest: the hub at login, your agents' hooks and skill, and
+Wheelhouse.app.
+
+<Aside type="note">
+Rex is in private beta. Wheelhouse needs a Rex build, or
+[herdr-core](https://herdr.dev/core/) 0.1.20 or later, whose agents report
+program status (OSC 7501). Claude Code, Codex, Antigravity and Pi do on their
+own. With both installed, Wheelhouse follows both.
+</Aside>
+
+## Requirements
+
+- macOS, and [Rex](https://www.superlogical.com/rex) with the `rex` CLI, or
+  [Herdr](https://herdr.dev) ([herdr-core](https://herdr.dev/core/) 0.1.20 or
+  later, with the `hc` CLI), or both. See [Rex and Herdr](/concepts/runtimes/).
+- [Rust](https://rustup.rs) 1.88 or later, [Node](https://nodejs.org) 22.18 or
+  later, and [just](https://github.com/casey/just) (`brew install just`).
+- Xcode 26 (Swift 6.2), for Wheelhouse.app.
+- [LuaJIT](https://luajit.org) (`brew install luajit`), to read Review's and
+  Build's configs.
+- [GitHub CLI](https://cli.github.com), signed in (`gh auth login`), for Review
+  and Build.
+- Claude Code, and Codex, Antigravity (`agy`) or [Pi](https://pi.dev) (`pi`) if
+  you want them as reviewers or builders.
+
+Optional:
+
+- [Tailscale](https://tailscale.com) with HTTPS on, for the app on your phone
+  and Web Push.
+- `terminal-notifier`, for clickable Mac notifications.
+- A Linear API key, for linking issues.
+
+## Install
+
+<Steps>
+
+1. Clone the repo and run setup:
+
+   ```sh
+   git clone https://github.com/captjt/wheelhouse ~/src/wheelhouse
+   cd ~/src/wheelhouse
+   just setup
+   ```
+
+   `just setup` builds the hub (`wh`, in `~/.cargo/bin`, with the web app built
+   in) and runs it at login (`wh up`; its log is `wh logs`). It installs Claude
+   Code's and Antigravity's hooks and Pi's extension, which add your prompts and
+   each turn's last message to the docket, name dockets from your prompts, and
+   open a new docket on `/clear` (or Pi's `/new`). It installs the `wheelhouse`
+   skill for agents, and puts Wheelhouse.app in `~/Applications`.
+
+2. Open Wheelhouse.app and allow its notifications. Every agent pane in Rex and
+   every agent terminal in Herdr is already a docket. Without the Mac app, open
+   `http://127.0.0.1:7500` in a browser.
+
+3. Tell your agents about Wheelhouse. Paste the block from
+   [Agents on a docket](/concepts/agents/#tell-your-agents) into each agent's
+   global instructions:
+
+   - `~/.claude/CLAUDE.md`, for Claude Code
+   - `~/.codex/AGENTS.md`, for Codex
+   - `~/.gemini/config/GEMINI.md`, for Antigravity
+   - `~/.pi/agent/AGENTS.md`, for Pi
+
+4. Turn on tab completion. In `~/.zshrc`:
+
+   ```sh
+   eval "$(wh completions zsh)"
+   ```
+
+   For bash, put `eval "$(wh completions bash)"` in `~/.bashrc`. Tab fills in
+   commands and flags, and from the hub: the dockets in flight with their
+   titles, your messages and their options, agents' addresses for
+   `wh send --to`, and the PRs Review follows.
+
+5. Optional, your phone. `wh web --publish` serves the app on your tailnet at
+   `https://<your-mac>.ts.net:7500`, to your Tailscale user only. Open it in
+   Safari and add it to your Home Screen for the app and its notifications. See
+   [Web and phone](/apps/web-phone/).
+
+6. Optional, Linear. `wh setup-linear` stores a read-only API key in the
+   Keychain, so dockets can link issues and Build can start from them.
+
+</Steps>
+
+## Check it
+
+`wh doctor` says what's set up, what isn't, and what to do about each: the hub
+and whether it starts at login, each runtime, the agents' hooks, `gh`, LuaJIT
+and Tailscale, Review and Build and each repo's checks, Linear, the Mac app and
+tab completion.
+
+```sh
+wh doctor     # what's set up, and what to do about the rest
+wh status     # whether the hub runs, and what it sees in Rex and in Herdr
+wh            # what needs you, and what's in flight
+```
+
+## Update
+
+Pull and run setup again. It rebuilds the hub and Wheelhouse.app, and installs
+them over the ones you have.
+`just app` rebuilds only the Mac app.
+
+```sh
+cd ~/src/wheelhouse
+git pull
+just setup
+```
+
+## Review and Build
+
+Both read a small Lua file in `~/.config/wheelhouse/` for your repos. Review is
+off until you turn it on; Build is on as soon as either file lists a repo:
+
+- **Review:** copy
+  [examples/review.lua](https://github.com/captjt/wheelhouse/blob/main/examples/review.lua)
+  to `~/.config/wheelhouse/review.lua` and list your repos and their checkouts.
+  `wh review on` checks it and turns Review on, paused; `wh review resume`
+  starts it.
+- **Build:** uses `review.lua`'s repos as they are. To change something for
+  Build, or to build in a repo you don't review, copy
+  [examples/build.lua](https://github.com/captjt/wheelhouse/blob/main/examples/build.lua)
+  to `~/.config/wheelhouse/build.lua`. Then press **Build it** on a docket with
+  an intent, or run `wh build start D-12`.
+
+Only the hub writes to GitHub, with your `gh` login, and only what you
+approved. Agents' panes have no GitHub token, and their pushes fail.
+
+<CardGrid>
+  <LinkCard title="A day with it" description="What working with Wheelhouse looks like." href="/start/tour/" />
+  <LinkCard title="Review" description="Multi-agent reviews of the PRs that request you." href="/features/review/" />
+  <LinkCard title="Build" description="A docket's intent becomes a PR you approve." href="/features/build/" />
+  <LinkCard title="Configuration" description="Where the hub keeps things, and how to move them." href="/reference/configuration/" />
+</CardGrid>

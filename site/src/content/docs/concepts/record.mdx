@@ -1,0 +1,100 @@
+---
+title: The record
+description: Each docket is a log of signed, chained entries. What's on it, how each entry is known, and what wh verify proves.
+---
+
+import { Aside, CardGrid, LinkCard } from "@astrojs/starlight/components";
+import Shot from "../../../components/Shot.astro";
+
+A docket is its entries, in order. An entry is never changed or removed: a
+correction is a new entry that names the one it replaces. Everything else you
+see on a docket (its title, status, agents, what it waits on) is worked out from
+the entries, and can be rebuilt from them at any time.
+
+<Shot name="mac-record" alt="A docket's record in Wheelhouse.app: verified intact, who signed, and every entry, filtered by how it's known" />
+
+## What's on it
+
+One entry per thing that happened: an agent opening, a prompt you gave it, the
+end of each turn with its last message, a note, a question and its answer, an
+approval, a status change, a check the hub ran, a checker's verdict, a file the
+work kept. Each entry names who wrote it:
+
+- **You**, for what you say: notes, titles, prompts you give an agent, approvals.
+- **The hub**, for what it saw: an agent opening, a turn ending, a pane
+  closing, a check it ran.
+- **An agent**, for what it says through `wh`: notes, messages, files it keeps.
+
+## How each entry is known
+
+Every entry carries a mark, worked out from who wrote it and what it is:
+
+| Mark | When |
+| --- | --- |
+| **witnessed** | The hub wrote it: it saw this happen. A turn ending, a check's exit code at a commit. |
+| **checkable** | A link or an observation read from a source anyone can read again: a Linear issue, a PR, a review on GitHub. |
+| **said** | A person or an agent wrote it. True if you trust them. |
+
+That's why a docket with acceptance boxes can't close on an agent saying "tests
+pass": that's *said*. A check the hub ran itself is *witnessed*. See
+[Verify](/features/verify/).
+
+## Signed and chained
+
+- **Signed.** Each entry is signed with Ed25519 by the key of whoever wrote it,
+  in a [DSSE](https://github.com/secure-systems-lab/dsse) envelope. The keys
+  live on your Mac: one for you, one for the hub, and one per agent app.
+- **Chained.** The hub gives each entry the next number on its docket, with no
+  gaps, and chains each entry's hash to the one before it. The last link is the
+  docket's **head**. Its first eight characters name the docket's exact state,
+  as in a PR footer: `Docket: D-12 @ 9f2c41ab`.
+- **Files by hash.** A file an entry names is kept once, by the sha256 of its
+  bytes, and the signature covers that hash. A changed file no longer matches,
+  and a lost one is missing.
+
+## Checking a record
+
+```sh
+wh verify D-12      # one docket, every kept file included
+wh verify           # every docket
+```
+
+Or click **Verified** on any docket to read its record: who signed each entry,
+how each is known, and what the check means (and doesn't).
+
+A passing check means that since each entry was written, nothing in it has
+changed, nothing was removed, added in between or reordered, each was signed by
+the key it names, and each file is as it was.
+
+<Aside type="note" title="What it doesn't mean">
+A passing check doesn't mean an entry is true: its mark says how it's known.
+And the hub holds every key on your Mac, where your agents run as you. The
+record catches an entry changed, dropped or reordered after it was written. It
+isn't a defense against a hostile agent with your account. See
+[Security](/reference/security/).
+</Aside>
+
+## Exporting a record
+
+A docket's record exports as JSON lines that check without the hub, with only
+the public keys they name:
+
+```sh
+wh export D-12 > D-12.jsonl
+wh verify --file D-12.jsonl
+```
+
+Each line carries an entry's number, its id, its chain value, and its envelope's
+exact bytes. Anyone with the file can check that it's intact.
+
+## On a team
+
+A docket you share with your [team](/teams/overview/) keeps the same format.
+Every entry is signed by whoever wrote it, on their own Mac, and the workspace
+hub only orders them. Every member's hub keeps a copy and checks it entry by
+entry, so a workspace hub that changes, drops or reorders an entry is caught.
+
+<CardGrid>
+  <LinkCard title="Verify" description="Checks the hub runs itself, and the rule for done." href="/features/verify/" />
+  <LinkCard title="Security" description="What Wheelhouse protects, and what it doesn't." href="/reference/security/" />
+</CardGrid>
