@@ -89,6 +89,8 @@ final class Nav {
     var holding: String?
     /// Starting an agent on a docket: asking where, and with what.
     var starting: String?
+    /// What `/task` in the composer said the new agent should do.
+    var startingPrompt: String?
     /// Done was refused for want of evidence: its checks, or your word.
     var closing: Closing?
     var inspector = true

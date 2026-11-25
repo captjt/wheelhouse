@@ -22,6 +22,7 @@ mod diffs;
 mod doctor;
 mod evidence;
 
+mod compose;
 mod hooks;
 mod hub;
 mod linear;

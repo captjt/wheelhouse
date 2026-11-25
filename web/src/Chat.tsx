@@ -52,7 +52,9 @@ function itemsOf(entries: EntryView[], dk: Docket): Item[] {
         out.push({ t: "ask", seq: e.seq, at: e.at, text: e.body || "", subject: d.subject, options: d.options || [], app: agentApp, who });
         break;
       case "decision":
-        out.push({ t: "chose", seq: e.seq, at: e.at, text: e.body && e.body !== d.choice ? `${d.choice}: ${e.body}` : String(d.choice || "") });
+        // One of yours from the composer has a subject, not a question it answers.
+        if (d.via === "composer") out.push({ t: "chose", seq: e.seq, at: e.at, text: d.subject ? `${d.subject}: ${d.choice}` : String(d.choice || "") });
+        else out.push({ t: "chose", seq: e.seq, at: e.at, text: e.body && e.body !== d.choice ? `${d.choice}: ${e.body}` : String(d.choice || "") });
         break;
       case "turn":
         if (e.body?.trim()) out.push({ t: "agent", seq: e.seq, at: e.at, text: e.body, app: a?.app || "agent", who });

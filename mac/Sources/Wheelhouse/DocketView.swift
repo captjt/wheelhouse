@@ -29,7 +29,7 @@ struct DocketWindow: View {
             .sheet(item: Binding(get: { nav.record.map(IdBox.init) }, set: { nav.record = $0?.id })) { b in RecordSheet(id: b.id) }
             .sheet(item: Binding(get: { nav.linking.map(IdBox.init) }, set: { nav.linking = $0?.id })) { b in LinkIssueSheet(docket: b.id) }
             .sheet(item: Binding(get: { nav.holding.map(IdBox.init) }, set: { nav.holding = $0?.id })) { b in HoldSheet(id: b.id) }
-            .sheet(item: Binding(get: { nav.starting.map(IdBox.init) }, set: { nav.starting = $0?.id })) { b in StartAgentSheet(id: b.id) }
+            .sheet(item: Binding(get: { nav.starting.map(IdBox.init) }, set: { nav.starting = $0?.id; if $0 == nil { nav.startingPrompt = nil } })) { b in StartAgentSheet(id: b.id, prompt: nav.startingPrompt) }
             .sheet(item: Binding(get: { nav.closing }, set: { nav.closing = $0 })) { c in CloseOnWordSheet(closing: c) }
             .background(WindowReader { Windows.register($0, nav) })
             .navigationTitle(store.docket(id).map { "\($0.id) · \($0.title)" } ?? id)
@@ -769,16 +769,37 @@ struct AgentLine: View {
 struct Composer: View {
     let d: Docket
     @Environment(Store.self) private var store
+    @Environment(Nav.self) private var nav
     @State private var text = ""
     @State private var busy = false
 
     var body: some View {
+        let kind = Compose.kind(text)
+        let agents = d.onAgents.filter { $0.live != nil }.map { (pane: $0.pane, role: $0.role, app: $0.app) }
+        let sugg = Compose.suggestions(text, agents: agents, docket: d.id)
         VStack(alignment: .leading, spacing: 8) {
-            Editor(text: $text, placeholder: "Leave a note… (Markdown)", minHeight: 40, maxHeight: 240, onSubmit: send)
+            if !sugg.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(sugg, id: \.label) { s in
+                        Button { text = s.insert } label: {
+                            HStack(spacing: 10) {
+                                Text(s.label).font(.system(size: 12, design: .monospaced)).foregroundStyle(K.text)
+                                Text(s.sub).font(.system(size: 11.5)).foregroundStyle(K.muted)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 3)
+                    }
+                }
+                Divider()
+            }
+            Editor(text: $text, placeholder: "Leave a note… (Markdown) · @agent, /ask, /decide, /task", minHeight: 40, maxHeight: 240, onSubmit: send)
             HStack {
-                Text("Signed as you").font(.system(size: 11.5)).foregroundStyle(K.faint)
+                Text(Compose.hint(kind, d.id)).font(.system(size: 11.5)).foregroundStyle(K.faint)
                 Spacer()
-                Button(action: send) { Text("Note  ⌘↩") }
+                Button(action: send) { Text("\(Compose.button(kind))  ⌘↩") }
                     .buttonStyle(.borderedProminent)
                     .tint(K.accent)
                     .controlSize(.small)
@@ -795,7 +816,13 @@ struct Composer: View {
         guard !t.isEmpty, !busy else { return }
         busy = true
         Task {
-            if await store.note(d.id, t) { text = "" }
+            if let r = await store.compose(d.id, t) {
+                text = ""
+                if r["did"].str == "task" {
+                    nav.startingPrompt = r["prompt"].str
+                    nav.starting = d.id
+                }
+            }
             busy = false
         }
     }

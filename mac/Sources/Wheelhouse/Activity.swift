@@ -171,6 +171,8 @@ struct ActivityRow: View {
             return sys(.hub, [.b(agent), .t(src == "resume" ? " resumed session " : src == "clear" ? " cleared into session " : " started session "), .mono(s)])
         case "question":
             return .comment(writerAvatar, writer, "asked \(data["to"].str == "me" ? "you" : data["to"].str ?? "")\(data["subject"].str.map { " · \($0)" } ?? "") (#\(data["message"].int ?? 0))", "\(e.body ?? "")\n\nOptions: \(data["options"].strings.joined(separator: " · "))", "ask")
+        case "decision" where data["via"].str == "composer":
+            return .comment(you, youName, "decided\(data["subject"].str.map { " · \($0)" } ?? "")", "**\(data["choice"].str ?? "")**", "you")
         case "decision":
             let choice = data["choice"].str ?? ""
             return .comment(writerAvatar, writer, "chose “\(choice)” (#\(data["replies_to"].int ?? 0))", e.body.flatMap { $0 != choice ? $0 : nil } ?? "**\(choice)**", e.actorType == "person" ? "you" : nil)

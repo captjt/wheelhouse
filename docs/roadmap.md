@@ -62,6 +62,13 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       agent asked, the answer that stands, and who gave it
 - [x] The readable record: open it in the app, see who signed each entry,
       and check every kept file against its hash
+- [x] The composer on a docket's Activity: a note, `@builder` (or `@all`)
+      to instruct the agents on it, queued while they work; `/ask` to ask
+      them, with options after `|`; `/decide Subject: answer` for a
+      decision of yours, which stands under Decisions and is told to the
+      agents, or `/decide #12 …` to answer a question; and `/task` to add
+      an agent with that prompt (`POST /api/dockets/{id}/compose`,
+      `src/compose.rs`). `/` and `@` complete as you type, in both apps.
 - [x] Changes: every docket with code shows what it changed, `+N −M` on
       its page and in full on its Changes view (`D`), drawn with Pierre's
       diffs (highlighted, split or unified, a file list, folded context).

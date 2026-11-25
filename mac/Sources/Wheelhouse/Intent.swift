@@ -283,8 +283,11 @@ private struct DecisionRow: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(answered ? K.working : K.blocked)
                     .frame(width: 14)
-                Text(d["question"].str ?? "").foregroundStyle(K.text2)
-                Text("→").foregroundStyle(K.faint)
+                // One of yours from the composer may have no question.
+                if let q = d["question"].str, !q.isEmpty {
+                    Text(q).foregroundStyle(K.text2)
+                    Text("→").foregroundStyle(K.faint)
+                }
                 Text(d["answer"].str ?? "waiting on you").fontWeight(answered ? .semibold : .regular).foregroundStyle(answered ? K.text : K.blocked)
                 if answered {
                     Text("\(by)\(d["at"].str.map { " · \(agoLong($0))" } ?? "")").font(.system(size: 11.5)).foregroundStyle(K.faint)

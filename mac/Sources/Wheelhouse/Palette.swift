@@ -399,6 +399,8 @@ struct NewDocketSheet: View {
 /// new pane of the wheelhouse session, in the runtime new agents open in.
 struct StartAgentSheet: View {
     let id: String
+    /// From the composer's `/task`: what the agent should do.
+    var prompt: String?
     @Environment(Store.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var note = ""
@@ -453,7 +455,7 @@ struct StartAgentSheet: View {
         .padding(16)
         .frame(width: 560)
         .task {
-            if note.isEmpty { note = "Read wh brief \(id), then work on its intent." }
+            if note.isEmpty { note = prompt.map { "Read wh brief \(id), then: \($0)" } ?? "Read wh brief \(id), then work on its intent." }
             if let a = d?.agent {
                 app = startApp(for: a.app)
                 if cwd.isEmpty, let c = a.cwd { cwd = shortPath(c) }

@@ -64,6 +64,10 @@ struct ChatView: View {
                 else if e.actorType == "person", !x["message"].exists { put(.you(e.seq, e.at, e.body ?? "", note: true, to: nil), nil) }
             case "question":
                 put(.agent(e.seq, e.at, e.body ?? "", app: app, who: who, ask: x["options"].strings, subject: x["subject"].str), by)
+            case "decision" where x["via"].str == "composer":
+                // One of yours: a subject, not a question it answers.
+                let c = x["choice"].str ?? ""
+                put(.chose(e.seq, x["subject"].str.map { "\($0): \(c)" } ?? c), nil)
             case "decision":
                 let c = x["choice"].str ?? ""
                 put(.chose(e.seq, e.body.flatMap { $0 != c ? "\(c): \($0)" : nil } ?? c), nil)

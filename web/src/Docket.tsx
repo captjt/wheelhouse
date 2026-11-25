@@ -27,6 +27,7 @@ import { IconAgents, IconPause, IconPlay } from "./icons";
 import { SubagentsSection } from "./Subagents";
 import { IconCode } from "./icons";
 import { diffPath, type DiffView } from "./diffview";
+import { composeButton, composeHint, composeKind, composeToast, suggestions, type ComposeResult, type Suggestion } from "./compose";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
   const hub = useHub();
@@ -473,7 +474,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} me={hub.state?.team?.workspace?.you} onOpen={setViewing} onCheck={setCheckOut} />
             ))}
           </div>
-          <Composer ref={composerRef} onSend={(t) => hub.note(d.id, t).then(reload)} />
+          <Composer ref={composerRef} d={d} onDone={reload} />
           </div>
         </div>
 
@@ -719,6 +720,8 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
     case "question":
       return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, e.actor.type === "agent" ? actorApp : youName, `asked ${data.to === "me" ? "you" : data.to}${data.subject ? ` · ${data.subject}` : ""} (#${data.message})`, `${e.body || ""}\n\nOptions: ${(data.options || []).join(" · ")}`, "ask");
     case "decision":
+      if (data.via === "composer")
+        return comment(you, youName, `decided${data.subject ? ` · ${data.subject}` : ""}`, `**${data.choice}**`, "you");
       return comment(e.actor.type === "person" ? you : <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} />, e.actor.type === "person" ? youName : actorApp, `chose “${data.choice}” (#${data.replies_to})`, e.body && e.body !== data.choice ? e.body : `**${data.choice}**`, e.actor.type === "person" ? "you" : "");
     case "note":
       if (data.message) {
@@ -942,37 +945,63 @@ const Title = forwardRef<{ edit: () => void }, { d: Docket; onSave: (t: string) 
   );
 });
 
-const Composer = forwardRef<HTMLTextAreaElement, { onSend: (t: string) => Promise<unknown> }>(function Composer({ onSend }, ref) {
+/** The note box, and more (src/compose.rs): `@agent` instructs one, `/ask` asks them, `/decide` records a decision, `/task` adds an agent. */
+const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void }>(function Composer({ d, onDone }, ref) {
+  const hub = useHub();
+  const toast = useToast();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pick, setPick] = useState(0);
+  const kind = composeKind(text);
+  const sugg = suggestions(text, d);
+  const complete = (s: Suggestion) => (setText(s.insert), setPick(0));
   const send = () => {
     const t = text.trim();
     if (!t || busy) return;
     setBusy(true);
-    onSend(t).then(
-      () => (setText(""), setBusy(false)),
-      () => setBusy(false),
+    post<ComposeResult>(`/api/dockets/${encodeURIComponent(d.id)}/compose`, { text: t }).then(
+      (r) => {
+        setText("");
+        setBusy(false);
+        if (r.did === "task") hub.setDialog({ kind: "agent", id: d.id, prompt: r.prompt });
+        const said = composeToast(r);
+        if (said) toast(said.text, said.error ? "error" : undefined);
+        onDone();
+      },
+      (e: Error) => (setBusy(false), toast(e.message, "error")),
     );
   };
   return (
     <div className="composer">
+      {sugg.length > 0 && (
+        <div className="compose-sugg" role="listbox" aria-label="Commands and agents">
+          {sugg.map((s, i) => (
+            <button key={s.label} role="option" aria-selected={i === pick % sugg.length} className={i === pick % sugg.length ? "on" : ""} onMouseDown={(e) => (e.preventDefault(), complete(s))}>
+              <span className="mono-s">{s.label}</span>
+              <span className="muted small">{s.sub}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <textarea
         ref={ref}
-        placeholder="Leave a note… (Markdown)"
+        placeholder="Leave a note… (Markdown) · @agent, /ask, /decide, /task"
         value={text}
         rows={text.split("\n").length > 2 ? 5 : 2}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => (setText(e.target.value), setPick(0))}
         onKeyDown={(e) => {
+          if (sugg.length && (e.key === "Tab" || (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey))) return (e.preventDefault(), complete(sugg[pick % sugg.length]));
+          if (sugg.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) return (e.preventDefault(), setPick((p) => (p + (e.key === "ArrowDown" ? 1 : sugg.length - 1)) % sugg.length));
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) return (e.preventDefault(), send());
           if (e.key === "Escape") return (e.currentTarget.blur(), e.stopPropagation());
           markdownKeys(e);
         }}
       />
       <div className="composer-bar">
-        <span className="muted small">Signed as you</span>
+        <span className="muted small">{composeHint(kind, d.id)}</span>
         <span className="spacer" />
         <button className="btn btn-primary btn-small" disabled={!text.trim() || busy} onClick={send}>
-          Note <Kbd>⌘↩</Kbd>
+          {composeButton(kind)} <Kbd>⌘↩</Kbd>
         </button>
       </div>
     </div>
