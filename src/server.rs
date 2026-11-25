@@ -402,7 +402,7 @@ async fn docket_subagents(State(shared): State<Shared>, Path(id): Path<String>) 
     let entries: Vec<record::Entry> = {
         let core = shared.lock();
         core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
-        core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| s.entry().ok()).filter(|e| e.kind == "claim" || e.kind == "release").collect()
+        core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| s.entry().ok()).filter(|e| matches!(e.kind.as_str(), "open" | "claim" | "release")).collect()
     };
     let claims = crate::subagents::claims(&entries);
     let v = tokio::task::spawn_blocking(move || crate::subagents::of(&claims)).await.map_err(|e| fail(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;

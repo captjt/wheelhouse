@@ -433,7 +433,7 @@ struct Properties: View {
                 if d.crew.isEmpty, task == nil, d.canStartAgent {
                     prop("Agent") {
                         Button("Start an agent…") { nav.starting = d.id }.buttonStyle(.link)
-                            .help("Start Claude Code, Codex or Antigravity on this docket, in a new \(store.state?.spawnRuntime ?? "Rex") pane")
+                            .help("Start Claude Code, Codex, Antigravity or Pi on this docket, in a new \(store.state?.spawnRuntime ?? "Rex") pane")
                     }
                 }
                 // The lead (or the one agent); the Agents section lists them all.

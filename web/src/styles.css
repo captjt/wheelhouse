@@ -808,6 +808,9 @@ code {
 .avatar-agy {
   background: #4f6ef7;
 }
+.avatar-pi {
+  background: #0f8f84;
+}
 .avatar-agent {
   background: var(--faint);
 }

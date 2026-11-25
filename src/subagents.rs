@@ -64,18 +64,25 @@ fn rfc3339(secs: i64) -> Option<String> {
 }
 
 /// The docket's agents, from its record: each claim, until its pane's
-/// release.
+/// release. A docket a hook opened, session and all, before its pane was
+/// seen names the agent in `open`, and no `claim` follows: that `open` is
+/// its claim. One opened without a session isn't: matched by its folder,
+/// it would take the sessions of every other pane there.
 pub fn claims(entries: &[Entry]) -> Vec<Claim> {
     let mut out: Vec<(Option<String>, Claim)> = Vec::new();
     for e in entries {
         let d = &e.data;
         match e.kind.as_str() {
-            "claim" => {
+            "open" | "claim" => {
                 let a = &d["agent"];
+                if !a.is_object() || (e.kind == "open" && d["session"].as_str().is_none_or(str::is_empty)) {
+                    continue;
+                }
                 let app = match a["app"].as_str() {
                     Some("claude-code" | "claude") => "claude",
                     Some("codex") => "codex",
                     Some("agy" | "antigravity") => "agy",
+                    Some("pi") => "pi",
                     _ => continue,
                 };
                 let Some(cwd) = a["cwd"].as_str().filter(|c| !c.is_empty()) else { continue };
@@ -395,6 +402,7 @@ fn collect(
     claims: &[Claim],
     conn: Option<&rusqlite::Connection>,
     agy_root: &Path,
+    pi_root: &Path,
     listings: &mut HashMap<PathBuf, Vec<(String, i64)>>,
 ) -> (BTreeMap<(String, String), Session>, AgyByFolder) {
     let mut sessions: BTreeMap<(String, String), Session> = BTreeMap::new();
@@ -437,7 +445,34 @@ fn collect(
             }
         }
     }
+    // Pi's: the session its extension named, else the ones begun in its
+    // folder while this claim held it.
+    for c in claims.iter().filter(|c| c.app == "pi") {
+        match &c.session {
+            Some(s) => put("pi", s.clone(), c, c.from),
+            None => {
+                for (s, t) in pi_listing(&agentcli::pi_project(pi_root, &c.cwd)) {
+                    if t >= c.from - SLACK && owner(claims, "pi", &c.cwd, t).is_some_and(|o| std::ptr::eq(o, c)) {
+                        put("pi", s, c, t);
+                    }
+                }
+            }
+        }
+    }
     (sessions, agy)
+}
+
+/// Every Pi session in one of its folders, with when it began.
+fn pi_listing(dir: &Path) -> Vec<(String, i64)> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        let Some(id) = agentcli::pi_session_id(&p).filter(|id| plain_id(id)).map(str::to_string) else { continue };
+        let born = e.metadata().ok().and_then(|m| m.created().or_else(|_| m.modified()).ok());
+        let Some(t) = born.and_then(|b| b.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64) else { continue };
+        out.push((id, t));
+    }
+    out
 }
 
 /// A transcript a docket's agent wrote, and the span (unix seconds) the
@@ -463,6 +498,7 @@ fn plain_id(s: &str) -> bool {
 pub struct Finder {
     conn: Option<rusqlite::Connection>,
     agy_root: PathBuf,
+    pi_root: PathBuf,
     claude: HashMap<PathBuf, Vec<(String, i64)>>,
     codex: Option<CodexTree>,
 }
@@ -490,7 +526,7 @@ fn codex_tree(conn: &rusqlite::Connection) -> CodexTree {
 
 impl Finder {
     pub fn new() -> Self {
-        Finder { conn: agentcli::codex_conn(), agy_root: agentcli::agy_home(), claude: HashMap::new(), codex: None }
+        Finder { conn: agentcli::codex_conn(), agy_root: agentcli::agy_home(), pi_root: agentcli::pi_sessions_root(), claude: HashMap::new(), codex: None }
     }
 
     /// Every file a docket's agents wrote their model calls to: each
@@ -498,7 +534,7 @@ impl Finder {
     /// held the session over. For the recap's usage; a path is the same
     /// file however it's reached.
     pub fn transcripts(&mut self, claims: &[Claim]) -> Vec<Transcript> {
-        let (sessions, agy) = collect(claims, self.conn.as_ref(), &self.agy_root, &mut self.claude);
+        let (sessions, agy) = collect(claims, self.conn.as_ref(), &self.agy_root, &self.pi_root, &mut self.claude);
         let mut found: Vec<(String, PathBuf, String)> = Vec::new();
         let mut all = Vec::new();
         for ((app, session), (_, _, cwd, _)) in sessions {
@@ -545,6 +581,10 @@ impl Finder {
                     }
                     out.extend(ids.iter().filter(|id| plain_id(id)).map(|id| ("agy".to_string(), agentcli::agy_transcript(&self.agy_root, id), session.clone())));
                 }
+                "pi" => {
+                    let Some(p) = agentcli::pi_transcript(&self.pi_root, &cwd, &session) else { continue };
+                    out.push(("pi".to_string(), p, session.clone()));
+                }
                 _ => {}
             }
             // The claims that held it: one naming it, or (a session found by
@@ -572,7 +612,7 @@ pub fn of(claims: &[Claim]) -> Value {
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let conn = agentcli::codex_conn();
     let agy_root = agentcli::agy_home();
-    let (sessions, agy) = collect(claims, conn.as_ref(), &agy_root, &mut HashMap::new());
+    let (sessions, agy) = collect(claims, conn.as_ref(), &agy_root, &agentcli::pi_sessions_root(), &mut HashMap::new());
     let (mut running, mut total, mut tokens) = (0, 0, 0i64);
     let mut agents = Vec::new();
     for ((app, session), (label, round, cwd, began)) in sessions {
@@ -675,6 +715,32 @@ mod tests {
     }
 
     #[test]
+    fn a_docket_a_hook_opened_names_its_agent_in_the_open() {
+        let pane = |app: &str, b: &str| json!({ "app": app, "block": b, "pane": "D-1", "cwd": "/w" });
+        // A hook opened it, session and all, before the pane was seen: no claim follows.
+        let cs = claims(&[entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "agent", "agent": pane("pi", "p1"), "session": "s-1", "source": "startup" }))]);
+        assert_eq!(cs.len(), 1);
+        assert_eq!((cs[0].app.as_str(), cs[0].session.as_deref()), ("pi", Some("s-1")));
+
+        // Opened for the pane, then its session claimed: the claim alone.
+        let cs = claims(&[
+            entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "agent", "agent": pane("claude-code", "b1") })),
+            entry("claim", "2026-11-25T14:00:02Z", json!({ "session": "s-2", "source": "startup", "agent": pane("claude-code", "b1") })),
+            entry("release", "2026-11-25T15:00:00Z", json!({ "block": "b1", "reason": "pane closed" })),
+        ]);
+        assert_eq!(cs.len(), 1, "{cs:?}");
+        assert_eq!((cs[0].session.as_deref(), cs[0].until), (Some("s-2"), epoch("2026-11-25T15:00:00Z")));
+
+        // Opened with no session (Codex, or no hooks): matched by folder, it
+        // would take another pane's sessions there, so it isn't a claim.
+        let cs = claims(&[
+            entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "agent", "agent": pane("codex", "b2") })),
+            entry("open", "2026-11-25T14:00:00Z", json!({ "protocol": "none" })),
+        ]);
+        assert!(cs.is_empty(), "{cs:?}");
+    }
+
+    #[test]
     fn only_a_plain_session_id_names_a_file() {
         assert!(plain_id("01a20b4f-50c1-70e3-ae70-28a8998a2f12"));
         for bad in ["", "../../etc/x", "a/b", "a.jsonl", &"x".repeat(129)] {
@@ -754,6 +820,52 @@ mod tests {
         let s = &subs[0];
         assert_eq!((s["id"].as_str(), s["name"].as_str(), s["task"].as_str(), s["state"].as_str()), (Some("kid"), Some("research"), Some("Ping Responder"), Some("done")));
         assert_eq!((s["tokens"].as_i64(), s["model"].as_str(), s["words"].as_str()), (Some(10), Some("Gemini 4 Neon"), Some("Sent pong to caller.")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_pi_agents_session_is_found_by_its_id_or_its_folder() {
+        let root = std::env::temp_dir().join(format!("wh-subagents-pi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cwd = PathBuf::from("/Users/you/git/api");
+        let dir = agentcli::pi_project(&root, &cwd);
+        assert_eq!(dir.file_name().unwrap(), "--Users-you-git-api--");
+        std::fs::create_dir_all(&dir).unwrap();
+        let named = dir.join("2026-11-25T14-01-08-166Z_01a21302-9d46-70b8-8140-c80e75e0a0bb.jsonl");
+        std::fs::write(&named, "{}\n").unwrap();
+        // A session resumed from another folder stays in its first one.
+        let elsewhere = agentcli::pi_project(&root, Path::new("/Users/you/git/web"));
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let moved = elsewhere.join("2026-11-25T09-00-00-000Z_old-1.jsonl");
+        std::fs::write(&moved, "{}\n").unwrap();
+        std::fs::write(dir.join("notes.txt"), "").unwrap();
+
+        let es = [
+            entry(
+                "claim",
+                "2026-11-25T14:00:00Z",
+                json!({ "session": "01a21302-9d46-70b8-8140-c80e75e0a0bb", "source": "startup", "agent": { "app": "pi", "block": "b1", "pane": "D-3", "cwd": "/Users/you/git/api" } }),
+            ),
+            entry(
+                "claim",
+                "2026-11-25T14:00:00Z",
+                json!({ "session": "old-1", "source": "resume", "agent": { "app": "pi", "block": "b2", "pane": "D-4", "cwd": "/Users/you/git/api" } }),
+            ),
+        ];
+        let cs = claims(&es);
+        assert_eq!(cs.iter().map(|c| c.app.as_str()).collect::<Vec<_>>(), ["pi", "pi"]);
+        let mut f = Finder { conn: None, agy_root: root.join("none"), pi_root: root.clone(), claude: HashMap::new(), codex: None };
+        let mut paths: Vec<PathBuf> = f.transcripts(&cs).into_iter().map(|t| t.path).collect();
+        paths.sort();
+        let mut want = vec![named.clone(), moved.clone()];
+        want.sort();
+        assert_eq!(paths, want);
+
+        // No extension, so no session on the claim: the folder's, begun while it held the pane.
+        let unnamed = [entry("claim", "2026-01-01T00:00:00Z", json!({ "source": "startup", "agent": { "app": "pi", "block": "b3", "pane": "D-5", "cwd": "/Users/you/git/api" } }))];
+        let found: Vec<PathBuf> = f.transcripts(&claims(&unnamed)).into_iter().map(|t| t.path).collect();
+        assert_eq!(found, vec![named]);
+        assert_eq!(agentcli::pi_session_id(Path::new("x/notes.jsonl")), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

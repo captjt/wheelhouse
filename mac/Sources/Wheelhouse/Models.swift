@@ -54,11 +54,28 @@ struct RuntimeLink: Hashable {
     var spawn: Bool { j["spawn"].bool }
 }
 
+/// The agents Review and Build run, by their config names (src/review/config.rs).
+let reviewAgents = ["claude", "codex", "agy", "pi"]
+
+/// The agents Wheelhouse starts (src/start.rs), in the order its pickers show them.
+let startApps = ["claude-code", "codex", "agy", "pi"]
+
+/// The agent to start on a docket: the kind already on it, else Claude Code.
+func startApp(for app: String?) -> String {
+    app == "antigravity" ? "agy" : startApps.contains(app ?? "") ? app! : "claude-code"
+}
+
+/// An agent's app from the name a message gives it (`from_app`: "Codex").
+func appOfName(_ name: String?) -> String {
+    startApps.first { appName($0) == name } ?? "claude-code"
+}
+
 func appName(_ app: String?) -> String {
     switch app {
     case "claude-code", "claude": "Claude Code"
     case "codex": "Codex"
     case "agy", "antigravity": "Antigravity"
+    case "pi": "Pi"
     case let a? where !a.isEmpty: a
     default: "Agent"
     }

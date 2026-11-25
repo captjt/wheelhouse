@@ -8,6 +8,8 @@ details.
    it's missing):
    - `~/.claude/CLAUDE.md`, for Claude Code
    - `~/.codex/AGENTS.md`, for Codex
+   - `~/.gemini/config/GEMINI.md`, for Antigravity
+   - `~/.pi/agent/AGENTS.md`, for Pi
 2. Install the skill the block points to:
 
    ```sh
@@ -16,9 +18,10 @@ details.
 
    With a shared `~/.agents/skills` folder, it writes the skill there and
    links it into `~/.claude/skills`, `~/.codex/skills` and
-   `~/.gemini/config/skills`. Without one, it goes in
-   `~/.claude/skills/wheelhouse`, for Claude Code only; make
-   `~/.agents/skills` first to give Codex and Antigravity the skill too. `wh skill show`
+   `~/.gemini/config/skills`; Pi reads `~/.agents/skills` itself. Without
+   one, it goes in `~/.claude/skills/wheelhouse`, linked into
+   `~/.pi/agent/skills` when Pi is installed; make `~/.agents/skills`
+   first to give Codex and Antigravity the skill too. `wh skill show`
    prints the skill, and `wh skill remove` takes it out.
 
 The lines apply only inside a Rex pane or a Herdr terminal (`REX_SESSION`

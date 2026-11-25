@@ -408,7 +408,7 @@ export function AgentsView() {
           <IconTerminal size={15} /> Agents <span className="view-count">{total}</span>
         </span>
         <span className="spacer" />
-        <span className="muted small m-hide">Every Claude Code, Codex and Antigravity pane in {followedRuntimes(hub.state)}, live</span>
+        <span className="muted small m-hide">Every Claude Code, Codex, Antigravity and Pi pane in {followedRuntimes(hub.state)}, live</span>
         <span className="seg seg-text" role="tablist" aria-label="Group by">
           <button className={by === "session" ? "on" : ""} onClick={() => pick("session")} role="tab" aria-selected={by === "session"}>
             Session

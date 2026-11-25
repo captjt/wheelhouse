@@ -176,7 +176,8 @@ pub fn gather(core: &Core, since: &str, until: &str) -> Result<(Value, Vec<Work>
             _ if core.store.build_task(&st.id)?.is_some() => "builds",
             _ => "agents",
         };
-        let claims = crate::subagents::claims(&stored.iter().filter_map(|s| s.entry().ok()).filter(|e| e.kind == "claim" || e.kind == "release").collect::<Vec<_>>());
+        let claims =
+            crate::subagents::claims(&stored.iter().filter_map(|s| s.entry().ok()).filter(|e| matches!(e.kind.as_str(), "open" | "claim" | "release")).collect::<Vec<_>>());
         if !claims.is_empty() {
             work.push(Work { id: st.id.clone(), title: st.title.clone(), kind, claims });
         }

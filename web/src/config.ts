@@ -110,6 +110,7 @@ export const AGENTS: { key: string; label: string }[] = [
   { key: "claude", label: "Claude Code" },
   { key: "codex", label: "Codex" },
   { key: "agy", label: "Antigravity" },
+  { key: "pi", label: "Pi" },
 ];
 export const agentLabel = (a?: string | null) => AGENTS.find((x) => x.key === a)?.label ?? a ?? "";
 

@@ -13,10 +13,10 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### The hub and the record
 
-- [x] Every Claude Code, Codex or Antigravity agent in a Rex pane or a
-      Herdr terminal gets a docket. Claude Code's and Antigravity's hooks (`wh hooks install`)
-      add names from your prompts,
-      each turn's summary, and a new docket on `/clear`.
+- [x] Every Claude Code, Codex, Antigravity or Pi agent in a Rex pane or a
+      Herdr terminal gets a docket. Claude Code's and Antigravity's hooks,
+      and Pi's extension (`wh hooks install`), add names from your prompts,
+      each turn's summary, and a new docket on `/clear` (Pi's `/new`).
 - [x] A signed, hash-chained record per docket: `wh verify`, `wh export`,
       and `wh verify --file` for an export ([record.md](record.md))
 - [x] Rex and Herdr as runtimes behind one interface, followed side by
@@ -145,7 +145,7 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       as Markdown, and `wh recap`.
 - [x] Recap's tokens: across all the work (agents, Builds, reviews), by
       provider and model, per day, and the dockets that took the most, from
-      the agents' own Claude Code, Codex and Antigravity transcripts
+      the agents' own Claude Code, Codex, Antigravity and Pi transcripts
 - [ ] Keep tokens after the tools prune their transcripts (Claude Code's
       go after 30 days): snapshot each day's usage into the hub's store
 - [ ] Cost: tokens at each model's price
@@ -208,7 +208,7 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### Review
 
-- [ ] Codex and Antigravity reviewers and checkers tested in live rounds.
+- [ ] Codex, Antigravity and Pi reviewers and checkers tested in live rounds.
       The config supports them, but they haven't run a live Wheelhouse
       round yet.
 - [ ] Drafts and round status on the docket's record, rather than in the

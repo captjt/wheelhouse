@@ -153,7 +153,7 @@ pub const TOKEN_FIELDS: [&str; 5] = ["input", "cache_read", "cache_write", "outp
 pub fn flat_tokens(t: &Value) -> Value {
     let mut sum = serde_json::Map::new();
     for f in TOKEN_FIELDS {
-        let n: i64 = ["codex", "claude", "agy"].iter().map(|a| t[a][f].as_i64().unwrap_or(0)).sum();
+        let n: i64 = super::config::AGENTS.iter().map(|a| t[a][f].as_i64().unwrap_or(0)).sum();
         sum.insert(f.into(), json!(n));
     }
     Value::Object(sum)
