@@ -1,0 +1,189 @@
+---
+title: The wh CLI
+description: Every wh command, for you and for your agents, grouped by what it's for, with its flags.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+`wh` is Wheelhouse's command line. You use it from any terminal; your agents
+use it from their panes. Every command talks to the hub on this Mac over its
+socket, so the hub must be running (`wh up` runs it at login).
+
+`wh --help` lists the commands, and `wh <command> --help` shows one's flags.
+With [tab completion](#setup) on, Tab fills in commands, flags, the dockets in
+flight, your messages and their options, agents' addresses, and the PRs Review
+follows.
+
+A docket is written `D-12`, or `ACME-12` when it's shared with a team.
+
+## What needs you
+
+| Command | What it does |
+| --- | --- |
+| `wh` | What needs you, and what's in flight |
+| `wh ls [--all]` | Open dockets, newest first. `--all` includes closed ones |
+| `wh attention` | What needs you beyond your asks: failing checks, stalled Builds, held dockets, and dockets closed on your word |
+| `wh recap [today\|week\|30d]` | What happened, as Markdown. The default is `week` |
+| `wh open [D-4]` | Open a docket, or the Inbox, in Wheelhouse.app (or the web app without it) |
+
+## Your dockets
+
+| Command | What it does |
+| --- | --- |
+| `wh show D-4` | One docket's record, each entry with how it's known |
+| `wh new "title"` | Open a docket by hand |
+| `wh new --linear ENG-142` | Open a docket from a Linear issue |
+| `wh new --team "title"` | Open a docket shared with your workspace from the start |
+| `wh intent D-4` | Print a docket's intent |
+| `wh intent D-4 "text"`, `wh intent D-4 - < intent.md` | Set it, from the argument or from stdin |
+| `wh note D-4 "text"` | Add a note. From an agent's pane, the note is the agent's |
+| `wh set D-4 --title "…"` | Rename it |
+| `wh set D-4 --status todo\|in_progress\|done\|dropped` | Set its status |
+| `wh set D-4 --status done --anyway --reason "…"` | Close a docket with acceptance items without evidence, on your word. The record says so |
+| `wh link D-4 ENG-142` | Link a Linear issue |
+| `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or an `https://` link with a docket. From an agent's pane, its own docket. The title defaults to the file's name |
+| `wh check D-4 [--wait]` | Run its witnessed checks now, in its worktree. `--wait` waits for the results and exits non-zero on a required failure |
+| `wh hold D-4 ["why"]` | Hold it: its protocol takes no steps until you resume it. The reason goes on the record |
+| `wh hold D-4 --off` | Resume it |
+
+## The record
+
+| Command | What it does |
+| --- | --- |
+| `wh verify [D-4]` | Check one docket's record, or every docket's, kept files included |
+| `wh export D-4 > D-4.jsonl` | A docket's record as JSON lines |
+| `wh verify --file D-4.jsonl` | Check an exported record, without the hub |
+
+See [The record](/concepts/record/).
+
+## Agents
+
+### Starting one
+
+```sh
+wh start [--codex|--agy|--pi] [-C DIR] [--title T] [--docket D-4] "prompt"
+```
+
+Starts Claude Code (or Codex, Antigravity, or Pi) in a new pane, on a new
+docket, in `DIR` (the current folder by default), with your prompt. With
+`--docket`, it works on that docket instead, beside any agents already on it.
+It opens in Rex, or in Herdr when Settings → Runtimes says so.
+
+### From an agent's pane
+
+Agents run these from their own panes. The `wheelhouse` skill
+(`wh skill install`) teaches them how. You can run most of them yourself,
+from a shell, where the messages are yours.
+
+| Command | What it does |
+| --- | --- |
+| `wh brief [D-4]` | What an agent reads to work on its docket: the intent, the Linear issue, what was said lately, other agents on it |
+| `wh whoami` | This pane's address and docket |
+| `wh name NAME` | Name this pane, so others can message it as `NAME` |
+| `wh intent D-4 [TEXT\|-]` | Read or update the docket's intent |
+| `wh note D-4 "text"` | A note on the record, as the agent |
+| `wh attach FILE\|URL [--title T]` | Keep a file or a link with its docket |
+| `wh send --to ADDR [--subject S] [--option O]… "text"` | Message another agent, every agent on a docket, or you. Text `-` reads stdin. Each `--option` is an answer, shown as a button |
+| `wh reply N ["text"] [--choice OPTION]` | Answer message N with words, an option, or both |
+| `wh inbox [--json]` | Messages to this pane not read yet (from a shell: to you) |
+| `wh read N [--json]` | Read message N |
+| `wh wait [--thread N] [--timeout SECS] [--json]` | Wait for a message to this pane, or a reply in thread N. The timeout defaults to 300 seconds |
+| `wh share PORT [--title T] [--ask Q] [--option O]…` | Show you an app this pane serves, on your tailnet, with a question and answers as buttons |
+| `wh share --stop [PORT]` | Take it down, or all of this pane's |
+| `wh join D-4 [--role R]` | Put this pane's agent on a docket, beside the agents there. It leaves the docket it was on |
+| `wh leave [--reason R]` | Take this pane off its docket. The others keep it; this pane gets a docket of its own |
+
+**Addresses for `wh send --to`:**
+
+| Address | Who it reaches |
+| --- | --- |
+| `me` | You, in the Inbox, the menu bar, a notification, your phone |
+| `reviewer` | The pane named `reviewer` |
+| `api/builder` | The pane named `builder` in the `api` session |
+| `herdr:wheelhouse/D-12` | A pane in Herdr, when both runtimes have a session of that name |
+| `@D-12` | Every agent on D-12 but the sender |
+| `@ACME-12` | Every agent on a shared docket, your teammates' included |
+
+A message to an agent waits until it's between turns, then it's pasted in. See
+[Agents on a docket](/concepts/agents/).
+
+## Review
+
+A PR is `OWNER/NAME N` or `OWNER/NAME#N`, such as `acme/api 341`.
+
+| Command | What it does |
+| --- | --- |
+| `wh review [--json]` | Every PR it follows, and what each needs |
+| `wh review on [--force]`, `wh review off` | Turn the protocol on (paused, the first time) or off |
+| `wh review pause`, `wh review resume` | Stop or restart new rounds |
+| `wh review check` | Check GitHub now |
+| `wh review post-mode ask\|auto\|config` | Who posts a checked review: you, the checker, or what the config says |
+| `wh review pickup acme/api 341` | Review a PR that didn't request you |
+| `wh review preview acme/api 341` | See the round's checked review |
+| `wh review post acme/api 341` | Post it |
+| `wh review dismiss acme/api 341` | Drop it |
+
+See [Review](/features/review/).
+
+## Build
+
+| Command | What it does |
+| --- | --- |
+| `wh build [--json]` | Every Build, its phase, and what needs you; and what's wrong with the config, if anything |
+| `wh build start D-12` | Build a docket from its intent |
+| `wh build start acme/api#45` | Build a GitHub issue (its URL works too) |
+| `wh build start ENG-142 [--repo owner/name]` | Build a Linear issue (needs `wh setup-linear`) |
+| `wh build discard D-12` | Stop a Build. Its branch stays |
+| `wh build pause`, `wh build resume` | Stop or restart new Builds |
+
+See [Build](/features/build/).
+
+## Teams
+
+| Command | What it does |
+| --- | --- |
+| `wh team` | Your workspace: connected or not, its members, its shared dockets, anything held |
+| `wh team create NAME --prefix ACME --url URL --setup CODE` | Make a workspace on a workspace hub, as its first admin |
+| `wh team invite HANDLE [--admin] [--hours N]` | An invite code, for one person, once |
+| `wh team join CODE [--login L] [--name N]` | Join with an invite code |
+| `wh team members` | Who's in, with their role and login |
+| `wh team share D-12` | Share a docket of yours. It goes on as `ACME-n`, with you as its first owner |
+| `wh team people ACME-1 [HANDLE] [--owner\|--remove] [--answer owners\|members]` | Who's on a shared docket, and who answers its agents' questions |
+| `wh team trust ACME-1 [HANDLE] [--off] [--private-prompts on\|off]` | Let a teammate's agents' messages straight in; keep your prompts to yourself |
+| `wh team role HANDLE admin\|member` | Admins: make a member an admin, or the reverse |
+| `wh team remove HANDLE`, `wh team leave` | Admins: take a member out. Anyone: leave |
+| `wh team send N`, `wh team drop N` | Send or drop an entry the outbox held back |
+| `wh team sync` | Send the outbox and take in what's new, now |
+| `wh team follow ACME-1` | Follow a shared docket again that your hub stopped following |
+
+See [How teams work](/teams/overview/).
+
+## The hub
+
+| Command | What it does |
+| --- | --- |
+| `wh up` | Run the hub in the background, at login (a LaunchAgent) |
+| `wh down` | Stop it |
+| `wh status` | Whether the hub runs, and what it sees, Rex and Herdr each |
+| `wh logs [-n LINES]` | The background hub's log. The last 60 lines by default |
+| `wh doctor` | What's set up, what isn't, and what to do about each |
+| `wh web` | The app's address on your tailnet |
+| `wh web --publish` | Serve it there, to your Tailscale user only |
+| `wh serve` | Run the hub in the foreground. `wh up` runs this for you |
+| `wh serve --workspace`, `wh up --workspace`, `wh down --workspace` | Run a workspace hub for a team, in the foreground or at login |
+
+## Setup
+
+| Command | What it does |
+| --- | --- |
+| `wh hooks [status\|install\|remove]` | Claude Code's and Antigravity's hooks, and Pi's extension |
+| `wh skill [show\|install\|remove]` | The `wheelhouse` skill for agents |
+| `wh setup-linear` | Store a read-only Linear API key in the Keychain |
+| `wh completions zsh\|bash` | Tab completion. Add `eval "$(wh completions zsh)"` to `~/.zshrc`, or `eval "$(wh completions bash)"` to `~/.bashrc` |
+| `wh import rex-reviewer [--force]` | Move over from rex-reviewer, once: its config, guides and ledger |
+| `wh --version` | The version |
+
+<Aside>
+`just setup` runs the hooks, the skill and `wh up` for you. See
+[Install](/start/install/).
+</Aside>
