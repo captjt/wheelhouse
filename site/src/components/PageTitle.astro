@@ -1,0 +1,24 @@
+---
+// A page's title: its section above it, its description below as the lead.
+import type { StarlightRouteData } from "@astrojs/starlight/route-data";
+
+const { entry, sidebar } = Astro.locals.starlightRoute;
+type Entry = StarlightRouteData["sidebar"][number];
+const groupOf = (entries: Entry[]): string | undefined => {
+  for (const e of entries) {
+    if (e.type === "group" && e.entries.some((c) => c.type === "link" && c.isCurrent)) return e.label;
+    if (e.type === "group") {
+      const inner = groupOf(e.entries);
+      if (inner) return inner;
+    }
+  }
+};
+const section = groupOf(sidebar);
+const lead = entry.data.description;
+---
+
+<header class="wh-ptitle">
+  {section && <p class="wh-ptitle-section">{section}</p>}
+  <h1 id="_top">{entry.data.title}</h1>
+  {lead && <p class="wh-ptitle-lead">{lead}</p>}
+</header>
