@@ -24,7 +24,23 @@ export type DiffView = {
   patch: string | null;
   too_big: boolean;
   untracked_more: number;
+  /** Every comment on the docket's diff, every version's (src/comments.rs). */
+  comments?: DiffComment[];
 };
+
+/** Where a comment is: a file's line or lines, on the new side (`additions`) or the old (`deletions`), between two commits (`to` none for the working tree, on `head`). */
+export type CommentPlace = {
+  path: string;
+  old_path?: string | null;
+  side: "additions" | "deletions";
+  line: number;
+  end_line?: number | null;
+  from: string;
+  to?: string | null;
+  head?: string | null;
+  excerpt?: string | null;
+};
+export type DiffComment = { seq: number; at: string; by: string; body: string; diff: CommentPlace };
 
 /** The diff's address: from and to, when chosen; one file, when asked. */
 export function diffPath(id: string, q: { from?: string | null; to?: string | null; path?: string | null; old_path?: string | null; stat?: boolean } = {}): string {
@@ -106,4 +122,81 @@ export function sourceLabel(v: Pick<DiffView, "source" | "dir">): string {
     case "record":
       return "The checkout is gone; this is the patch the record kept with its checks";
   }
+}
+
+/** Two commits are one when one names the other (a short sha and a full one). */
+const sameSha = (a?: string | null, b?: string | null) => !!a && !!b && (a.startsWith(b) || b.startsWith(a));
+
+/** Whether a comment's lines are the ones shown: the new side's are the same when `to` is, the old side's when `from` is. */
+export function commentHere(c: DiffComment, v: Pick<DiffView, "from" | "to" | "head">): boolean {
+  const d = c.diff;
+  if (d.side === "deletions") return sameSha(d.from, v.from.sha);
+  if (!d.to) return v.to.ref === "work" && sameSha(d.head, v.head);
+  return sameSha(d.to, v.to.sha);
+}
+
+/** The comments on what's shown, by file and line, and those on other versions. */
+export function placeComments(comments: DiffComment[] | undefined, v: Pick<DiffView, "from" | "to" | "head" | "files">): { here: Map<string, DiffComment[]>; elsewhere: DiffComment[] } {
+  const here = new Map<string, DiffComment[]>();
+  const elsewhere: DiffComment[] = [];
+  const paths = new Set(v.files.map((f) => f.path));
+  for (const c of comments ?? []) {
+    if (commentHere(c, v) && paths.has(c.diff.path)) here.set(c.diff.path, [...(here.get(c.diff.path) ?? []), c]);
+    else elsewhere.push(c);
+  }
+  return { here, elsewhere };
+}
+
+/** Where a comment is, for people: `src/a.rs:12`, `src/a.rs:12–14`, and `(old)` on the removed lines (as src/comments.rs says it). */
+export function commentPlace(d: Pick<CommentPlace, "path" | "line" | "end_line" | "side">): string {
+  return `${d.path}:${d.end_line && d.end_line !== d.line ? `${d.line}–${d.end_line}` : d.line}${d.side === "deletions" ? " (old)" : ""}`;
+}
+
+/** The lines `line` to `end` of one side of a file, read from a unified patch: the code a comment is on. Empty when the patch doesn't show them. */
+export function excerptOf(patch: string | null | undefined, path: string, side: "additions" | "deletions", line: number, end = line): string {
+  if (!patch) return "";
+  const [lo, hi] = line <= end ? [line, end] : [end, line];
+  const out: string[] = [];
+  let inFile = false;
+  let oldName = "";
+  let oldN = 0;
+  let newN = 0;
+  for (const raw of patch.split("\n")) {
+    if (raw.startsWith("diff --git ")) {
+      inFile = false;
+      continue;
+    }
+    if (raw.startsWith("--- ")) {
+      oldName = raw.slice(4).replace(/^a\//, "");
+      continue;
+    }
+    if (raw.startsWith("+++ ")) {
+      // A deleted file's new name is /dev/null: it's known by its old one.
+      const name = raw.slice(4) === "/dev/null" ? oldName : raw.slice(4).replace(/^b\//, "");
+      inFile = name === path;
+      continue;
+    }
+    if (!inFile) continue;
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+    if (h) {
+      oldN = Number(h[1]);
+      newN = Number(h[2]);
+      continue;
+    }
+    if (raw.startsWith("\\")) continue;
+    const mark = raw[0];
+    const text = raw.slice(1);
+    if (mark === " ") {
+      if (side === "additions" ? newN >= lo && newN <= hi : oldN >= lo && oldN <= hi) out.push(text);
+      oldN++;
+      newN++;
+    } else if (mark === "+") {
+      if (side === "additions" && newN >= lo && newN <= hi) out.push(text);
+      newN++;
+    } else if (mark === "-") {
+      if (side === "deletions" && oldN >= lo && oldN <= hi) out.push(text);
+      oldN++;
+    }
+  }
+  return out.join("\n");
 }

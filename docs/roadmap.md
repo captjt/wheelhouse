@@ -244,8 +244,12 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### Changes
 
-- [ ] Comments on a diff's lines, on the record (Pierre's annotations), and
-      sent to the agent as a note
+- [x] Comments on a diff's lines: the `+` in the gutter of a docket's
+      Changes (or a dragged range) opens a box under the line; the comment
+      is a note on the record with the file, side, lines, commits and the
+      code it's on, shown under its lines on that version and listed apart
+      on others, and the agents on the docket are told
+      (`POST /api/dockets/{id}/comments`, `src/comments.rs`)
 - [ ] Unchanged context expanded in place, from the file at each side
 - [ ] Comparing two dockets' work: two agents who tried the same issue
 

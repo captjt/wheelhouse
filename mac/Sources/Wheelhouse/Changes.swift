@@ -156,3 +156,11 @@ struct ChangesWeb: NSViewRepresentable {
         }
     }
 }
+
+/// Where a comment on a diff is, for people: `src/a.rs:12`, `src/a.rs:12–14`,
+/// and `(old)` on the removed lines (as src/comments.rs says it).
+func commentPlace(_ d: JSON) -> String {
+    let line = d["line"].int ?? 0
+    let span = d["end_line"].int.flatMap { $0 != line ? "\(line)–\($0)" : nil } ?? "\(line)"
+    return "\(d["path"].str ?? ""):\(span)\(d["side"].str == "deletions" ? " (old)" : "")"
+}
