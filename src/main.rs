@@ -917,6 +917,7 @@ fn serve() -> Result<()> {
         supervise("Review", shared.clone(), review::watch::run);
         supervise("Build", shared.clone(), build::watch::run);
         supervise("logs", shared.clone(), service::trim_logs);
+        supervise("token snapshots", shared.clone(), recap::snapshot_loop);
         supervise("the workspace", shared.clone(), team::member::follow);
         server::serve(shared).await
     })
