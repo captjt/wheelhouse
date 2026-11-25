@@ -1,4 +1,4 @@
-//! Starting an agent on a docket: Claude Code or Codex, in a new tab of the
+//! Starting an agent on a docket: Claude Code, Codex, Antigravity or Pi, in a new tab of the
 //! `wheelhouse` session on the spawn runtime (Rex, or Herdr), in a folder,
 //! with your prompt. The docket comes
 //! first, and the pane is named after it (`wheelhouse/D-12`), so others can
@@ -18,7 +18,8 @@ pub fn program(app: &str) -> Result<(&'static str, &'static str)> {
         "" | "claude" | "claude-code" => Ok(("claude", "claude-code")),
         "codex" => Ok(("codex", "codex")),
         "agy" | "antigravity" => Ok(("agy", "agy")),
-        other => bail!("Wheelhouse starts Claude Code, Codex or Antigravity, not {other}"),
+        "pi" => Ok(("pi", "pi")),
+        other => bail!("Wheelhouse starts Claude Code, Codex, Antigravity or Pi, not {other}"),
     }
 }
 
@@ -73,16 +74,7 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
     let path = tokio::task::spawn_blocking(|| crate::review::agentcli::agent_path(&[])).await.context("reading your shell's PATH")?;
     let mut argv = vec!["env".to_string(), format!("PATH={path}"), bin.to_string()];
     if let Some(p) = prompt {
-        if app == "agy" {
-            argv.push("-i".into());
-            // agy's `-i` takes the next word: a prompt that starts with `-`
-            // gets a space first, so it's never read as a flag.
-            argv.push(if p.starts_with('-') { format!(" {p}") } else { p.to_string() });
-        } else {
-            // After `--`, a prompt that starts with `-` is a prompt, never a flag.
-            argv.push("--".into());
-            argv.push(p.to_string());
-        }
+        argv.extend(prompt_args(app, p));
     }
     let rt = crate::runtime::spawn_kind().get();
     let created = rt.open(session.as_deref(), SESSION, &name, &cwd, &argv, crate::runtime::Place::Tab).await.with_context(|| format!("starting {bin} in {}", rt.kind().title()))?;
@@ -103,6 +95,20 @@ pub async fn start(shared: &Shared, app: &str, cwd: &str, prompt: Option<&str>, 
         core.append(&docket, "note", &Who::Owner, Some(p.to_string()), json!({ "via": "prompt", "from": "wheelhouse", "block": created.block_id }))?;
     }
     Ok(json!({ "docket": docket, "block": created.block_id, "pane": format!("{SESSION}/{name}"), "others": others }))
+}
+
+/// The words after the program that give it its first prompt.
+fn prompt_args(app: &str, p: &str) -> Vec<String> {
+    match app {
+        // agy's `-i` takes the next word: a prompt that starts with `-`
+        // gets a space first, so it's never read as a flag.
+        "agy" => vec!["-i".into(), if p.starts_with('-') { format!(" {p}") } else { p.to_string() }],
+        // Pi reads a word that starts with `@` as a file to attach, even
+        // after `--`: a space first keeps it the prompt.
+        "pi" => vec!["--".into(), if p.starts_with('@') { format!(" {p}") } else { p.to_string() }],
+        // After `--`, a prompt that starts with `-` is a prompt, never a flag.
+        _ => vec!["--".into(), p.to_string()],
+    }
 }
 
 /// The new pane's name: the docket's (`D-12`), or with agents on it already,
@@ -198,4 +204,21 @@ pub async fn folders(shared: &Shared, docket: Option<&str>) -> Result<Value> {
         .cloned();
     let suggested = last.filter(|l| crate::paths::expand(l).is_dir()).or(worktree).or(named);
     Ok(json!({ "folders": out, "suggested": suggested }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_agent_gets_its_prompt_as_a_prompt() {
+        assert_eq!(program("pi").unwrap(), ("pi", "pi"));
+        assert!(program("opencode").is_err());
+        assert_eq!(prompt_args("claude-code", "-v please"), ["--", "-v please"]);
+        assert_eq!(prompt_args("agy", "-v please"), ["-i", " -v please"]);
+        assert_eq!(prompt_args("pi", "Fix the fold"), ["--", "Fix the fold"]);
+        // `@src/x.rs …` would be a file to Pi, and a missing one at that.
+        assert_eq!(prompt_args("pi", "@src/fold.rs is slow"), ["--", " @src/fold.rs is slow"]);
+        assert_eq!(prompt_args("pi", "-v please"), ["--", "-v please"]);
+    }
 }

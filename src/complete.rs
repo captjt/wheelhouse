@@ -139,8 +139,9 @@ pub const BUILD: Words = &[
     ("pause", "stop new Builds"),
     ("resume", "restart new Builds"),
 ];
-pub const SKILL: Words = &[("show", "print the agents' skill"), ("install", "install it for Claude Code, Codex and Antigravity"), ("remove", "remove it")];
-pub const HOOKS: Words = &[("status", "whether the agents' hooks are in"), ("install", "install Claude Code's and Antigravity's hooks"), ("remove", "remove them")];
+pub const SKILL: Words = &[("show", "print the agents' skill"), ("install", "install it for Claude Code, Codex, Antigravity and Pi"), ("remove", "remove it")];
+pub const HOOKS: Words =
+    &[("status", "whether the agents' hooks are in"), ("install", "install Claude Code's and Antigravity's hooks, and Pi's extension"), ("remove", "remove them")];
 pub const RECAP: Words = &[("today", ""), ("week", "the default"), ("30d", "the last 30 days")];
 pub const STATUS: Words = &[("todo", ""), ("in_progress", ""), ("done", "on evidence, or --anyway --reason"), ("dropped", "")];
 pub const IMPORT: Words = &[("rex-reviewer", "its config, guides and ledger, once")];

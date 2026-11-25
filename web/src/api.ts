@@ -565,7 +565,18 @@ export async function post<T>(path: string, body: unknown = {}): Promise<T> {
 }
 
 export const appName = (app?: string | null) =>
-  app === "claude-code" ? "Claude Code" : app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : app || "Agent";
+  app === "claude-code" ? "Claude Code" : app === "codex" ? "Codex" : app === "agy" ? "Antigravity" : app === "pi" ? "Pi" : app || "Agent";
+
+/** The agents Wheelhouse starts (src/start.rs), in the order its pickers show them. */
+export const startApps = ["claude-code", "codex", "agy", "pi"] as const;
+export type StartApp = (typeof startApps)[number];
+
+/** The agent to start on a docket: the kind already on it, else Claude Code. */
+export const startAppFor = (app?: string | null): StartApp =>
+  app === "antigravity" ? "agy" : (startApps as readonly string[]).includes(app ?? "") ? (app as StartApp) : "claude-code";
+
+/** An agent's app from the name a message gives it (`from_app`: "Codex"). */
+export const appOfName = (name?: string | null): string => startApps.find((a) => appName(a) === name) ?? "claude-code";
 
 /** On a shared docket (docs/teams.md), the teammate an entry's writer
  * belongs to (`sam`, `hub@sam`, `codex@sam`); null when it's yours, or the

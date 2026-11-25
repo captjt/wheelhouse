@@ -7,6 +7,11 @@
 //! `wh hooks install` adds the three to `~/.claude/settings.json`, beside
 //! whatever hooks are there. Codex comes once its hook events are checked
 //! against a live Codex.
+//!
+//! Pi has no hooks file: it loads TypeScript extensions. Ours
+//! (`src/pi-extension.ts`) goes in `~/.pi/agent/extensions/wheelhouse.ts`
+//! and runs `wh hook --agent pi` with the same three events and the same
+//! fields as Claude Code's, so the hub reads them alike.
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
@@ -16,6 +21,10 @@ use std::time::Duration;
 
 const EVENTS: [&str; 3] = ["SessionStart", "UserPromptSubmit", "Stop"];
 const AGY_EVENTS: [&str; 3] = ["SessionStart", "PreInvocation", "Stop"];
+/// Pi's extension, with `"__WH__"` where this `wh`'s path goes.
+const PI_EXTENSION: &str = include_str!("pi-extension.ts");
+/// What marks the extension as ours, in the file.
+const PI_MARK: &str = "wheelhouse-pi-extension";
 /// The hook's own timeout in the agent's config, in seconds.
 const HOOK_TIMEOUT: u64 = 5;
 
@@ -59,11 +68,43 @@ fn agy_hooks_file() -> PathBuf {
     dir.join("hooks.json")
 }
 
-fn command(agent: &str, event: &str) -> Result<String> {
+/// Pi's own folder: `$PI_CODING_AGENT_DIR`, else `~/.pi/agent`. It's there
+/// once Pi is installed.
+pub fn pi_agent_dir() -> PathBuf {
+    std::env::var("PI_CODING_AGENT_DIR").ok().filter(|d| !d.trim().is_empty()).map(|d| crate::paths::expand(&d)).unwrap_or_else(|| crate::paths::home().join(".pi/agent"))
+}
+
+/// Where `wh hooks install` puts Pi's extension.
+pub fn pi_extension_path() -> PathBuf {
+    pi_agent_dir().join("extensions/wheelhouse.ts")
+}
+
+/// The extension, calling `wh` at `exe`: a JSON string is a JavaScript
+/// string literal, so no path can end it early.
+fn pi_extension(exe: &str) -> Result<String> {
+    let lit = serde_json::to_string(exe)?;
+    Ok(PI_EXTENSION.replacen("\"__WH__\"", &lit, 1))
+}
+
+/// Whether a file there is ours, from its text: someone else's
+/// `wheelhouse.ts` is never written over or deleted.
+fn pi_is_ours(text: &str) -> bool {
+    text.contains(PI_MARK)
+}
+
+/// Whether Pi loads our extension on this machine.
+pub fn pi_installed() -> bool {
+    std::fs::read_to_string(pi_extension_path()).is_ok_and(|t| pi_is_ours(&t))
+}
+
+fn wh_exe() -> Result<String> {
     let exe = std::env::current_exe()?;
-    let exe = exe.canonicalize().unwrap_or(exe);
-    let exe = exe.to_string_lossy();
-    let exe = if exe.contains([' ', '\'', '"']) { format!("'{}'", exe.replace('\'', r"'\''")) } else { exe.into_owned() };
+    Ok(exe.canonicalize().unwrap_or(exe).to_string_lossy().into_owned())
+}
+
+fn command(agent: &str, event: &str) -> Result<String> {
+    let exe = wh_exe()?;
+    let exe = if exe.contains([' ', '\'', '"']) { format!("'{}'", exe.replace('\'', r"'\''")) } else { exe };
     Ok(format!("{exe} hook --agent {agent} {event}"))
 }
 
@@ -108,13 +149,14 @@ pub fn installed_for(app: &str) -> bool {
     match app {
         "claude-code" => claude_installed(),
         "agy" => agy_installed(),
+        "pi" => pi_installed(),
         _ => false,
     }
 }
 
 /// Whether any supported agent has our hooks installed.
 pub fn any_installed() -> bool {
-    claude_installed() || agy_installed()
+    claude_installed() || agy_installed() || pi_installed()
 }
 
 /// Add ours (or point them at this `wh`), leaving every other hook as it
@@ -171,18 +213,50 @@ fn remove_from(config: &mut Value) {
 /// Write a config in place: through a symlink to the file it points at, by
 /// way of a temporary file beside it, so a failure leaves the old one whole.
 fn write(file: &Path, config: &Value) -> Result<()> {
+    let mut text = serde_json::to_string_pretty(config)?;
+    text.push('\n');
+    write_text(file, &text)
+}
+
+fn write_text(file: &Path, text: &str) -> Result<()> {
     let target = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
     let dir = target.parent().ok_or_else(|| anyhow!("{} has no folder", target.display()))?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let tmp = dir.join(format!(".{}.wh.tmp", target.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()));
-    let mut text = serde_json::to_string_pretty(config)?;
-    text.push('\n');
     std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
     if let Ok(meta) = std::fs::metadata(&target) {
         let _ = std::fs::set_permissions(&tmp, meta.permissions());
     }
     std::fs::rename(&tmp, &target).with_context(|| format!("replacing {}", target.display()))?;
     Ok(())
+}
+
+/// Put our extension in Pi's folder `dir` (`extensions/wheelhouse.ts`),
+/// calling `wh` at `exe`. None when Pi isn't installed there.
+fn install_pi(dir: &Path, exe: &str) -> Result<Option<PathBuf>> {
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let file = dir.join("extensions/wheelhouse.ts");
+    match std::fs::read_to_string(&file) {
+        Ok(t) if !pi_is_ours(&t) => anyhow::bail!("{} is someone else's extension: move it, then run `wh hooks install` again", file.display()),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e).with_context(|| format!("reading {}", file.display())),
+        _ => {}
+    }
+    write_text(&file, &pi_extension(exe)?)?;
+    Ok(Some(file))
+}
+
+/// Take our extension out of Pi's folder `dir`: whether it was there.
+fn remove_pi(dir: &Path) -> Result<bool> {
+    let file = dir.join("extensions/wheelhouse.ts");
+    match std::fs::read_to_string(&file) {
+        Ok(t) if pi_is_ours(&t) => {
+            std::fs::remove_file(&file).with_context(|| format!("removing {}", file.display()))?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 /// `wh hooks [status | install | remove]`.
@@ -211,6 +285,14 @@ pub fn cli(action: Option<&str>) -> Result<()> {
             } else {
                 println!("Antigravity  some hooks ({}): run `wh hooks install`", agy_have.join(", "));
             }
+            let pi_shown = crate::paths::tilde(&pi_extension_path().to_string_lossy());
+            if pi_installed() {
+                println!("Pi           tracked: SessionStart, UserPromptSubmit and Stop from the extension {pi_shown}");
+            } else if pi_agent_dir().is_dir() {
+                println!("Pi           no extension: agents are tracked by pane only. Run `wh hooks install`.");
+            } else {
+                println!("Pi           not installed");
+            }
             println!("Codex        tracked by pane only, for now");
         }
         "install" => {
@@ -220,6 +302,10 @@ pub fn cli(action: Option<&str>) -> Result<()> {
             install_agy_into(&mut agy_config)?;
             write(&agy_file, &agy_config)?;
             println!("Antigravity  added SessionStart, PreInvocation and Stop hooks to {agy_shown}");
+            match install_pi(&pi_agent_dir(), &wh_exe()?)? {
+                Some(f) => println!("Pi           added the extension {}", crate::paths::tilde(&f.to_string_lossy())),
+                None => println!("Pi           not installed: skipped"),
+            }
             println!("             Agents already running pick them up when they next start.");
         }
         "remove" => {
@@ -230,6 +316,9 @@ pub fn cli(action: Option<&str>) -> Result<()> {
                 remove_agy_from(&mut agy_config);
                 write(&agy_file, &agy_config)?;
                 println!("Antigravity  removed Wheelhouse's hooks from {agy_shown}");
+            }
+            if remove_pi(&pi_agent_dir())? {
+                println!("Pi           removed the extension {}", crate::paths::tilde(&pi_extension_path().to_string_lossy()));
             }
         }
         other => anyhow::bail!("wh hooks takes status, install or remove, not {other}"),
@@ -275,6 +364,37 @@ mod tests {
         assert!(installed(&config).is_empty());
         assert_eq!(config["hooks"]["Stop"].as_array().unwrap().len(), 1);
         assert!(config["hooks"].get("UserPromptSubmit").is_none());
+    }
+
+    #[test]
+    fn pi_extension_goes_in_only_where_pi_is_and_never_over_anothers() {
+        let root = std::env::temp_dir().join(format!("wh-pi-ext-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("agent");
+        // No Pi: nothing written, not even its folder.
+        assert!(install_pi(&dir, "/x/wh").unwrap().is_none());
+        assert!(!dir.exists());
+
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = install_pi(&dir, "/Users/a b/it's \"wh\"").unwrap().unwrap();
+        let text = std::fs::read_to_string(&f).unwrap();
+        assert!(pi_is_ours(&text));
+        assert!(!text.contains("__WH__"));
+        // The path is one string literal, quotes and all.
+        assert!(text.contains(r#"const WH: string = "/Users/a b/it's \"wh\"";"#), "{text}");
+        // Again: rewritten in place, pointing at the new `wh`.
+        install_pi(&dir, "/y/wh").unwrap();
+        assert!(std::fs::read_to_string(&f).unwrap().contains(r#"const WH: string = "/y/wh";"#));
+        assert!(remove_pi(&dir).unwrap());
+        assert!(!f.exists());
+        assert!(!remove_pi(&dir).unwrap());
+
+        // Someone else's wheelhouse.ts stays, and stays theirs.
+        std::fs::write(&f, "export default function () {}\n").unwrap();
+        assert!(install_pi(&dir, "/x/wh").is_err());
+        assert!(!remove_pi(&dir).unwrap());
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "export default function () {}\n");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

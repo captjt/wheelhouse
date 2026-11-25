@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { appName, type Msg } from "./api";
+import { appName, appOfName, type Msg } from "./api";
 import { AppAvatar, HubAvatar, IconExternal } from "./icons";
 import { onThisMac } from "./Pane";
 import { agoLong, useHub } from "./live";
@@ -19,7 +19,7 @@ export function MessageCard({ m, compact }: { m: Msg; compact?: boolean }) {
   return (
     <div className="msg-card">
       <div className="msg-head">
-        {m.from === "wheelhouse" ? <HubAvatar size={18} /> : <AppAvatar app={m.from_app === "Codex" ? "codex" : m.from_app === "Antigravity" ? "agy" : "claude-code"} size={18} />}
+        {m.from === "wheelhouse" ? <HubAvatar size={18} /> : <AppAvatar app={appOfName(m.from_app)} size={18} />}
         <strong>{msgFrom(m)}</strong>
         <span className="muted">{m.options.length ? "asks you" : "wrote to you"}</span>
         {m.subject && <span className="msg-subject">· {m.subject}</span>}

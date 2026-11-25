@@ -347,9 +347,7 @@ struct AgentsSettings: View {
                 // As {agent}: whatever else the Lua gives it (effort, args) stays.
                 Task { await model.change(key, SettingsPatch.make(part, [field], ["agent": v])) }
             })) {
-                Text("Claude Code").tag("claude")
-                Text("Codex").tag("codex")
-                Text("Antigravity").tag("agy")
+                ForEach(reviewAgents, id: \.self) { Text(appName($0)).tag($0) }
             } label: {
                 Described(title: title, text: text)
             }
@@ -362,7 +360,7 @@ struct AgentsSettings: View {
 
     private func prereview(_ b: JSON) -> some View {
         let now = b["prereview"].strings
-        let all = ["claude", "codex", "agy"]
+        let all = reviewAgents
         return VStack(alignment: .leading, spacing: 4) {
             LabeledContent {
                 HStack(spacing: 6) {
