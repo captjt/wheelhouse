@@ -6867,6 +6867,8 @@ code {
 }
 /* comments under a diff's lines */
 .ch-thread {
+  box-sizing: border-box;
+  min-width: 0;
   margin: 6px 12px 8px;
   max-width: 760px;
   border: 1px solid var(--line);
@@ -6906,8 +6908,14 @@ code {
 }
 .ch-draft-bar {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+.ch-draft-bar .ch-tell {
+  margin-right: auto;
 }
 .ch-tell {
   white-space: nowrap;

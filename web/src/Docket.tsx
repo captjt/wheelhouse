@@ -26,7 +26,7 @@ import { checkState, checkWord, independence, shortSha, verifyShown } from "./ev
 import { IconAgents, IconPause, IconPlay } from "./icons";
 import { SubagentsSection } from "./Subagents";
 import { IconCode } from "./icons";
-import { commentPlace, diffPath, type DiffView } from "./diffview";
+import { commentPlace, diffPath, fenceFor, type DiffView } from "./diffview";
 import { composeButton, composeHint, composeKind, composeToast, composeWarning, suggestions, type ComposeResult, type Suggestion } from "./compose";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
@@ -734,7 +734,7 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
       if (data.via === "diff" && data.diff) {
         const place = commentPlace(data.diff);
         const ex = data.diff.excerpt ? String(data.diff.excerpt) : "";
-        const fence = ex.includes("```") ? "````" : "```";
+        const fence = fenceFor(ex);
         const code = ex ? `\n\n${fence}\n${ex}\n${fence}` : "";
         return comment(e.actor.type === "agent" ? app : you, e.actor.type === "agent" ? agent : youName, `commented on ${place}`, `${e.body || ""}${code}`, e.actor.type === "person" ? "you" : "");
       }

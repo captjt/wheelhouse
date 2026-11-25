@@ -673,9 +673,12 @@ async fn docket_diff(State(shared): State<Shared>, Path(id): Path<String>, axum:
     let mut v = crate::diffs::diff(&shared, &id, &ask).await.map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))?;
     // Its comments, every version's: the app shows those on what it shows.
     if !ask.stat {
-        let stored = shared.lock().store.entries(&id).map_err(internal)?;
+        let core = shared.lock();
+        let stored = core.store.entries(&id).map_err(internal)?;
         let numbered: Vec<(i64, crate::record::Entry)> = stored.iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
-        v["comments"] = json!(crate::comments::list(&numbered));
+        let handle = core.team.as_ref().map(|t| t.config.handle.clone());
+        let you: Vec<&str> = std::iter::once(core.owner.as_str()).chain(handle.as_deref()).collect();
+        v["comments"] = json!(crate::comments::list(&numbered, &you));
     }
     Ok(Json(v))
 }
@@ -2097,7 +2100,11 @@ mod tests {
         assert_eq!(post_json(&app, &uri, bad).await.0, StatusCode::BAD_REQUEST);
         assert_eq!(post_json(&app, "/api/dockets/D-999/comments", c).await.0, StatusCode::NOT_FOUND);
         let numbered: Vec<(i64, crate::record::Entry)> = shared.lock().store.entries(&d).unwrap().iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
-        assert_eq!(crate::comments::list(&numbered).len(), 2);
+        let owner = shared.lock().owner.clone();
+        let listed = crate::comments::list(&numbered, &[owner.as_str()]);
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0]["by"], "you");
+        assert_eq!(crate::comments::list(&numbered, &["sam"])[0]["by"], owner.as_str(), "a teammate's is theirs");
         assert!(shared.lock().verify(&d).unwrap().ok);
     }
 

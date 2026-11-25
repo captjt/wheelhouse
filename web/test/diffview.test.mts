@@ -1,7 +1,7 @@
 // A docket's Changes view: its address, its file list, and when it changed.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { commentHere, commentPlace, countsLabel, diffPath, excerptOf, fileStatus, placeComments, sortFiles, sourceLabel, splitPath, statKey, statusesOf, type DiffComment, type DiffFile, type DiffView } from "../src/diffview.ts";
+import { commentHere, commentPlace, countsLabel, diffPath, excerptOf, fenceFor, fileStatus, patchName, pickedLines, placeComments, sideLines, sortFiles, sourceLabel, splitPath, statKey, statusesOf, type DiffComment, type DiffFile, type DiffView } from "../src/diffview.ts";
 
 const f = (path: string, more: Partial<DiffFile> = {}): DiffFile => ({ path, added: 1, removed: 0, binary: false, untracked: false, ...more });
 
@@ -106,4 +106,53 @@ test("a comment shows on the version it was written on, and is listed apart othe
   assert.equal(elsewhere.length, 2, "another version's, and a file this diff doesn't have");
   assert.equal(commentPlace({ path: "a.rs", line: 3, end_line: 5, side: "deletions" }), "a.rs:3–5 (old)");
   assert.equal(commentPlace({ path: "a.rs", line: 3, end_line: 3, side: "additions" }), "a.rs:3");
+});
+
+test("a hunk's content is never a header: a removed SQL comment, an added ++ line", () => {
+  const p = [
+    "diff --git a/q.sql b/q.sql",
+    "--- a/q.sql",
+    "+++ b/q.sql",
+    "@@ -1,4 +1,4 @@",
+    " select 1;",
+    "--- why we join",
+    "++++x",
+    " join t;",
+    " end;",
+    "",
+  ].join("\n");
+  assert.equal(excerptOf(p, "q.sql", "deletions", 2), "-- why we join");
+  assert.equal(excerptOf(p, "q.sql", "deletions", 4), " end;".slice(1), "old lines after it still count right");
+  assert.equal(excerptOf(p, "q.sql", "additions", 2), "+++x");
+  assert.equal(excerptOf(p, "q.sql", "additions", 4), "end;", "the file isn't dropped after it");
+});
+
+test("a path with a space or a quote is read the way git writes it", () => {
+  assert.equal(patchName("b/a b.txt\t"), "a b.txt");
+  assert.equal(patchName('"b/say \\"hi\\".txt"'), 'say "hi".txt');
+  assert.equal(patchName('"b/caf\\303\\251.md"'), "café.md");
+  const p = ["diff --git a/a b.txt b/a b.txt", "--- a/a b.txt\t", "+++ b/a b.txt\t", "@@ -1 +1 @@", "-old", "+new", ""].join("\n");
+  assert.equal(excerptOf(p, "a b.txt", "additions", 1), "new");
+  assert.deepEqual([...sideLines(p, "a b.txt", "deletions").keys()], [1]);
+});
+
+test("a drag across the old and new sides is its last line alone", () => {
+  assert.deepEqual(pickedLines({ start: 7, end: 5, side: "additions" }), { side: "additions", line: 5, end: 7 });
+  assert.deepEqual(pickedLines({ start: 300, end: 250, side: "deletions", endSide: "additions" }), { side: "additions", line: 250, end: 250 });
+  assert.deepEqual(pickedLines({ start: 4, end: 4 }), { side: "additions", line: 4, end: 4 });
+});
+
+test("a comment shows only on a line the diff shows, and a working-tree one only while its code is the same", () => {
+  const v = view();
+  assert.equal(commentHere(comment({ line: 11 }), v, PATCH), true);
+  assert.equal(commentHere(comment({ line: 40 }), v, PATCH), false, "a line outside every hunk");
+  const work = view({ to: { ref: "work", sha: null, label: "Uncommitted" } });
+  const onWork = (excerpt: string) => comment({ to: null, head: "bbbbbbb", line: 11, excerpt });
+  assert.equal(commentHere(onWork("    let tries = 3;"), work, PATCH), true);
+  assert.equal(commentHere(onWork("    let tries = 9;"), work, PATCH), false, "the agent changed the line since");
+  const { here, elsewhere } = placeComments([comment({ line: 40 })], v, PATCH);
+  assert.equal(here.size, 0);
+  assert.equal(elsewhere.length, 1, "listed apart, not lost");
+  assert.equal(fenceFor("a ```` b"), "`````");
+  assert.equal(fenceFor("plain"), "```");
 });

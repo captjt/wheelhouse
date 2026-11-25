@@ -185,9 +185,9 @@ struct ActivityRow: View {
             // A comment on a diff's lines (src/comments.rs): where, what it says, and the code it's on.
             if data["via"].str == "diff", data["diff"].object != nil {
                 let ex = data["diff"]["excerpt"].str ?? ""
-                let fence = ex.contains("```") ? "````" : "```"
+                let fence = fenceFor(ex)
                 let code = ex.isEmpty ? "" : "\n\n\(fence)\n\(ex)\n\(fence)"
-                return .comment(you, youName, "commented on \(commentPlace(data["diff"]))", "\(e.body ?? "")\(code)", "you")
+                return .comment(you, youName, "commented on \(commentPlace(data["diff"]))", "\(e.body ?? "")\(code)", mate == nil ? "you" : nil)
             }
             if data["via"].str == "message" { return .comment(.hub, "rex-inbox", "delivered a message", e.body ?? "", nil) }
             if e.actorType == "agent" { return .comment(app, agent, "noted", e.body ?? "", nil) }

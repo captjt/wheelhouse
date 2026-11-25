@@ -16,6 +16,7 @@ import {
   diffPath,
   excerptOf,
   fileStatus,
+  pickedLines,
   placeComments,
   sortFiles,
   sourceLabel,
@@ -56,6 +57,7 @@ export default function ChangesScreen({ id, embedded }: { id: string; embedded?:
 
 function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
   const hub = useHub();
+  const toast = useToast();
   const phone = usePhone();
   const [theme] = useTheme();
   const menu = useMenu();
@@ -166,12 +168,14 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
   }, [files, filter]);
 
   // Comments on what's shown go under their lines; the rest are listed above.
-  const placed = useMemo(() => (view ? placeComments(view.comments, view) : { here: new Map<string, DiffComment[]>(), elsewhere: [] as DiffComment[] }), [view]);
+  const patch = single?.patch ?? view?.patch ?? null;
+  const placed = useMemo(() => (view ? placeComments(view.comments, view, patch) : { here: new Map<string, DiffComment[]>(), elsewhere: [] as DiffComment[] }), [view, patch]);
+  // What's drawn: a new read of the diff draws every file again, not only those whose comments changed.
+  const drawn = useMemo(() => hash(`${range}|${patch ?? ""}`), [range, patch]);
   // Comments can be written on a commit (both sides known) or the working tree (on its HEAD).
   const canComment = !!view && !!view.from.sha && view.source !== "record";
 
   const items = useMemo<CodeViewItem<Note>[]>(() => {
-    const patch = single?.patch ?? view?.patch;
     if (!patch) return [];
     let parsed: FileDiffMetadata[];
     try {
@@ -192,13 +196,14 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
           const [side, line] = k.split(":");
           return { side: side as "additions" | "deletions", lineNumber: Number(line), metadata: { kind: "comments", list } as Note };
         });
-        if (draft?.path === fd.name) annotations.push({ side: draft.side, lineNumber: draft.end, metadata: { kind: "draft", list: [] } });
-        // What it shows changed: drawn again.
-        const version = hash(`${annotations.map((a) => `${a.side}${a.lineNumber}${a.metadata.kind === "comments" ? a.metadata.list.map((c) => c.seq).join(".") : "d"}`).join("|")}`);
+        // The draft first: annotations are drawn by their place in the list, so it keeps its own (and its text) when comments come and go.
+        if (draft?.path === fd.name && canComment) annotations.unshift({ side: draft.side, lineNumber: draft.end, metadata: { kind: "draft", list: [] } });
+        // What it shows changed (the diff, or its comments): drawn again.
+        const version = hash(`${drawn}|${annotations.map((a) => `${a.side}${a.lineNumber}${a.metadata.kind === "comments" ? a.metadata.list.map((c) => c.seq).join(".") : "d"}`).join("|")}`);
         return { id: fd.name, type: "diff" as const, fileDiff: fd, annotations, version };
       })
       .sort((a, b) => (order.get(a.id) ?? 1e9) - (order.get(b.id) ?? 1e9));
-  }, [view, single, files, placed, draft]);
+  }, [patch, files, placed, draft, drawn, canComment]);
 
   // A draft ends, sent or not: its lines are no longer picked.
   const endDraft = () => {
@@ -206,11 +211,18 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
     codeRef.current?.clearSelectedLines();
   };
 
-  const startDraft = (path: string, range: { start: number; end: number; side?: "additions" | "deletions"; endSide?: "additions" | "deletions" }) => {
+  const startDraft = (path: string, picked: { start: number; end: number; side?: "additions" | "deletions"; endSide?: "additions" | "deletions" }) => {
     if (!canComment) return;
-    const [a, b] = range.start <= range.end ? [range.start, range.end] : [range.end, range.start];
-    setDraft({ path, side: range.endSide ?? range.side ?? "additions", line: a, end: b });
+    const p = pickedLines(picked);
+    if (p.end - p.line > 500) {
+      codeRef.current?.clearSelectedLines();
+      return toast("A comment spans at most 500 lines", "error");
+    }
+    setDraft({ path, ...p });
   };
+
+  // Another range, or a source you can't comment on: a draft for the old one ends.
+  useEffect(() => endDraft(), [range]);
 
   const open = async (f: DiffFile) => {
     setActive(f.path);
@@ -323,7 +335,6 @@ function Changes({ id, embedded }: { id: string; embedded?: boolean }) {
                   if (!note) return null;
                   if (note.kind === "comments") return <Thread list={note.list} />;
                   if (!draft || !view) return null;
-                  const patch = single?.patch ?? view.patch;
                   return (
                     <CommentBox
                       id={id}
@@ -470,9 +481,15 @@ function Elsewhere({ list, onShow }: { list: DiffComment[]; onShow: (c: DiffComm
               <span className="mono-s">{commentPlace(c.diff)}</span>
               <span className="muted"> · {c.diff.to ? c.diff.to.slice(0, 7) : "uncommitted"} · {who(c.by)}, {ago(c.at)}: </span>
               <span className="ch-elsewhere-body">{c.body.split("\n")[0].replace(/[*_`]/g, "")}</span>
-              <button className="btn btn-ghost btn-small" onClick={() => onShow(c)} title="Compare what it was written on">
-                Show
-              </button>
+              {c.diff.to || c.diff.side === "deletions" ? (
+                <button className="btn btn-ghost btn-small" onClick={() => onShow(c)} title="Compare what it was written on">
+                  Show
+                </button>
+              ) : (
+                <span className="muted small" title="Written on uncommitted changes that have changed since">
+                  changed since
+                </span>
+              )}
             </li>
           ))}
         </ul>

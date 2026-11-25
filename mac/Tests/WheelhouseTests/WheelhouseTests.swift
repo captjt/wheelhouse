@@ -354,4 +354,6 @@ private func docket(_ json: String) throws -> Docket { Docket(j: try JSON.parse(
     #expect(commentPlace(JSON(any: ["path": "src/a.rs", "line": 12, "side": "additions"])) == "src/a.rs:12")
     #expect(commentPlace(JSON(any: ["path": "src/a.rs", "line": 12, "end_line": 14, "side": "deletions"])) == "src/a.rs:12–14 (old)")
     #expect(commentPlace(JSON(any: ["path": "a", "line": 3, "end_line": 3, "side": "additions"])) == "a:3")
+    #expect(fenceFor("let x = 1") == "```")
+    #expect(fenceFor("a ```` b") == "`````")
 }
