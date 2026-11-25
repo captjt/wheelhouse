@@ -20,7 +20,7 @@ struct ComposeSuggestion: Equatable {
 
 enum Compose {
     static let commands: [(word: String, kind: ComposeKind, what: String)] = [
-        ("ask", .ask, "Ask the agents here; options after |"),
+        ("ask", .ask, "Ask the agents here: Which store? | Postgres | SQLite"),
         ("decide", .decide, "Record a decision (Subject: answer), or answer a question (#12 …)"),
         ("task", .task, "Start another agent here with this prompt"),
         ("note", .note, "A note that starts with / or @"),

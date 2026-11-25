@@ -16,7 +16,7 @@ export type ComposeResult =
   | { did: "task"; prompt: string };
 
 export const COMMANDS: { word: string; kind: ComposeKind; what: string }[] = [
-  { word: "ask", kind: "ask", what: "Ask the agents here; options after |" },
+  { word: "ask", kind: "ask", what: "Ask the agents here: Which store? | Postgres | SQLite" },
   { word: "decide", kind: "decide", what: "Record a decision (Subject: answer), or answer a question (#12 …)" },
   { word: "task", kind: "task", what: "Start another agent here with this prompt" },
   { word: "note", kind: "note", what: "A note that starts with / or @" },
