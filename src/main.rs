@@ -952,14 +952,21 @@ fn call(file: Option<String>, title: Option<String>, again: Option<String>) -> R
         return Ok(());
     }
     let Some(file) = file else { anyhow::bail!("give the transcript: wh call FILE, or - to read it from standard input") };
-    let transcript = if file == "-" {
-        let mut t = String::new();
-        std::io::Read::read_to_string(&mut std::io::Read::take(std::io::stdin(), calls::MAX_TRANSCRIPT as u64 + 1), &mut t)?;
-        t
+    let too_long = || anyhow::anyhow!("a transcript is at most {} KB", calls::MAX_TRANSCRIPT / 1000);
+    let bytes = if file == "-" {
+        let mut b = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::Read::take(std::io::stdin(), calls::MAX_TRANSCRIPT as u64 + 1), &mut b)?;
+        b
     } else {
-        let bytes = std::fs::read(&file).with_context(|| format!("reading {file}"))?;
-        String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{file} isn't text: give the transcript as text"))?
+        if std::fs::metadata(&file).with_context(|| format!("reading {file}"))?.len() > calls::MAX_TRANSCRIPT as u64 {
+            return Err(too_long());
+        }
+        std::fs::read(&file).with_context(|| format!("reading {file}"))?
     };
+    if bytes.len() > calls::MAX_TRANSCRIPT {
+        return Err(too_long());
+    }
+    let transcript = String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{file} isn't text: give the transcript as text"))?;
     let v = client::json("POST", "/api/calls", Some(&json!({ "title": title, "transcript": transcript })))?;
     let d = v["docket"].as_str().unwrap_or("");
     println!("{d}: the Listener is reading the call. Its proposals land on {d}, to apply or ignore: wh open {d}");

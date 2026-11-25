@@ -1027,7 +1027,19 @@ async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String
         "apply" => {}
         other => return Err(fail(StatusCode::BAD_REQUEST, format!("apply or ignore, not {other}"))),
     }
-    // What you changed, over what was proposed, checked the same way.
+    // What you changed, over what was proposed, checked the same way; too
+    // long is said, not cut.
+    let limits = [("subject", 200), ("choice", 500), ("question", 1000), ("title", 120), ("intent", 4000)];
+    for (k, max) in limits {
+        if req.edit.as_ref().and_then(|e| e[k].as_str()).is_some_and(|x| x.trim().chars().count() > max) {
+            return Err(fail(StatusCode::BAD_REQUEST, format!("the {k} is at most {max} characters")));
+        }
+    }
+    if let Some(o) = req.edit.as_ref().and_then(|e| e["options"].as_array())
+        && (o.len() > 6 || o.iter().any(|x| x.as_str().is_some_and(|x| x.trim().chars().count() > 80)))
+    {
+        return Err(fail(StatusCode::BAD_REQUEST, "at most 6 options, each at most 80 characters"));
+    }
     let mut v = p.clone();
     let mut edited = serde_json::Map::new();
     for k in ["docket", "subject", "choice", "question", "options", "title", "intent"] {
@@ -2295,7 +2307,7 @@ mod tests {
             crate::calls::view(&numbered, crate::calls::is_listening(c))
         };
         let settled = |c: String| async move {
-            for _ in 0..100 {
+            for _ in 0..400 {
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 if !crate::calls::is_listening(&c) && page(&c)["listening"]["state"] != "started" {
                     break;
@@ -2322,7 +2334,14 @@ mod tests {
         let ps = v["proposals"].as_array().unwrap();
         assert_eq!(ps.len(), 4);
         assert_eq!(ps[3]["quote_found"], false, "a quote nobody said is flagged");
+        // Read again: what it proposed already isn't proposed twice.
+        assert_eq!(post_json(&app, &format!("/api/calls/{call}/listen"), json!({})).await.0, StatusCode::OK);
+        settled(call.clone()).await;
+        let again = page(&call);
+        assert_eq!(again["proposals"].as_array().unwrap().len(), 4, "{again}");
+        assert!(again["listening"]["left_out"].to_string().contains("4 proposed already"), "{again}");
         let sent = std::fs::read_to_string(dir.join("prompt.txt")).unwrap();
+        assert!(sent.contains("Proposed from this call already"), "the Listener is told");
         assert!(sent.contains(&format!("- {d}:")) && sent.contains("<transcript>") && !sent.contains(&format!("- {call}:")), "the open dockets, not the call itself");
 
         let act = |n: usize, body: Value| {

@@ -108,7 +108,7 @@ enum Calls {
 
     /// Options as typed in Edit: one per line, or split by `|`; six at most.
     static func parseOptions(_ s: String) -> [String] {
-        Array(s.split(whereSeparator: { $0 == "\n" || $0 == "|" || $0 == "\r\n" }).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.prefix(6))
+        Array(s.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" }).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.prefix(6))
     }
 
     /// Edit's fields, filled from the proposal.

@@ -22,7 +22,7 @@ test("Apply waits for a docket and the words its kind needs", () => {
   assert.equal(cantApply(p({ kind: "task", title: "T" })), null, "a task needs no docket");
   assert.deepEqual(editable("ask"), ["docket", "question", "options"]);
   assert.deepEqual(editable("task"), ["title", "intent"]);
-  assert.deepEqual(parseOptions("Yes\n No | Maybe\n\n"), ["Yes", "No", "Maybe"]);
+  assert.deepEqual(parseOptions("Yes\n No | Maybe\r\n\n"), ["Yes", "No | Maybe"], "one per line: an option may hold a |");
 });
 
 test("how listening went, in words", () => {

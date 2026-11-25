@@ -37,10 +37,10 @@ export function listeningWords(v: CallView): { text: string; tone: "busy" | "err
   return null;
 }
 
-/** Options as typed in Edit: one per line, or split by `|`. */
+/** Options as typed in Edit: one per line (an option may hold a `|`). */
 export const parseOptions = (s: string): string[] =>
   s
-    .split(/\n|\|/)
+    .split(/\r?\n/)
     .map((o) => o.trim())
     .filter(Boolean)
     .slice(0, 6);

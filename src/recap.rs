@@ -293,7 +293,7 @@ pub fn gather(core: &Core, since: &str, until: &str) -> Result<(Value, Vec<Work>
                 "note" if you && e.data["via"] == "prompt" => prompts += 1,
                 "intent" if you => intents += 1,
                 "question" => asked += 1,
-                "decision" if you => {
+                "decision" if you && e.data["proposal"].is_null() => {
                     answered += 1;
                     decisions
                         .push(json!({ "docket": st.id, "title": st.title, "choice": e.data["choice"], "subject": e.data["subject"], "message": e.data["replies_to"], "at": e.at }));
@@ -1023,6 +1023,8 @@ mod tests {
         core.append(&id, "note", &Who::Owner, Some("fix it".into()), json!({ "via": "prompt" })).unwrap();
         core.append(&id, "turn", &Who::Hub, Some("Fixed.".into()), json!({})).unwrap();
         core.append(&id, "decision", &Who::Owner, None, json!({ "choice": "Merge", "replies_to": 3 })).unwrap();
+        // Your answer to a call's proposal isn't a decision of yours.
+        core.append(&id, "decision", &Who::Owner, Some("Applied #1".into()), json!({ "proposal": 1, "choice": "Apply" })).unwrap();
         core.append(&id, "set", &Who::Hub, None, json!({ "status": "done" })).unwrap();
         // A Build: its PR opened, a round pushed with two replies, merged.
         let b = core.open(&Who::Hub, "Retry the outbox", json!({ "protocol": "build" })).unwrap();
@@ -1042,6 +1044,7 @@ mod tests {
         assert_eq!(r["agents"]["prompts"], 1);
         assert_eq!(r["agents"]["done"][0]["id"], id.as_str());
         assert_eq!(r["you"]["decisions"][0]["choice"], "Merge");
+        assert_eq!(r["you"]["decisions"].as_array().unwrap().len(), 1, "an Apply on a call isn't a decision");
         let bs = &r["builds"];
         assert_eq!((bs["opened"].as_i64(), bs["rounds"].as_i64(), bs["replies"].as_i64(), bs["merged"].as_i64()), (Some(1), Some(1), Some(2), Some(1)));
         assert_eq!(bs["list"][0]["outcome"], "merged");

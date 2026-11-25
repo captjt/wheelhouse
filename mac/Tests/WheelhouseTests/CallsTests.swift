@@ -48,10 +48,10 @@ private func call(_ listening: [String: Any], _ n: Int = 0) -> CallView {
 }
 
 @Test func optionsAsTyped() {
-    #expect(Calls.parseOptions("Yes\n No | Maybe\n\n") == ["Yes", "No", "Maybe"])
+    #expect(Calls.parseOptions("Yes\n No | Maybe\n\n") == ["Yes", "No | Maybe"], "one per line: an option may hold a |")
     #expect(Calls.parseOptions("a\r\nb") == ["a", "b"])
     #expect(Calls.parseOptions("") == [])
-    #expect(Calls.parseOptions("1|2|3|4|5|6|7|8") == ["1", "2", "3", "4", "5", "6"], "six at most")
+    #expect(Calls.parseOptions("1\n2\n3\n4\n5\n6\n7\n8") == ["1", "2", "3", "4", "5", "6"], "six at most")
 }
 
 @Test func editSendsItsKindsFieldsBlankAsNull() {
@@ -64,7 +64,7 @@ private func call(_ listening: [String: Any], _ n: Int = 0) -> CallView {
     f["docket"] = ""
     f["title"] = "not this kind's"
     let out = JSON(any: Calls.edit(.ask, f))
-    #expect(out == JSON(any: ["docket": NSNull(), "question": "Which one?", "options": ["A", "B", "C"]]))
+    #expect(out == JSON(any: ["docket": NSNull(), "question": "Which one?", "options": ["A | B", "C"]]))
     let task = JSON(any: Calls.edit(.task, ["title": "Runbook", "intent": ""]))
     #expect(task == JSON(any: ["title": "Runbook", "intent": NSNull()]))
 }
