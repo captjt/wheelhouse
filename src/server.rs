@@ -43,6 +43,9 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/subagents", get(docket_subagents))
         .route("/api/dockets/{id}/note", post(note))
         .route("/api/dockets/{id}/compose", post(compose))
+        .route("/api/calls", post(call_add).layer(axum::extract::DefaultBodyLimit::max(crate::calls::MAX_TRANSCRIPT * 2 + (64 << 10))))
+        .route("/api/calls/{id}/listen", post(call_listen))
+        .route("/api/calls/{id}/proposals/{n}", post(call_proposal))
         .route("/api/dockets/{id}/set", post(set))
         .route("/api/dockets/{id}/open", post(open_in_rex))
         .route("/api/dockets/{id}/hold", post(hold))
@@ -397,7 +400,11 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
     let decisions: Vec<Value> = crate::decisions::of_stored(&core.store.entries(&id).map_err(internal)?).iter().map(crate::decisions::Decision::json).collect();
     let numbered: Vec<(i64, record::Entry)> = entries.iter().filter_map(|v| v["seq"].as_i64()).zip(read.iter().cloned()).collect();
     let verify_view = crate::evidence::view(&core, &st, &numbered);
-    Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions, "evidence": verify_view })))
+    let mut page = json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions, "evidence": verify_view });
+    if st.protocol == crate::calls::PROTOCOL {
+        page["call"] = crate::calls::view(&numbered, crate::calls::is_listening(&id));
+    }
+    Ok(Json(page))
 }
 
 /// What the docket's agents spawned, read live from their own files.
@@ -816,8 +823,14 @@ struct ComposeReq {
 /// instruction to its agents, a question for them, a decision, or the
 /// prompt for another agent (the app opens Add an agent with it).
 async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<ComposeReq>) -> ApiResult {
-    use crate::compose::Command;
     let cmd = crate::compose::parse(&req.text).map_err(bad)?;
+    run_command(&shared, id, cmd).await
+}
+
+/// Carry out a composer command on a docket: what you typed, or a call's
+/// proposal you applied (`crate::calls`).
+async fn run_command(shared: &Shared, id: String, cmd: crate::compose::Command) -> ApiResult {
+    use crate::compose::Command;
     if shared.lock().store.state(&id).map_err(internal)?.is_none() {
         return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
     }
@@ -847,7 +860,7 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
             };
             let mut sent = Vec::new();
             for (block, shown) in targets {
-                let r = send_to(&shared, id.clone(), SendReq { text: text.clone(), queue: true, block: Some(block), steer: false }).await;
+                let r = send_to(shared, id.clone(), SendReq { text: text.clone(), queue: true, block: Some(block), steer: false }).await;
                 sent.push(match r {
                     Ok(Json(v)) => json!({ "to": shown, "ok": true, "queued": v["queued"].is_number() }),
                     Err((_, Json(e))) => json!({ "to": shown, "ok": false, "error": e["error"] }),
@@ -921,7 +934,7 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
             };
             let mut out = out;
             if let Some(k) = restand {
-                match make_standing(&shared, &id, &k) {
+                match make_standing(shared, &id, &k) {
                     Ok(v) => out["standing"] = v["repo"].clone(),
                     Err((_, Json(e))) => out["standing_error"] = e["error"].clone(),
                 }
@@ -929,6 +942,142 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
             Ok(Json(out))
         }
     }
+}
+
+#[derive(Deserialize)]
+struct CallReq {
+    #[serde(default)]
+    title: Option<String>,
+    transcript: String,
+}
+
+/// A new call: its docket keeps the transcript, and the Listener starts
+/// reading it (`crate::calls`).
+async fn call_add(State(shared): State<Shared>, Json(req): Json<CallReq>) -> ApiResult {
+    let id = crate::calls::add(&mut shared.lock(), req.title.as_deref(), &req.transcript).map_err(bad)?;
+    listen_in_background(&shared, &id);
+    Ok(Json(json!({ "docket": id })))
+}
+
+fn listen_in_background(shared: &Shared, id: &str) {
+    let (sh, id) = (shared.clone(), id.to_string());
+    tokio::spawn(async move {
+        if let Err(e) = crate::calls::listen(sh, id.clone()).await {
+            say!("the Listener couldn't read {id}: {e:#}");
+        }
+    });
+}
+
+/// Read a call again: after a failure, or with dockets that have changed.
+async fn call_listen(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    {
+        let core = shared.lock();
+        let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+        if st.protocol != crate::calls::PROTOCOL {
+            return Err(fail(StatusCode::BAD_REQUEST, format!("{id} isn't a call")));
+        }
+    }
+    if crate::calls::is_listening(&id) {
+        return Err(fail(StatusCode::CONFLICT, format!("the Listener is reading {id} already")));
+    }
+    listen_in_background(&shared, &id);
+    Ok(Json(json!({ "listening": true })))
+}
+
+#[derive(Deserialize)]
+struct ProposalAct {
+    /// `apply` or `ignore`.
+    action: String,
+    /// Fields you changed before applying: docket, subject, choice,
+    /// question, options, title, intent.
+    #[serde(default)]
+    edit: Option<Value>,
+}
+
+/// One answer at a time, so a proposal is never applied twice.
+fn proposal_turn() -> &'static tokio::sync::Mutex<()> {
+    static T: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    T.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Apply a call's proposal (as edited), or ignore it. Applying goes through
+/// the composer's own paths, and the outcome goes on the call's record.
+async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String, usize)>, Json(req): Json<ProposalAct>) -> ApiResult {
+    use crate::compose::Command;
+    let _turn = proposal_turn().lock().await;
+    let (p, open, transcript) = {
+        let core = shared.lock();
+        let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+        if st.protocol != crate::calls::PROTOCOL {
+            return Err(fail(StatusCode::BAD_REQUEST, format!("{id} isn't a call")));
+        }
+        let numbered: Vec<(i64, record::Entry)> = core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+        let (p, done) = crate::calls::proposal(&numbered, n).ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no proposal {n}")))?;
+        if let Some(d) = done {
+            return Err(fail(StatusCode::CONFLICT, format!("#{n} was {d} already")));
+        }
+        let open: Vec<String> = core.store.states().map_err(internal)?.into_iter().filter(|s| s.is_open() && s.protocol != crate::calls::PROTOCOL).map(|s| s.id).collect();
+        (p, open, crate::calls::transcript(&core, &id).map_err(internal)?)
+    };
+    match req.action.as_str() {
+        "ignore" => {
+            let s = shared.lock().append(&id, "decision", &Who::Owner, Some(format!("Ignored #{n}")), json!({ "proposal": n, "choice": "Ignore" })).map_err(internal)?;
+            return Ok(Json(json!({ "ignored": n, "seq": s.seq })));
+        }
+        "apply" => {}
+        other => return Err(fail(StatusCode::BAD_REQUEST, format!("apply or ignore, not {other}"))),
+    }
+    // What you changed, over what was proposed, checked the same way.
+    let mut v = p.clone();
+    let mut edited = serde_json::Map::new();
+    for k in ["docket", "subject", "choice", "question", "options", "title", "intent"] {
+        if let Some(x) = req.edit.as_ref().and_then(|e| e.get(k))
+            && *x != p[k]
+        {
+            v[k] = x.clone();
+            edited.insert(k.into(), x.clone());
+        }
+    }
+    let q = crate::calls::Proposal::from_value(&v, n, &transcript, &open).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    if q.docket.is_none() && v["docket"].as_str().is_some_and(|d| !d.trim().is_empty()) && q.kind != "task" {
+        return Err(fail(StatusCode::BAD_REQUEST, format!("{} isn't an open docket", v["docket"].as_str().unwrap_or(""))));
+    }
+    let need = |what: &str| fail(StatusCode::BAD_REQUEST, format!("pick the docket {what} is for"));
+    let result: Value = match q.kind.as_str() {
+        "decide" => {
+            let d = q.docket.clone().ok_or_else(|| need("this decision"))?;
+            let choice = q.choice.clone().unwrap_or_default();
+            let text = match &q.subject {
+                Some(s) => format!("{s}: {choice}"),
+                None => choice.clone(),
+            };
+            let Json(r) = run_command(&shared, d.clone(), Command::Decide { key: None, subject: q.subject.clone(), choice, text }).await?;
+            json!({ "docket": d, "did": r["did"], "seq": r["seq"], "key": r["key"], "told": r["told"] })
+        }
+        "ask" => {
+            let d = q.docket.clone().ok_or_else(|| need("this question"))?;
+            let Json(r) = run_command(&shared, d.clone(), Command::Ask { question: q.question.clone().unwrap_or_default(), options: q.options.clone() }).await?;
+            json!({ "docket": d, "did": r["did"], "message": r["message"] })
+        }
+        _ => {
+            let mut core = shared.lock();
+            let title = q.title.clone().unwrap_or_default();
+            let d = core.open(&Who::Owner, &title, json!({ "protocol": "none", "title_source": "person" })).map_err(internal)?;
+            let mut body = q.intent.clone().unwrap_or_else(|| title.clone());
+            if !q.quote.is_empty() {
+                body.push_str(&format!("\n\n> {}\n\nFrom the call {id}.", q.quote.lines().collect::<Vec<_>>().join(" ")));
+            }
+            let s = core.append(&d, "intent", &Who::Owner, Some(body), json!({ "source": "person", "call": id, "proposal": n })).map_err(internal)?;
+            json!({ "docket": d, "did": "opened", "seq": s.seq })
+        }
+    };
+    let summary = q.summary();
+    let edited = (!edited.is_empty()).then_some(Value::Object(edited));
+    let s = shared
+        .lock()
+        .append(&id, "decision", &Who::Owner, Some(format!("Applied #{n}: {summary}")), json!({ "proposal": n, "choice": "Apply", "applied": result, "edited": edited }))
+        .map_err(internal)?;
+    Ok(Json(json!({ "applied": n, "seq": s.seq, "result": result })))
 }
 
 async fn approve(State(shared): State<Shared>, Path(id): Path<String>, Json(seen): Json<crate::approve::Seen>) -> ApiResult {
@@ -2108,6 +2257,113 @@ mod tests {
         assert_eq!(listed[0]["by"], "you");
         assert_eq!(crate::comments::list(&numbered, &["sam"])[0]["by"], owner.as_str(), "a teammate's is theirs");
         assert!(shared.lock().verify(&d).unwrap().ok);
+    }
+
+    #[tokio::test]
+    async fn a_calls_proposals_are_applied_or_ignored_through_the_composer() {
+        let dir = std::env::temp_dir().join(format!("wh-calls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut core = crate::hub::test_core();
+        // A builder at work on the retries docket.
+        let fg = json!({ "foreground": { "name": "claude", "cwd": "/w" } });
+        let rec = crate::mirror::Record { state: "working".into(), app: Some("claude-code".into()), ..Default::default() };
+        core.mirror.apply_pane_status("s1", "b1", vec![rec], Some(&fg), None);
+        core.mirror.panes.get_mut("b1").unwrap().label = "builder".into();
+        agents::reconcile(&mut core, ["b1".to_string()]);
+        let d = agents::docket_of(&core, "b1").unwrap();
+        // A stand-in Listener: it reads the prompt, and answers with what a call settled.
+        let out = json!({ "type": "result", "is_error": false, "session_id": "s-listen", "usage": { "input_tokens": 9, "output_tokens": 3 }, "structured_output": { "proposals": [
+            { "kind": "decide", "docket": d, "subject": "Retries", "choice": "5xx and timeouts only", "quote": "let's do 5xx and timeouts only" },
+            { "kind": "ask", "docket": d, "question": "Do 429s count?", "options": ["Yes", "No"], "quote": "whether 429s count" },
+            { "kind": "task", "title": "Write the outage runbook", "intent": "A runbook for the outage page.", "quote": "write the runbook for the outage page" },
+            { "kind": "decide", "docket": d, "subject": "Backoff", "choice": "Linear", "quote": "never said" },
+        ] } });
+        let good = dir.join("listener.sh");
+        std::fs::write(&good, format!("#!/bin/sh\ncat > {}/prompt.txt\ncat <<'JSON'\n{out}\nJSON\n", dir.display())).unwrap();
+        let bad = dir.join("broken.sh");
+        std::fs::write(&bad, "#!/bin/sh\ncat >/dev/null\necho 'model overloaded' >&2\nexit 1\n").unwrap();
+        for f in [&good, &bad] {
+            std::fs::set_permissions(f, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        }
+        *crate::calls::TEST_LISTENER.lock().unwrap() = Some(bad.to_string_lossy().into_owned());
+        let shared = Shared::new(core);
+        let app = router(shared.clone());
+        let page = |c: &str| {
+            let core = shared.lock();
+            let numbered: Vec<(i64, record::Entry)> = core.store.entries(c).unwrap().iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+            crate::calls::view(&numbered, crate::calls::is_listening(c))
+        };
+        let settled = |c: String| async move {
+            for _ in 0..100 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                if !crate::calls::is_listening(&c) && page(&c)["listening"]["state"] != "started" {
+                    break;
+                }
+            }
+        };
+        let transcript =
+            "Sam: let's do 5xx and timeouts only, max three.\nDana: someone should write the runbook for the outage page.\nSam: can the builder check whether 429s count?";
+        let (st, v) = post_json(&app, "/api/calls", json!({ "title": "Webhooks sync", "transcript": transcript })).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        let call = v["docket"].as_str().unwrap().to_string();
+        settled(call.clone()).await;
+        let failed = page(&call);
+        assert_eq!(failed["listening"]["state"], "failed", "{failed}");
+        assert!(failed["listening"]["why"].as_str().unwrap().contains("model overloaded"), "{failed}");
+
+        // Read again, with a Listener that answers.
+        *crate::calls::TEST_LISTENER.lock().unwrap() = Some(good.to_string_lossy().into_owned());
+        let (st, _) = post_json(&app, &format!("/api/calls/{call}/listen"), json!({})).await;
+        assert_eq!(st, StatusCode::OK);
+        settled(call.clone()).await;
+        let v = page(&call);
+        assert_eq!(v["listening"]["state"], "done", "{v}");
+        let ps = v["proposals"].as_array().unwrap();
+        assert_eq!(ps.len(), 4);
+        assert_eq!(ps[3]["quote_found"], false, "a quote nobody said is flagged");
+        let sent = std::fs::read_to_string(dir.join("prompt.txt")).unwrap();
+        assert!(sent.contains(&format!("- {d}:")) && sent.contains("<transcript>") && !sent.contains(&format!("- {call}:")), "the open dockets, not the call itself");
+
+        let act = |n: usize, body: Value| {
+            let (app, uri) = (app.clone(), format!("/api/calls/{call}/proposals/{n}"));
+            async move { post_json(&app, &uri, body).await }
+        };
+        // A decision, as /decide records it, told to the builder.
+        let (st, r) = act(1, json!({ "action": "apply" })).await;
+        assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("decided")), "{r}");
+        let ds = crate::decisions::of_stored(&shared.lock().store.entries(&d).unwrap());
+        assert_eq!(ds.iter().find(|x| x.question == "Retries").and_then(|x| x.answer.as_deref()), Some("5xx and timeouts only"));
+        assert_eq!(act(1, json!({ "action": "apply" })).await.0, StatusCode::CONFLICT, "never twice");
+        // A question, edited, as /ask asks it.
+        let (st, r) = act(2, json!({ "action": "apply", "edit": { "question": "Do 429s count as retryable?" } })).await;
+        assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("asked")), "{r}");
+        let asked = shared.lock().store.message(r["result"]["message"].as_i64().unwrap()).unwrap().unwrap();
+        assert_eq!((asked.body.as_str(), asked.options.len()), ("Do 429s count as retryable?", 2));
+        // A task: a docket of its own, its intent quoting the call.
+        let (st, r) = act(3, json!({ "action": "apply" })).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        let new = r["result"]["docket"].as_str().unwrap().to_string();
+        let ns = shared.lock().store.state(&new).unwrap().unwrap();
+        assert_eq!(ns.title, "Write the outage runbook");
+        let intent = ns.intent.unwrap().body;
+        assert!(intent.contains("> write the runbook for the outage page") && intent.contains(&format!("From the call {call}")), "{intent}");
+        // A docket that isn't open, then ignored.
+        assert_eq!(act(4, json!({ "action": "apply", "edit": { "docket": "D-999" } })).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(act(4, json!({ "action": "ignore" })).await.0, StatusCode::OK);
+        assert_eq!(act(9, json!({ "action": "ignore" })).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(act(4, json!({ "action": "maybe" })).await.0, StatusCode::CONFLICT, "ignored already");
+        let v = page(&call);
+        let st: Vec<&str> = v["proposals"].as_array().unwrap().iter().map(|p| p["status"].as_str().unwrap()).collect();
+        assert_eq!(st, ["applied", "applied", "applied", "ignored"]);
+        assert_eq!(v["proposals"][1]["outcome"]["edited"]["question"], "Do 429s count as retryable?");
+        // Refused: no transcript, and listening to what isn't a call.
+        assert_eq!(post_json(&app, "/api/calls", json!({ "transcript": "  " })).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(post_json(&app, &format!("/api/calls/{d}/listen"), json!({})).await.0, StatusCode::BAD_REQUEST);
+        for x in [&call, &d, &new] {
+            assert!(shared.lock().verify(x).unwrap().ok);
+        }
+        *crate::calls::TEST_LISTENER.lock().unwrap() = None;
     }
 
     #[tokio::test]

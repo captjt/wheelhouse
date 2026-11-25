@@ -5147,6 +5147,158 @@ code {
 .decisions {
   margin-top: 14px;
 }
+
+/* a call's proposals (src/Call.tsx) */
+.call {
+  margin-top: 14px;
+}
+.call .intent-head .spacer {
+  flex: 1;
+}
+.call-state {
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--sel);
+  color: var(--text-2);
+  font-size: 13px;
+}
+.call-state.busy {
+  background: var(--accent-soft);
+}
+.call-state.error {
+  background: var(--danger-tint);
+  color: var(--error);
+}
+.call-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.call-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--elev);
+  min-width: 0;
+}
+.call-card.applied,
+.call-card.ignored {
+  opacity: 0.72;
+}
+.call-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.call-top .spacer {
+  flex: 1;
+}
+.call-kind.decide {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.call-kind.ask {
+  background: var(--warning-tint);
+  color: var(--blocked);
+}
+.call-kind.task {
+  background: var(--sel);
+  color: var(--text-2);
+}
+.call-what {
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.call-subject {
+  color: var(--text-2);
+}
+.call-options {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: 8px;
+}
+.call-intent {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.call-intent :is(h1, h2, h3, h4) {
+  margin: 8px 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.call-intent :is(p, ul, ol) {
+  margin: 2px 0;
+}
+.call-quote {
+  margin: 0;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--line-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+.call-quote.unfound {
+  border-left-color: var(--blocked);
+}
+.call-warn {
+  color: var(--blocked);
+  font-style: normal;
+}
+.call-done {
+  color: var(--working);
+}
+.call-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.call-bar .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.call-edit {
+  display: grid;
+  gap: 8px;
+}
+.call-field {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  align-items: start;
+  gap: 8px;
+  font-size: 13px;
+}
+.call-field > span {
+  padding-top: 5px;
+  color: var(--muted);
+}
+.call-field input,
+.call-field select,
+.call-field textarea {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--main, transparent);
+  color: var(--text);
+  font: inherit;
+}
+.nd-transcript {
+  font-family: var(--mono);
+  font-size: 12px;
+}
 .dec-list {
   list-style: none;
   margin: 4px 0 0;

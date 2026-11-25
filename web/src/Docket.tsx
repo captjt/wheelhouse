@@ -8,6 +8,7 @@ import { nav } from "./mobile";
 import { IconBack, IconBuild, IconInfo } from "./icons";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { DecisionsSection, IntentSection } from "./Intent";
+import { CallSection } from "./Call";
 import { ArtifactViewer, ArtifactsSection, RecordViewer } from "./Artifacts";
 import { ChatView } from "./Chat";
 import { IconTerminal } from "./icons";
@@ -131,7 +132,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </a>
             </Prop>
           )}
-          {d.protocol !== "review" && (
+          {d.protocol !== "review" && d.protocol !== "call" && (
             <Prop label="Build">
               {hub.state?.build?.tasks.some((t) => t.docket === d.id) ? (
                 <span className="prop-val">{(() => { const t = hub.state!.build!.tasks.find((x) => x.docket === d.id)!; return `${t.repo} · ${t.state === "active" ? t.phase?.replace("_", " ") : t.state}`; })()}</span>
@@ -233,9 +234,9 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </>
           )}
           <Prop label="Protocol">
-            <span className="prop-val">{building ? "Build" : d.protocol === "agent" ? "Agent" : d.protocol === "review" ? "Review" : "By hand"}</span>
+            <span className="prop-val">{building ? "Build" : d.protocol === "agent" ? "Agent" : d.protocol === "review" ? "Review" : d.protocol === "call" ? "Call" : "By hand"}</span>
           </Prop>
-          {d.protocol !== "review" && !building && <Prop label="Work">
+          {d.protocol !== "review" && d.protocol !== "call" && !building && <Prop label="Work">
             <span className="prop-val">
               {d.prompts} prompt{d.prompts === 1 ? "" : "s"} · {d.turns} turn{d.turns === 1 ? "" : "s"}
             </span>
@@ -438,7 +439,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               <MessageCard key={m.id} m={m} />
             ))}
 
-          <IntentSection d={d} entries={entries} onSaved={reload} />
+          {d.protocol !== "call" && <IntentSection d={d} entries={entries} onSaved={reload} />}
+          {data.call && <CallSection id={d.id} call={data.call} reload={reload} />}
           <DecisionsSection decisions={data.decisions ?? []} docket={d.id} repo={ev?.repo ?? null} />
           {ev && verifying && <VerifySection d={d} ev={ev} onCheck={setCheckOut} />}
           <ArtifactsSection entries={entries} onOpen={setViewing} />
@@ -719,7 +721,10 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
     }
     case "question":
       return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, e.actor.type === "agent" ? actorApp : youName, `asked ${data.to === "me" ? "you" : data.to}${data.subject ? ` · ${data.subject}` : ""} (#${data.message})`, `${e.body || ""}\n\nOptions: ${(data.options || []).join(" · ")}`, "ask");
+    case "proposal":
+      return comment(<AppAvatar app="claude-code" size={18} />, "Listener", `proposed #${data.n}`, `${e.body || ""}\n\n> ${String(data.quote || "").replace(/\n/g, " ")}`, "");
     case "decision":
+      if (data.proposal != null) return sys(you, <><b>{youName}</b> {data.choice === "Apply" ? "applied" : "ignored"} #{data.proposal}{data.applied?.docket ? <> to <a className="act-link" href={`#/d/${data.applied.docket}`}>{data.applied.docket}</a></> : null}{data.edited ? ", edited" : ""}</>);
       if (data.via === "composer")
         return comment(you, youName, `decided${data.subject ? ` · ${data.subject}` : ""}`, `**${data.choice}**`, "you");
       return comment(e.actor.type === "person" ? you : <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} />, e.actor.type === "person" ? youName : actorApp, `chose “${data.choice}” (#${data.replies_to})`, e.body && e.body !== data.choice ? e.body : `**${data.choice}**`, e.actor.type === "person" ? "you" : "");
@@ -782,6 +787,7 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
         return sys(<IconPR size={16} />, <>Round {data.round}'s review is <a className="act-link" href={data.url} target="_blank" rel="noreferrer">on GitHub</a></>, "approved");
       return sys(hubA, <>Linked {e.body}</>);
     case "observed":
+      if (data.what === "listen") return sys(hubA, <>{e.body}</>, data.state === "failed" ? "error" : undefined);
       if (data.what === "review" && data.source === "wheelhouse") return null;
       if (data.what === "review-event") {
         const tone = data.event === "posted" ? "approved" : data.event === "dismissed" || data.event === "post-refused" ? "denied" : data.event === "merged" ? "approved" : undefined;

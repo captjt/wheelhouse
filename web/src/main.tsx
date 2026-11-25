@@ -151,7 +151,7 @@ function App() {
   const hub = useHub();
   const route = useRoute();
   const [palette, setPalette] = useState(false);
-  const [creating, setCreating] = useState<false | "blank" | "linear" | "agent">(false);
+  const [creating, setCreating] = useState<false | "blank" | "linear" | "agent" | "call">(false);
   const [drawer, setDrawer] = useState(false);
   const [more, setMore] = useState(false);
   const phone = usePhone();
@@ -236,6 +236,7 @@ function App() {
   const openNew = useCallback(() => setCreating("blank"), []);
   const openNewLinear = useCallback(() => setCreating("linear"), []);
   const openNewAgent = useCallback(() => setCreating("agent"), []);
+  const openNewCall = useCallback(() => setCreating("call"), []);
 
   const sessions = useMemo(() => {
     const m = new Map<string, number>();
@@ -285,8 +286,8 @@ function App() {
   const closeDialog = useCallback(() => hub.setDialog(null), [hub.setDialog]);
   const overlays = (
     <>
-      {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} onNewAgent={openNewAgent} context={context} />}
-      {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} onClose={() => setCreating(false)} />}
+      {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} onNewAgent={openNewAgent} onNewCall={openNewCall} context={context} />}
+      {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} call={creating === "call"} onClose={() => setCreating(false)} />}
       {hub.dialog?.kind === "refused" && <RefusedDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
       {hub.dialog?.kind === "hold" && <HoldDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
       {hub.dialog?.kind === "agent" && <StartAgent key={`${hub.dialog.id}:${hub.dialog.prompt ?? ""}`} id={hub.dialog.id} prompt={hub.dialog.prompt} onClose={closeDialog} />}

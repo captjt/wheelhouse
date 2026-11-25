@@ -511,7 +511,33 @@ export type Decision = {
   at?: string | null;
 };
 
-export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify; queued?: { id: number; body: string; at: string }[]; decisions?: Decision[]; evidence?: Evidence };
+/** What a call proposes for a docket (src/calls.rs `Proposal`), and what became of it. */
+export type Proposal = {
+  n: number;
+  seq: number;
+  at: string;
+  kind: "decide" | "ask" | "task";
+  docket?: string | null;
+  subject?: string | null;
+  choice?: string | null;
+  question?: string | null;
+  options: string[];
+  title?: string | null;
+  intent?: string | null;
+  quote: string;
+  quote_found: boolean;
+  why?: string | null;
+  status: "open" | "applied" | "ignored";
+  outcome?: { seq: number; at: string; applied?: { docket?: string; did?: string } | null; edited?: Record<string, unknown> | null };
+};
+
+/** A call's proposals and how the Listener's reading went (src/calls.rs `view`). */
+export type CallView = {
+  listening: { state: "started" | "done" | "failed" | "stopped" | null; at?: string; why?: string | null; left_out?: string[] | null; proposals?: number | null };
+  proposals: Proposal[];
+};
+
+export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify; queued?: { id: number; body: string; at: string }[]; decisions?: Decision[]; evidence?: Evidence; call?: CallView };
 
 /** A refusal from the hub: its sentence, and its status (409: not now, or not on what was said). */
 export type ApiError = Error & { status?: number };

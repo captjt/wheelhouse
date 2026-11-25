@@ -49,7 +49,7 @@ export function rowMenu(d: Docket, hub: ReturnType<typeof useHub>, pane: ReturnT
 }
 
 /** Whether a docket can take an agent now: open, and not a Review's. One with agents on it takes another beside them. */
-export const canStartAgent = (d: Docket) => (d.status === "todo" || d.status === "in_progress") && d.protocol !== "review" && !d.review;
+export const canStartAgent = (d: Docket) => (d.status === "todo" || d.status === "in_progress") && d.protocol !== "review" && d.protocol !== "call" && !d.review;
 
 /** "Start an agent…", or with agents on it already, "Add an agent…". */
 export const startLabel = (d: Docket) => (liveAgents(d).length ? "Add an agent…" : "Start an agent…");

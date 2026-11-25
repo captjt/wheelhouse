@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { agentLabel, appName, get, liveAgents, quick, paneRuntime, post, spawnRuntime, startAppFor, startApps, type Docket, type StartApp } from "./api";
 import { LinearPicker } from "./Linear";
-import { IconActive, IconAgents, IconDone, IconEye, IconIssue, IconInbox, IconLayers, IconMonitor, IconMoon, IconPause, IconPlay, IconPlus, IconSettings, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
+import { IconActive, IconAgents, IconCall, IconDone, IconEye, IconIssue, IconInbox, IconLayers, IconMonitor, IconMoon, IconPause, IconPlay, IconPlus, IconSettings, IconShield, IconSun, IconTerminal, StatusIcon } from "./icons";
 import { AttentionIcon } from "./Verify";
 import { attentionShown } from "./evidence";
 import { go, setTheme, useHub } from "./live";
@@ -35,12 +35,14 @@ export function Palette({
   onNew,
   onNewLinear,
   onNewAgent,
+  onNewCall,
   context,
 }: {
   onClose: () => void;
   onNew: () => void;
   onNewLinear: () => void;
   onNewAgent: () => void;
+  onNewCall: () => void;
   context?: Docket;
 }) {
   const hub = useHub();
@@ -90,6 +92,7 @@ export function Palette({
     out.push(
       { id: "new", group: "Create", label: "New docket", icon: <IconPlus size={15} />, hint: <Kbd>C</Kbd>, run: onNew },
       { id: "new-agent", group: "Create", label: "Start an agent on a new docket", icon: <IconAgents size={15} />, keywords: "claude codex agy antigravity pi start run", run: () => onNewAgent() },
+      { id: "new-call", group: "Create", label: "Add a call's transcript", icon: <IconCall size={15} />, keywords: "call meeting transcript listen listener zoom meet granola", run: () => onNewCall() },
       { id: "new-linear", group: "Create", label: "New docket from a Linear issue", icon: <IconIssue size={15} />, keywords: "linear issue import", run: () => onNewLinear() },
       { id: "inbox", group: "Go to", label: "Inbox", icon: <IconInbox size={15} />, hint: <><Kbd>G</Kbd><Kbd>I</Kbd></>, run: () => go("/inbox") },
       { id: "active", group: "Go to", label: "Active dockets", icon: <IconActive size={15} />, hint: <><Kbd>G</Kbd><Kbd>A</Kbd></>, run: () => go("/view/active") },
@@ -131,7 +134,7 @@ export function Palette({
         run: () => go(`/d/${d.id}`),
       });
     return out;
-  }, [hub, pane, context, onNew, onNewLinear, onNewAgent, toast]);
+  }, [hub, pane, context, onNew, onNewLinear, onNewAgent, onNewCall, toast]);
 
   const shown = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -296,10 +299,10 @@ function AppPicker({ app, onPick }: { app: StartApp; onPick: (a: StartApp) => vo
   );
 }
 
-export function NewDocket({ onClose, linear, agent }: { onClose: () => void; linear?: boolean; agent?: boolean }) {
+export function NewDocket({ onClose, linear, agent, call }: { onClose: () => void; linear?: boolean; agent?: boolean; call?: boolean }) {
   const hub = useHub();
   const toast = useToast();
-  const [mode, setMode] = useState<"blank" | "linear" | "agent">(agent ? "agent" : linear ? "linear" : "blank");
+  const [mode, setMode] = useState<"blank" | "linear" | "agent" | "call">(call ? "call" : agent ? "agent" : linear ? "linear" : "blank");
   const [cwd, setCwd] = useState("");
   const [app, setApp] = useState<StartApp>("claude-code");
   const folders = Array.from(new Set((hub.state?.dockets ?? []).map((d) => d.agent?.cwd).filter((c): c is string => !!c && !c.includes("/.local/share/")))).sort();
@@ -337,9 +340,13 @@ export function NewDocket({ onClose, linear, agent }: { onClose: () => void; lin
         <button className={mode === "agent" ? "on" : ""} onClick={() => setMode("agent")} title="Start an agent on a new docket">
           Agent
         </button>
+        <button className={mode === "call" ? "on" : ""} onClick={() => setMode("call")} title="A call's transcript: the Listener proposes what it settled for your dockets">
+          Call
+        </button>
       </div>
     </div>
   );
+  if (mode === "call") return <NewCall head={head} onClose={onClose} />;
   if (mode === "agent") {
     const startIt = () => {
       if (busy || !cwd.trim()) return;
@@ -440,3 +447,67 @@ export function NewDocket({ onClose, linear, agent }: { onClose: () => void; lin
     </Modal>
   );
 }
+
+/** A call's transcript, pasted or from a file: a call docket that keeps it, and the Listener reading it (src/calls.rs). */
+function NewCall({ head, onClose }: { head: ReactNode; onClose: () => void }) {
+  const hub = useHub();
+  const toast = useToast();
+  const [title, setTitle] = useState("");
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const read = (f: File | undefined) => {
+    if (!f) return;
+    if (f.size > CALL_MAX) return toast(`${f.name} is over ${Math.round(CALL_MAX / 1000)} KB: a transcript is at most that`, "error");
+    f.text().then(
+      (t) => (setText(t), setTitle((x) => x || f.name.replace(/\.[a-z0-9]+$/i, ""))),
+      () => toast(`${f.name} couldn't be read`, "error"),
+    );
+  };
+  const add = () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    post<{ docket: string }>("/api/calls", { title: title.trim() || undefined, transcript: text }).then(
+      (r) => {
+        toast(`${r.docket}: the Listener is reading the call`);
+        hub.reload();
+        onClose();
+        go(`/d/${r.docket}`);
+      },
+      (e: Error) => (setBusy(false), toast(e.message, "error")),
+    );
+  };
+  const keys = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.preventDefault(), add());
+  };
+  return (
+    <Modal onClose={onClose} className="new-docket">
+      {head}
+      <input className="nd-title" placeholder="What the call was (Webhooks sync)" value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={keys} />
+      <textarea
+        autoFocus
+        className="nd-note nd-transcript"
+        placeholder="Paste the call's transcript, or drop its file here (.txt, .vtt, .srt, .md)"
+        value={text}
+        rows={10}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={keys}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => (e.preventDefault(), read(e.dataTransfer.files[0]))}
+      />
+      <div className="nd-foot">
+        <label className="btn btn-small btn-ghost">
+          Choose file…
+          <input type="file" accept=".txt,.vtt,.srt,.md,text/plain" hidden onChange={(e) => read(e.target.files?.[0])} />
+        </label>
+        <span className="muted small">The Listener reads it against your open dockets and proposes; nothing reaches a docket until you apply it.</span>
+        <span className="spacer" />
+        <button className="btn btn-primary" disabled={!text.trim() || busy || text.length > CALL_MAX} onClick={add}>
+          {busy ? "Adding…" : "Add call"} <Kbd>⌘↩</Kbd>
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** A transcript is at most this long (src/calls.rs MAX_TRANSCRIPT). */
+const CALL_MAX = 400_000;

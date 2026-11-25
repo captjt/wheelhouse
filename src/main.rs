@@ -22,6 +22,7 @@ mod diffs;
 mod doctor;
 mod evidence;
 
+mod calls;
 mod comments;
 mod compose;
 mod hooks;
@@ -251,6 +252,19 @@ enum Cmd {
         #[arg(add = complete::dockets())]
         docket: String,
         text: String,
+    },
+    /// A call's transcript: a call docket that keeps it, and the Listener
+    /// proposes what it settled for your dockets, to apply or ignore in the
+    /// apps. FILE, or - for standard input; --again D-12 reads a call again
+    Call {
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: Option<String>,
+        /// What the call was. Defaults to "Call" and the day.
+        #[arg(long)]
+        title: Option<String>,
+        /// Read this call again.
+        #[arg(long, add = complete::dockets(), conflicts_with = "file")]
+        again: Option<String>,
     },
     /// Keep a file (a report, a page, an image) or a link (a Claude artifact)
     /// with a docket: the record pins a file by its hash. From an agent's
@@ -584,6 +598,7 @@ fn main() {
             client::json("POST", &format!("/api/dockets/{d}/note"), Some(&json!({ "body": text, "block": block }))).map(|v| println!("{}", placed(&d, &v)))
         }
         Some(Cmd::Attach { what, title, docket }) => attach(&what, title, docket),
+        Some(Cmd::Call { file, title, again }) => call(file, title, again),
         Some(Cmd::Set { docket, title, status, anyway, reason }) => {
             let d = normalize(&docket);
             client::json("POST", &format!("/api/dockets/{d}/set"), Some(&json!({ "title": title, "status": status, "anyway": anyway, "reason": reason })))
@@ -927,6 +942,29 @@ fn serve() -> Result<()> {
 }
 
 const SKILL: &str = include_str!("../skills/wheelhouse/SKILL.md");
+
+/// `wh call`: a transcript in, and the Listener reading it; or a call read again.
+fn call(file: Option<String>, title: Option<String>, again: Option<String>) -> Result<()> {
+    if let Some(d) = again {
+        let d = normalize(&d);
+        client::json("POST", &format!("/api/calls/{d}/listen"), Some(&json!({})))?;
+        println!("{d}: the Listener is reading it again. Its proposals land on the call: wh open {d}");
+        return Ok(());
+    }
+    let Some(file) = file else { anyhow::bail!("give the transcript: wh call FILE, or - to read it from standard input") };
+    let transcript = if file == "-" {
+        let mut t = String::new();
+        std::io::Read::read_to_string(&mut std::io::Read::take(std::io::stdin(), calls::MAX_TRANSCRIPT as u64 + 1), &mut t)?;
+        t
+    } else {
+        let bytes = std::fs::read(&file).with_context(|| format!("reading {file}"))?;
+        String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{file} isn't text: give the transcript as text"))?
+    };
+    let v = client::json("POST", "/api/calls", Some(&json!({ "title": title, "transcript": transcript })))?;
+    let d = v["docket"].as_str().unwrap_or("");
+    println!("{d}: the Listener is reading the call. Its proposals land on {d}, to apply or ignore: wh open {d}");
+    Ok(())
+}
 
 fn build_cmd(action: &str, args: &[String], repo: Option<String>, as_json: bool) -> Result<()> {
     let v = match action {
