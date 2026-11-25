@@ -393,6 +393,15 @@ final class Store {
         Task { await act("/api/dockets/\(id)/set", ["title": title]) }
     }
 
+    /// What you typed in a docket's composer: a note, `@agent`, `/ask`,
+    /// `/decide` or `/task` (src/compose.rs). The hub's answer, or nil when
+    /// it refused (and said why in a toast).
+    func compose(_ id: String, _ text: String) async -> JSON? {
+        guard let r = await act("/api/dockets/\(id)/compose", ["text": text]) else { return nil }
+        if let t = Compose.toast(r) { toast(t.text, error: t.error) }
+        return r
+    }
+
     func note(_ id: String, _ body: String) async -> Bool {
         await act("/api/dockets/\(id)/note", ["body": body]) != nil
     }

@@ -50,6 +50,9 @@ pub fn rule(d: &Decision, docket: &str) -> String {
     let q = d.question.trim().trim_end_matches(['?', '.', ':']).trim();
     let a = d.answer.as_deref().unwrap_or("").trim().trim_end_matches('.');
     let note = d.note.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(|n| format!(": {}.", n.trim_end_matches('.'))).unwrap_or_else(|| ".".into());
+    if q.is_empty() {
+        return format!("- {a}{note} (Decided on {docket}{day}.)");
+    }
     format!("- {q}? {a}{note} (Decided on {docket}{day}.)")
 }
 
@@ -67,6 +70,15 @@ pub fn with_rule(notes: &str, rule: &str) -> Option<String> {
     } else {
         format!("{notes}\n\n## Standing decisions\n\n{rule}\n")
     })
+}
+
+/// A decision of your own is known by its subject (or, with none, its
+/// words): `=` and the first 8 hex of their sha256, the same on every hub.
+pub fn own_key(words: &str) -> String {
+    use sha2::Digest;
+    let norm = words.trim().trim_end_matches(['?', '.', ':', '!']).split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    let h = sha2::Sha256::digest(norm.as_bytes());
+    format!("={}", h.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>())
 }
 
 fn first_line(s: &str) -> String {
@@ -164,6 +176,33 @@ fn fold<'a>(entries: impl Iterator<Item = (Option<&'a str>, &'a Entry)>) -> Vec<
                     x.standing = d["repo"].as_str().map(str::to_string);
                 }
             }
+            // One of yours, from the composer (`/decide`): no question
+            // asked it, and the newest for a subject stands.
+            "decision" if d["via"] == "composer" && d["replies_to"].is_null() && d["answers"].is_null() => {
+                let Some(choice) = d["choice"].as_str().map(str::trim).filter(|c| !c.is_empty()) else { continue };
+                let subject = d["subject"].as_str().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("");
+                let key = own_key(if subject.is_empty() { choice } else { subject });
+                if !by_key.contains_key(&key) {
+                    order.push(key.clone());
+                }
+                let standing = by_key.remove(&key).and_then(|w| w.standing);
+                by_key.insert(
+                    key.clone(),
+                    Decision {
+                        key,
+                        question: subject.to_string(),
+                        options: Vec::new(),
+                        asked_by: who(e),
+                        asked_at: e.at.clone(),
+                        message: None,
+                        answer: Some(choice.to_string()),
+                        note: None,
+                        by: Some(who(e)),
+                        at: Some(e.at.clone()),
+                        standing,
+                    },
+                );
+            }
             "decision" | "note" => {
                 let by_entry = d["answers"].as_str().and_then(|a| key_of_entry.get(a));
                 let Some(k) = by_entry.or_else(|| d["replies_to"].as_i64().and_then(|m| key_of.get(&m))) else { continue };
@@ -190,6 +229,10 @@ pub fn brief(ds: &[Decision]) -> String {
             Some(b) => b.to_string(),
             None => "?".into(),
         };
+        if d.question.trim().is_empty() {
+            out.push_str(&format!("- **{}** ({by})\n", d.answer.as_deref().unwrap_or("")));
+            continue;
+        }
         out.push_str(&format!(
             "- {}: **{}** ({by}){}\n",
             d.question,
@@ -310,6 +353,33 @@ mod tests {
         assert!(b.contains("- PR #12: **Merge** (you). \"but squash it\""));
         assert!(b.contains("- Retry cap?: **3** (the recommendation, approved with the plan)"));
         assert!(b.contains("- Rename the flag?: waiting on an answer (Yes / No)"));
+    }
+
+    #[test]
+    fn your_own_decisions_stand_newest_per_subject() {
+        let mine = |subject: Option<&str>, choice: &str, at: &str| {
+            let mut data = json!({ "via": "composer", "choice": choice });
+            if let Some(s) = subject {
+                data["subject"] = json!(s);
+            }
+            e("decision", "person", "you", Some(choice), data, at)
+        };
+        let es = vec![
+            mine(Some("Retries"), "5xx only", "2026-11-25T10:00:00Z"),
+            mine(None, "Use Postgres", "2026-11-25T10:01:00Z"),
+            mine(Some("retries?"), "5xx and timeouts", "2026-11-25T10:02:00Z"),
+            // Not one of yours from the composer: a reply's, and a malformed one.
+            e("decision", "person", "you", Some("x"), json!({ "choice": "x" }), "2026-11-25T10:03:00Z"),
+            mine(Some("Empty"), "  ", "2026-11-25T10:04:00Z"),
+        ];
+        let ds = of(&es);
+        assert_eq!(ds.len(), 2, "{ds:?}");
+        assert_eq!((ds[0].question.as_str(), ds[0].answer.as_deref(), ds[0].by.as_deref()), ("retries?", Some("5xx and timeouts"), Some("you")));
+        assert_eq!(ds[0].key, own_key("Retries"), "the same subject, however it's written");
+        assert_eq!((ds[1].question.as_str(), ds[1].answer.as_deref()), ("", Some("Use Postgres")));
+        assert_eq!(brief(&ds), "- retries?: **5xx and timeouts** (you)\n- **Use Postgres** (you)\n");
+        let r = rule(&ds[1], "D-6");
+        assert!(r.starts_with("- Use Postgres. (Decided on D-6"), "{r}");
     }
 
     #[test]

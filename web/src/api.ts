@@ -496,7 +496,7 @@ export type Verify = {
   problems: string[];
 };
 
-/** A question an agent put to you, and the answer that stands (src/decisions.rs). */
+/** A question an agent put to you, and the answer that stands, or a decision of your own from the composer (no `message`) (src/decisions.rs). */
 export type Decision = {
   key: string;
   question: string;

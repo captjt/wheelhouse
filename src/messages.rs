@@ -172,6 +172,47 @@ pub fn caller(core: &Core, block: Option<&str>) -> Caller {
     }
 }
 
+/// The agents on a docket a message reaches here, as `(address, block)`:
+/// this hub's own, in a pane on that docket now, but the sender's.
+fn own_agents(core: &Core, docket: &str, but: Option<&str>) -> Result<Vec<(String, String)>> {
+    let st = core.store.state(docket)?.ok_or_else(|| anyhow!("no docket {docket}"))?;
+    let me = core.team.as_ref().map(|t| t.config.handle.clone());
+    Ok(st
+        .own_agents_on(me.as_deref())
+        .filter(|a| Some(a.agent.block.as_str()) != but && agents::docket_of(core, &a.agent.block).as_deref() == Some(docket))
+        .filter_map(|a| core.mirror.panes.get(&a.agent.block).map(|p| (addr_of(core, p), p.block_id.clone())))
+        .collect())
+}
+
+/// Tell the agents on a docket about one of your entries already on its
+/// record (a decision from the composer): a message to each, delivered
+/// between turns, placed at that entry rather than adding one of its own.
+/// Returns who it went to; none when no agent is on it now.
+pub fn tell(core: &mut Core, docket: &str, subject: &str, body: &str, seq: i64, entry: &str) -> Result<Vec<String>> {
+    let to = own_agents(core, docket, None)?;
+    // Its first line, cut to fit: the entry is on the record already, so
+    // telling never fails on its words.
+    let line = subject.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let subject = if line.chars().count() > MAX_SUBJECT { format!("{}…", line.chars().take(MAX_SUBJECT - 1).collect::<String>()) } else { line.to_string() };
+    for (addr, block) in &to {
+        let m = Message {
+            from_addr: ME.into(),
+            to_addr: addr.clone(),
+            to_block: Some(block.clone()),
+            subject: Some(subject.clone()).filter(|s| !s.is_empty()),
+            body: body.trim_end().to_string(),
+            status: "queued".into(),
+            created_at: crate::time::now_ms(),
+            ..Default::default()
+        };
+        let id = core.store.insert_message(&m)?;
+        core.store.set_message_place(id, docket, seq)?;
+        core.store.set_message_entry(id, entry)?;
+        let _ = core.events.send(json!({ "type": "message", "id": id, "to_block": m.to_block, "to": m.to_addr }));
+    }
+    Ok(to.into_iter().map(|(a, _)| a).collect())
+}
+
 /// The docket an `@D-12` address names, if it's one.
 fn docket_addr(to: &str) -> Option<String> {
     let d = to.trim().strip_prefix('@')?.trim().to_ascii_uppercase();
@@ -183,11 +224,7 @@ fn docket_addr(to: &str) -> Option<String> {
 fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<String>, body: String, options: Vec<String>) -> Result<Message> {
     let st = core.store.state(docket)?.ok_or_else(|| anyhow!("no docket {docket}"))?;
     let me = core.team.as_ref().map(|t| t.config.handle.clone());
-    let to: Vec<(String, String)> = st
-        .own_agents_on(me.as_deref())
-        .filter(|a| Some(&a.agent.block) != from.block.as_ref() && agents::docket_of(core, &a.agent.block).as_deref() == Some(docket))
-        .filter_map(|a| core.mirror.panes.get(&a.agent.block).map(|p| (addr_of(core, p), p.block_id.clone())))
-        .collect();
+    let to = own_agents(core, docket, from.block.as_deref())?;
     // On a shared docket, teammates' agents too: the message is an entry, and
     // each of their hubs delivers it (or asks its person first).
     let remote: Vec<Value> = st
