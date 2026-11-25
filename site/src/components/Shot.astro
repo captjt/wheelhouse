@@ -1,0 +1,29 @@
+---
+// A screenshot in the docs, in a window (or a phone), the right capture for
+// the theme. A capture is never shown wider than its natural size, so the
+// Mac app's 1x captures don't blur.
+import Pic from "./Pic.astro";
+import { shot } from "../lib/shots";
+
+interface Props {
+  name: string;
+  alt: string;
+  caption?: string;
+}
+
+const { name, alt, caption } = Astro.props;
+const s = await shot(name);
+// The Mac app's own captures are whole windows, title bar and all.
+const ownChrome = name.startsWith("mac-");
+const natural = Math.round(s.light.width / s.density);
+const max = s.phone ? 288 : Math.min(natural, 1100);
+const sizes = s.phone ? "18rem" : `(min-width: 72rem) min(46rem, ${max}px), min(100vw, ${max}px)`;
+---
+
+<figure class:list={["wh-shot", "not-content", s.phone ? "is-phone" : "is-window"]} style={`--max: ${max}px`}>
+  <div class="wh-shot-frame">
+    {!s.phone && !ownChrome && <div class="wh-shot-bar" aria-hidden="true"><i></i><i></i><i></i></div>}
+    <Pic name={name} alt={alt} sizes={sizes} />
+  </div>
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>

@@ -1,0 +1,15 @@
+---
+// A phone screenshot in a phone: a bezel, rounded as an iPhone's.
+import Pic from "../Pic.astro";
+
+interface Props {
+  name: string;
+  alt: string;
+  class?: string;
+}
+const { name, alt, class: cls } = Astro.props;
+---
+
+<figure class:list={["wh-phone", cls]}>
+  <Pic name={name} alt={alt} sizes="(min-width: 50rem) 18rem, 70vw" />
+</figure>

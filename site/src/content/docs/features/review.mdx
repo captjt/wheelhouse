@@ -1,0 +1,229 @@
+---
+title: Review
+description: A PR that requests you becomes a Review docket. Blind reviewers, a checker that merges their findings and rates the merge risk, and a review that posts only when you say so.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+import Shot from "../../../components/Shot.astro";
+
+A PR that requests you by name, in a repo your review config lists, becomes one
+**Review docket** for its whole life. Agents review it in Rex or Herdr, a
+checker checks their findings, and you decide what gets posted. The review
+posts from your GitHub account.
+
+<Shot name="mac-reviews" alt="Reviews in dark mode: the protocol's state, PRs by what they need, and a Review docket's round history" />
+
+## Set it up
+
+Review is off until you set it up. With the hub running:
+
+<Steps>
+
+1. Install LuaJIT (`brew install luajit`). The config is a Lua file.
+
+2. Sign in to GitHub with `gh auth login`. Reviews post from your account.
+
+3. From your clone of Wheelhouse, copy the example config to
+   `~/.config/wheelhouse/review.lua`, and list your repos with the path to
+   your clone of each:
+
+   ```sh
+   mkdir -p ~/.config/wheelhouse
+   cp examples/review.lua ~/.config/wheelhouse/review.lua
+   ```
+
+4. Turn Review on. It starts paused, so nothing runs until you resume it:
+
+   ```sh
+   wh review on       # checks the config; starts paused
+   wh review          # the config it read, and the PRs it sees
+   wh review resume   # rounds start
+   ```
+
+</Steps>
+
+A small config:
+
+```lua title="~/.config/wheelhouse/review.lua"
+return {
+  repos = {
+    ["acme/api"] = {
+      checkout = "~/code/acme-api",
+      notes = [[
+Run `just test` for the unit tests and `just lint` before a finding about style.
+Migrations live in db/migrations/ and must be reversible.
+]],
+    },
+  },
+
+  -- One to four reviewers, each blind to the others. The first is the primary.
+  reviewers = { "claude", { name = "codex", agent = "codex" } },
+  checker = "claude",
+
+  -- Who posts a checked review: "ask" (you), "auto" (the checker), or a rule.
+  post = "ask",
+
+  poll_seconds = 180,
+  max_rounds = 3,
+}
+```
+
+The full example, with every key commented, is
+[examples/review.lua](https://github.com/captjt/wheelhouse/blob/main/examples/review.lua).
+The hub reads the file again whenever it changes, and `wh review` says what's
+wrong with it, if anything. **Settings** in the apps changes the parts that
+aren't code (posting, agents, notes) without editing the file; see
+[Settings](/reference/settings/).
+
+<Aside type="note">
+Leaving `reviewers` out means `{ "claude" }`: Claude Code alone. Codex, Antigravity
+(`agy`) and Pi work as reviewers and checkers, each needing its CLI on your
+PATH. Claude Code is the one most tested in live rounds so far.
+</Aside>
+
+## How a round goes
+
+<Steps>
+
+1. **Prep.** The hub fetches the PR's head and base with your `gh` login, puts
+   each reviewer in a worktree of its own at that head, and gathers the round's
+   context: the PR, its diff, its reviews, comments, threads and CI. Your own
+   working copy isn't touched.
+
+2. **Reviewers.** One to four agents, each blind to the others, each in its own
+   pane of the `wheelhouse-reviews` session (a tab per PR, in Rex or Herdr).
+   `gh` is signed out in their panes. Each writes a draft review and a report.
+
+3. **Checker.** A fresh agent merges the drafts, checks every finding, notes
+   which reviewers found each one, and rates the **merge risk**: low, medium or
+   high.
+
+4. **Post.** With `post = "ask"`, the round waits for you: **Post**,
+   **Preview** or **Dismiss**, in the Inbox, on Reviews, on the docket, or in a
+   notification. Or from the terminal with `wh review post` and
+   `wh review dismiss`.
+
+5. **Later rounds.** A re-request starts the next round. The same reviewers
+   resume with what changed since the last one. A push mid-round sends them the
+   new commits in the same round.
+
+6. **End.** When the PR merges or closes, the panes close, and the worktrees and
+   refs are removed.
+
+</Steps>
+
+Everything that happens goes on the docket's record, and each round's reports,
+checked review and merge risk are kept as files on it.
+
+## What the PR is for
+
+When a review starts, the hub reads which Linear issues the PR addresses:
+Linear's own link on the PR, closing words like `Closes ENG-12`, other magic
+words like `Part of ENG-12`, the branch name, and the title. A bare mention in
+the description doesn't count. Each issue is linked on the docket.
+
+From these it writes the docket's **intent**: the PR, its author, the issues it
+addresses, the author's own summary, and what the review holds it to: its part
+of each issue's acceptance criteria. The intent follows the PR while it's
+Wheelhouse's; once you edit it, it's yours.
+
+## Who posts
+
+`post` says who posts a checked review, for every repo. A repo's own `post`
+wins for that repo.
+
+- `"ask"`: it waits for you.
+- `"auto"`: the checker posts it.
+- `{ auto = { … } }`: a rule. It posts itself only when every condition holds.
+  Otherwise it waits for you, and the Inbox says why ("merge risk is medium
+  (auto needs low)").
+- A function of the PR and its checked review, returning `"ask"` or `"auto"`.
+
+```lua
+post = { auto = { verdict = "approve", merge_risk = "low", max_lines = 300 } },
+repos = {
+  ["acme/api"] = { checkout = "~/code/acme-api", post = "ask" },
+  ["acme/docs"] = { checkout = "~/code/acme-docs", post = "auto" },
+},
+```
+
+| Condition | Holds when |
+| --- | --- |
+| `verdict = "approve"` | The review approves. One that requests changes asks. |
+| `merge_risk = "low"` or `"medium"` | The merge risk is that or lower. |
+| `max_lines = N` | The PR changes at most N lines. |
+| `authors = { … }` | The PR is by one of them. |
+| `labels = { … }` | The PR has one of these labels. |
+| `not_touching = { … }` | No changed path contains any of them. |
+
+`wh review post-mode ask` or `auto` puts every repo on ask or auto until
+`wh review post-mode config`. Standing orders in Settings say in a sentence what
+posting does now.
+
+### What never posts
+
+Whoever posts, a review is refused when:
+
+- its event isn't approve or request changes, or doesn't match its blocking
+  findings;
+- it has no verdict, or a finding has no title;
+- the merge risk is missing (with the merge-risk guide on) or isn't one of the
+  rubric's words;
+- any of its prose speaks in the first person, outside code;
+- the PR isn't open, or its head moved past the round's. The hub then follows
+  the new head on its own.
+
+Only you, the PR's own checker in `auto` mode, or the hub when your rule holds,
+can post. Only you can dismiss.
+
+## Effort and guides
+
+**Effort** is `low`, `medium`, `high`, `xhigh` or `max`, or nil for the agent's
+own setting. A reviewer's own effort wins, then the repo's, then the top-level
+one. It can be a function of the PR, so a migration gets more thought than a
+typo fix:
+
+```lua
+effort = {
+  review = function(pr)
+    if pr.touches({ "db/migrations/", "auth/" }) then return "xhigh" end
+    return pr.lines < 150 and "medium" or "high"
+  end,
+  check = "medium",
+},
+```
+
+**Guides** go into the briefs: what to look for (`review`), how the posted
+review reads (`style`), the merge-risk rubric (`merge_risk`), and more for the
+checker (`check`). Each is instructions, a file, `"bundled"`, or `false`.
+`merge_risk = false` turns the merge risk off. You can read and edit every guide
+in Settings, with the built-in one a click away.
+
+## Commands
+
+A PR is `OWNER/NAME N` or `OWNER/NAME#N`, such as `acme/api 341`.
+
+| | |
+| --- | --- |
+| `wh review` | Every PR it follows, and what each needs. |
+| `wh review on`, `off` | Turn Review on (paused, the first time) or off. |
+| `wh review pause`, `resume` | Stop or restart new rounds. GitHub is still checked while paused. |
+| `wh review check` | Check GitHub now. |
+| `wh review post-mode ask\|auto\|config` | Who posts a checked review. |
+| `wh review pickup acme/api 341` | Review a PR that didn't request you. |
+| `wh review preview\|post\|dismiss acme/api 341` | The round's checked review: see it, post it, or drop it. |
+
+## Moving over from rex-reviewer
+
+If you used rex-reviewer, stop its watcher and import its setup once:
+
+```sh
+rex-reviewer down
+wh import rex-reviewer   # its config, guides, PRs and rounds
+wh review on
+wh review resume
+```
+
+The import writes `review.lua` from rex-reviewer's config (unless you already
+have one) and keeps each PR's rounds, so a re-request resumes where it left
+off. A new user can skip this.
