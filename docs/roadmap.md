@@ -154,8 +154,12 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 - [x] Recap's tokens: across all the work (agents, Builds, reviews), by
       provider and model, per day, and the dockets that took the most, from
       the agents' own Claude Code, Codex, Antigravity and Pi transcripts
-- [ ] Keep tokens after the tools prune their transcripts (Claude Code's
-      go after 30 days): snapshot each day's usage into the hub's store
+- [x] Tokens kept after the tools prune their transcripts (Claude Code's
+      go after 30 days): a snapshot keeps each transcript's calls, a
+      minute and a model at a time, in the hub's store (everything on disk
+      the first time, then about daily, by each transcript's own id so a
+      moved one counts once), and Recap counts from what it keeps with
+      what was written since read over it
 - [ ] Cost: tokens at each model's price
 - [x] The phone app, from the Home Screen: a tab bar, swipe back, rows that
       swipe, sheets, and pull to refresh
