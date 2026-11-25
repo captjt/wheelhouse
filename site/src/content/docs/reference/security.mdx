@@ -1,0 +1,157 @@
+---
+title: Security
+description: What Wheelhouse protects, what it doesn't, and what to do about the gap. Agents run as you, on your Mac.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Wheelhouse runs on your Mac, as you, next to agents that also run as you. This
+page says what it protects, what it doesn't, and what to do about the gap.
+
+<Aside type="caution" title="The short version">
+Wheelhouse keeps your agents' honest mistakes off GitHub and out of the app.
+It isn't a sandbox against a hostile agent. Claude Code's own permission
+prompts are still the real line of defense.
+</Aside>
+
+## What it protects
+
+### The app answers only you
+
+- **On this Mac,** it listens on 127.0.0.1 only. A request must name one of
+  Wheelhouse's own hosts, which stops DNS rebinding.
+- **On your tailnet,** `wh web --publish` serves it through `tailscale serve`.
+  Every request must carry your Tailscale login. Anyone else on the tailnet
+  gets a 403.
+- **Not through another website.** Writes must carry a header a browser can't
+  send cross-site without a preflight, and the hub refuses preflights. Another
+  site can't act through your browser.
+- **Not in a frame.** No other site can frame the app, so it can't trick you
+  into clicking Approve or Post.
+- **Only its own scripts.** The app's content security policy runs nothing
+  else.
+
+### An approval answers only the prompt you saw
+
+Before a key goes in, the hub reads the prompt from its runtime again. It sends
+nothing if the prompt changed, if it can't tell it from a later one, or if it
+isn't the only prompt waiting in that pane (a subagent's included).
+
+- One answer goes into a pane at a time, so approving from two screens at once
+  can't send a second key to the next prompt.
+- A prompt whose text has characters that don't show (bidirectional
+  overrides, zero-width or control characters) is never answered from
+  Wheelhouse: what you'd approve isn't what you'd read.
+- Where a prompt is shown cut short (a banner, a menu, the palette, an Inbox
+  row), Approve is offered only for one short line. Anything longer opens
+  where it's shown whole.
+- The Mac's banner buttons work only on an unlocked Mac.
+
+### What agents and PRs write can't run in the app
+
+Agent turns, messages, PR descriptions, review drafts and Linear text are
+Markdown. Wheelhouse renders them to HTML, sanitizes it, and inserts the result
+as DOM nodes, never as an HTML string parsed again.
+
+Files an agent keeps (an HTML page, an SVG) open in a sandboxed frame with no
+access to the app's origin. Opened directly, they're served with a sandbox
+content security policy.
+
+### Text typed into a pane is only text
+
+- Messages and queued prompts lose every control character, escape sequences
+  included, except newlines and tabs, before they're pasted. One agent can't
+  type keys into another.
+- Messages go in only between an agent's turns, only into an agent, and only
+  while the hub can see the pane's runtime. The pane is read just before, so
+  text never goes into a shell an agent left behind.
+- The one exception is yours: **Send now** in Chat types into Claude Code or
+  Codex while it works, and never while it, or a subagent of it, waits on a
+  prompt.
+- A message can't pass for another or for you. Its options are picked by
+  number, so an option's words never go inside a command an agent is told to
+  run. One sender can have at most 20 messages waiting for one agent.
+
+### Only the hub writes to GitHub, and only what you approved
+
+- **Agents' panes have no way to push.** The panes Review and Build start have
+  no Linear key and no SSH agent, and a GitHub token that works nowhere. Every
+  `git push` is rewritten to a URL that fails. Build's Claude Code,
+  Antigravity and Pi also can't run `git push`, `gh` or `wh send`.
+- **No MCP servers** for Review's and Build's agents, unless you turn them back
+  on for Build.
+- **Pi gets a wall of its own,** since it asks before nothing: an extension
+  that reads each command line as a shell would and refuses the denied
+  commands. Pi won't start without it.
+- **Witnessed checks** run the repo's own code, so they get the same wall and
+  only a plain environment.
+- **Exactly what you saw.** The hub posts a review only if its draft is byte
+  for byte the one you saw. It opens a PR only with the title and description
+  you were asked about. It pushes only the exact commit the checker checked
+  and you approved.
+- **The hub's own git commands,** which run with your credentials in repos
+  agents can write to, never run the repo's hooks, fsmonitor, `core.sshCommand`,
+  or external diff and textconv programs, and never skip TLS checks.
+
+### The record can't be changed quietly
+
+Each entry is signed, by you, Wheelhouse or an agent, each with its own key.
+Entries are chained by hash, and kept files are pinned by their hash.
+`wh verify`, or **Verified** on a docket, shows that nothing was changed,
+removed, added in between or reordered. See [The record](/concepts/record/).
+
+### Your state is yours
+
+`~/.local/state/wheelhouse` is readable only by you (0700). The keys, the
+database and the socket are 0600.
+
+### Agents joining dockets
+
+Any agent on this Mac can join an open docket with `wh join`. That's the same
+trust any agent already has to note on any docket, since the hub holds every
+key on this Mac. Every join and leave is on the record, so you can see who
+joined and when. Review's and Build's dockets refuse joins: their panes are the
+protocol's. A message from another agent carries no more authority than any
+other text, and the agents' instructions say so.
+
+## What it doesn't protect
+
+**Agents run as you, so a determined agent can do what you can.** The wall
+around Review's and Build's agents stops mistakes. It doesn't stop an agent
+that's trying, for example one following instructions planted in a PR it
+reviews. Running as you, an agent can:
+
+- read your files, including `~/.config/gh` and Keychain items the `security`
+  tool can read without asking;
+- undo the environment the wall sets up, and push with your credentials;
+- call the hub on 127.0.0.1 or its socket, the way the app and `wh` do. A
+  caller that doesn't say which pane it's in counts as you, so it can approve
+  prompts, post reviews or start agents. It can change Settings too: a gate to
+  Auto, a repo's checks, a guide or brief. Settings refuses what reaches
+  outside (agents' programs, PATH, the wall) and keeps what each save
+  replaces, but it can't tell such a call from yours.
+
+Two narrow gaps remain in what the hub itself does:
+
+- A runtime can't check a prompt and send a key in one step. Between the
+  hub's last read and its key (a few milliseconds), a prompt answered in the
+  pane could be replaced by the next one.
+- Messages waiting for a pane are delivered to whichever agent is next in it,
+  even a new session.
+
+## What to do about it
+
+- **Review PRs from people you trust.** Review picks up the PRs that request
+  you, in the repos you list. For repos open to outside contributors, keep
+  posting on Ask, and read what the checker drafted before you press Post.
+- **Keep agents' permissions tight.** Don't run Review or Build agents with
+  `--dangerously-skip-permissions`, or with blanket allow rules for `curl`,
+  `security` or `git push`.
+- **For untrusted code, isolate the agents:** Claude Code's sandbox with
+  network limits, or a separate macOS user with its own Rex or Herdr. Real
+  isolation between agents and the hub is planned.
+
+## Reporting a problem
+
+Open a private security advisory on the repository, or message the maintainer
+directly. Please don't open a public issue for a vulnerability.

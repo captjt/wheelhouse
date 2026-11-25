@@ -1,0 +1,58 @@
+---
+// The landing page's frame: the head, the nav and the footer. The docs use
+// Starlight's, with the same header (components/Header.astro).
+import "@fontsource-variable/inter/opsz.css";
+import "../styles/tokens.css";
+import "../styles/site.css";
+import Nav from "../components/site/Nav.astro";
+import Footer from "../components/site/Footer.astro";
+
+interface Props {
+  title: string;
+  description: string;
+}
+const { title, description } = Astro.props;
+const url = new URL(Astro.url.pathname, Astro.site);
+const image = new URL("/social-preview.png", Astro.site);
+---
+
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={url} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={url} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content={image} />
+    <meta name="twitter:card" content="summary_large_image" />
+    {/* The theme before the first paint, as Starlight's docs do it. */}
+    <script is:inline>
+      (() => {
+        let t = "";
+        try {
+          t = localStorage.getItem("starlight-theme") || "";
+        } catch {}
+        const dark = t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
+  </head>
+  <body class="wh-site">
+    <a class="wh-skip" href="#main">Skip to content</a>
+    <Nav />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+  </body>
+</html>

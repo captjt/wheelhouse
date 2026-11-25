@@ -1,0 +1,97 @@
+---
+title: What is Wheelhouse
+description: Every piece of agent work as a docket, on a record you can check. What Wheelhouse is, who it's for, and the ideas it rests on.
+---
+
+import { LinkCard, CardGrid } from "@astrojs/starlight/components";
+import Shot from "../../../components/Shot.astro";
+
+Wheelhouse is where you run all your agent work on your Mac. Each piece of work
+is a **docket**. Your agents (Claude Code, Codex, Antigravity or Pi) run in
+[Rex](https://www.superlogical.com/rex) or [Herdr](https://herdr.dev), side by
+side. Wheelhouse follows them, briefs them and watches them. It asks you only
+what you must decide, and keeps a record you can check.
+
+<Shot name="mac-inbox" alt="Wheelhouse.app's Inbox: an agent asking to run the checkout tests with Approve and Deny, a question with two answers as buttons, a failed migration, and a finished turn; beside it the first item's docket" />
+
+## Who it's for
+
+One developer running many agents in Rex or Herdr, across their own Macs. Your
+work is in GitHub repos, with issues in Linear or GitHub. You review other
+people's PRs and write your own, and you start agents by hand all day. You want
+to steer all of it from one place, on the Mac or on your phone, without
+watching panes.
+
+With [Teams](/teams/overview/), several of those developers share the dockets
+they choose, and their agents work together across Macs.
+
+## What you get
+
+- **A docket for every agent.** Every agent in a Rex pane or a Herdr terminal
+  gets one: what you asked, what the agent answered, when it waited on you, the
+  files it made, and how it ended.
+- **One Inbox.** Permission prompts, questions with answers as buttons,
+  failures, finished turns and reviews ready to post, from every agent, on the
+  Mac, in the menu bar, in a notification or on your phone.
+- **Chat from anywhere.** Talk to any agent from your phone. What you send while
+  it works is queued and goes in when its turn ends.
+- **Steer a docket from one box.** Under its Activity: a note, `@tests` or
+  `@all` to instruct its agents, `/ask` to ask them, `/decide` to record a
+  decision they'll all work from, `/task` to add another agent.
+- **Review and Build.** PRs that request you get a multi-agent review you
+  approve before it posts. A docket's intent becomes a PR you approve before it
+  opens, and review rounds become fixes you approve before they push.
+- **Checks the hub runs itself.** Done rests on evidence: your repo's checks,
+  run by the hub at the commit, recorded as witnessed.
+- **Recap.** What happened today, this week or in 30 days, as a standup note,
+  and the tokens it took.
+
+## The ideas it rests on
+
+1. **One record.** Every piece of work is a docket, and everything that
+   happens to it is an entry. Every screen is a view of the record.
+2. **Agents do, you decide.** Agents ask only what only you can decide. A
+   question comes with options and a recommendation, and the agent keeps
+   working on the recommendation while it waits.
+3. **Nothing goes outward without you.** Agents never push, post, or open a
+   PR. Wheelhouse does those things for them after you approve, or under a
+   standing order you wrote. Nothing ever merges.
+4. **Every claim says how it's known.** An entry is *said*, *witnessed* or
+   *checkable*. A docket can't be closed on what was said.
+5. **The runtime holds the panes.** Panes live in Rex or Herdr. Wheelhouse
+   never draws a terminal: **Open** takes you to the pane.
+6. **Answer from anywhere.** The window, the menu bar, a notification, the
+   phone, the keyboard, or a terminal.
+7. **Quiet by default.** It notifies only for what needs you, and only once.
+
+## The words it uses
+
+| Word | What it means |
+| --- | --- |
+| **Docket** | One piece of work, from the first ask to the last merge, numbered `D-41`. It has a title, a status, an intent, and the issue or PR it came from. |
+| **Intent** | A docket's living spec: what must be true when it's done, its acceptance boxes, and what's out of scope. |
+| **Entry** | One signed, append-only record in a docket's log. A correction is a new entry that names the one it replaces. |
+| **Protocol** | The playbook a docket follows: **Agent** (one you started by hand), **Review** or **Build**. |
+| **Ask** | Something that waits on you: a permission prompt, a question, a gate, a failure, a message. Your Inbox is your open asks. |
+| **Standing order** | A rule you wrote: when something happens, do something. "When a PR in acme/api requests me, Review it." |
+| **Runtime** | The terminal multiplexer an agent's pane is in: Rex or Herdr. |
+| **Hub** | `wh serve`: the process on your Mac that follows the runtimes, keeps the record and serves the apps. |
+
+## How it fits together
+
+The **hub** runs at login on your Mac. It follows Rex's and Herdr's events,
+mirrors their sessions and panes, and gives each agent a docket. Claude Code's
+and Antigravity's hooks, and Pi's extension, add your prompts and their turns.
+
+The **record** is a local SQLite database: one signed, chained entry per thing
+that happened. Keys are Ed25519, one per signer, on your Mac.
+
+The **apps** are Wheelhouse.app on the Mac and the same app in a browser at
+`http://127.0.0.1:7500`, or on your phone over Tailscale. Agents use the `wh`
+CLI from their panes to read their brief, message you and each other, and keep
+files on their docket.
+
+<CardGrid>
+  <LinkCard title="Install" description="Build the hub, run it at login, and open the app." href="/start/install/" />
+  <LinkCard title="Dockets" description="Intent, status, acceptance, and the files a docket keeps." href="/concepts/dockets/" />
+</CardGrid>

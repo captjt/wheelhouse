@@ -7,6 +7,22 @@ default:
 deps:
     cd ./web && npm ci --no-audit --no-fund
 
+# The docs site (site/, wheelhouse.0utlaw.xyz): its types, and a build
+# that fails on any warning.
+check-site:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ./site
+    npm ci --no-audit --no-fund
+    npx astro check
+    out=$(npm run build 2>&1) || { echo "$out"; exit 1; }
+    if grep -E '\[WARN\]|\[ERROR\]' <<<"$out"; then echo "site: the build warned"; exit 1; fi
+    echo "site: built $(grep -oE '[0-9]+ page\(s\)' <<<"$out")"
+
+# The docs site with hot reload on :4321.
+site:
+    cd ./site && npm ci --no-audit --no-fund && npm run dev
+
 # Build the web app into web/dist.
 web: deps
     cd ./web && npm run build
@@ -22,6 +38,7 @@ check: deps
     cargo test
     cargo clippy --all-targets -- -D warnings
     cd ./web && npm run typecheck && npm test
+    just check-site
     just check-app
 
 # The Mac app: its tests, and a release build. Needs Xcode 26 (Swift 6.2).

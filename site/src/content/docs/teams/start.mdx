@@ -1,0 +1,163 @@
+---
+title: Start a workspace
+description: Get a team workspace running. One person runs the workspace hub, the first admin makes the workspace, and every engineer joins from their own Mac.
+---
+
+import { Aside, CardGrid, LinkCard, Steps, Tabs, TabItem } from "@astrojs/starlight/components";
+import Shot from "../../../components/Shot.astro";
+
+One person runs the workspace hub, once. The first admin makes the workspace
+and invites everyone. Each engineer joins from their own Mac.
+[How teams work](/teams/overview/) is what it's like once you're in.
+
+## What you need
+
+- **Everyone:** a Mac with Wheelhouse [installed](/start/install/), Rex or
+  Herdr, and Tailscale signed in on that Mac. Use a personal device, not a
+  tagged one: Tailscale gives a tagged device no login.
+- **Whoever runs the workspace hub:** a Linux box or VM on the tailnet with
+  Docker (or systemd and a Rust toolchain), or an always-on Mac. It needs
+  Tailscale with HTTPS turned on for the tailnet.
+- **The network:** either everyone is on one tailnet, or the workspace's
+  machine is shared into each teammate's own tailnet (in Tailscale's admin
+  console, the machine's **Share…**). Either way, each person must be able to
+  open the workspace's `https://….ts.net` address.
+
+## Set it up
+
+<Steps>
+
+1. **Run the workspace hub** (one person, once).
+
+    <Tabs>
+      <TabItem label="Linux, with Docker">
+      From a checkout of the repo:
+
+      ```sh
+      docker build -f examples/workspace/Dockerfile -t wheelhouse-workspace .
+      docker run -d --name wheelhouse-workspace --restart unless-stopped \
+        --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+        --cap-drop ALL --security-opt no-new-privileges:true \
+        -p 127.0.0.1:7700:7700 -v wheelhouse-workspace:/var/lib/wheelhouse-workspace \
+        wheelhouse-workspace
+      sudo tailscale serve --bg 7700
+      docker logs wheelhouse-workspace     # the setup code: whs1.…
+      ```
+
+      The image runs as uid 65532. Without Docker, use
+      `examples/workspace/wheelhouse-workspace.service`; its head has the
+      steps.
+      </TabItem>
+      <TabItem label="An always-on Mac">
+      ```sh
+      wh up --workspace
+      tailscale serve --bg 7700
+      ```
+
+      The setup code is in `~/Library/Logs/wheelhouse-workspace.log`.
+      </TabItem>
+      <TabItem label="GCP">
+      The Terraform module runs the hub in a GCP project of its own, with no
+      public address: [A workspace hub on GCP](/teams/gcp/).
+      </TabItem>
+    </Tabs>
+
+    `tailscale serve status` shows the address, like
+    `https://ws.tail1234.ts.net`. The workspace hub answers no request without
+    a tailnet login, so opening that address in a browser shows a short JSON
+    answer and nothing else.
+
+2. **Make the workspace** (the first admin, on their Mac).
+
+    ```sh
+    wh team create Acme --prefix ACME --url https://ws.tail1234.ts.net --setup whs1.…
+    ```
+
+    - `--prefix` numbers the shared dockets: `ACME-1`, `ACME-2`, and so on.
+    - Your handle defaults to your user name, lowercased (`--handle` to pick
+      one). Teammates see it on everything you write.
+    - Your Tailscale login comes from your Mac's Tailscale. If Wheelhouse
+      can't read it, pass `--login you@example.com`. It must be the login the
+      workspace sees, or the create is refused.
+
+    Make it right after the hub first starts: until then, anyone who can read
+    the setup code can make it.
+
+3. **Invite each engineer.**
+
+    ```sh
+    wh team invite sam            # --admin to make them an admin; --hours 48 for longer
+    ```
+
+    It prints a code (`whi1.…`). Send it to Sam however you like. It works
+    once, for 24 hours, and only as `sam`. The code's secret never reaches the
+    workspace hub: it proves to every hub that Sam's key is the one this
+    invite admitted.
+
+4. **Join** (each engineer, on their own Mac).
+
+    With Wheelhouse running (`wh status`):
+
+    ```sh
+    wh team join whi1.…
+    wh team                       # the workspace, connected, its members
+    ```
+
+    If the join says the login isn't the one Tailscale sees, pass `--login`
+    with the login shown in Tailscale's menu.
+
+    Then run `wh skill install` again, so your agents know about shared
+    dockets and teammates' messages. In the app, the workspace shows in the
+    sidebar under its name, with its shared dockets and members.
+
+5. **Work on something together.**
+
+    ```sh
+    wh team share D-12                 # one of yours → ACME-n (its history stays on your Mac)
+    wh new --team "Rate limits"        # or a new one, straight on the workspace
+    wh team people ACME-1 sam --owner  # add Sam as an owner (or leave off --owner)
+    ```
+
+    Start an agent on it from your Mac (`wh start --docket ACME-1`, or
+    **Add an agent** on its page), and so does your teammate from theirs. Each
+    agent's `wh brief` lists the other's.
+
+</Steps>
+
+<Shot name="team" alt="The Acme workspace in the web app: connected, an entry held back, four shared dockets with their agents and people, and the members" />
+
+## Once you're working
+
+- `wh send --to @ACME-1 "…"` from an agent reaches the teammate's agents. The
+  first message from a teammate's agents waits in your Inbox: **Deliver**,
+  **Drop**, or **Let Sam's agents through** on that docket.
+- An agent's question (`wh send --to me`) reaches its own person and every
+  owner. Whoever answers first, it stands.
+- Only owners change a shared docket's intent and status.
+
+<Aside title="What stays on your Mac">
+Your panes and what's on their screens, permission prompts and what you
+approved (the team sees only that you approved one), your credentials, and
+every docket you haven't shared. `wh team trust ACME-1 --private-prompts on`
+keeps your prompts on a docket to yourself too. An entry that looks like it
+holds a secret is held in your Inbox before it leaves: `wh team send N` or
+`wh team drop N`.
+</Aside>
+
+## When something's off
+
+- **`wh team` says not connected:** the workspace hub is down or unreachable.
+  Your writes wait in the outbox and go when it's back. `wh team sync` tries
+  now and says why not.
+- **"the Tailscale login … isn't yours":** you're reaching the workspace as
+  another tailnet user, or from a tagged device.
+- **"Not followed" on a shared docket:** your hub refused something the
+  workspace hub served (a changed entry, a fork, a key no member issued).
+  Nothing was taken in. Tell the workspace's admin, and keep the hub's log
+  (`wh logs`).
+- **`wh verify ACME-1`** checks your copy against every member's keys.
+
+<CardGrid>
+  <LinkCard title="How teams work" description="Shared dockets, owners and members, agents across Macs, and what stays on your Mac." href="/teams/overview/" />
+  <LinkCard title="A workspace hub on GCP" description="The Terraform module, step by step." href="/teams/gcp/" />
+</CardGrid>

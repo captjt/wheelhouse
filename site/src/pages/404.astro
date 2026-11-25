@@ -1,0 +1,22 @@
+---
+// The not-found page, in Starlight's frame. Starlight's own 404 route is off
+// (disable404Route in astro.config.mjs) so this is the only /404.
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+---
+
+<StarlightPage
+  frontmatter={{
+    title: "Not found",
+    description: "This page isn't here.",
+    template: "splash",
+    pagefind: false,
+    hero: {
+      title: "Not found",
+      tagline: "This page isn't here. It may have moved when the docs were reorganized.",
+      actions: [
+        { text: "Back to the start", link: "/", variant: "primary" },
+        { text: "What is Wheelhouse", link: "/start/introduction/", variant: "secondary" },
+      ],
+    },
+  }}
+/>

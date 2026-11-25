@@ -1,0 +1,69 @@
+---
+title: Recap
+description: What happened today, this week or in the last 30 days, as a standup note, and the tokens all of it took, by provider and model.
+---
+
+import Shot from "../../../components/Shot.astro";
+
+**Recap** reads the record back to you: what your agents did, what got reviewed
+and merged, what you decided, and the tokens all of it took. Pick **Today**,
+**This week** or **30 days**. The headline numbers are set against the period before.
+
+<Shot name="recap" alt="Recap for this week: tiles for reviews posted, approved, changes requested, PRs merged and agent turns, each against the week before; then the PRs merged and waiting on their authors with their merge risk, the agents' finished work, and your decisions" />
+
+## What it shows
+
+- **Reviews.** Reviews posted, approved and changes requested, PRs merged, and
+  the median time from request to review. Then the PRs themselves: merged,
+  waiting on their authors, or closed without merging, each with its verdicts
+  across rounds, its merge risk and its author.
+- **Agents.** Dockets started and done, turns, and the prompts you gave, with
+  each finished docket and its last summary.
+- **Builds.** PRs opened, address rounds and the replies they posted, and what
+  merged.
+- **You.** The decisions you made and what you chose, the prompts you approved
+  and denied, the intents you edited, and how often agents asked you.
+- **Tokens.** All of it, across agents, Builds and reviews: by provider and
+  model, per day, by kind of work, and the dockets that took the most. They're
+  read from the agents' own transcripts (Claude Code, Codex, Antigravity and
+  Pi), by when each call was made.
+
+## As a standup note
+
+**Copy as Markdown** puts the recap on your clipboard, ready to paste into a
+standup or a weekly note. From a terminal:
+
+```sh
+wh recap          # this week
+wh recap today
+wh recap 30d
+```
+
+It prints the same Markdown:
+
+```md
+## Recap: Nov 10 to 16
+
+**Reviews:** 2 reviews posted (+1 vs the period before) · 1 approved · 1 changes requested · 1 merged · median 20m from request to review
+
+**Merged**
+- [api#341](https://github.com/acme/api/pull/341) Add rate limiting: ✕ → ✓, 2 rounds, low risk, @dana
+
+**Agents:** 6 dockets started, 4 done, 31 turns, 9 prompts from you
+- D-47 Flaky retry test: Fixed the flaky retry test. Tests pass.
+
+**You:** 2 decisions, 5 approvals, 0 denied
+- D-41 Retry failed webhooks: chose “5xx + timeouts”
+```
+
+## Limits
+
+Tokens come from the agents' own transcripts. The tools prune those (Claude
+Code's go after 30 days), so the hub keeps them: about once a day it snapshots
+each transcript's calls, a minute and a model at a time, into its own store.
+Recap counts from what it kept, with anything written since read over it, so a
+month-old week still adds up after its transcripts are gone. A transcript that
+moved counts once. The first snapshot takes everything on disk, so tokens reach
+back to the oldest transcript you had when the hub first ran.
+
+Recap counts tokens, not cost.
