@@ -32,6 +32,14 @@ struct WheelhouseApp: App {
         }
         .defaultSize(width: 1000, height: 840)
 
+        // A docket's code changes (Changes.swift), in a window of its own.
+        WindowGroup("Changes", id: "changes", for: String.self) { $id in
+            if let id {
+                ChangesWindow(id: id).environment(store)
+            }
+        }
+        .defaultSize(width: 1280, height: 860)
+
         MenuBarExtra(isInserted: $menuBar) {
             MenuBarPanel().environment(store).environment(nav)
         } label: {
@@ -57,6 +65,7 @@ private struct Opener: ViewModifier {
         content.onAppear {
             Windows.openWindow = { openWindow(id: $0) }
             Windows.openDocket = { openWindow(id: "docket", value: $0) }
+            Windows.openChanges = { openWindow(id: "changes", value: $0) }
             Windows.openSettings = { openSettings() }
         }
     }
@@ -156,6 +165,7 @@ struct AppCommands: Commands {
             Button(d.map { "Open in \($0.runtime)" } ?? "Open in Rex") { if let d { store.openInRex(d.id) } }.keyboardShortcut("o", modifiers: [.command, .shift]).disabled(d?.live == nil)
             Button("Peek at Pane") { if let d { here.peek(d.id) } }.keyboardShortcut("p", modifiers: [.command, .shift]).disabled(d?.live == nil)
             Button("Read the Record") { if let d { here.record = d.id } }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(d == nil)
+            Button("View Changes") { if let d { Windows.openChanges?(d.id) } }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(d == nil || d?.sharedFrom != nil)
             Button("Link a Linear Issue…") { if let d { here.linking = d.id } }.disabled(d == nil)
             Divider()
             Menu("Status") {

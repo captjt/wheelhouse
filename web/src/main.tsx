@@ -1,5 +1,5 @@
 import "@fontsource-variable/inter";
-import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StrictMode, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { connLine, type Docket, type Flavor } from "./api";
 import { DocketScreen } from "./Docket";
@@ -22,6 +22,14 @@ import { AgentsView, DocketListView } from "./views";
 import { SettingsView } from "./Settings";
 import { HoldDialog, RefusedDialog } from "./Verify";
 import "./styles.css";
+
+// A docket's code changes: its own chunk, with the highlighter, loaded on first open.
+const ChangesScreen = lazy(() => import("./Changes"));
+const changes = (id: string, embedded = false) => (
+  <Suspense fallback={<div className="view" />}>
+    <ChangesScreen key={id} id={id} embedded={embedded} />
+  </Suspense>
+);
 
 const isOpen = (d: Docket) => d.status === "todo" || d.status === "in_progress";
 const FILTERS = {
@@ -249,7 +257,8 @@ function App() {
   );
 
   const docket = page === "d" && route[1] ? route[1] : null;
-  const main = docket ? <DocketScreen key={docket} id={docket} /> : <RouteView route={route} />;
+  const onDocket = docket ? (route[2] === "changes" ? changes(docket) : <DocketScreen key={docket} id={docket} />) : null;
+  const main = onDocket ?? <RouteView route={route} />;
   // A flavored hub (Wheelhouse Dev) has the runtimes, Linear, hooks and push
   // off on purpose: no hints to turn them on, and a calm line instead of an error.
   const foot = (
@@ -430,7 +439,7 @@ function PhoneApp({
           <>
             <div ref={shade} className="m-shade" />
             <div ref={top} className="m-top" key={docket}>
-              <DocketScreen key={docket} id={docket} />
+              {route[2] === "changes" ? changes(docket) : <DocketScreen key={docket} id={docket} />}
             </div>
           </>
         )}
@@ -461,7 +470,20 @@ function PhoneApp({
   );
 }
 
-registerWorker();
+/** The Mac app's web view: one docket's changes, with no app around them
+ * (`/?theme=dark#/embed/changes/D-12`). Its theme is the app's, not this
+ * browser's choice, and isn't kept. */
+function Embedded({ route }: { route: string[] }) {
+  return route[1] === "changes" && route[2] ? <div className="embed">{changes(route[2], true)}</div> : <div className="view-empty">Nothing to show here.</div>;
+}
+const embedRoute = routeOf(window.location.hash);
+const embedded = embedRoute[0] === "embed";
+if (embedded) {
+  const t = new URLSearchParams(window.location.search).get("theme");
+  if (t === "light" || t === "dark") document.documentElement.dataset.mode = t;
+  else delete document.documentElement.dataset.mode;
+  document.documentElement.classList.add("embedded");
+} else registerWorker();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -469,7 +491,7 @@ createRoot(document.getElementById("root")!).render(
       <LiveProvider>
         <HubProvider>
           <PaneProvider>
-            <App />
+            {embedded ? <Embedded route={embedRoute} /> : <App />}
           </PaneProvider>
         </HubProvider>
       </LiveProvider>

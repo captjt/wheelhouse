@@ -17,7 +17,7 @@ import { ReviewPanel } from "./Reviews";
 import { BuildIt, BuildPanel } from "./Builds";
 import { IconExternal } from "./icons";
 import { LinearChip, LinearModal } from "./Linear";
-import { post } from "./api";
+import { get, post } from "./api";
 import { IconIssue, IconPR } from "./icons";
 import { useToast } from "./ui";
 import { STATUSES, canStartAgent, startLabel, statusItems } from "./views";
@@ -25,6 +25,8 @@ import { CheckOutput, VerifySection } from "./Verify";
 import { checkState, checkWord, independence, shortSha, verifyShown } from "./evidence";
 import { IconAgents, IconPause, IconPlay } from "./icons";
 import { SubagentsSection } from "./Subagents";
+import { IconCode } from "./icons";
+import { diffPath, type DiffView } from "./diffview";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
   const hub = useHub();
@@ -67,6 +69,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
       o: () => d?.live && pane.act(d.id),
       r: () => titleRef.current?.edit(),
       m: () => composerRef.current?.focus(),
+      d: () => go(`/d/${id}/changes`),
     },
     !embedded,
   );
@@ -138,6 +141,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               )}
             </Prop>
           )}
+          <ChangesProp d={d} />
           <Prop label="Linear">
             {d.linear ? (
               <span className="prop-issues">
@@ -564,6 +568,48 @@ function AgentsProp({ d }: { d: Docket }) {
         </span>
       </Prop>
     </>
+  );
+}
+
+/** The docket's code changes, counted: a click opens them (Changes.tsx). Only
+ * on a docket whose code is on this Mac: a Build's or Review's worktree, or
+ * the folder its agent works in. */
+function ChangesProp({ d }: { d: Docket }) {
+  const [v, setV] = useState<DiffView | null>(null);
+  const [gone, setGone] = useState(false);
+  const local = !d.shared_from;
+  useEffect(() => {
+    if (!local) return;
+    let on = true;
+    get<DiffView>(diffPath(d.id, { stat: true })).then(
+      (x) => on && (setV(x), setGone(false)),
+      () => on && setGone(true),
+    );
+    return () => {
+      on = false;
+    };
+  }, [d.id, d.updated_at, local]);
+  if (!local || gone || !v) return null;
+  const n = v.files.length;
+  return (
+    <Prop label="Changes">
+      <a className="prop-btn" href={`#/d/${d.id}/changes`} title={`${v.from.label} → ${v.to.label} (D)`}>
+        <IconCode size={14} />
+        <span className="prop-text">
+          {n ? (
+            <>
+              <span className="ch-add">+{v.added}</span> <span className="ch-del">−{v.removed}</span>
+              <span className="muted">
+                {" "}
+                · {n} file{n === 1 ? "" : "s"}
+              </span>
+            </>
+          ) : (
+            <span className="muted">No changes</span>
+          )}
+        </span>
+      </a>
+    </Prop>
   );
 }
 

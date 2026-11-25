@@ -99,6 +99,9 @@ struct PaletteOverlay: View {
                 out.append(Command(id: "st-\(s.rawValue)", group: d.id, label: "Move to \(s.label)", status: s, keywords: "status") { store.setStatus(d.id, s, undo: d.status) })
             }
             out.append(Command(id: "win", group: d.id, label: "Open in new window", symbol: "macwindow") { openWindow(id: "docket", value: d.id) })
+            if d.sharedFrom == nil {
+                out.append(Command(id: "changes", group: d.id, label: "View changes", symbol: "plus.forwardslash.minus", hint: "⇧⌘D", keywords: "diff code files commits patch") { openWindow(id: "changes", value: d.id) })
+            }
             out.append(Command(id: "rec", group: d.id, label: "Read the record", symbol: "checkmark.shield", keywords: "verify signed chain") { reveal(); nav.record = d.id })
         }
         out += [

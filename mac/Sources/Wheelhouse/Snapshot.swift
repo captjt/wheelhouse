@@ -20,7 +20,7 @@ enum Snapshot {
         return Set(a[i + 1].split(separator: ",").map(String.init))
     }
 
-    enum Target { case main, sheet, docketWindow, menuBar, quick, settings, settingsSheet, fixture }
+    enum Target { case main, sheet, docketWindow, changesWindow, menuBar, quick, settings, settingsSheet, fixture }
 
     struct Shot {
         let name: String
@@ -36,6 +36,8 @@ enum Snapshot {
     static let snapDocket = ProcessInfo.processInfo.environment["WH_SNAP_DOCKET"] ?? "D-7"
     /// A docket whose agent runs in Herdr (`WH_SNAP_HERDR`): the made-up world's acme-web.
     static let snapHerdr = ProcessInfo.processInfo.environment["WH_SNAP_HERDR"] ?? "D-8"
+    /// A docket whose code is on this Mac, for its Changes window (`WH_SNAP_CHANGES`).
+    static let snapChanges = ProcessInfo.processInfo.environment["WH_SNAP_CHANGES"] ?? "D-6"
 
     static let shots: [Shot] = [
         Shot(name: "docket", place: .active, select: "D-6"),
@@ -61,6 +63,9 @@ enum Snapshot {
         },
         Shot(name: "agent", place: .inbox, target: .sheet) { nav in nav.creating = .agent },
         Shot(name: "window", place: .inbox, target: .docketWindow),
+        // A docket's code changes: the hub's page, in the app's web view.
+        Shot(name: "docket-changes", place: .all, select: snapChanges),
+        Shot(name: "changes", place: .all, select: snapChanges, target: .changesWindow),
         Shot(name: "menubar", place: .inbox, target: .menuBar),
         Shot(name: "quick", place: .inbox, target: .quick),
         Shot(name: "shortcuts", place: .inbox, target: .sheet) { nav in nav.shortcuts = true },
@@ -208,6 +213,7 @@ enum Snapshot {
                     if let s = shot.select { nav.select(s, in: shot.place) }
                     try? await Task.sleep(for: .seconds(1.2))
                     if shot.target == .docketWindow { Windows.openDocket?("D-6") }
+                    if shot.target == .changesWindow { Windows.openChanges?(snapChanges) }
                     if shot.target == .menuBar { clickStatusItem() }
                     if shot.target == .quick { QuickPanel.show(key: false) }
                     if let tab = shot.tab {
@@ -231,6 +237,11 @@ enum Snapshot {
                     case .main: w = main
                     case .sheet: w = main.attachedSheet
                     case .docketWindow: w = NSApp.windows.first { $0.isVisible && $0 != main && $0.title.hasPrefix("D-6") }
+                    case .changesWindow:
+                        w = NSApp.windows.first { $0.isVisible && $0 != main && $0.title.hasPrefix("\(snapChanges) · Changes") }
+                        // The page loads its highlighter on first open: a moment more.
+                        if let w, w.frame.size != NSSize(width: 1440, height: 900) { w.setFrame(NSRect(x: w.frame.minX, y: w.frame.minY, width: 1440, height: 900), display: true) }
+                        try? await Task.sleep(for: .seconds(2.5))
                     case .menuBar: w = NSApp.windows.first { $0.isVisible && $0 != main && abs($0.frame.width - 380) < 2 }
                     case .quick: w = QuickPanel.window
                     case .settings: w = settingsWindow
@@ -245,6 +256,7 @@ enum Snapshot {
                     }
                     fixtureWindow?.close()
                     if shot.target == .docketWindow { NSApp.windows.first { $0.title.hasPrefix("D-6") }?.close() }
+                    if shot.target == .changesWindow { NSApp.windows.first { $0.title.hasPrefix("\(snapChanges) · Changes") }?.close() }
                     if shot.target == .menuBar { clickStatusItem() }
                     if shot.target == .quick { QuickPanel.close() }
                     reset(nav)

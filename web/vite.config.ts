@@ -1,4 +1,5 @@
-import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 // `npm run dev` serves the app with hot reload and sends /api to a hub:
@@ -8,8 +9,29 @@ import react from "@vitejs/plugin-react";
 // your own dockets or settings.
 const hub = process.env.WH_HUB ?? "http://127.0.0.1:7500";
 
+/**
+ * The Changes view's highlighter loads its grammars from shiki/langs. The
+ * page resolves them and hands them to the worker, so the page gets only
+ * the ones the hub carries (src/shiki-langs.ts, not all 200-odd) and the
+ * worker none (src/shiki-langs-none.ts). Shiki's WebAssembly engine stays
+ * out (src/shiki-wasm-none.ts): the JavaScript one is the default.
+ */
+const shikiLangs = (forWorker: boolean): Plugin => ({
+  name: "wheelhouse-shiki-langs",
+  enforce: "pre",
+  resolveId(source) {
+    const local = (f: string) => fileURLToPath(new URL(`./src/${f}`, import.meta.url));
+    if (source === "shiki/langs") return local(forWorker ? "shiki-langs-none.ts" : "shiki-langs.ts");
+    // Its WebAssembly engine, which it uses only when asked for by name.
+    if (source === "shiki/wasm" || source === "shiki/engine/oniguruma") return local("shiki-wasm-none.ts");
+    return null;
+  },
+});
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [shikiLangs(false), react()],
+  // The highlighter's worker, split, so it shares the page's chunks.
+  worker: { format: "es", plugins: () => [shikiLangs(true)] },
   server: {
     port: Number(process.env.PORT ?? 5180),
     // The hub takes a write only from its own origin: it checks the page's
