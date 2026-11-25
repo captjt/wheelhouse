@@ -6865,6 +6865,116 @@ code {
   --diffs-header-font-family: var(--sans);
   --diffs-font-size: 12px;
 }
+/* comments under a diff's lines */
+.ch-thread {
+  box-sizing: border-box;
+  min-width: 0;
+  margin: 6px 12px 8px;
+  max-width: 760px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--text);
+  white-space: normal;
+}
+.ch-comment {
+  padding: 8px 12px;
+}
+.ch-comment + .ch-comment {
+  border-top: 1px solid var(--line);
+}
+.ch-comment-head {
+  margin-bottom: 2px;
+  font-size: 12px;
+}
+.ch-draft {
+  padding: 8px 12px;
+}
+.ch-draft:focus-within {
+  border-color: color-mix(in oklch, var(--focus) 55%, var(--line-2));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.ch-draft-text {
+  width: 100%;
+  margin: 4px 0 6px;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+.ch-draft-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ch-draft-bar .ch-tell {
+  margin-right: auto;
+}
+.ch-tell {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+.ch-elsewhere {
+  margin: 8px 12px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--elev);
+  font-size: 12.5px;
+}
+.ch-elsewhere-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ch-elsewhere ul {
+  margin: 0;
+  padding: 0 12px 8px;
+  list-style: none;
+}
+.ch-elsewhere li {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 3px 0;
+  min-width: 0;
+}
+.ch-elsewhere-body {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-n-comments {
+  font-family: var(--sans);
+  flex: none;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
 .ch-error {
   flex: none;
   padding: 8px 16px;
