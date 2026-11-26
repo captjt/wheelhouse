@@ -38,8 +38,9 @@ enum Snapshot {
     static let snapHerdr = ProcessInfo.processInfo.environment["WH_SNAP_HERDR"] ?? "D-8"
     /// A docket whose code is on this Mac, for its Changes window (`WH_SNAP_CHANGES`).
     static let snapChanges = ProcessInfo.processInfo.environment["WH_SNAP_CHANGES"] ?? "D-6"
-    /// A call's docket (`WH_SNAP_CALL`): the made-up world's "Webhooks sync".
-    static let snapCall = ProcessInfo.processInfo.environment["WH_SNAP_CALL"] ?? "D-9"
+    /// A docket with a call on it (`WH_SNAP_CALL`): the made-up world's
+    /// "Retry failed webhook deliveries", which keeps "Webhooks sync".
+    static let snapCall = ProcessInfo.processInfo.environment["WH_SNAP_CALL"] ?? "D-6"
 
     static let shots: [Shot] = [
         Shot(name: "docket", place: .active, select: "D-6"),
@@ -53,7 +54,9 @@ enum Snapshot {
         Shot(name: "reviews", place: .reviews, select: "D-7"),
         Shot(name: "board", place: .all),
         Shot(name: "recap", place: .recap),
-        Shot(name: "call", place: .all, select: snapCall),
+        // A docket's Calls section, and adding another call to it.
+        Shot(name: "call", place: .all, select: snapCall) { _ in scroll("calls") },
+        Shot(name: "call-add", place: .all, select: snapCall, target: .sheet) { nav in nav.addingCall = snapCall },
         Shot(name: "palette", place: .inbox) { nav in nav.palette = true },
         Shot(name: "record", place: .active, select: "D-6", target: .sheet) { nav in nav.record = "D-6" },
         // A checkable link's signed envelope, open: it once hung the app.
@@ -284,6 +287,8 @@ enum Snapshot {
         nav.holding = nil
         nav.starting = nil
         nav.closing = nil
+        nav.addingCall = nil
+        nav.callOn = nil
         NotificationCenter.default.post(name: .snapshotTab, object: "docket")
         NotificationCenter.default.post(name: .snapshotOutput, object: nil)
         NotificationCenter.default.post(name: .snapshotCheck, object: nil)

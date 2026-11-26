@@ -21,6 +21,7 @@ struct DocketWindow: View {
 
     var body: some View {
         DocketView(id: id, standalone: true)
+            .modifier(AddCallSheets(nav: nav))
             .environment(nav)
             .frame(minWidth: 620, minHeight: 480)
             .background(K.main)
@@ -86,8 +87,8 @@ struct DocketView: View {
         }
         .task(id: store.version) { await load() }
         // While the Listener reads a call, look again now and then: it can take minutes.
-        .task(id: page?.call?.reading == true) {
-            guard page?.call?.reading == true else { return }
+        .task(id: page?.calls?.contains(where: \.reading) == true) {
+            guard page?.calls?.contains(where: \.reading) == true else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
                 if Task.isCancelled { return }
@@ -206,7 +207,9 @@ struct DocketBody: View {
             SubagentsSection(d: d)
             ForEach((store.state?.messages ?? []).filter { $0.docket == d.id }) { m in MessageCard(m: m) }
             if !d.isCall { IntentSection(d: d, entries: page.entries) }
-            if let call = page.call { CallSection(id: d.id, call: call).id("call") }
+            if let calls = page.calls {
+                CallsSection(d: d, calls: calls, entries: page.entries, onAdd: d.callable ? { nav.addingCall = d.id } : nil).id("calls")
+            }
             DecisionsSection(decisions: page.decisions, docket: d.id, repo: page.evidence.repo)
             VerifySection(page: page)
             ArtifactsSection(d: d, entries: page.entries)
@@ -439,6 +442,13 @@ struct Properties: View {
                         }
                     } else {
                         Button("Link issue…") { nav.linking = d.id }.buttonStyle(.link)
+                    }
+                }
+                // A docket that has had no call yet: add one here (one that has, in its Calls section).
+                if d.callable, page.calls?.isEmpty ?? true {
+                    prop("Calls") {
+                        Button("Add a call…") { nav.addingCall = d.id }.buttonStyle(.link)
+                            .help("Paste or drop a call's transcript: the Listener reads it against this docket and proposes what it settled")
                     }
                 }
                 if d.crew.isEmpty, task == nil, d.canStartAgent {

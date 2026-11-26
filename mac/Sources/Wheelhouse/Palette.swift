@@ -92,6 +92,9 @@ struct PaletteOverlay: View {
                 out.append(Command(id: "hold", group: d.id, label: "Hold…", symbol: "pause.circle", hint: "⇧⌘H", keywords: "pause stop wait build review") { reveal(); nav.holding = d.id })
             }
             out.append(Command(id: "checks", group: d.id, label: "Run checks", symbol: "checklist", hint: "⇧⌘U", keywords: "verify test lint witnessed") { Task { await store.runChecks(d.id) } })
+            if d.callable {
+                out.append(Command(id: "add-call", group: d.id, label: "Add a call…", symbol: "phone.badge.plus", keywords: "call meeting transcript listen listener zoom meet granola") { reveal(); nav.addingCall = d.id })
+            }
             if d.canStartAgent {
                 out.append(Command(id: "start-agent", group: d.id, label: d.onAgents.isEmpty ? "Start an agent…" : "Add an agent…", symbol: "terminal", hint: "⇧⌘A", keywords: "agent claude codex agy antigravity pi start pane work") { reveal(); nav.starting = d.id })
             }
@@ -107,7 +110,7 @@ struct PaletteOverlay: View {
         out += [
             Command(id: "new", group: "Create", label: "New docket", symbol: "square.and.pencil", hint: "⌘N") { reveal(); nav.creating = .blank },
             Command(id: "new-agent", group: "Create", label: "Start an agent on a new docket", symbol: "terminal", hint: "⇧⌘N", keywords: "claude codex agy antigravity pi start run") { reveal(); nav.creating = .agent },
-            Command(id: "new-call", group: "Create", label: "Add a Call's Transcript…", symbol: "phone", keywords: "call meeting transcript listen listener zoom meet granola") { reveal(); nav.creating = .call },
+            Command(id: "new-call", group: "Create", label: "Add a Call's Transcript…", symbol: "phone", keywords: "call meeting transcript listen listener zoom meet granola") { reveal(); nav.newCall(about: floating ? nil : store.docket(nav.current)) },
             Command(id: "new-linear", group: "Create", label: "New docket from a Linear issue", symbol: "circle.hexagongrid", keywords: "linear issue import") { reveal(); nav.creating = .linear },
         ]
         for (i, (p, key)) in Place.order.enumerated() {
@@ -290,7 +293,7 @@ struct NewDocketSheet: View {
                 switch mode {
                 case .blank: blank
                 case .agent: agent
-                case .call: NewCallForm(done: done)
+                case .call: NewCallForm(docket: nav.callOn, done: done)
                 case .linear:
                     LinearPicker(busy: busy) { issue in
                         busy = true
@@ -302,6 +305,8 @@ struct NewDocketSheet: View {
             }
         }
         .frame(width: 620)
+        // About starts on the docket you were on only for the Call it was opened for.
+        .onDisappear { nav.callOn = nil }
     }
 
     private var blank: some View {

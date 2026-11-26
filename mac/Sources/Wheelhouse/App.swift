@@ -148,7 +148,7 @@ struct AppCommands: Commands {
             Button("New Docket") { Windows.showMain(); nav.creating = .blank }.keyboardShortcut("n")
             Button("Start an Agent…") { Windows.showMain(); nav.creating = .agent }.keyboardShortcut("n", modifiers: [.command, .shift])
             Button("New Docket from Linear…") { Windows.showMain(); nav.creating = .linear }
-            Button("Add a Call's Transcript…") { Windows.showMain(); nav.creating = .call }
+            Button("Add a Call's Transcript…") { Windows.showMain(); nav.newCall(about: store.docket(focused?.id ?? nav.current)) }
         }
         CommandMenu("Go") {
             Button("Search…") { Windows.showMain(); nav.palette.toggle() }.keyboardShortcut("k")
@@ -168,6 +168,7 @@ struct AppCommands: Commands {
             Button("Read the Record") { if let d { here.record = d.id } }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(d == nil)
             Button("View Changes") { if let d { Windows.openChanges?(d.id) } }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(d == nil || d?.sharedFrom != nil)
             Button("Link a Linear Issue…") { if let d { here.linking = d.id } }.disabled(d == nil)
+            Button("Add a Call…") { if let d { here.addingCall = d.id } }.disabled(d?.callable != true)
             Divider()
             Menu("Status") {
                 ForEach(Array(Status.allCases.enumerated()), id: \.offset) { i, s in

@@ -176,7 +176,7 @@ private struct RecordRow: View {
                         if !e.blobs.isEmpty { fact("Files", e.blobs.joined(separator: "\n"), mono: true) }
                     }
                     .font(.system(size: 12))
-                    if let b = e.body, !b.isEmpty { MarkdownView(text: b, size: 12.5).padding(10).background(K.recessed, in: RoundedRectangle(cornerRadius: 8)) }
+                    if let b = e.body, !b.isEmpty { MarkdownView(text: b, size: 12.5, images: e.kind != "proposal").padding(10).background(K.recessed, in: RoundedRectangle(cornerRadius: 8)) }
                     if e.data.object?.isEmpty == false { code(e.data.pretty) }
                     if let env = envelope {
                         Text("The envelope, exactly as stored and signed (DSSE, Ed25519):").font(.system(size: 11.5)).foregroundStyle(K.muted)

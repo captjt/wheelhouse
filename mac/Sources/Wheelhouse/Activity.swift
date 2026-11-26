@@ -80,7 +80,8 @@ struct ActivityRow: View {
                     Spacer()
                     Mark(mark: e.mark)
                 }
-                Clamp { MarkdownView(text: body) }
+                // The Listener's words, from a call: no image of theirs loads.
+                Clamp { MarkdownView(text: body, images: e.kind != "proposal") }
             }
             .padding(12)
             .background(tone == "you" ? K.accentSoft.opacity(0.5) : K.elev, in: RoundedRectangle(cornerRadius: 10, style: .continuous))

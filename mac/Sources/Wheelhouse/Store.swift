@@ -415,10 +415,12 @@ final class Store {
 
     // ---- calls (src/calls.rs) ----
 
-    /// A call's transcript: a call docket that keeps it, and the Listener
-    /// starts reading it. The new docket's id, or nil when it was refused.
-    func addCall(title: String, transcript: String) async -> String? {
+    /// A call's transcript, kept on the docket it was about (nil: on a
+    /// docket of its own), and the Listener starts reading it. The docket
+    /// that keeps it, or nil when it was refused.
+    func addCall(docket: String?, title: String, transcript: String) async -> String? {
         var body: [String: Any] = ["transcript": transcript]
+        if let docket { body["docket"] = docket }
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { body["title"] = t }
         guard let r = await act("/api/calls", body), let id = r["docket"].text else { return nil }
@@ -426,17 +428,19 @@ final class Store {
         return id
     }
 
-    /// Read a call again: after a failure, or with dockets that have changed.
+    /// Read a docket's call again: after a failure, or with dockets that
+    /// have changed. `call`: the entry keeping its transcript.
     @discardableResult
-    func listen(_ id: String) async -> Bool {
-        await act("/api/calls/\(id)/listen") != nil
+    func listen(_ id: String, call: Int) async -> Bool {
+        await act("/api/dockets/\(id)/calls/\(call)/listen") != nil
     }
 
-    /// Apply a call's proposal (as edited), or ignore it. True if it went through.
+    /// Apply a proposal from one of a docket's calls (as edited), or ignore
+    /// it. True if it went through.
     func answerProposal(_ id: String, _ n: Int, apply: Bool, edit: [String: Any]? = nil) async -> Bool {
         var body: [String: Any] = ["action": apply ? "apply" : "ignore"]
         if let edit { body["edit"] = edit }
-        guard let r = await act("/api/calls/\(id)/proposals/\(n)", body) else { return false }
+        guard let r = await act("/api/dockets/\(id)/proposals/\(n)", body) else { return false }
         if apply { toast(Calls.appliedToast(r["result"])) }
         return true
     }

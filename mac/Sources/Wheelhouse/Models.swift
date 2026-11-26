@@ -235,9 +235,12 @@ struct Docket: Hashable, Identifiable {
     /// It can take an agent now: open, not a Review's or a call's, and no agent working on it.
     /// A hub that lists agents adds one beside those on it.
     var canStartAgent: Bool { isOpen && proto != "review" && !isCall && (hasAgents || live == nil) }
-    /// A call's docket (src/calls.rs): it keeps a transcript, and has no
-    /// intent, Build or agents of its own.
+    /// A call's docket (src/calls.rs): it keeps a transcript about no one
+    /// docket, and has no intent, Build or agents of its own.
     var isCall: Bool { proto == "call" }
+    /// A call's transcript can be kept on it: one of your own, not shared
+    /// with the team, open, not itself a call (web/src/Palette.tsx `callable`).
+    var callable: Bool { id.hasPrefix("D-") && sharedAs == nil && isOpen && !isCall }
     /// On hold: Build and Review take no steps on it. The reason, or nil.
     var hold: String? { j["hold"].text }
     /// A local docket that was shared: the shared docket it went on as.
@@ -658,8 +661,13 @@ struct DocketPage: Hashable {
     var evidence: Evidence { Evidence(j: j["evidence"]) }
     /// What agents asked, and the answers that stand (src/decisions.rs).
     var decisions: [JSON] { j["decisions"].array }
-    /// A call's proposals and how listening went; nil for any other docket.
-    var call: CallView? { j["call"].object == nil ? nil : CallView(j: j["call"]) }
+    /// Its calls, newest first: each one's proposals and how listening went
+    /// (src/calls.rs `view`). Nil for a docket that has had no call and
+    /// isn't one.
+    var calls: [CallView]? {
+        guard case let .array(a) = j["calls"] else { return nil }
+        return a.map(CallView.init)
+    }
     var queued: [(id: Int, body: String, at: String)] { j["queued"].array.map { ($0["id"].int ?? 0, $0["body"].str ?? "", $0["at"].str ?? "") } }
 }
 

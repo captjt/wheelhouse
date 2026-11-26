@@ -31,10 +31,12 @@ enum MD {
     nonisolated(unsafe) private static let cache = NSCache<NSString, Box>()
     final class Box { let blocks: [MDBlock]; init(_ b: [MDBlock]) { blocks = b } }
 
-    static func blocks(_ text: String, size: CGFloat) -> [MDBlock] {
-        let key = "\(size)\u{0}\(text)" as NSString
+    /// `images`: a lone image shows as itself, fetched; without, as its
+    /// words, so text from outside (the Listener's) never loads one.
+    static func blocks(_ text: String, size: CGFloat, images: Bool = true) -> [MDBlock] {
+        let key = "\(size)\u{0}\(images)\u{0}\(text)" as NSString
         if let hit = cache.object(forKey: key) { return hit.blocks }
-        var conv = Converter(size: size, breaks: !hardWrapped(text))
+        var conv = Converter(size: size, breaks: !hardWrapped(text), images: images)
         let out = conv.blocks(Document(parsing: text, options: [.disableSmartOpts]).children)
         cache.setObject(Box(out), forKey: key)
         return out
@@ -69,6 +71,8 @@ enum MD {
 private struct Converter {
     let size: CGFloat
     let breaks: Bool
+    /// A lone image may load; otherwise it's its words.
+    let images: Bool
     /// How many quotes deep: cmark misses task boxes in lists inside them.
     var quotes = 0
 
@@ -90,7 +94,7 @@ private struct Converter {
         switch m {
         case let p as Paragraph:
             let kids = Array(p.children)
-            if kids.count == 1, let img = kids[0] as? Markdown.Image, let src = img.source, let url = URL(string: src), url.scheme == "https" || url.scheme == "data" {
+            if images, kids.count == 1, let img = kids[0] as? Markdown.Image, let src = img.source, let url = URL(string: src), url.scheme == "https" || url.scheme == "data" {
                 return .image(url, alt: img.plainText)
             }
             return .paragraph(inline(kids, Style(), size))
@@ -240,9 +244,12 @@ struct MarkdownView: View {
     var onTask: ((Int, Bool) -> Void)?
     /// Take the width it's given (a page), or only what the text needs (a bubble).
     var fill = true
+    /// Load an image the text shows on its own; false for text from outside
+    /// (the Listener's, from a call), which shows an image as its words.
+    var images = true
 
     var body: some View {
-        BlocksView(blocks: MD.blocks(text, size: size), size: size, onTask: onTask)
+        BlocksView(blocks: MD.blocks(text, size: size, images: images), size: size, onTask: onTask)
             .textSelection(.enabled)
             .frame(maxWidth: fill ? .infinity : nil, alignment: .leading)
     }

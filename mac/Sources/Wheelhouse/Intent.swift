@@ -203,7 +203,7 @@ struct IntentHistory: View {
     }
 }
 
-struct DiffLine {
+struct DiffLine: Equatable {
     enum Op { case same, add, del }
     let op: Op
     let text: String
@@ -233,6 +233,35 @@ func lineDiff(_ a: String, _ b: String) -> [DiffLine] {
     }
     while i < n { out.append(DiffLine(op: .del, text: x[i])); i += 1 }
     while j < m { out.append(DiffLine(op: .add, text: y[j])); j += 1 }
+    return out
+}
+
+/// A diff line, or a run of unchanged ones folded away.
+enum FoldedLine: Equatable {
+    case line(DiffLine)
+    case skip(Int)
+}
+
+/// A long diff, folded (web/src/diff.ts `foldDiff`): changed lines with
+/// `context` lines around them, and each run of unchanged lines between as
+/// one `skip` with its count.
+func foldDiff(_ d: [DiffLine], context: Int = 3) -> [FoldedLine] {
+    var near = Array(repeating: false, count: d.count)
+    for (i, l) in d.enumerated() where l.op != .same {
+        for k in max(0, i - context) ... min(d.count - 1, i + context) { near[k] = true }
+    }
+    var out: [FoldedLine] = []
+    var skipped = 0
+    for (i, l) in d.enumerated() {
+        if near[i] {
+            if skipped > 0 { out.append(.skip(skipped)) }
+            skipped = 0
+            out.append(.line(l))
+        } else {
+            skipped += 1
+        }
+    }
+    if skipped > 0 { out.append(.skip(skipped)) }
     return out
 }
 
