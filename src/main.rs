@@ -253,12 +253,17 @@ enum Cmd {
         docket: String,
         text: String,
     },
-    /// A call's transcript: a call docket that keeps it, and the Listener
-    /// proposes what it settled for your dockets, to apply or ignore in the
-    /// apps. FILE, or - for standard input; --again D-12 reads a call again
+    /// A call's transcript, kept on the docket it was about (--docket D-12),
+    /// or on a docket of its own: the Listener proposes what it settled (the
+    /// intent revised, decisions, work and questions for its agents), to
+    /// apply or ignore in the apps. FILE, or - for standard input; --again
+    /// D-12 reads that docket's latest call again
     Call {
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: Option<String>,
+        /// The docket the call was about.
+        #[arg(long, add = complete::dockets())]
+        docket: Option<String>,
         /// What the call was. Defaults to "Call" and the day.
         #[arg(long)]
         title: Option<String>,
@@ -598,7 +603,7 @@ fn main() {
             client::json("POST", &format!("/api/dockets/{d}/note"), Some(&json!({ "body": text, "block": block }))).map(|v| println!("{}", placed(&d, &v)))
         }
         Some(Cmd::Attach { what, title, docket }) => attach(&what, title, docket),
-        Some(Cmd::Call { file, title, again }) => call(file, title, again),
+        Some(Cmd::Call { file, docket, title, again }) => call(file, docket, title, again),
         Some(Cmd::Set { docket, title, status, anyway, reason }) => {
             let d = normalize(&docket);
             client::json("POST", &format!("/api/dockets/{d}/set"), Some(&json!({ "title": title, "status": status, "anyway": anyway, "reason": reason })))
@@ -944,11 +949,13 @@ fn serve() -> Result<()> {
 const SKILL: &str = include_str!("../skills/wheelhouse/SKILL.md");
 
 /// `wh call`: a transcript in, and the Listener reading it; or a call read again.
-fn call(file: Option<String>, title: Option<String>, again: Option<String>) -> Result<()> {
+fn call(file: Option<String>, docket: Option<String>, title: Option<String>, again: Option<String>) -> Result<()> {
     if let Some(d) = again {
         let d = normalize(&d);
-        client::json("POST", &format!("/api/calls/{d}/listen"), Some(&json!({})))?;
-        println!("{d}: the Listener is reading it again. Its proposals land on the call: wh open {d}");
+        let page = client::json("GET", &format!("/api/dockets/{d}"), None)?;
+        let Some(c) = page["calls"][0]["call"].as_i64() else { anyhow::bail!("{d} keeps no call") };
+        client::json("POST", &format!("/api/dockets/{d}/calls/{c}/listen"), Some(&json!({})))?;
+        println!("{d}: the Listener is reading its call again. Its proposals land on {d}: wh open {d}");
         return Ok(());
     }
     let Some(file) = file else { anyhow::bail!("give the transcript: wh call FILE, or - to read it from standard input") };
@@ -967,7 +974,7 @@ fn call(file: Option<String>, title: Option<String>, again: Option<String>) -> R
         return Err(too_long());
     }
     let transcript = String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{file} isn't text: give the transcript as text"))?;
-    let v = client::json("POST", "/api/calls", Some(&json!({ "title": title, "transcript": transcript })))?;
+    let v = client::json("POST", "/api/calls", Some(&json!({ "docket": docket.as_deref().map(normalize), "title": title, "transcript": transcript })))?;
     let d = v["docket"].as_str().unwrap_or("");
     println!("{d}: the Listener is reading the call. Its proposals land on {d}, to apply or ignore: wh open {d}");
     Ok(())

@@ -8,7 +8,9 @@ import { nav } from "./mobile";
 import { IconBack, IconBuild, IconInfo } from "./icons";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { DecisionsSection, IntentSection } from "./Intent";
-import { CallSection } from "./Call";
+import { CallsSection } from "./Call";
+import { NewCallModal, callable } from "./Palette";
+import { IconCall } from "./icons";
 import { ArtifactViewer, ArtifactsSection, RecordViewer } from "./Artifacts";
 import { ChatView } from "./Chat";
 import { IconTerminal } from "./icons";
@@ -45,6 +47,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   const [viewing, setViewing] = useState<EntryView | null>(null);
   const [record, setRecord] = useState(false);
   const [checkOut, setCheckOut] = useState<CheckRun | null>(null);
+  const [addingCall, setAddingCall] = useState(false);
   // An agent's docket opens to its conversation on a phone; the record is a tap away.
   const [tab, setTab] = useState<"chat" | "docket" | null>(null);
   // A long record shows its latest entries first; the rest are a tap away.
@@ -164,6 +167,13 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </button>
             )}
           </Prop>
+          {callable(d) && !data.calls?.length && (
+            <Prop label="Calls">
+              <button className="prop-btn muted" onClick={() => setAddingCall(true)} title="Paste or drop a call's transcript: the Listener reads it against this docket and proposes what it settled">
+                <IconCall size={14} /> Add a call…
+              </button>
+            </Prop>
+          )}
           {!d.agent && !building && canStartAgent(d) && (
             <Prop label="Agent">
               <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title={`Start Claude Code, Codex, Antigravity or Pi on this docket, in a new ${spawnRuntime(hub.state)} pane`}>
@@ -440,7 +450,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             ))}
 
           {d.protocol !== "call" && <IntentSection d={d} entries={entries} onSaved={reload} />}
-          {data.call && <CallSection id={d.id} call={data.call} reload={reload} />}
+          {data.calls && <CallsSection d={d} calls={data.calls} entries={entries} reload={reload} onAdd={callable(d) ? () => setAddingCall(true) : undefined} />}
           <DecisionsSection decisions={data.decisions ?? []} docket={d.id} repo={ev?.repo ?? null} />
           {ev && verifying && <VerifySection d={d} ev={ev} onCheck={setCheckOut} />}
           <ArtifactsSection entries={entries} onOpen={setViewing} />
@@ -492,6 +502,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
       </div>
       )}
       {menu.node}
+      {addingCall && d && <NewCallModal docket={d.id} onClose={() => setAddingCall(false)} onAdded={reload} />}
       {viewing && <ArtifactViewer e={viewing} docket={d.id} onClose={() => setViewing(null)} />}
       {checkOut && <CheckOutput c={checkOut} onClose={() => setCheckOut(null)} />}
       {record && <RecordViewer d={d} onClose={() => setRecord(false)} />}
@@ -652,7 +663,7 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
       {mark}
     </div>
   );
-  const comment = (avatar: ReactNode, name: ReactNode, verb: string, body: string, tone = "") => (
+  const comment = (avatar: ReactNode, name: ReactNode, verb: string, body: string, tone = "", images = true) => (
     <div className={`act act-comment${tone ? ` tone-${tone}` : ""}`}>
       <div className="act-card">
         <div className="act-card-head">
@@ -665,7 +676,7 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
           {mark}
         </div>
         <Clamp>
-          <Prose text={body} />
+          <Prose text={body} images={images} />
         </Clamp>
       </div>
     </div>
@@ -722,7 +733,7 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
     case "question":
       return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, e.actor.type === "agent" ? actorApp : youName, `asked ${data.to === "me" ? "you" : data.to}${data.subject ? ` · ${data.subject}` : ""} (#${data.message})`, `${e.body || ""}\n\nOptions: ${(data.options || []).join(" · ")}`, "ask");
     case "proposal":
-      return comment(<AppAvatar app="claude-code" size={18} />, "Listener", `proposed #${data.n}`, `${e.body || ""}\n\n> ${String(data.quote || "").replace(/\n/g, " ")}`, "");
+      return comment(<AppAvatar app="claude-code" size={18} />, "Listener", `proposed #${data.n}`, `${e.body || ""}\n\n> ${String(data.quote || "").replace(/\n/g, " ")}`, "", false);
     case "decision":
       if (data.proposal != null) return sys(you, <><b>{youName}</b> {data.choice === "Apply" ? "applied" : "ignored"} #{data.proposal}{data.applied?.docket ? <> to <a className="act-link" href={`#/d/${data.applied.docket}`}>{data.applied.docket}</a></> : null}{data.edited ? ", edited" : ""}</>);
       if (data.via === "composer")

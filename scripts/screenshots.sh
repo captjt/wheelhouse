@@ -281,14 +281,16 @@ api -X POST "$base/api/dockets/$W/comments" -d "$(jq -n --arg from "$base_sha" -
   '{path: "deliver.ts", side: "additions", line: 5, from: $from, to: null, head: $head, excerpt: "  const tries = 5;", tell: false,
     body: "Cap it at **3**, as decided: five keeps a down endpoint busy for too long."}')" >/dev/null
 
-# A call: its transcript in, and the Listener's proposals (a stand-in, so
-# the shots stay the same); one applied, so both states show.
-C=$(api -X POST "$base/api/calls" -d "$(jq -n '{title: "Webhooks sync", transcript: "Dana: Where are we on the webhook retries?\nSam: Retries are 5xx and timeouts only, and three tries at most. That is settled.\nDana: Good. Can the checkout agent tell us whether the cart test covers a bundle on sale?\nSam: I will ask. Somebody should write the runbook for the outage page before Friday.\nDana: Agreed, make it its own piece of work."}')" | jq -r .docket)
+# A call on the webhooks docket: its transcript in, and the Listener's
+# proposals (a stand-in, so the shots stay the same); one applied, so both
+# states show, and the intent change left open to show its diff.
+K=$(api -X POST "$base/api/calls" -d "$(jq -n --arg w "$W" '{docket: $w, title: "Webhooks sync", transcript: "Dana: Where are we on the webhook retries?\nSam: Retries are 5xx and timeouts only, and three tries at most. That is settled.\nDana: Good. Anything that runs out of tries goes to the dead-letter queue. Put that in the spec.\nSam: Can the checkout agent tell us whether the cart test covers a bundle on sale?\nDana: I will ask. Somebody should write the runbook for the outage page before Friday.\nSam: Agreed, make it its own piece of work."}')" | jq -r .call)
 for _ in $(seq 60); do
-  [ "$(api "$base/api/dockets/$C" | jq -r '.call.listening.state')" = done ] && break
+  [ "$(api "$base/api/dockets/$W" | jq -r '.calls[0].listening.state')" = done ] && break
   sleep 0.5
 done
-api -X POST "$base/api/calls/$C/proposals/1" -d '{"action": "apply"}' >/dev/null
+first=$(api "$base/api/dockets/$W" | jq -r --argjson k "$K" '.calls[] | select(.call == $k) | .proposals[0].n')
+api -X POST "$base/api/dockets/$W/proposals/$first" -d '{"action": "apply"}' >/dev/null
 
 # Recap's tokens and cost: a week of made-up usage, kept the way the hub's
 # snapshots keep it (no transcripts in this world to read), one model unpriced.
@@ -361,7 +363,7 @@ for look in light dark; do
   shot "$base/#/d/$W" "$images/record-$look.png" "$look" desktop "$record_js"
   shot "$base/#/recap" "$images/recap-$look.png" "$look" desktop
   shot "$base/#/d/$W/changes" "$images/changes-$look.png" "$look" desktop
-  shot "$base/#/d/$C" "$images/call-$look.png" "$look" desktop 'document.querySelector(".call")?.scrollIntoView({block: "start"})'
+  shot "$base/#/d/$W" "$images/call-$look.png" "$look" desktop 'document.querySelector(".calls")?.scrollIntoView({block: "start"})'
   shot "$base/#/settings" "$images/settings-$look.png" "$look" desktop
   shot "$base/#/settings" "$images/runtimes-$look.png" "$look" desktop "$runtimes_js"
   shot "$base/#/agents" "$images/agents-$look.png" "$look" desktop

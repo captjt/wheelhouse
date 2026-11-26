@@ -299,7 +299,7 @@ function AppPicker({ app, onPick }: { app: StartApp; onPick: (a: StartApp) => vo
   );
 }
 
-export function NewDocket({ onClose, linear, agent, call }: { onClose: () => void; linear?: boolean; agent?: boolean; call?: boolean }) {
+export function NewDocket({ onClose, linear, agent, call, docket }: { onClose: () => void; linear?: boolean; agent?: boolean; call?: boolean; docket?: string }) {
   const hub = useHub();
   const toast = useToast();
   const [mode, setMode] = useState<"blank" | "linear" | "agent" | "call">(call ? "call" : agent ? "agent" : linear ? "linear" : "blank");
@@ -346,7 +346,7 @@ export function NewDocket({ onClose, linear, agent, call }: { onClose: () => voi
       </div>
     </div>
   );
-  if (mode === "call") return <NewCall head={head} onClose={onClose} />;
+  if (mode === "call") return <NewCall head={head} onClose={onClose} docket={docket} />;
   if (mode === "agent") {
     const startIt = () => {
       if (busy || !cwd.trim()) return;
@@ -449,9 +449,27 @@ export function NewDocket({ onClose, linear, agent, call }: { onClose: () => voi
 }
 
 /** A call's transcript, pasted or from a file: a call docket that keeps it, and the Listener reading it (src/calls.rs). */
-function NewCall({ head, onClose }: { head: ReactNode; onClose: () => void }) {
+/** A docket a call's transcript can be kept on: one of your own, open, not itself a call. */
+export const callable = (d: { id: string; status: string; protocol?: string | null; shared_as?: string | null }) =>
+  d.id.startsWith("D-") && !d.shared_as && (d.status === "todo" || d.status === "in_progress") && d.protocol !== "call";
+
+/** Add a call's transcript from a docket's page: on that docket. */
+export function NewCallModal({ docket, onClose, onAdded }: { docket: string; onClose: () => void; onAdded?: () => void }) {
+  const head = (
+    <div className="nd-head">
+      <span className="chip">{docket}</span>
+      <span className="muted">›</span>
+      <span className="nd-mode">Add a call</span>
+    </div>
+  );
+  return <NewCall head={head} onClose={onClose} docket={docket} onAdded={onAdded} />;
+}
+
+function NewCall({ head, onClose, docket, onAdded }: { head: ReactNode; onClose: () => void; docket?: string; onAdded?: () => void }) {
   const hub = useHub();
   const toast = useToast();
+  const dockets = (hub.state?.dockets ?? []).filter(callable);
+  const [on, setOn] = useState(docket && dockets.some((d) => d.id === docket) ? docket : "");
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -466,10 +484,11 @@ function NewCall({ head, onClose }: { head: ReactNode; onClose: () => void }) {
   const add = () => {
     if (!text.trim() || busy) return;
     setBusy(true);
-    post<{ docket: string }>("/api/calls", { title: title.trim() || undefined, transcript: text }).then(
+    post<{ docket: string; call: number }>("/api/calls", { docket: on || undefined, title: title.trim() || undefined, transcript: text }).then(
       (r) => {
         toast(`${r.docket}: the Listener is reading the call`);
         hub.reload();
+        onAdded?.();
         onClose();
         go(`/d/${r.docket}`);
       },
@@ -483,6 +502,17 @@ function NewCall({ head, onClose }: { head: ReactNode; onClose: () => void }) {
     <Modal onClose={onClose} className="new-docket">
       {head}
       <input className="nd-title" placeholder="What the call was (Webhooks sync)" value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={keys} />
+      <label className="nd-on small">
+        <span className="muted">About</span>
+        <select value={on} onChange={(e) => setOn(e.target.value)}>
+          <option value="">No one docket: a docket of its own</option>
+          {dockets.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.id} · {d.title}
+            </option>
+          ))}
+        </select>
+      </label>
       <textarea
         autoFocus
         className="nd-note nd-transcript"
@@ -499,7 +529,9 @@ function NewCall({ head, onClose }: { head: ReactNode; onClose: () => void }) {
           Choose file…
           <input type="file" accept=".txt,.vtt,.srt,.md,text/plain" hidden onChange={(e) => read(e.target.files?.[0])} />
         </label>
-        <span className="muted small">The Listener reads it against your open dockets and proposes; nothing reaches a docket until you apply it.</span>
+        <span className="muted small">
+          {on ? `The Listener reads it against ${on}: its intent, decisions and agents, and proposes.` : "The Listener reads it against your open dockets and proposes."} Nothing changes until you apply it.
+        </span>
         <span className="spacer" />
         <button className="btn btn-primary" disabled={!text.trim() || busy || text.length > CALL_MAX} onClick={add}>
           {busy ? "Adding…" : "Add call"} <Kbd>⌘↩</Kbd>

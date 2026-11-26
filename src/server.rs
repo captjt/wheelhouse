@@ -44,8 +44,8 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/note", post(note))
         .route("/api/dockets/{id}/compose", post(compose))
         .route("/api/calls", post(call_add).layer(axum::extract::DefaultBodyLimit::max(crate::calls::MAX_TRANSCRIPT * 2 + (64 << 10))))
-        .route("/api/calls/{id}/listen", post(call_listen))
-        .route("/api/calls/{id}/proposals/{n}", post(call_proposal))
+        .route("/api/dockets/{id}/calls/{call}/listen", post(call_listen))
+        .route("/api/dockets/{id}/proposals/{n}", post(call_proposal))
         .route("/api/dockets/{id}/set", post(set))
         .route("/api/dockets/{id}/open", post(open_in_rex))
         .route("/api/dockets/{id}/hold", post(hold))
@@ -401,8 +401,12 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
     let numbered: Vec<(i64, record::Entry)> = entries.iter().filter_map(|v| v["seq"].as_i64()).zip(read.iter().cloned()).collect();
     let verify_view = crate::evidence::view(&core, &st, &numbered);
     let mut page = json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions, "evidence": verify_view });
-    if st.protocol == crate::calls::PROTOCOL {
-        page["call"] = crate::calls::view(&numbered, crate::calls::is_listening(&id));
+    // Calls are kept on your own dockets only (never one shared with a team).
+    if id.starts_with("D-") && st.shared_as.is_none() {
+        let calls = crate::calls::view(&numbered, |c| crate::calls::is_listening(&id, c));
+        if calls.as_array().is_some_and(|a| !a.is_empty()) || st.protocol == crate::calls::PROTOCOL {
+            page["calls"] = calls;
+        }
     }
     Ok(Json(page))
 }
@@ -946,41 +950,44 @@ async fn run_command(shared: &Shared, id: String, cmd: crate::compose::Command) 
 
 #[derive(Deserialize)]
 struct CallReq {
+    /// The docket the call was on; none for a call of its own.
+    #[serde(default)]
+    docket: Option<String>,
     #[serde(default)]
     title: Option<String>,
     transcript: String,
 }
 
-/// A new call: its docket keeps the transcript, and the Listener starts
-/// reading it (`crate::calls`).
+/// A new call: its transcript kept on its docket (or a docket of its own),
+/// and the Listener reading it (`crate::calls`).
 async fn call_add(State(shared): State<Shared>, Json(req): Json<CallReq>) -> ApiResult {
-    let id = crate::calls::add(&mut shared.lock(), req.title.as_deref(), &req.transcript).map_err(bad)?;
-    listen_in_background(&shared, &id);
-    Ok(Json(json!({ "docket": id })))
+    let docket = req.docket.as_deref().map(str::trim).filter(|d| !d.is_empty()).map(str::to_ascii_uppercase);
+    let (id, call) = crate::calls::add(&mut shared.lock(), docket.as_deref(), req.title.as_deref(), &req.transcript).map_err(bad)?;
+    listen_in_background(&shared, &id, call);
+    Ok(Json(json!({ "docket": id, "call": call })))
 }
 
-fn listen_in_background(shared: &Shared, id: &str) {
+fn listen_in_background(shared: &Shared, id: &str, call: i64) {
     let (sh, id) = (shared.clone(), id.to_string());
     tokio::spawn(async move {
-        if let Err(e) = crate::calls::listen(sh, id.clone()).await {
-            say!("the Listener couldn't read {id}: {e:#}");
+        if let Err(e) = crate::calls::listen(sh, id.clone(), call).await {
+            say!("the Listener couldn't read {id}'s call {call}: {e:#}");
         }
     });
 }
 
-/// Read a call again: after a failure, or with dockets that have changed.
-async fn call_listen(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+/// Read a call again: after a failure, or with its docket as it is now.
+async fn call_listen(State(shared): State<Shared>, Path((id, call)): Path<(String, i64)>) -> ApiResult {
     {
         let core = shared.lock();
         let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
-        if st.protocol != crate::calls::PROTOCOL {
-            return Err(fail(StatusCode::BAD_REQUEST, format!("{id} isn't a call")));
-        }
+        own_calls(&id, &st)?;
+        crate::calls::transcript(&core, &id, call).map_err(|e| fail(StatusCode::NOT_FOUND, format!("{e:#}")))?;
     }
-    if crate::calls::is_listening(&id) {
-        return Err(fail(StatusCode::CONFLICT, format!("the Listener is reading {id} already")));
+    if crate::calls::is_listening(&id, call) {
+        return Err(fail(StatusCode::CONFLICT, "the Listener is reading that call already"));
     }
-    listen_in_background(&shared, &id);
+    listen_in_background(&shared, &id, call);
     Ok(Json(json!({ "listening": true })))
 }
 
@@ -989,9 +996,18 @@ struct ProposalAct {
     /// `apply` or `ignore`.
     action: String,
     /// Fields you changed before applying: docket, subject, choice,
-    /// question, options, title, intent.
+    /// question, options, text, title, intent.
     #[serde(default)]
     edit: Option<Value>,
+}
+
+/// Calls are kept on your own dockets, never one shared with a team: its
+/// record goes to the workspace.
+fn own_calls(id: &str, st: &crate::record::fold::DocketState) -> Result<(), (StatusCode, Json<Value>)> {
+    if !id.starts_with("D-") || st.shared_as.is_some() {
+        return Err(fail(StatusCode::BAD_REQUEST, format!("{id} is shared with your team: calls stay on your own dockets")));
+    }
+    Ok(())
 }
 
 /// One answer at a time, so a proposal is never applied twice.
@@ -1001,23 +1017,26 @@ fn proposal_turn() -> &'static tokio::sync::Mutex<()> {
 }
 
 /// Apply a call's proposal (as edited), or ignore it. Applying goes through
-/// the composer's own paths, and the outcome goes on the call's record.
+/// the composer's own paths, and the outcome goes on the record of the
+/// docket that keeps the call.
 async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String, usize)>, Json(req): Json<ProposalAct>) -> ApiResult {
     use crate::compose::Command;
     let _turn = proposal_turn().lock().await;
-    let (p, open, transcript) = {
+    let (p, scope, transcript, versions) = {
         let core = shared.lock();
         let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
-        if st.protocol != crate::calls::PROTOCOL {
-            return Err(fail(StatusCode::BAD_REQUEST, format!("{id} isn't a call")));
-        }
+        own_calls(&id, &st)?;
         let numbered: Vec<(i64, record::Entry)> = core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
         let (p, done) = crate::calls::proposal(&numbered, n).ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no proposal {n}")))?;
         if let Some(d) = done {
             return Err(fail(StatusCode::CONFLICT, format!("#{n} was {d} already")));
         }
         let open: Vec<String> = core.store.states().map_err(internal)?.into_iter().filter(|s| s.is_open() && s.protocol != crate::calls::PROTOCOL).map(|s| s.id).collect();
-        (p, open, crate::calls::transcript(&core, &id).map_err(internal)?)
+        let focus = (st.protocol != crate::calls::PROTOCOL).then(|| id.clone());
+        let call = p["call"].as_i64().unwrap_or_default();
+        let transcript = crate::calls::transcript(&core, &id, call).map_err(internal)?;
+        let intent = st.intent.as_ref().filter(|_| focus.is_some()).map(|i| i.body.clone());
+        (p, crate::calls::Scope { focus, open, intent }, transcript, st.intent_versions)
     };
     match req.action.as_str() {
         "ignore" => {
@@ -1029,7 +1048,7 @@ async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String
     }
     // What you changed, over what was proposed, checked the same way; too
     // long is said, not cut.
-    let limits = [("subject", 200), ("choice", 500), ("question", 1000), ("title", 120), ("intent", 4000)];
+    let limits = [("subject", 200), ("choice", 500), ("question", 1000), ("text", 4000), ("title", 120), ("intent", crate::calls::MAX_INTENT)];
     for (k, max) in limits {
         if req.edit.as_ref().and_then(|e| e[k].as_str()).is_some_and(|x| x.trim().chars().count() > max) {
             return Err(fail(StatusCode::BAD_REQUEST, format!("the {k} is at most {max} characters")));
@@ -1042,7 +1061,7 @@ async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String
     }
     let mut v = p.clone();
     let mut edited = serde_json::Map::new();
-    for k in ["docket", "subject", "choice", "question", "options", "title", "intent"] {
+    for k in ["docket", "subject", "choice", "question", "options", "text", "title", "intent"] {
         if let Some(x) = req.edit.as_ref().and_then(|e| e.get(k))
             && *x != p[k]
         {
@@ -1050,12 +1069,47 @@ async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String
             edited.insert(k.into(), x.clone());
         }
     }
-    let q = crate::calls::Proposal::from_value(&v, n, &transcript, &open).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
-    if q.docket.is_none() && v["docket"].as_str().is_some_and(|d| !d.trim().is_empty()) && q.kind != "task" {
+    let call = p["call"].as_i64().unwrap_or_default();
+    let mut q = crate::calls::Proposal::from_value(&v, n, call, &transcript, &scope).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    if q.kind != "task" && q.docket.is_none() && v["docket"].as_str().is_some_and(|d| !d.trim().is_empty()) {
         return Err(fail(StatusCode::BAD_REQUEST, format!("{} isn't an open docket", v["docket"].as_str().unwrap_or(""))));
+    }
+    // A docket you cleared in Edit is one to pick, not the call's own.
+    if q.kind != "task" && q.kind != "intent" && edited.get("docket").is_some_and(|d| d.as_str().is_none_or(|d| d.trim().is_empty())) {
+        return Err(fail(StatusCode::BAD_REQUEST, "pick the docket it's for"));
+    }
+    // An intent you wrote is yours, as you wrote it: only the Listener's is made inert.
+    let mine = edited.get("intent").and_then(Value::as_str).map(|s| s.trim().to_string());
+    if q.kind == "intent"
+        && let Some(m) = &mine
+    {
+        if m.is_empty() {
+            return Err(fail(StatusCode::BAD_REQUEST, "an intent change with no intent"));
+        }
+        q.intent = Some(m.clone());
     }
     let need = |what: &str| fail(StatusCode::BAD_REQUEST, format!("pick the docket {what} is for"));
     let result: Value = match q.kind.as_str() {
+        "intent" => {
+            let d = q.docket.clone().ok_or_else(|| need("this intent"))?;
+            let body = q.intent.clone().unwrap_or_default();
+            // The version this replaces: the one the call was read against, or,
+            // edited, the one you edited against. Moved since, it says so
+            // rather than write over what changed.
+            let against = if mine.is_some() { req.edit.as_ref().and_then(|e| e["version"].as_u64()).and_then(|v| u32::try_from(v).ok()) } else { q.base };
+            let mut core = shared.lock();
+            let now_v = core.store.state(&d).map_err(internal)?.map(|s| s.intent_versions).unwrap_or_default();
+            if against != Some(now_v) || now_v != versions {
+                let how = if mine.is_some() { "while you edited" } else { "since the call was read: Listen again, or Edit this one" };
+                return Err(fail(StatusCode::CONFLICT, format!("{d}'s intent changed {how}")));
+            }
+            let now = core.store.state(&d).map_err(internal)?.and_then(|s| s.intent.map(|i| i.body));
+            if now.as_deref().map(str::trim) == Some(body.trim()) {
+                return Err(fail(StatusCode::CONFLICT, "that's the intent already"));
+            }
+            let s = core.append(&d, "intent", &Who::Owner, Some(body), json!({ "source": "person", "call": call, "proposal": n })).map_err(internal)?;
+            json!({ "docket": d, "did": "intent", "seq": s.seq })
+        }
         "decide" => {
             let d = q.docket.clone().ok_or_else(|| need("this decision"))?;
             let choice = q.choice.clone().unwrap_or_default();
@@ -1065,6 +1119,11 @@ async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String
             };
             let Json(r) = run_command(&shared, d.clone(), Command::Decide { key: None, subject: q.subject.clone(), choice, text }).await?;
             json!({ "docket": d, "did": r["did"], "seq": r["seq"], "key": r["key"], "told": r["told"] })
+        }
+        "instruct" => {
+            let d = q.docket.clone().ok_or_else(|| need("this instruction"))?;
+            let Json(r) = run_command(&shared, d.clone(), Command::Instruct { to: "all".into(), text: q.text.clone().unwrap_or_default() }).await?;
+            json!({ "docket": d, "did": r["did"], "sent": r["sent"] })
         }
         "ask" => {
             let d = q.docket.clone().ok_or_else(|| need("this question"))?;
@@ -1077,9 +1136,9 @@ async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String
             let d = core.open(&Who::Owner, &title, json!({ "protocol": "none", "title_source": "person" })).map_err(internal)?;
             let mut body = q.intent.clone().unwrap_or_else(|| title.clone());
             if !q.quote.is_empty() {
-                body.push_str(&format!("\n\n> {}\n\nFrom the call {id}.", q.quote.lines().collect::<Vec<_>>().join(" ")));
+                body.push_str(&format!("\n\n> {}\n\nFrom a call on {id}.", q.quote.lines().collect::<Vec<_>>().join(" ")));
             }
-            let s = core.append(&d, "intent", &Who::Owner, Some(body), json!({ "source": "person", "call": id, "proposal": n })).map_err(internal)?;
+            let s = core.append(&d, "intent", &Who::Owner, Some(body), json!({ "source": "person", "call": call, "from": id, "proposal": n })).map_err(internal)?;
             json!({ "docket": d, "did": "opened", "seq": s.seq })
         }
     };
@@ -2277,19 +2336,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut core = crate::hub::test_core();
-        // A builder at work on the retries docket.
+        // A builder at work on the retries docket, with an intent.
         let fg = json!({ "foreground": { "name": "claude", "cwd": "/w" } });
         let rec = crate::mirror::Record { state: "working".into(), app: Some("claude-code".into()), ..Default::default() };
         core.mirror.apply_pane_status("s1", "b1", vec![rec], Some(&fg), None);
         core.mirror.panes.get_mut("b1").unwrap().label = "builder".into();
         agents::reconcile(&mut core, ["b1".to_string()]);
         let d = agents::docket_of(&core, "b1").unwrap();
+        core.append(&d, "intent", &Who::Owner, Some("Retry failed webhooks.\n\n## Acceptance\n- [ ] 5xx are retried".into()), json!({ "source": "person" })).unwrap();
         // A stand-in Listener: it reads the prompt, and answers with what a call settled.
+        let revised = "Retry failed webhooks.\n\n## Acceptance\n- [ ] 5xx are retried\n- [ ] Each attempt is logged";
         let out = json!({ "type": "result", "is_error": false, "session_id": "s-listen", "usage": { "input_tokens": 9, "output_tokens": 3 }, "structured_output": { "proposals": [
-            { "kind": "decide", "docket": d, "subject": "Retries", "choice": "5xx and timeouts only", "quote": "let's do 5xx and timeouts only" },
-            { "kind": "ask", "docket": d, "question": "Do 429s count?", "options": ["Yes", "No"], "quote": "whether 429s count" },
+            { "kind": "decide", "subject": "Retries", "choice": "5xx and timeouts only", "quote": "let's do 5xx and timeouts only" },
+            { "kind": "intent", "subject": "Log each attempt", "intent": revised, "quote": "log each attempt, add that to the spec", "base": 99 },
+            { "kind": "instruct", "text": "Log each retry with its attempt number.", "quote": "log each attempt" },
+            { "kind": "ask", "question": "Do 429s count?", "options": ["Yes", "No"], "quote": "whether 429s count" },
             { "kind": "task", "title": "Write the outage runbook", "intent": "A runbook for the outage page.", "quote": "write the runbook for the outage page" },
-            { "kind": "decide", "docket": d, "subject": "Backoff", "choice": "Linear", "quote": "never said" },
+            { "kind": "decide", "subject": "Backoff", "choice": "Linear", "quote": "never said" },
         ] } });
         let good = dir.join("listener.sh");
         std::fs::write(&good, format!("#!/bin/sh\ncat > {}/prompt.txt\ncat <<'JSON'\n{out}\nJSON\n", dir.display())).unwrap();
@@ -2301,51 +2364,57 @@ mod tests {
         *crate::calls::TEST_LISTENER.lock().unwrap() = Some(bad.to_string_lossy().into_owned());
         let shared = Shared::new(core);
         let app = router(shared.clone());
-        let page = |c: &str| {
+        let page = |x: &str| {
             let core = shared.lock();
-            let numbered: Vec<(i64, record::Entry)> = core.store.entries(c).unwrap().iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
-            crate::calls::view(&numbered, crate::calls::is_listening(c))
+            let numbered: Vec<(i64, record::Entry)> = core.store.entries(x).unwrap().iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+            crate::calls::view(&numbered, |c| crate::calls::is_listening(x, c))[0].clone()
         };
-        let settled = |c: String| async move {
+        let settled = |x: String, c: i64| async move {
             for _ in 0..400 {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                if !crate::calls::is_listening(&c) && page(&c)["listening"]["state"] != "started" {
+                if !crate::calls::is_listening(&x, c) && page(&x)["listening"]["state"] != "started" {
                     break;
                 }
             }
         };
-        let transcript =
-            "Sam: let's do 5xx and timeouts only, max three.\nDana: someone should write the runbook for the outage page.\nSam: can the builder check whether 429s count?";
-        let (st, v) = post_json(&app, "/api/calls", json!({ "title": "Webhooks sync", "transcript": transcript })).await;
+        let transcript = "Sam: let's do 5xx and timeouts only, max three.\nDana: someone should write the runbook for the outage page.\nSam: can the builder check whether 429s count?\nDana: and log each attempt, add that to the spec.";
+        let (st, v) = post_json(&app, "/api/calls", json!({ "docket": d.to_lowercase(), "title": "Webhooks sync", "transcript": transcript })).await;
         assert_eq!(st, StatusCode::OK, "{v}");
-        let call = v["docket"].as_str().unwrap().to_string();
-        settled(call.clone()).await;
-        let failed = page(&call);
+        assert_eq!(v["docket"], d.as_str(), "kept on the docket it was about");
+        let call = v["call"].as_i64().unwrap();
+        settled(d.clone(), call).await;
+        let failed = page(&d);
+        assert_eq!((failed["call"].as_i64(), failed["title"].as_str()), (Some(call), Some("Webhooks sync")));
         assert_eq!(failed["listening"]["state"], "failed", "{failed}");
         assert!(failed["listening"]["why"].as_str().unwrap().contains("model overloaded"), "{failed}");
 
         // Read again, with a Listener that answers.
         *crate::calls::TEST_LISTENER.lock().unwrap() = Some(good.to_string_lossy().into_owned());
-        let (st, _) = post_json(&app, &format!("/api/calls/{call}/listen"), json!({})).await;
-        assert_eq!(st, StatusCode::OK);
-        settled(call.clone()).await;
-        let v = page(&call);
+        let listen = format!("/api/dockets/{d}/calls/{call}/listen");
+        assert_eq!(post_json(&app, &listen, json!({})).await.0, StatusCode::OK);
+        settled(d.clone(), call).await;
+        let v = page(&d);
         assert_eq!(v["listening"]["state"], "done", "{v}");
         let ps = v["proposals"].as_array().unwrap();
-        assert_eq!(ps.len(), 4);
-        assert_eq!(ps[3]["quote_found"], false, "a quote nobody said is flagged");
-        // Read again: what it proposed already isn't proposed twice.
-        assert_eq!(post_json(&app, &format!("/api/calls/{call}/listen"), json!({})).await.0, StatusCode::OK);
-        settled(call.clone()).await;
-        let again = page(&call);
-        assert_eq!(again["proposals"].as_array().unwrap().len(), 4, "{again}");
-        assert!(again["listening"]["left_out"].to_string().contains("4 proposed already"), "{again}");
+        assert_eq!(ps.len(), 6);
+        assert_eq!(ps[0]["docket"], d.as_str(), "a docket left out is the call's own");
+        assert_eq!(ps[1]["base"], 1, "the version it read, not the one it claimed");
+        assert_eq!(ps[5]["quote_found"], false, "a quote nobody said is flagged");
         let sent = std::fs::read_to_string(dir.join("prompt.txt")).unwrap();
-        assert!(sent.contains("Proposed from this call already"), "the Listener is told");
-        assert!(sent.contains(&format!("- {d}:")) && sent.contains("<transcript>") && !sent.contains(&format!("- {call}:")), "the open dockets, not the call itself");
+        assert!(
+            sent.starts_with(&format!("<docket>\n{d}: ")) && sent.contains("Intent (version 1):\nRetry failed webhooks.") && sent.contains("Agents on it: Claude Code"),
+            "{sent}"
+        );
+        // Read again: what it proposed already isn't proposed twice.
+        assert_eq!(post_json(&app, &listen, json!({})).await.0, StatusCode::OK);
+        settled(d.clone(), call).await;
+        let again = page(&d);
+        assert_eq!(again["proposals"].as_array().unwrap().len(), 6, "{again}");
+        assert!(again["listening"]["left_out"].to_string().contains("6 proposed already"), "{again}");
+        assert!(std::fs::read_to_string(dir.join("prompt.txt")).unwrap().contains("Proposed from this call already"), "the Listener is told");
 
         let act = |n: usize, body: Value| {
-            let (app, uri) = (app.clone(), format!("/api/calls/{call}/proposals/{n}"));
+            let (app, uri) = (app.clone(), format!("/api/dockets/{d}/proposals/{n}"));
             async move { post_json(&app, &uri, body).await }
         };
         // A decision, as /decide records it, told to the builder.
@@ -2354,32 +2423,96 @@ mod tests {
         let ds = crate::decisions::of_stored(&shared.lock().store.entries(&d).unwrap());
         assert_eq!(ds.iter().find(|x| x.question == "Retries").and_then(|x| x.answer.as_deref()), Some("5xx and timeouts only"));
         assert_eq!(act(1, json!({ "action": "apply" })).await.0, StatusCode::CONFLICT, "never twice");
+        // The intent, as the call revised it: a new version.
+        let (st, r) = act(2, json!({ "action": "apply" })).await;
+        assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("intent")), "{r}");
+        let ns = shared.lock().store.state(&d).unwrap().unwrap();
+        assert_eq!((ns.intent_versions, ns.intent.unwrap().body.as_str()), (2, revised));
+        // Work for its agents, as @all sends it.
+        let (st, r) = act(3, json!({ "action": "apply" })).await;
+        assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("instructed")), "{r}");
+        assert!(r["result"]["sent"].to_string().contains("builder"), "{r}");
         // A question, edited, as /ask asks it.
-        let (st, r) = act(2, json!({ "action": "apply", "edit": { "question": "Do 429s count as retryable?" } })).await;
+        let (st, r) = act(4, json!({ "action": "apply", "edit": { "question": "Do 429s count as retryable?" } })).await;
         assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("asked")), "{r}");
         let asked = shared.lock().store.message(r["result"]["message"].as_i64().unwrap()).unwrap().unwrap();
         assert_eq!((asked.body.as_str(), asked.options.len()), ("Do 429s count as retryable?", 2));
         // A task: a docket of its own, its intent quoting the call.
-        let (st, r) = act(3, json!({ "action": "apply" })).await;
+        let (st, r) = act(5, json!({ "action": "apply" })).await;
         assert_eq!(st, StatusCode::OK, "{r}");
         let new = r["result"]["docket"].as_str().unwrap().to_string();
         let ns = shared.lock().store.state(&new).unwrap().unwrap();
         assert_eq!(ns.title, "Write the outage runbook");
         let intent = ns.intent.unwrap().body;
-        assert!(intent.contains("> write the runbook for the outage page") && intent.contains(&format!("From the call {call}")), "{intent}");
+        assert!(intent.contains("> write the runbook for the outage page") && intent.contains(&format!("From a call on {d}")), "{intent}");
         // A docket that isn't open, then ignored.
-        assert_eq!(act(4, json!({ "action": "apply", "edit": { "docket": "D-999" } })).await.0, StatusCode::BAD_REQUEST);
-        assert_eq!(act(4, json!({ "action": "ignore" })).await.0, StatusCode::OK);
+        assert_eq!(act(6, json!({ "action": "apply", "edit": { "docket": "D-999" } })).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(act(6, json!({ "action": "ignore" })).await.0, StatusCode::OK);
         assert_eq!(act(9, json!({ "action": "ignore" })).await.0, StatusCode::NOT_FOUND);
-        assert_eq!(act(4, json!({ "action": "maybe" })).await.0, StatusCode::CONFLICT, "ignored already");
-        let v = page(&call);
+        assert_eq!(act(6, json!({ "action": "maybe" })).await.0, StatusCode::CONFLICT, "ignored already");
+        let v = page(&d);
         let st: Vec<&str> = v["proposals"].as_array().unwrap().iter().map(|p| p["status"].as_str().unwrap()).collect();
-        assert_eq!(st, ["applied", "applied", "applied", "ignored"]);
-        assert_eq!(v["proposals"][1]["outcome"]["edited"]["question"], "Do 429s count as retryable?");
-        // Refused: no transcript, and listening to what isn't a call.
+        assert_eq!(st, ["applied", "applied", "applied", "applied", "applied", "ignored"]);
+        assert_eq!(v["proposals"][3]["outcome"]["edited"]["question"], "Do 429s count as retryable?");
+
+        // A second call on the docket, read against the intent as it is now.
+        let (_, v) = post_json(&app, "/api/calls", json!({ "docket": d, "transcript": format!("{transcript}\nSam: one more.") })).await;
+        let second = v["call"].as_i64().unwrap();
+        settled(d.clone(), second).await;
+        assert!(std::fs::read_to_string(dir.join("prompt.txt")).unwrap().contains("Intent (version 2):"));
+        let page_all = |x: &str| {
+            let core = shared.lock();
+            let numbered: Vec<(i64, record::Entry)> = core.store.entries(x).unwrap().iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+            crate::calls::view(&numbered, |_| false)
+        };
+        let both = page_all(&d);
+        assert_eq!((both[0]["call"].as_i64(), both[1]["call"].as_i64()), (Some(second), Some(call)), "newest first");
+        let intent_n = both[0]["proposals"].as_array().unwrap().iter().find(|p| p["kind"] == "intent").unwrap()["n"].as_u64().unwrap() as usize;
+        // The intent moves before you apply: refused, unless you edit it against the intent now.
+        shared.lock().append(&d, "intent", &Who::Owner, Some("Retry failed webhooks, by hand.".into()), json!({ "source": "person" })).unwrap();
+        assert_eq!(act(intent_n, json!({ "action": "apply" })).await.0, StatusCode::CONFLICT);
+        let mine = "Retry failed webhooks, by hand, logged.\n\n- [ ] At most `<= 3` tries, `Vec<Try>`";
+        assert_eq!(act(intent_n, json!({ "action": "apply", "edit": { "intent": mine, "version": 2 } })).await.0, StatusCode::CONFLICT, "edited against an older one");
+        assert_eq!(act(intent_n, json!({ "action": "apply", "edit": { "intent": mine } })).await.0, StatusCode::CONFLICT, "edited against none said");
+        let (st, r) = act(intent_n, json!({ "action": "apply", "edit": { "intent": mine, "version": 3 } })).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        assert_eq!(shared.lock().store.state(&d).unwrap().unwrap().intent.unwrap().body, mine, "yours, as you wrote it");
+        // A docket cleared in Edit is one to pick, never the call's own.
+        let decide_n = both[0]["proposals"].as_array().unwrap().iter().find(|p| p["kind"] == "decide").unwrap()["n"].as_u64().unwrap() as usize;
+        let (st, r) = act(decide_n, json!({ "action": "apply", "edit": { "docket": null } })).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{r}");
+
+        // Two calls read at once on one docket: each proposal its own number.
+        let slow = dir.join("slow.sh");
+        std::fs::write(&slow, format!("#!/bin/sh\ncat >/dev/null\nsleep 0.4\ncat <<'JSON'\n{out}\nJSON\n")).unwrap();
+        std::fs::set_permissions(&slow, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        *crate::calls::TEST_LISTENER.lock().unwrap() = Some(slow.to_string_lossy().into_owned());
+        let (_, a) = post_json(&app, "/api/calls", json!({ "docket": d, "transcript": "Sam: first of two." })).await;
+        let (_, b) = post_json(&app, "/api/calls", json!({ "docket": d, "transcript": "Sam: second of two." })).await;
+        settled(d.clone(), a["call"].as_i64().unwrap()).await;
+        settled(d.clone(), b["call"].as_i64().unwrap()).await;
+        let ns: Vec<u64> =
+            page_all(&d).as_array().unwrap().iter().flat_map(|c| c["proposals"].as_array().unwrap().iter().map(|p| p["n"].as_u64().unwrap()).collect::<Vec<_>>()).collect();
+        let unique: std::collections::HashSet<_> = ns.iter().collect();
+        assert_eq!(unique.len(), ns.len(), "{ns:?}");
+        *crate::calls::TEST_LISTENER.lock().unwrap() = Some(good.to_string_lossy().into_owned());
+
+        // A call of its own: about whichever docket it names, never an intent change.
+        let (_, v) = post_json(&app, "/api/calls", json!({ "title": "All hands", "transcript": "Sam: something else entirely." })).await;
+        let own = v["docket"].as_str().unwrap().to_string();
+        assert_ne!(own, d);
+        let own_call = v["call"].as_i64().unwrap();
+        settled(own.clone(), own_call).await;
+        let sent = std::fs::read_to_string(dir.join("prompt.txt")).unwrap();
+        assert!(!sent.contains("<docket>") && sent.contains(&format!("- {d}:")) && !sent.contains(&format!("- {own}:")), "{sent}");
+        let v = page(&own);
+        assert!(v["proposals"].as_array().unwrap().iter().all(|p| p["kind"] != "intent" && p["docket"].is_null()), "{v}");
+
+        // Refused: no transcript, a closed or unknown docket, and a call that isn't one.
         assert_eq!(post_json(&app, "/api/calls", json!({ "transcript": "  " })).await.0, StatusCode::BAD_REQUEST);
-        assert_eq!(post_json(&app, &format!("/api/calls/{d}/listen"), json!({})).await.0, StatusCode::BAD_REQUEST);
-        for x in [&call, &d, &new] {
+        assert_eq!(post_json(&app, "/api/calls", json!({ "docket": "D-999", "transcript": "x" })).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(post_json(&app, &format!("/api/dockets/{d}/calls/1/listen"), json!({})).await.0, StatusCode::NOT_FOUND);
+        for x in [&d, &new, &own] {
             assert!(shared.lock().verify(x).unwrap().ok);
         }
         *crate::calls::TEST_LISTENER.lock().unwrap() = None;

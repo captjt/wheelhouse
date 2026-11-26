@@ -287,7 +287,7 @@ function App() {
   const overlays = (
     <>
       {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} onNewAgent={openNewAgent} onNewCall={openNewCall} context={context} />}
-      {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} call={creating === "call"} onClose={() => setCreating(false)} />}
+      {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} call={creating === "call"} docket={context?.id} onClose={() => setCreating(false)} />}
       {hub.dialog?.kind === "refused" && <RefusedDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
       {hub.dialog?.kind === "hold" && <HoldDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
       {hub.dialog?.kind === "agent" && <StartAgent key={`${hub.dialog.id}:${hub.dialog.prompt ?? ""}`} id={hub.dialog.id} prompt={hub.dialog.prompt} onClose={closeDialog} />}

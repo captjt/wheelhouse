@@ -251,12 +251,16 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
 
 ### Calls
 
-- [x] Phase 1: a call's transcript in, proposals out. `wh call FILE` or
-      + › Call keeps the transcript on a call docket; the Listener (Claude
-      Code headless, with no tools, MCP servers, settings or hooks) reads it
-      against the open dockets and proposes decisions, questions and tasks,
-      each quoting the call (checked against the transcript); Apply, Edit
-      or Ignore each, through the composer's own paths (`src/calls.rs`)
+- [x] Phase 1: a call's transcript in, proposals out. Calls happen in a
+      docket's life: `wh call FILE --docket D-4` or Add a call keeps the
+      transcript on that docket (or a docket of its own, for a call about
+      none); the Listener (Claude Code headless, with no tools, MCP servers,
+      settings or hooks) reads it against the docket in full and the other
+      open dockets, and proposes the intent revised (applied as a new
+      version, refused if the intent moved since), decisions, instructions
+      and questions for its agents, and separate tasks, each quoting the
+      call (checked against the transcript); Apply, Edit or Ignore each,
+      through the composer's own paths (`src/calls.rs`)
 - [ ] Phase 2: the call's audio captured on the Mac, and transcribed there
 - [ ] Phase 3: listening live, steering agents while the call goes on
 

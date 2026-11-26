@@ -1,69 +1,92 @@
 ---
 title: Calls
-description: A call's transcript in, proposals for your dockets out. Each quotes the part of the call it came from, and nothing reaches a docket until you apply it.
+description: Calls happen in a docket's life. Give it the call's transcript, and the Listener proposes what the call settled for it, each quoting the call, for you to apply, edit or ignore.
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 import Shot from "../../../components/Shot.astro";
 
-A call settles things: a decision on a piece of work, a question for whoever's
-building it, a new job nobody has filed yet. Give Wheelhouse the call's
-transcript and its **Listener** reads it against your open dockets, then
-proposes each of those things for the docket it's for, quoting the part of the
-call it came from. You **Apply**, **Edit** then apply, or **Ignore** each one.
-Nothing reaches a docket until you do.
+As a docket's intent and design move, its people meet to talk the changes
+through. The call settles things: what done now means, a decision, the next
+piece of work for its agents, a question for them. Give the docket the call's
+transcript and its **Listener** reads it against that docket (its whole intent,
+the decisions in force, its agents and what happened lately), then proposes each
+of those things, quoting the part of the call it came from. You **Apply**,
+**Edit** then apply, or **Ignore** each one. Nothing changes until you do.
 
-<Shot name="call" alt="A call's proposals: a decision for D-6, applied; a question for D-1's agents with two options; and a task that opens a new docket, each quoting the call, with Apply, Edit and Ignore" />
+<Shot name="call" alt="A docket's Calls section: the Webhooks sync call, with a decision applied, the intent revised as a diff that adds a dead-letter acceptance item, an instruction for its agents, a question for another docket's agents, and a task, each quoting the call, with Apply, Edit and Ignore" />
 
 ## Adding a call
 
-- **In the web app:** **+** then **Call**, or **Add a call's transcript** in
-  ⌘K. Paste the transcript, drop its file on the box, or **Choose file…**
-  (`.txt`, `.vtt`, `.srt`, `.md`). Give it a title, or it's called "Call" and
-  the day.
-- **In Wheelhouse.app:** **Add a Call's Transcript…** in ⌘K.
-- **From a terminal:** `wh call notes.txt --title "Webhooks sync"`, or pipe it
-  in with `wh call -`.
+- **On a docket:** **Add a call…** in its properties (or **Add a call** on its
+  Calls section, once it has one). Paste the transcript, drop its file on the
+  box, or **Choose file…** (`.txt`, `.vtt`, `.srt`, `.md`). Give it a title,
+  or it's called "Call" and the day.
+- **Anywhere:** **Add a call's transcript** in ⌘K, or **+** then **Call**. It's
+  about the docket you're on; pick another under **About**, or **No one
+  docket** for a call that isn't about any one.
+- **In Wheelhouse.app:** the same, and **Add a Call's Transcript…** in ⌘K.
+- **From a terminal:** `wh call notes.txt --docket D-41 --title "Webhooks
+  sync"`, or pipe it in with `wh call - --docket D-41`.
 
-A call is a docket of its own. It keeps the transcript (up to 400 KB), pinned
-by its hash, and its record holds everything that follows.
+The docket keeps the transcript (up to 400 KB) under its files' **Calls**,
+pinned by its hash, and the docket's page lists its calls, newest first, each
+with its transcript and what the Listener proposed from it. Its Activity says
+when each was added and what came of it.
+
+A call that isn't about any one docket (a planning call, say) gets a docket of
+its own, and the Listener proposes for whichever of your open dockets it was
+about.
 
 ## What the Listener proposes
 
-| Kind | For | When you apply it |
-| --- | --- | --- |
-| **Decision** | A docket the call decided something about | It's recorded as `/decide Subject: answer` would record it: it stands under the docket's Decisions, goes in every agent's brief, and the agents on it are told |
-| **Question** | A docket whose agents should answer something | It's asked as `/ask` asks it, with the options as buttons. Their answer stands under Decisions |
-| **Task** | New work no open docket covers | It opens a docket with that title, its intent written from the call, and the quote that asked for it |
+| Kind | When you apply it |
+| --- | --- |
+| **Intent** | The docket's intent, as the call revised it, becomes its next version. The card shows the change as a diff against the intent now |
+| **Decision** | It's recorded as `/decide Subject: answer` would record it: it stands under the docket's Decisions, goes in every agent's brief, and the agents on it are told |
+| **Instruction** | It's sent to the docket's agents as `@all` would send it, waiting for each to finish its turn |
+| **Question** | It's asked as `/ask` asks it, with the options as buttons. Their answer stands under Decisions |
+| **Task** | Only for separate work the call asked for that no open docket covers: it opens a docket with that title, its intent written from the call, and the quote that asked for it |
 
-Each proposal says which docket it's for, why, and quotes the call. A quote
-that isn't in the transcript, sentence by sentence, is flagged **Not in the
-transcript**: read that one twice. A decision or question for a docket the
-Listener couldn't place says **no docket yet**; pick one in **Edit**.
+Most proposals are for the call's own docket. When the call settled something
+about another open docket, the proposal names it. An intent change is only ever
+for the call's own docket, and at most one per call.
 
-**Edit** changes the docket and the words before applying: the subject and
-what was decided, the question and its options, or a task's title and intent.
-The call's record keeps what you changed. A proposal is answered once.
+Each proposal says why, and quotes the call. A quote that isn't in the
+transcript, sentence by sentence, is flagged **Not in the transcript**: read
+that one twice.
+
+**Edit** changes the words before applying: the revised intent, the subject
+and what was decided, the instruction, the question and its options, or a
+task's title and intent, and the docket for anything but an intent change. The
+record keeps what you changed. A proposal is answered once.
+
+<Aside>
+If the intent changes after the Listener read the call (you edited it, or an
+earlier proposal revised it), its intent change won't apply as it is: it would
+write over what changed. **Listen again** to read the call against the intent
+as it is now, or **Edit** it.
+</Aside>
 
 ## The Listener
 
 The Listener is Claude Code, run headless with **no tools, no MCP servers, no
-settings and no hooks**. It's given your open dockets (each one's title, the
-start of its intent, and its decisions in force) and the transcript, and it can
-only answer with proposals. Its answer is checked like any untrusted input:
-kinds, sizes, dockets that are really open, and quotes against the transcript.
+settings and no hooks**. It's given the call's docket in full, a line on each
+of your other open dockets (its title, the start of its intent, and its
+decisions in force), and the transcript, and it can only answer with
+proposals. Its answer is checked like any untrusted input: kinds, sizes,
+dockets that are really open, and quotes against the transcript.
 
 <Aside>
 The transcript is data. A line in the call that says "ignore your instructions"
 is something someone said, not an instruction, and the worst a hostile
 transcript can do is propose something you ignore. It runs on your Claude Code
-login, and the call's record says how many tokens it took.
+login, and the docket's record says how many tokens it took.
 </Aside>
 
-The call's Activity says when it started reading, how many it proposed, and
-how many more didn't hold up. If it fails (Claude Code isn't signed in, or it
-timed out), the call says why; **Listen again** reads it again, against your
-dockets as they are now.
+If it fails (Claude Code isn't signed in, or it timed out), the call says why;
+**Listen again** reads it again, against the docket as it is now, and doesn't
+propose again what it proposed already.
 
 ## Coming later
 

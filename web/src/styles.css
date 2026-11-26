@@ -5148,12 +5148,69 @@ code {
   margin-top: 14px;
 }
 
-/* a call's proposals (src/Call.tsx) */
-.call {
+/* a docket's calls, and each call's proposals (src/Call.tsx) */
+.calls {
   margin-top: 14px;
 }
-.call .intent-head .spacer {
+.calls .intent-head .spacer {
   flex: 1;
+}
+.call {
+  margin-top: 8px;
+}
+.call + .call {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.call-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.call-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.call-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 0 -2px;
+}
+.call-tools a {
+  padding: 0 6px;
+}
+.call-text {
+  white-space: pre-wrap;
+}
+.call-diff {
+  margin: 6px 0 0;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+}
+.call-kind.kind-intent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.call-kind.kind-instruct {
+  background: var(--sel);
+  color: var(--text);
+}
+.nd-on {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.nd-on select {
+  flex: 1;
+  min-width: 0;
 }
 .call-state {
   margin: 6px 0;
@@ -5199,15 +5256,15 @@ code {
 .call-top .spacer {
   flex: 1;
 }
-.call-kind.decide {
+.call-kind.kind-decide {
   background: var(--accent-soft);
   color: var(--accent);
 }
-.call-kind.ask {
+.call-kind.kind-ask {
   background: var(--warning-tint);
   color: var(--blocked);
 }
-.call-kind.task {
+.call-kind.kind-task {
   background: var(--sel);
   color: var(--text-2);
 }

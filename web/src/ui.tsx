@@ -379,8 +379,11 @@ export function Sheet({
  * carry, sanitized. With `onTask`, its task boxes can be ticked: it gets the
  * box's index and new state, and resolves false to put the box back.
  */
-export function Prose({ text, onTask }: { text: string; onTask?: (index: number, checked: boolean) => Promise<boolean> | boolean }) {
-  const frag = useMemo(() => renderMarkdown(text), [text]);
+/** Markdown, sanitized. `images: false` for text a model wrote from
+ * something untrusted (a call's Listener): no image, so nothing on the page
+ * fetches a URL it chose. */
+export function Prose({ text, onTask, images = true }: { text: string; onTask?: (index: number, checked: boolean) => Promise<boolean> | boolean; images?: boolean }) {
+  const frag = useMemo(() => renderMarkdown(text, { images }), [text, images]);
   const ref = useRef<HTMLDivElement>(null);
   // The sanitized nodes go in as nodes: no HTML string is parsed here.
   useLayoutEffect(() => {
