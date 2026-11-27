@@ -798,6 +798,8 @@ struct Composer: View {
     /// Images to send with it: staged as they're added.
     @State private var tray: [TrayImage] = []
     @State private var marking: UUID?
+    /// The images a `/task` sent: taken out of the tray once its agent starts.
+    @State private var taskSent: Set<UUID> = []
     @State private var dropping = false
 
     var body: some View {
@@ -861,7 +863,8 @@ struct Composer: View {
         .onReceive(NotificationCenter.default.publisher(for: .taskStarted)) { n in
             if n.object as? String == d.id, Compose.kind(text) == .task {
                 text = ""
-                tray = []
+                tray = Images.afterSend(tray, sent: taskSent)
+                taskSent = []
             }
         }
         .sheet(item: Binding(get: { marking.flatMap { id in tray.first { $0.id == id } } }, set: { if $0 == nil { marking = nil } })) { t in
@@ -889,18 +892,36 @@ struct Composer: View {
         return out
     }
 
-    /// Add images to the tray, and stage each one.
+    /// Add images to the tray: each fitted (off the main actor) to what an
+    /// agent can open, then staged. Not while a send is on its way.
     private func add(_ images: [(name: String, data: Data)]) {
+        guard !images.isEmpty else { return }
+        if busy {
+            store.toast("Sending: add the images once it's gone", error: true)
+            return
+        }
         for (name, raw) in images {
             guard tray.count < Images.maxPer else {
                 store.toast("At most \(Images.maxPer) images go at once", error: true)
                 return
             }
-            let (n, data) = Images.normalized(name: name, data: raw)
-            var t = TrayImage(name: n, data: data)
-            if data.count > Images.maxBytes { t.stage = .failed("It's \(data.count >> 20) MB; an image is at most \(Images.maxBytes >> 20) MB") }
+            let t = TrayImage(name: name, data: raw)
             tray.append(t)
-            if t.failure == nil { stage(t.id, data: data, name: n) }
+            Task {
+                let fitted = await Task.detached(priority: .userInitiated) { Images.fit(name: name, data: raw) }.value
+                guard let i = tray.firstIndex(where: { $0.id == t.id }) else { return }
+                guard let (n, data) = fitted else {
+                    tray[i].stage = .failed("It isn't an image this can read")
+                    return
+                }
+                tray[i].name = n
+                tray[i].data = data
+                if data.count > Images.maxBytes {
+                    tray[i].stage = .failed("It's \(data.count >> 20) MB; an image is at most \(Images.maxBytes >> 20) MB")
+                    return
+                }
+                stage(t.id, data: data, name: n)
+            }
         }
     }
 
@@ -908,7 +929,8 @@ struct Composer: View {
         Task {
             let stage: TrayImage.Stage
             do { stage = .staged(try await store.stage(name: name, data: data)) } catch { stage = .failed(Store.words(error)) }
-            if let i = tray.firstIndex(where: { $0.id == id }) { tray[i].stage = stage }
+            // Only if it's still that image: marked up again meanwhile, a later staging stands.
+            if let i = tray.firstIndex(where: { $0.id == id }), tray[i].data == data { tray[i].stage = stage }
         }
     }
 
@@ -924,6 +946,7 @@ struct Composer: View {
             t.base = nil
             t.marks = []
             t.pins = []
+            t.name = t.baseName ?? t.name
             if let o = t.baseDigest, let size = Images.pixelSize(base) {
                 t.stage = .staged(StagedImage(digest: o, name: t.name, width: Int(size.width), height: Int(size.height)))
             } else {
@@ -931,29 +954,38 @@ struct Composer: View {
                 stage(id, data: base, name: t.name)
             }
             t.baseDigest = nil
+            t.baseName = nil
             tray[i] = t
-            return
-        }
-        guard let (png, ext) = ImageMarks.flatten(base, marks: marks) else {
-            store.toast("Couldn't draw the marks into \(t.name)", error: true)
             return
         }
         if t.base == nil {
             t.base = base
             t.baseDigest = t.staged?.digest
+            t.baseName = t.name
         }
         t.marks = marks
         t.pins = ImageMarks.pins(marks)
-        t.data = png
-        let stem = (t.name as NSString).deletingPathExtension
-        t.name = stem.hasSuffix("-marked") ? "\(stem).\(ext)" : "\(stem)-marked.\(ext)"
-        t.stage = png.count > Images.maxBytes ? .failed("Marked up, it's over \(Images.maxBytes >> 20) MB") : .staging
+        t.stage = .staging
         tray[i] = t
-        if t.failure == nil { stage(id, data: png, name: t.name) }
-        // The original was still on its way: stage it again, for its digest.
-        if t.baseDigest == nil {
-            Task {
-                if let s = try? await store.stage(name: t.name, data: base), let j = tray.firstIndex(where: { $0.id == id }) { tray[j].baseDigest = s.digest }
+        let stem = ((t.baseName ?? t.name) as NSString).deletingPathExtension
+        Task {
+            guard let (name, data) = await ImageMarks.flatten(base, name: "\(stem)-marked.png", marks: marks), let j = tray.firstIndex(where: { $0.id == id }) else {
+                store.toast("Couldn't draw the marks into \(t.name)", error: true)
+                if let j = tray.firstIndex(where: { $0.id == id }) { tray[j].stage = .failed("Couldn't draw the marks") }
+                return
+            }
+            // Marked again while this one was drawn: the newer marks stand.
+            guard tray[j].marks == marks else { return }
+            tray[j].name = name
+            tray[j].data = data
+            if data.count > Images.maxBytes {
+                tray[j].stage = .failed("Marked up, it's over \(Images.maxBytes >> 20) MB")
+            } else {
+                stage(id, data: data, name: name)
+            }
+            // The original was still on its way: stage it again, for its digest.
+            if tray[j].baseDigest == nil {
+                if let s = try? await store.stage(name: t.baseName ?? t.name, data: base), let k = tray.firstIndex(where: { $0.id == id }) { tray[k].baseDigest = s.digest }
             }
         }
     }
@@ -963,15 +995,18 @@ struct Composer: View {
         guard !t.isEmpty || !tray.isEmpty, !busy, Images.ready(tray) else { return }
         busy = true
         let images = tray
+        let sent = Set(images.map(\.id))
         Task {
             if let r = await store.compose(d.id, t, images: images) {
                 // A task's text stays until its sheet starts the agent: cancelling it loses nothing.
                 if r["did"].str == "task" {
+                    taskSent = sent
                     nav.startingPrompt = r["prompt"].str
                     nav.starting = d.id
                 } else {
-                    text = ""
-                    tray = []
+                    // Only what went: words or images added meanwhile stay.
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines) == t { text = "" }
+                    tray = Images.afterSend(tray, sent: sent)
                 }
             }
             busy = false

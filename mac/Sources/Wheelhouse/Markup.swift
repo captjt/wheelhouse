@@ -157,14 +157,11 @@ enum ImageMarks {
         return NSBitmapImageRep(cgImage: out).representation(using: .png, properties: [:])
     }
 
-    /// The marked-up image to send: a PNG, or a JPEG (quality 0.9) when the
-    /// PNG is over `limit` (a full-resolution phone photo), as the web app
-    /// does. Its bytes and the extension its name takes.
-    @MainActor static func flatten(_ data: Data, marks: [MarkupMark], limit: Int = Images.maxBytes) -> (data: Data, ext: String)? {
-        guard let png = render(data, marks: marks) else { return nil }
-        if png.count <= limit { return (png, "png") }
-        guard let rep = NSBitmapImageRep(data: png), let jpg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return (png, "png") }
-        return (jpg, "jpg")
+    /// The marked-up image to send, fitted as any image is (`Images.fit`):
+    /// drawn here, on the main actor, fitted off it. Its name and bytes.
+    static func flatten(_ data: Data, name: String, marks: [MarkupMark], maxBytes: Int = Images.maxBytes) async -> (name: String, data: Data)? {
+        guard let png = await render(data, marks: marks) else { return nil }
+        return await Task.detached(priority: .userInitiated) { Images.fit(name: name, data: png, maxBytes: maxBytes) }.value
     }
 }
 

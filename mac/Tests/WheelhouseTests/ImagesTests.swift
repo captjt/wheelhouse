@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
+import ImageIO
 import Testing
+import UniformTypeIdentifiers
 @testable import Wheelhouse
 
 // Images shared with a docket's agents (Images.swift, Markup.swift): what
@@ -142,21 +144,92 @@ private func staged(_ digest: String, _ name: String = "shot.png") -> TrayImage.
     #expect(Images.pixelSize(out!) == CGSize(width: 640, height: 400), "the image's own pixels, not the screen's")
     #expect(out!.starts(with: [0x89, 0x50, 0x4E, 0x47]), "a PNG")
     #expect(ImageMarks.render(Data("not an image".utf8), marks: marks) == nil)
-    // Over the limit as a PNG (a phone photo at full size): a JPEG.
-    #expect(ImageMarks.flatten(base, marks: marks)?.ext == "png")
-    let big = ImageMarks.flatten(base, marks: marks, limit: 100)
-    #expect(big?.ext == "jpg" && big?.data.starts(with: [0xFF, 0xD8, 0xFF]) == true)
+}
+
+@MainActor @Test func aMarkedUpImageIsFittedAsAnyImageIs() async {
+    let marks = [MarkupMark(tool: .pin, color: ImageMarks.defaultColor, points: [MarkupPoint(CGPoint(x: 40, y: 40))], n: 1)]
+    let out = await ImageMarks.flatten(png(640, 400), name: "shot-marked.png", marks: marks)
+    #expect(out?.name == "shot-marked.png" && out.flatMap { Images.pixelSize($0.data) } == CGSize(width: 640, height: 400))
+    // Over the limit as a PNG: a JPEG, the same size.
+    let big = await ImageMarks.flatten(png(640, 400), name: "shot-marked.png", marks: marks, maxBytes: 100)
+    #expect(big?.name == "shot-marked.jpg" && big?.data.starts(with: [0xFF, 0xD8, 0xFF]) == true)
     #expect(big.flatMap { Images.pixelSize($0.data) } == CGSize(width: 640, height: 400))
 }
 
-@Test func picturesAgentsCantOpenGoAsPNG() {
-    let rep = NSBitmapImageRep(data: png(8, 6))!
-    let tiff = rep.tiffRepresentation!
-    let (name, data) = Images.normalized(name: "Screen Shot.tiff", data: tiff)
-    #expect(name == "Screen Shot.png")
-    #expect(data.starts(with: [0x89, 0x50, 0x4E, 0x47]))
-    #expect(Images.pixelSize(data) == CGSize(width: 8, height: 6))
-    let p = png(4, 4)
-    #expect(Images.normalized(name: "a.png", data: p).data == p, "a PNG is sent as it is")
-    #expect(Images.thumbnail(png(800, 400), max: 100).map { $0.size.width <= 100 } == true)
+/// An image in `type`, w×h, of something a codec can't squash to nothing.
+private func encoded(_ w: Int, _ h: Int, _ type: UTType) -> Data? {
+    guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+    ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+    ctx.setFillColor(CGColor(srgbRed: 0.02, green: 0.43, blue: 1, alpha: 1))
+    for y in stride(from: 0, to: h, by: 400) { ctx.fill(CGRect(x: 20, y: y, width: w / 2, height: 40)) }
+    guard let cg = ctx.makeImage() else { return nil }
+    let out = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(out, type.identifier as CFString, 1, nil) else { return nil }
+    CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+    return CGImageDestinationFinalize(dest) ? out as Data : nil
+}
+
+private func size(_ d: Data?) -> (Int, Int)? {
+    d.flatMap(Images.pixelSize).map { (Int($0.width), Int($0.height)) }
+}
+
+@Test func imagesFitWhatTheHubAndAgentsTake() {
+    // The limits: a side, then the area.
+    #expect(Images.fitted(1440, 900) == (1440, 900))
+    #expect(Images.fitted(4000, 4000) == (4000, 4000), "16 MP exactly")
+    let page = Images.fitted(1440, 24000)
+    #expect(page.h <= Images.fitSide && page.w * page.h <= Images.fitPixels)
+    #expect((975 ... 985).contains(page.w) && (16300 ... 16384).contains(page.h), "a full-page screenshot stays readable: \(page)")
+    let wide = Images.fitted(20000, 400)
+    #expect(wide == (16384, 328), "the short side rounded, as ImageIO does")
+    let photo = Images.fitted(5712, 4284)
+    #expect(photo.w * photo.h <= Images.fitPixels && photo.w > 4000, "\(photo)")
+}
+
+@Test func aScreenshotWithinTheLimitsGoesAsItIs() {
+    let p = png(800, 500)
+    #expect(Images.fit(name: "a.png", data: p)?.data == p)
+    let j = encoded(800, 500, .jpeg)!
+    #expect(Images.fit(name: "b.jpg", data: j)?.data == j)
+    #expect(Images.fit(name: "x.png", data: Data("not an image".utf8)) == nil)
+}
+
+@Test func aLongScreenshotIsScaledAndStaysAPNG() throws {
+    let tall = try #require(encoded(1440, 24000, .png))
+    let out = try #require(Images.fit(name: "page.png", data: tall))
+    #expect(out.name == "page.png" && out.data.starts(with: [0x89, 0x50, 0x4E, 0x47]))
+    let (w, h) = try #require(size(out.data))
+    #expect((975 ... 985).contains(w) && h <= Images.fitSide && w * h <= Images.fitPixels, "\(w)×\(h)")
+    // Over the bytes as a PNG: a JPEG.
+    let small = try #require(Images.fit(name: "page.png", data: png(300, 200), maxBytes: 100))
+    #expect(small.name == "page.jpg" && small.data.starts(with: [0xFF, 0xD8, 0xFF]))
+}
+
+@Test func aPhotoGoesAsAJPEGThatFits() throws {
+    // TIFF (or HEIC, where this Mac writes it): a JPEG at its size, or smaller.
+    let tiff = try #require(encoded(800, 600, .tiff))
+    let t = try #require(Images.fit(name: "Screen Shot.tiff", data: tiff))
+    #expect(t.name == "Screen Shot.jpg" && t.data.starts(with: [0xFF, 0xD8, 0xFF]))
+    #expect(size(t.data).map { $0 == (800, 600) } == true)
+    if let heic = encoded(5712, 4284, .heic) {
+        let h = try #require(Images.fit(name: "IMG_0042.HEIC", data: heic))
+        let (w, hh) = try #require(size(h.data))
+        #expect(h.name == "IMG_0042.jpg" && h.data.count <= Images.maxBytes && w * hh <= Images.fitPixels && w > 4000, "\(w)×\(hh)")
+    }
+    // A JPEG over the bytes: written again, smaller.
+    let j = try #require(encoded(1200, 800, .jpeg))
+    let again = try #require(Images.fit(name: "p.jpg", data: j, maxBytes: j.count - 1))
+    #expect(again.name == "p.jpg" && size(again.data).map { $0 == (1200, 800) } == true)
+}
+
+@Test func anImageAddedWhileSendingStaysInTheTray() {
+    var a = TrayImage(name: "a.png", data: Data([1]))
+    a.stage = staged(d1)
+    let b = TrayImage(name: "b.png", data: Data([2]))
+    let c = TrayImage(name: "c.png", data: Data([3]))
+    // a and b went; c was pasted while they were on their way.
+    let after = Images.afterSend([a, b, c], sent: [a.id, b.id])
+    #expect(after.map(\.id) == [c.id])
+    #expect(Images.afterSend([a], sent: []).count == 1)
 }

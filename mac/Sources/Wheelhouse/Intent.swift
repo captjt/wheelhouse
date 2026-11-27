@@ -108,13 +108,19 @@ struct IntentSection: View {
     /// cursor was. The hub keeps it with the docket when you save.
     private func addImages(_ images: [(name: String, data: Data)], _ insert: @escaping (String) -> Void) {
         for (name, raw) in images {
-            let (n, data) = Images.normalized(name: name, data: raw)
-            guard data.count <= Images.maxBytes else {
-                store.toast("\(n) is \(data.count >> 20) MB; an image is at most \(Images.maxBytes >> 20) MB", error: true)
-                continue
-            }
             adding += 1
             Task {
+                defer { adding -= 1 }
+                // Fitted off the main actor: a phone photo is scaled and sent as JPEG.
+                let fitted = await Task.detached(priority: .userInitiated) { Images.fit(name: name, data: raw) }.value
+                guard let (n, data) = fitted else {
+                    store.toast("Couldn't add \(name): it isn't an image this can read", error: true)
+                    return
+                }
+                guard data.count <= Images.maxBytes else {
+                    store.toast("\(n) is \(data.count >> 20) MB; an image is at most \(Images.maxBytes >> 20) MB", error: true)
+                    return
+                }
                 do {
                     let s = try await store.stage(name: n, data: data)
                     let alt = (n as NSString).deletingPathExtension.replacingOccurrences(of: "-", with: " ")
@@ -122,7 +128,6 @@ struct IntentSection: View {
                 } catch {
                     store.toast("Couldn't add \(n): \(Store.words(error))", error: true)
                 }
-                adding -= 1
             }
         }
     }

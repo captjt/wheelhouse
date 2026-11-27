@@ -53,6 +53,7 @@ struct TrayImage: Identifiable, Equatable {
     /// Before markup: its bytes, and their digest once staged.
     var base: Data?
     var baseDigest: String?
+    var baseName: String?
     var marks: [MarkupMark] = []
     var pins: [ImagePin] = []
 
@@ -174,14 +175,66 @@ enum Images {
         return panel.urls.compactMap { u in (try? Data(contentsOf: u)).map { (u.lastPathComponent, $0) } }
     }
 
-    /// HEIC and TIFF aren't for agents: they go as PNG. The rest as they are.
-    static func normalized(name: String, data: Data) -> (name: String, data: Data) {
-        guard let src = CGImageSourceCreateWithData(data as CFData, nil), let type = CGImageSourceGetType(src) as String? else { return (name, data) }
-        let keep: Set<String> = [UTType.png.identifier, UTType.jpeg.identifier, UTType.gif.identifier, UTType.webP.identifier]
-        if keep.contains(type) { return (name, data) }
-        guard let cg = CGImageSourceCreateImageAtIndex(src, 0, nil), let png = NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:]) else { return (name, data) }
-        let stem = (name as NSString).deletingPathExtension
-        return ((stem.isEmpty ? "image" : stem) + ".png", png)
+    /// The most pixels on a side, and in all, an image goes at: the web
+    /// app's `fitLimits`. A full-page screenshot (1440×24000) comes out about
+    /// 980×16330, still readable.
+    static let fitSide = 16_384
+    static let fitPixels = 16_000_000
+
+    /// The size an image is fitted to: the same, or scaled so its longer
+    /// side is at most `fitSide` and its area at most `fitPixels`.
+    static func fitted(_ w: Int, _ h: Int) -> (w: Int, h: Int) {
+        guard w > 0, h > 0 else { return (w, h) }
+        let s = min(1, Double(fitSide) / Double(max(w, h)), (Double(fitPixels) / (Double(w) * Double(h))).squareRoot())
+        if s >= 1 { return (w, h) }
+        // ImageIO takes the longer side and rounds the other: step down
+        // until what it makes fits.
+        let (long, short) = (max(w, h), min(w, h))
+        var l = min(fitSide, Int((Double(long) * s).rounded(.down)))
+        var o = max(1, Int((Double(short) * Double(l) / Double(long)).rounded()))
+        while l > 1, l * o > fitPixels {
+            l -= 1
+            o = max(1, Int((Double(short) * Double(l) / Double(long)).rounded()))
+        }
+        return w >= h ? (l, o) : (o, l)
+    }
+
+    /// An image as it's sent: left alone when it's already a PNG, JPEG, GIF
+    /// or WebP within the limits; otherwise decoded, scaled to fit, and
+    /// written again: a screenshot (a PNG) as PNG unless that's over
+    /// `maxBytes`, a photo (anything else: HEIC, JPEG, TIFF) as JPEG at 0.9.
+    /// Nil when it isn't an image. Slow on a big photo: call it off the main
+    /// actor.
+    static func fit(name: String, data: Data, maxBytes: Int = Images.maxBytes) -> (name: String, data: Data)? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil), let type = CGImageSourceGetType(src) as String?,
+              let size = pixelSize(data) else { return nil }
+        let (w, h) = (Int(size.width), Int(size.height))
+        let ok: Set<String> = [UTType.png.identifier, UTType.jpeg.identifier, UTType.gif.identifier, UTType.webP.identifier]
+        let to = fitted(w, h)
+        if ok.contains(type), data.count <= maxBytes, to.w == w, to.h == h { return (name, data) }
+        // Decoded at the fitted size (its orientation applied), never larger.
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(to.w, to.h),
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        let rep = NSBitmapImageRep(cgImage: cg)
+        let stem = { () -> String in
+            let s = (name as NSString).deletingPathExtension
+            return s.isEmpty ? "image" : s
+        }()
+        if type == UTType.png.identifier, let png = rep.representation(using: .png, properties: [:]), png.count <= maxBytes {
+            return (stem + ".png", png)
+        }
+        guard let jpg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return nil }
+        return (stem + ".jpg", jpg)
+    }
+
+    /// The tray after a send: what went is taken out; an image added while
+    /// it was on its way stays, for the next one.
+    static func afterSend(_ tray: [TrayImage], sent: Set<UUID>) -> [TrayImage] {
+        tray.filter { !sent.contains($0.id) }
     }
 }
 
