@@ -786,6 +786,7 @@ mod tests {
         // A repo that says it's a partial clone, with a promisor remote whose
         // upload-pack is a command: asking for a missing blob would run it.
         let tmp = std::env::temp_dir().join(format!("wh-lazy-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(tmp.clone());
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let mark = tmp.join("ran");
@@ -814,6 +815,7 @@ mod tests {
     #[test]
     fn a_new_file_is_counted_without_git() {
         let d = std::env::temp_dir().join(format!("wh-count-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(d.clone());
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("a"), "x\ny\nz").unwrap();
@@ -876,6 +878,7 @@ mod tests {
     #[tokio::test]
     async fn a_worktree_diff_has_commits_edits_and_new_files() {
         let tmp = std::env::temp_dir().join(format!("wh-diffs-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(tmp.clone());
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let g = "git -c user.name=t -c user.email=t@t -c commit.gpgsign=false";

@@ -300,6 +300,7 @@ mod tests {
     #[tokio::test]
     async fn a_check_runs_behind_the_wall() {
         let dir = std::env::temp_dir().join(format!("wh-check-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         std::fs::create_dir_all(&dir).unwrap();
         let s = CheckSpec { name: "env".into(), run: "echo token=${GH_TOKEN:-none} ssh=${SSH_AUTH_SOCK:-none} check=$WH_CHECK; exit 3".into(), required: true, timeout: 30 };
         // SAFETY: this test alone reads these, in its own child.

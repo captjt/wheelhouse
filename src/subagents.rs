@@ -751,6 +751,7 @@ mod tests {
     #[test]
     fn a_codex_rollouts_end_says_whether_its_done() {
         let dir = std::env::temp_dir().join(format!("wh-subagents-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         std::fs::create_dir_all(&dir).unwrap();
         let r = dir.join("rollout.jsonl");
         let line = |t: &str, extra: Value| {
@@ -768,6 +769,7 @@ mod tests {
     #[test]
     fn a_claude_subagent_reads_from_its_transcript_and_meta() {
         let dir = std::env::temp_dir().join(format!("wh-subagents-claude-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         std::fs::create_dir_all(&dir).unwrap();
         let usage = json!({ "input_tokens": 10, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 5, "output_tokens": 20 });
         let lines = [
@@ -793,6 +795,7 @@ mod tests {
     #[test]
     fn an_agy_subagent_is_the_conversation_its_caller_invoked() {
         let root = std::env::temp_dir().join(format!("wh-subagents-agy-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(root.clone());
         let _ = std::fs::remove_dir_all(&root);
         let wt = PathBuf::from("/w/pr-9");
         let call = json!([{ "name": "invoke_subagent", "args": { "Prompt": "\"Reply with pong.\"", "Role": "\"Ping Responder\"", "TypeName": "\"research\"" } }]);
@@ -826,6 +829,7 @@ mod tests {
     #[test]
     fn a_pi_agents_session_is_found_by_its_id_or_its_folder() {
         let root = std::env::temp_dir().join(format!("wh-subagents-pi-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(root.clone());
         let _ = std::fs::remove_dir_all(&root);
         let cwd = PathBuf::from("/Users/you/git/api");
         let dir = agentcli::pi_project(&root, &cwd);

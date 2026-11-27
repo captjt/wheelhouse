@@ -374,6 +374,7 @@ mod tests {
     #[test]
     fn pi_extension_goes_in_only_where_pi_is_and_never_over_anothers() {
         let root = std::env::temp_dir().join(format!("wh-pi-ext-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(root.clone());
         let _ = std::fs::remove_dir_all(&root);
         let dir = root.join("agent");
         // No Pi: nothing written, not even its folder.

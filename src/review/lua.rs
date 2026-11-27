@@ -92,6 +92,7 @@ mod tests {
             return;
         }
         let dir = std::env::temp_dir().join(format!("wh-lua-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.lua");
         std::fs::write(
@@ -122,6 +123,7 @@ mod tests {
             return;
         }
         let dir = std::env::temp_dir().join(format!("wh-lua-post-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("review.lua");
         std::fs::write(

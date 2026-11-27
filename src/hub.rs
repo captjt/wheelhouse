@@ -47,6 +47,33 @@ pub struct Core {
     pub team: Option<crate::team::member::Team>,
     /// Where images are written out for agents to open (`crate::images`).
     pub images_dir: std::path::PathBuf,
+    /// A test core's own images folder, removed when the core is dropped.
+    #[cfg(test)]
+    pub test_dir: Option<TestDir>,
+}
+
+/// A folder (or a file) a test made, removed when it's dropped, so a test
+/// run leaves nothing in the temp folder.
+#[cfg(test)]
+pub struct TestDir(pub std::path::PathBuf);
+
+#[cfg(test)]
+impl std::ops::Deref for TestDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestDir {
+    fn drop(&mut self) {
+        if self.0.is_dir() {
+            let _ = std::fs::remove_dir_all(&self.0);
+        } else {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -95,6 +122,8 @@ impl Core {
             verified: Default::default(),
             team: None,
             images_dir: crate::paths::state_dir().join("images"),
+            #[cfg(test)]
+            test_dir: None,
         };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;
@@ -307,6 +336,8 @@ pub fn test_core() -> Core {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     core.images_dir = std::env::temp_dir().join(format!("wh-test-images-{}-{n}", std::process::id()));
+    // Gone with the core: a test run leaves no folders behind.
+    core.test_dir = Some(TestDir(core.images_dir.clone()));
     core
 }
 
@@ -381,5 +412,18 @@ mod tests {
         let named: Vec<String> = core.store.keys().unwrap().into_iter().map(|(_, n)| n).collect();
         assert!(named.contains(&"agent-claude-code@local".to_string()), "{named:?}");
         assert!(core.verify(&id).unwrap().ok);
+    }
+}
+
+#[cfg(test)]
+mod test_dir_tests {
+    #[test]
+    fn a_test_cores_images_folder_goes_with_it() {
+        let core = super::test_core();
+        let dir = core.images_dir.clone();
+        std::fs::create_dir_all(dir.join("D-1")).unwrap();
+        std::fs::write(dir.join("D-1").join("x.png"), b"x").unwrap();
+        drop(core);
+        assert!(!dir.exists(), "{} is still there", dir.display());
     }
 }

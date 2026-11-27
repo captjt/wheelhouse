@@ -2632,6 +2632,7 @@ mod tests {
     #[tokio::test]
     async fn a_calls_proposals_are_applied_or_ignored_through_the_composer() {
         let dir = std::env::temp_dir().join(format!("wh-calls-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let mut core = crate::hub::test_core();

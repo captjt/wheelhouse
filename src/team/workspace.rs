@@ -577,7 +577,9 @@ mod tests {
         let sam = Key::generate("owner");
         let mut l = create(&jordan);
         invite_and_join(&mut l, ("jordan", &jordan), "sam", "member", &sam).unwrap();
-        let mut ws = Ws::open(Store::in_memory().unwrap(), std::env::temp_dir().join("wh-test-unused-setup")).unwrap();
+        let setup = std::env::temp_dir().join(format!("wh-test-unused-setup-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(setup.clone());
+        let mut ws = Ws::open(Store::in_memory().unwrap(), setup).unwrap();
         ws.roster = Some(l.roster.clone());
         ws.reserved.insert("ACME-1".into(), "jordan".into());
         let sign = |kind: &str, who: &str, data: serde_json::Value, k: &Key| {

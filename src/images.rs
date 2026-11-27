@@ -957,6 +957,7 @@ mod tests {
         let checked =
             check(&core, &[Ref { digest: s.digest.clone(), name: s.name, caption: "Like this".into(), original: None, pins: vec![Pin { n: 1, note: "Bigger".into() }] }]).unwrap();
         let tmp = std::env::temp_dir().join(format!("wh-images-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(tmp.clone());
         let b = block_in(&core, &tmp, &d, &checked);
         let path = materialize_in(&core, &tmp, &d, &s.digest, "mock.png").unwrap();
         assert!(b.contains(&path.display().to_string()), "{b}");
@@ -1031,6 +1032,7 @@ mod tests {
         assert_eq!(all.len(), 3, "{all:?}");
         assert!(all.iter().any(|a| a["pins"][0]["note"] == "Bigger"));
         let tmp = std::env::temp_dir().join(format!("wh-again-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(tmp.clone());
         assert!(brief_section(&core, &tmp, &d, &[]).unwrap().contains("1. Bigger"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1051,6 +1053,7 @@ mod tests {
         assert_eq!(pinned, vec![s.digest.clone()]);
         keep_intent(&mut core, &d, &Who::Owner, found).unwrap();
         let tmp = std::env::temp_dir().join(format!("wh-intent-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(tmp.clone());
         let out = intent_for_agent(&core, &tmp, &d, &md, &pinned);
         // The link stays (an agent may save the intent back), with the file beside it.
         assert!(out.contains(&format!("![The settings page](/api/blobs/{}?name=settings%20mock.png) (file: {}", s.digest, tmp.display())), "{out}");
@@ -1087,6 +1090,7 @@ mod tests {
         core.append_with(&d, "artifact", &Who::Owner, Some("spec".into()), data, vec![]).unwrap();
         assert!(list(&core, &d).unwrap().is_empty(), "not listed: its entry doesn't pin it");
         let tmp = std::env::temp_dir().join(format!("wh-pinned-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(tmp.clone());
         assert!(brief_section(&core, &tmp, &d, &[]).unwrap().is_empty());
         // And never written out as anything but an image, named by its bytes.
         assert!(materialize_in(&core, &tmp, &d, &format!("sha256:{hex}"), "spec.json").is_err());

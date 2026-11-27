@@ -798,6 +798,7 @@ mod tests {
         let mut p = crate::review::pr::Pr { repo: "acme/api".into(), pr: 42, state: "queued".into(), title: Some(pr42().title), ..Default::default() };
         let d = crate::review::save(&mut shared.lock(), &mut p).unwrap();
         let ctx = std::env::temp_dir().join(format!("wh-links-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(ctx.clone());
         std::fs::create_dir_all(&ctx).unwrap();
         integrate(&shared, key, &pr42(), Some(&ctx)).await.unwrap();
         let st = |s: &Shared| s.lock().store.state(&d).unwrap().unwrap();

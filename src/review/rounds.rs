@@ -1545,6 +1545,7 @@ mod tests {
     #[tokio::test]
     async fn a_rule_decides_once_per_checked_review_and_says_why() {
         let wt = std::env::temp_dir().join(format!("wh-decide-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(wt.clone());
         let out = wt.join(".tmp/rounds/1");
         std::fs::create_dir_all(&out).unwrap();
         std::fs::create_dir_all(wt.join(".tmp/context/round-1")).unwrap();
@@ -1615,6 +1616,7 @@ mod tests {
     #[tokio::test]
     async fn a_round_follows_a_head_the_scan_hasnt_seen_yet() {
         let wt = std::env::temp_dir().join(format!("wh-moved-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(wt.clone());
         std::fs::create_dir_all(wt.join(".tmp/rounds/2")).unwrap();
         let risk = r#""merge_risk":{"alignment":{"verdict":"good","gaps":[]},"impact":{"verdict":"small","gaps":[]},"verification":{"verdict":"good","gaps":[]},"rollback_cost":{"verdict":"low","gaps":[]},"error_detection":{"verdict":"good","gaps":[]}}"#;
         std::fs::write(wt.join(".tmp/rounds/2/review.verified.json"), format!(r#"{{"event":"APPROVE","verdict":"Looks right.","findings":[],{risk}}}"#)).unwrap();
@@ -1712,6 +1714,7 @@ esac
     #[test]
     fn a_rounds_work_is_kept_on_its_docket() {
         let dir = std::env::temp_dir().join(format!("wh-keep-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         let (main, other) = (dir.join("main"), dir.join("other"));
         let out = main.join(".tmp/rounds/2");
         std::fs::create_dir_all(out.join("reviewers/codex")).unwrap();

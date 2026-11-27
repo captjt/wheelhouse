@@ -1231,6 +1231,7 @@ mod tests {
     #[test]
     fn a_pi_session_kept_in_a_folder_you_chose_is_found_there() {
         let dir = std::env::temp_dir().join(format!("wh-pi-flat-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
         let (root, flat) = (dir.join("sessions"), dir.join("mine"));
         std::fs::create_dir_all(&root).unwrap();
@@ -1246,6 +1247,7 @@ mod tests {
     #[test]
     fn a_pi_sessions_model_effort_and_tokens_come_from_its_file() {
         let dir = std::env::temp_dir().join(format!("wh-pi-read-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("2026-11-25T14-01-08-166Z_s1.jsonl");
         let u = |i: i64| json!({ "input": i, "output": 2, "cacheRead": 100, "cacheWrite": 10 });
@@ -1324,6 +1326,7 @@ mod tests {
     fn agy_conversations_are_found_by_folder_and_read_from_their_transcripts() {
         assert_eq!(file_uri(Path::new("/w/My Code")), b"file:///w/My%20Code".to_vec());
         let root = std::env::temp_dir().join(format!("wh-agy-read-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(root.clone());
         let _ = std::fs::remove_dir_all(&root);
         let (wt, other) = (PathBuf::from("/w/pr-7"), PathBuf::from("/w/pr-70"));
         let planner = |content: &str, calls: Value, tokens: Value| {

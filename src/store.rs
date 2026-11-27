@@ -754,6 +754,7 @@ mod tests {
     #[test]
     fn the_first_usage_table_is_made_again_and_its_snapshot_forgotten() {
         let dir = std::env::temp_dir().join(format!("wh-store-usage-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("wheelhouse.db");
@@ -790,6 +791,7 @@ mod tests {
     #[test]
     fn minutes_kept_before_the_1_hour_writes_are_read_again() {
         let dir = std::env::temp_dir().join(format!("wh-store-write-1h-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("wheelhouse.db");

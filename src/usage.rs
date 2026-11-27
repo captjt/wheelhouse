@@ -475,11 +475,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn scratch(name: &str) -> PathBuf {
+    /// A folder for one test, gone when the test lets go of it.
+    fn scratch(name: &str) -> crate::hub::TestDir {
         let d = std::env::temp_dir().join(format!("wh-usage-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        d
+        crate::hub::TestDir(d)
     }
 
     fn write(dir: &Path, name: &str, lines: &[Value]) -> PathBuf {

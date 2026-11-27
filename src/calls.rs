@@ -622,8 +622,15 @@ async fn run_listener(prompt: &str) -> Result<Value> {
     #[cfg(not(test))]
     let (dir, path) =
         (crate::paths::state_dir().join("listener"), tokio::task::spawn_blocking(|| crate::review::agentcli::agent_path(&[])).await.context("reading your shell's PATH")?);
+    // In tests, a folder per call (tests run at once), gone when it returns.
     #[cfg(test)]
-    let (dir, path) = (std::env::temp_dir().join(format!("wh-listener-{}", std::process::id())), std::env::var("PATH").unwrap_or_default());
+    let (dir, path) = {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        (std::env::temp_dir().join(format!("wh-listener-{}-{n}", std::process::id())), std::env::var("PATH").unwrap_or_default())
+    };
+    #[cfg(test)]
+    let _gone = crate::hub::TestDir(dir.clone());
     std::fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
     let schema = schema().to_string();
     let mut cmd = tokio::process::Command::new(&program);

@@ -1501,6 +1501,7 @@ mod tests {
         assert_eq!(st.prompts, 1);
 
         let dir = std::env::temp_dir().join(format!("wh-agy-hook-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         std::fs::create_dir_all(&dir).unwrap();
         let transcript = dir.join("transcript.jsonl");
         std::fs::write(&transcript, json!({ "type": "PLANNER_RESPONSE", "response": "Implemented **agy** support." }).to_string()).unwrap();

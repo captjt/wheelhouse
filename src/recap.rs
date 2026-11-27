@@ -1404,6 +1404,7 @@ mod tests {
     #[test]
     fn reading_in_parts_counts_what_reading_at_once_does() {
         let dir = std::env::temp_dir().join(format!("wh-recap-parts-{}", std::process::id()));
+        let _gone = crate::hub::TestDir(dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let line = |id: &str, at: &str, n: i64| {
