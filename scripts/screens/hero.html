@@ -1,0 +1,70 @@
+<!doctype html>
+<!-- The made-up world's landing hero, for the images shots (scripts/screenshots.sh):
+     ?hero is the mockup, ?marked the same marked up, ?built the agent's version. -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      body { width: 1280px; height: 800px; font: 16px/1.5 -apple-system, "Inter", system-ui, sans-serif; color: #18181b; background: #fafaf9; position: relative; overflow: hidden; }
+      nav { display: flex; align-items: center; gap: 28px; padding: 22px 64px; font-size: 15px; color: #52525b; }
+      nav b { color: #18181b; font-size: 18px; margin-right: auto; letter-spacing: -0.01em; }
+      nav .cta { padding: 8px 16px; border-radius: 8px; background: #18181b; color: #fff; }
+      header { text-align: center; padding: 56px 0 36px; }
+      h1 { font-size: 52px; line-height: 1.1; letter-spacing: -0.03em; }
+      header p { margin-top: 14px; font-size: 19px; color: #52525b; }
+      .toggle { display: inline-flex; margin-top: 26px; padding: 4px; border-radius: 999px; background: #e7e5e4; font-size: 14px; }
+      .toggle span { padding: 6px 16px; border-radius: 999px; }
+      .toggle .on { background: #fff; box-shadow: 0 1px 2px #0002; }
+      .plans { display: flex; justify-content: center; gap: 22px; padding: 0 64px; }
+      .plan { width: 320px; padding: 28px; border-radius: 16px; background: #fff; border: 1px solid #e7e5e4; }
+      .plan.pick { border: 2px solid #2563eb; box-shadow: 0 12px 32px #2563eb22; }
+      .plan h3 { font-size: 17px; }
+      .price { margin: 10px 0 4px; font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
+      .price small { font-size: 15px; font-weight: 400; color: #71717a; }
+      .plan ul { margin: 16px 0 22px; padding-left: 18px; color: #52525b; font-size: 14.5px; line-height: 1.9; }
+      .btn { display: block; text-align: center; padding: 11px; border-radius: 10px; border: 1px solid #d6d3d1; font-weight: 600; font-size: 15px; }
+      .btn.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+      /* What the agent built: close, but not yet right. */
+      .built header { padding-top: 40px; }
+      .built .toggle { display: none; }
+      .built .plan .btn { background: #2563eb; border-color: #2563eb; color: #fff; }
+      .built .plans { gap: 12px; }
+      .built .plan { padding: 20px; }
+      /* The marks, as Wheelhouse's markup draws them. */
+      .mark { position: absolute; border: 4px solid #e5484d; border-radius: 3px; }
+      .pin { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 50%; background: #e5484d; border: 3px solid #fff; color: #fff; font: 700 17px/30px system-ui; text-align: center; box-shadow: 0 1px 3px #0004; }
+    </style>
+  </head>
+  <body>
+    <nav><b>Acme</b><span>Product</span><span>Pricing</span><span>Docs</span><span class="cta">Sign in</span></nav>
+    <header>
+      <h1>Pricing that grows with your team</h1>
+      <p>Start free. Every plan includes the API, webhooks and SSO.</p>
+      <div class="toggle"><span class="on">Yearly · 2 months free</span><span>Monthly</span></div>
+    </header>
+    <div class="plans">
+      <div class="plan"><h3>Starter</h3><div class="price">$0<small> / month</small></div><ul><li>3 projects</li><li>Community support</li><li>1,000 webhook deliveries</li></ul><span class="btn">Start free</span></div>
+      <div class="plan pick"><h3>Team</h3><div class="price">$24<small> / seat / month</small></div><ul><li>Unlimited projects</li><li>Retries and a dead-letter queue</li><li>100,000 webhook deliveries</li></ul><span class="btn primary">Start a trial</span></div>
+      <div class="plan"><h3>Enterprise</h3><div class="price">Custom</div><ul><li>SAML and audit logs</li><li>99.99% uptime SLA</li><li>A named engineer</li></ul><span class="btn">Talk to us</span></div>
+    </div>
+    <script>
+      const v = location.search.slice(1);
+      if (v === "built") document.body.classList.add("built");
+      if (v === "marked") {
+        const add = (cls, style, text) => {
+          const el = document.createElement("div");
+          el.className = cls;
+          Object.assign(el.style, style);
+          if (text) el.textContent = text;
+          document.body.append(el);
+        };
+        const r = document.querySelector(".toggle").getBoundingClientRect();
+        add("mark", { left: r.left - 10 + "px", top: r.top - 8 + "px", width: r.width + 20 + "px", height: r.height + 16 + "px" });
+        add("pin", { left: r.right + 26 + "px", top: r.top + r.height / 2 + "px" }, "1");
+        const b = document.querySelector(".plan.pick .btn").getBoundingClientRect();
+        add("pin", { left: b.right + 4 + "px", top: b.top + "px" }, "2");
+      }
+    </script>
+  </body>
+</html>

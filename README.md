@@ -28,6 +28,11 @@ On top of the record, Wheelhouse runs the work you'd otherwise babysit:
   open, review comments, failing checks and a base that moved become
   rounds of fixes, with one reply per thread you approve before it posts.
   Linear issues with a label (or in your cycle) can start one.
+- **Images.** Paste a mockup, an inspiration or a screenshot into a
+  docket's composer, mark it up with boxes, arrows and numbered pins, and
+  its agents get the image itself, as a file they open, with what each pin
+  says. Put mockups in the intent, and compare an agent's screenshot with
+  what you asked for, side by side.
 - **Recap.** What happened today, this week, or in 30 days, as a standup
   note, and the tokens all of it took, by provider and model, with what
   they cost at each model's API price.
@@ -296,6 +301,7 @@ approved: agents' panes have no GitHub token, and their pushes fail.
 | `wh intent D-4 [TEXT\|-]` | Print a docket's intent, or set it |
 | `wh link D-4 ENG-142` | Link a Linear issue |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or a link with a docket |
+| `wh images [D-4]`, `wh attach SHOT.png --against N` | A docket's images as files an agent opens; keep a screenshot to compare with image #N ([docs/images.md](docs/images.md)) |
 | `wh call FILE --docket D-4` | A call's transcript, kept on its docket: the Listener proposes what it settled (the intent revised, decisions, work and questions for its agents), to apply or ignore |
 | `wh start [--codex\|--agy\|--pi] [-C DIR] [--docket D-4] "prompt"` | Start an agent on a new docket, or on one you have (beside any agents already on it), in Rex (or Herdr, with `runtime` set) |
 | `wh join D-4 [--role R]`, `wh leave` | From an agent's pane: put it on a docket beside the agents there, or take it off its docket |

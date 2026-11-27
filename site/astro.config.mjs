@@ -74,6 +74,7 @@ export default defineConfig({
             { label: "Verify", slug: "features/verify" },
             { label: "Recap", slug: "features/recap" },
             { label: "Calls", slug: "features/calls" },
+            { label: "Images", slug: "features/images" },
           ],
         },
         {

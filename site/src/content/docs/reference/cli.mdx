@@ -44,6 +44,8 @@ A docket is written `D-12`, or `ACME-12` when it's shared with a team.
 | `wh call FILE --docket D-4 [--title T]`, `wh call - --docket D-4` | A call's transcript, from a file or stdin, kept on the docket it was about: the Listener proposes what it settled (the intent revised, decisions, work and questions for its agents). Without `--docket`, a docket of its own. See [Calls](/features/calls/) |
 | `wh call --again D-4` | Read the docket's latest call again |
 | `wh attach FILE\|URL [--title T] [--docket D-4]` | Keep a file (pinned by its hash) or an `https://` link with a docket. From an agent's pane, its own docket. The title defaults to the file's name |
+| `wh attach SHOT.png --against N` | Keep a screenshot to compare with image #N on the docket: side by side, as a swipe, or as an onion skin. See [Images](/features/images/) |
+| `wh images [D-4] [--json]` | A docket's images (what you shared, the intent's, and screenshots kept against them), each written out as a file, with who shared it, its caption and its pins |
 | `wh check D-4 [--wait]` | Run its witnessed checks now, in its worktree. `--wait` waits for the results and exits non-zero on a required failure |
 | `wh hold D-4 ["why"]` | Hold it: its protocol takes no steps until you resume it. The reason goes on the record |
 | `wh hold D-4 --off` | Resume it |
@@ -79,12 +81,13 @@ from a shell, where the messages are yours.
 
 | Command | What it does |
 | --- | --- |
-| `wh brief [D-4]` | What an agent reads to work on its docket: the intent, the Linear issue, what was said lately, other agents on it |
+| `wh brief [D-4]` | What an agent reads to work on its docket: the intent (each image's file beside its link), its images, the Linear issue, what was said lately, other agents on it |
+| `wh images [--json]` | The docket's images, each written out as a file to open |
 | `wh whoami` | This pane's address and docket |
 | `wh name NAME` | Name this pane, so others can message it as `NAME` |
 | `wh intent D-4 [TEXT\|-]` | Read or update the docket's intent |
 | `wh note D-4 "text"` | A note on the record, as the agent |
-| `wh attach FILE\|URL [--title T]` | Keep a file or a link with its docket |
+| `wh attach FILE\|URL [--title T] [--against N]` | Keep a file or a link with its docket; `--against N` keeps a screenshot to compare with image #N |
 | `wh send --to ADDR [--subject S] [--option O]… "text"` | Message another agent, every agent on a docket, or you. Text `-` reads stdin. Each `--option` is an answer, shown as a button |
 | `wh reply N ["text"] [--choice OPTION]` | Answer message N with words, an option, or both |
 | `wh inbox [--json]` | Messages to this pane not read yet (from a shell: to you) |

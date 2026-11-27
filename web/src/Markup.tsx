@@ -163,7 +163,12 @@ export function Markup({ src, marks: initial, onDone, onClose }: { src: string; 
       setTimeout(() => textInput.current?.focus(), 0);
       return;
     }
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // Not every pointer can be captured (one a script made): drawing works without.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* the moves still come while the pointer's over the canvas */
+    }
     if (tool === "box") setDraft({ kind: "box", x, y, w: 0, h: 0, color });
     if (tool === "arrow") setDraft({ kind: "arrow", x1: x, y1: y, x2: x, y2: y, color });
     if (tool === "pen") setDraft({ kind: "pen", points: [[x, y]], color });

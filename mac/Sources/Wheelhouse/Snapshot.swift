@@ -99,7 +99,8 @@ enum Snapshot {
         },
         Shot(name: "verify-fixture", place: .inbox, target: .fixture),
         // Images shared with the agents: in the Activity, marked up, and compared.
-        Shot(name: "images", place: .active, select: "D-6") { _ in scroll("activity") },
+        // On the landing docket (Herdr's), which the made-up world sends a mockup to.
+        Shot(name: "images", place: .active, select: snapHerdr) { _ in scroll("activity") },
         Shot(name: "markup", place: .inbox, target: .markup),
         Shot(name: "compare", place: .inbox, target: .compare),
         // Settings: each tab of what Wheelhouse does on its own.
