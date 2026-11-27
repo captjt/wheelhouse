@@ -25,6 +25,10 @@
 set -euo pipefail
 serve=""
 [ "${1:-}" = --serve ] && serve=1
+# SHOTS=images makes only the shots of images shared with agents (and,
+# with MAC_SHOTS=images, the Mac app's): the rest stay as
+# they are.
+only="${SHOTS:-}"
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
@@ -43,6 +47,7 @@ trap cleanup EXIT
 (cd "$root/web" && npm run build --silent >/dev/null)
 cargo build --release --quiet --manifest-path "$root/Cargo.toml"
 wh="$root/target/release/wh"
+chrome="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 mkdir -p "$images" "$demo/home/code/acme-api" "$demo/home/code/storefront" "$demo/home/code/acme-web" "$demo/state"
 # Herdr has nothing open until the Rex agents have their dockets, so their
 # numbers stay the same (the Mac app's shots pick dockets by number).
@@ -144,7 +149,7 @@ export HOME="$demo/home" WH_STATE="$demo/state" WH_SOCKET="$demo/wh.sock" WH_HTT
   WH_REX="$here/fake-rex" WH_WORLD="$demo/world.json" \
   WH_HC="$here/fake-hc" WH_HC_WORLD="$demo/hc.json" WH_HERDR_APP=/usr/bin/true \
   WH_GH="$demo/gh" WH_REVIEW_CONFIG="$demo/review.lua" WH_BUILD_CONFIG="$demo/build.lua" \
-  REX_REVIEWER_STATE_DIR="$demo/reviewer" USER=you
+  REX_REVIEWER_STATE_DIR="$demo/reviewer" WH_LISTENER="$here/fake-listener" USER=you
 # Claude Code's hooks, in the made-up HOME, so the app shows them on. Never
 # your own config, even when this runs inside Claude Code.
 unset CLAUDE_CONFIG_DIR CODEX_HOME HC_TERMINAL_ID HC_SCOPE HC_TERMINAL_SOCKET
@@ -281,6 +286,17 @@ api -X POST "$base/api/dockets/$W/comments" -d "$(jq -n --arg from "$base_sha" -
   '{path: "deliver.ts", side: "additions", line: 5, from: $from, to: null, head: $head, excerpt: "  const tries = 5;", tell: false,
     body: "Cap it at **3**, as decided: five keeps a down endpoint busy for too long."}')" >/dev/null
 
+# A call on the webhooks docket: its transcript in, and the Listener's
+# proposals (a stand-in, so the shots stay the same); one applied, so both
+# states show, and the intent change left open to show its diff.
+K=$(api -X POST "$base/api/calls" -d "$(jq -n --arg w "$W" '{docket: $w, title: "Webhooks sync", transcript: "Dana: Where are we on the webhook retries?\nSam: Retries are 5xx and timeouts only, and three tries at most. That is settled.\nDana: Good. Anything that runs out of tries goes to the dead-letter queue. Put that in the spec.\nSam: Can the checkout agent tell us whether the cart test covers a bundle on sale?\nDana: I will ask. Somebody should write the runbook for the outage page before Friday.\nSam: Agreed, make it its own piece of work."}')" | jq -r .call)
+for _ in $(seq 60); do
+  [ "$(api "$base/api/dockets/$W" | jq -r '.calls[0].listening.state')" = done ] && break
+  sleep 0.5
+done
+first=$(api "$base/api/dockets/$W" | jq -r --argjson k "$K" '.calls[] | select(.call == $k) | .proposals[0].n')
+api -X POST "$base/api/dockets/$W/proposals/$first" -d '{"action": "apply"}' >/dev/null
+
 # Recap's tokens and cost: a week of made-up usage, kept the way the hub's
 # snapshots keep it (no transcripts in this world to read), one model unpriced.
 python3 - "$demo/state/wheelhouse.db" "$(api "$base/api/state" | jq -r '[.dockets[].id] | join(",")')" <<'PY'
@@ -331,6 +347,25 @@ L=$(api "$base/api/state" | jq -r '.agents[] | select(.block == "herdr:t1") | .d
 api -X POST "$base/api/messages" -d "$(jq -n '{to: "acme-api/webhooks", block: "herdr:t1", body: "Does the pricing API retry on a 5xx now? The hero reads it on every deploy."}')" >/dev/null
 sleep 2
 
+# Images for the landing agent (Herdr's): the hero as it should look, marked
+# up with a box and numbered pins, sent with an instruction; then its
+# screenshot of what it built, attached against that. Rendered from
+# scripts/screens/hero.html, as a page of the made-up world.
+for v in hero marked built; do
+  # A profile of its own and a mock keychain, as for the social preview below.
+  "$chrome" --headless=new --disable-gpu --hide-scrollbars --use-mock-keychain --password-store=basic --no-first-run \
+    --window-size=1280,800 --user-data-dir="$demo/chrome" --screenshot="$demo/$v.png" "file://$here/screens/hero.html?$v" >/dev/null 2>&1
+done
+stage() { curl -fsS -H 'x-wheelhouse: 1' --data-binary @"$demo/$1.png" "$base/api/images?name=$2" | jq -r .digest; }
+hero=$(stage hero hero.png)
+marked=$(stage marked hero.png)
+api -X POST "$base/api/dockets/$L/compose" -d "$(jq -n --arg m "$marked" --arg o "$hero" '{text: "@landing build the hero like this: the copy and the plans are final.", images: [{digest: $m, name: "hero.png", original: $o,
+  caption: "The new pricing hero: three plans, Team picked",
+  pins: [{n: 1, note: "Yearly and monthly as a toggle, yearly first"}, {n: 2, note: "One filled button, on Team only; the others outlined"}]}]}')" >/dev/null
+ref=$(api "$base/api/dockets/$L/images" | jq -r '[.images[] | select(.image == "reference")][0].seq')
+api -X POST "$base/api/dockets/$L/artifacts" -d "$(jq -n --rawfile b <(base64 <"$demo/built.png") --argjson ref "$ref" \
+  '{name: "hero-built.png", title: "The hero as built", content: ($b | gsub("\\s"; "")), against: $ref, block: "herdr:t1"}')" >/dev/null
+
 if [ -n "$serve" ]; then
   echo "The made-up world's hub: $base (Ctrl-C stops it)"
   wait "$hub"
@@ -345,13 +380,61 @@ intent_js='document.querySelector(".docket-main")?.scrollTo(0, 0)'
 record_js='document.querySelector(".verify-chip")?.click(); new Promise(r => setTimeout(r, 900))'
 runtimes_js='document.getElementById("set-runtimes")?.scrollIntoView(); new Promise(r => setTimeout(r, 300))'
 artifact_js='[...document.querySelectorAll(".art-card")].find(c => c.textContent.includes("Retry design"))?.click(); new Promise(r => setTimeout(r, 900))'
+# Images: a screenshot pasted into the composer and marked up (a box, an
+# arrow, two pins and their notes); the docket with what was sent and the
+# screenshot kept against it; and the two side by side.
+markup_js="(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const file = new File([await (await fetch('/api/blobs/$hero?name=hero.png')).blob()], 'hero.png', { type: 'image/png' });
+  const ta = document.querySelector('.composer textarea');
+  ta.scrollIntoView({ block: 'center' });
+  ta.focus();
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  ta.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  await sleep(1500);
+  document.querySelector('.img-thumb').click();
+  await sleep(1200);
+  const c = document.querySelector('.markup-canvas');
+  const r = c.getBoundingClientRect();
+  const at = (x, y) => ({ clientX: r.left + r.width * x, clientY: r.top + r.height * y });
+  const ev = (type, p) => c.dispatchEvent(new PointerEvent(type, { ...p, bubbles: true, pointerId: 1, isPrimary: true, button: 0 }));
+  // A frame between each step, so the editor draws what it's dragged so far.
+  const drag = async (a, b) => {
+    ev('pointerdown', a);
+    await sleep(40);
+    for (let i = 1; i <= 6; i++) { ev('pointermove', { clientX: a.clientX + (b.clientX - a.clientX) * i / 6, clientY: a.clientY + (b.clientY - a.clientY) * i / 6 }); await sleep(40); }
+    ev('pointerup', b);
+    await sleep(80);
+  };
+  const tool = async (k) => { window.dispatchEvent(new KeyboardEvent('keydown', { key: k })); await sleep(60); };
+  const click = async (p) => { ev('pointerdown', p); ev('pointerup', p); await sleep(60); };
+  await tool('b'); await drag(at(0.385, 0.305), at(0.615, 0.375));
+  await tool('n'); await click(at(0.64, 0.34)); await click(at(0.625, 0.735));
+  await tool('a'); await drag(at(0.84, 0.9), at(0.655, 0.765));
+  const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+  const notes = ['Yearly and monthly as a toggle, yearly first', 'One filled button, on Team only; the others outlined'];
+  document.querySelectorAll('.markup-pin textarea').forEach((t, i) => { set.call(t, notes[i]); t.dispatchEvent(new Event('input', { bubbles: true })); });
+})()"
+images_js='document.querySelector(".activity")?.lastElementChild?.scrollIntoView({ block: "end" }); new Promise(r => setTimeout(r, 400))'
+compare_js='[...document.querySelectorAll(".art-card")].find(c => c.textContent.includes("The hero as built"))?.click(); new Promise(r => setTimeout(r, 1500))'
 for look in light dark; do
+  shot "$base/#/d/$L" "$images/images-markup-$look.png" "$look" desktop "$markup_js"
+  shot "$base/#/d/$L" "$images/images-$look.png" "$look" desktop "$images_js"
+  shot "$base/#/d/$L" "$images/images-compare-$look.png" "$look" desktop "$compare_js"
+  shot "$base/#/d/$L" "$images/phone-images-$look.png" "$look" phone \
+    "[...document.querySelectorAll('.docket-seg button')].find(b => b.textContent === 'Docket')?.click(); new Promise(r => setTimeout(r, 600)).then(() => { [...document.querySelectorAll('.act-image')].pop()?.scrollIntoView({ block: 'center' }); return new Promise(r => setTimeout(r, 400)); })"
+done
+
+for look in light dark; do
+  [ "$only" = images ] && break
   shot "$base/#/d/$W" "$images/docket-$look.png" "$look" desktop "$intent_js"
   shot "$base/#/inbox" "$images/inbox-$look.png" "$look" desktop
   shot "$base/#/reviews" "$images/reviews-$look.png" "$look" desktop
   shot "$base/#/d/$W" "$images/record-$look.png" "$look" desktop "$record_js"
   shot "$base/#/recap" "$images/recap-$look.png" "$look" desktop
   shot "$base/#/d/$W/changes" "$images/changes-$look.png" "$look" desktop
+  shot "$base/#/d/$W" "$images/call-$look.png" "$look" desktop 'document.querySelector(".calls")?.scrollIntoView({block: "start"})'
   shot "$base/#/settings" "$images/settings-$look.png" "$look" desktop
   shot "$base/#/settings" "$images/runtimes-$look.png" "$look" desktop "$runtimes_js"
   shot "$base/#/agents" "$images/agents-$look.png" "$look" desktop
@@ -369,13 +452,13 @@ done
 if swift --version 2>/dev/null | grep -qE "Swift version (6\.[2-9]|[7-9])"; then
   (cd "$root/mac" && swift build -c release --product Wheelhouse >/dev/null)
   WH_APP_HUB="$base" WH_SNAP_HERDR="$L" "$root/mac/.build/release/Wheelhouse" --snapshot "$images" \
-    --only "${MAC_SHOTS:-docket,inbox,chat,reviews,board,record,quick,shortcuts,window,menubar,verify,settings-orders,settings-agents,settings-guides,agents,docket-herdr}" | sed "s|$root/||"
+    --only "${MAC_SHOTS:-docket,inbox,chat,reviews,board,record,quick,shortcuts,window,menubar,verify,settings-orders,settings-agents,settings-guides,agents,docket-herdr,images}" | sed "s|$root/||"
 else
   echo "skipped Wheelhouse.app's shots: they need Xcode 26 (Swift 6.2)"
 fi
 
 # The social preview card shows docket-dark.png, so render it after.
-chrome="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
+[ "$only" = images ] && exit 0
 # A profile of its own: never your Chrome's, which may be open.
 # A mock keychain too: no Keychain prompt for "Chrome Safe Storage".
 "$chrome" --headless=new --disable-gpu --hide-scrollbars --use-mock-keychain --password-store=basic --no-first-run \

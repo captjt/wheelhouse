@@ -41,6 +41,19 @@ HTML page, an SVG) open in a sandboxed frame with no access to the app's
 origin. When opened directly, they're served with a sandbox CSP and
 `nosniff`.
 
+**An image you share is checked by its bytes.** The hub takes a PNG, JPEG,
+GIF or WebP only when its header says so (never SVG, whatever its name),
+refuses one claiming more than 100 megapixels before anything decodes it,
+and keeps at most 15 MB. It writes images out for agents only under its own
+state folder, by hash, with a cleaned name, readable by you alone. A
+caption or pin note is one line with no control characters. Staging an
+image is a write like any other: it needs the app's header, so another site
+can't post one. A hub writes out only an image an entry pins, so a
+teammate's entry can't have it write out other files it keeps, and the brief
+credits an image to whoever signed its entry, never to you by a teammate's
+say-so. The phone's share target takes images only, never words, since
+another site can post a form to it too ([images.md](images.md)).
+
 **Text typed into a pane is only text.** Messages, queued prompts and
 message headers lose every control character (escape sequences included)
 except newlines and tabs before they're pasted, so one agent can't type

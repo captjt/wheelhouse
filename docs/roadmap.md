@@ -58,6 +58,13 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       reports, checked review and merge risk; each Build's plan and
       checks). Agents keep anything else with `wh attach FILE|URL`. The
       record pins each file by its hash.
+- [x] Images for agents ([images.md](images.md)): paste, drop or pick
+      images in the composer, caption them, and mark them up (box, arrow,
+      pen, text, numbered pins). They go to agents as files they open, with
+      `@agent`, `/ask`, `/decide` and `/task`; in the intent as mockups; in
+      `wh brief` and `wh images`. `wh attach shot.png --against N` and a
+      compare view (side by side, swipe, onion skin). From the phone's share
+      sheet (Android, and an iOS Shortcut).
 - [x] Decisions in force under the intent, and in `wh brief`: what each
       agent asked, the answer that stands, and who gave it
 - [x] The readable record: open it in the app, see who signed each entry,
@@ -248,6 +255,21 @@ them. [DESIGN.md](../DESIGN.md) has the full design and its milestones.
       Build's agents in Claude Code's sandbox (or a separate macOS user),
       and owner-only API calls that need a secret agents can't read. Today
       the wall stops mistakes, not a hostile agent (docs/security.md).
+
+### Calls
+
+- [x] Phase 1: a call's transcript in, proposals out. Calls happen in a
+      docket's life: `wh call FILE --docket D-4` or Add a call keeps the
+      transcript on that docket (or a docket of its own, for a call about
+      none); the Listener (Claude Code headless, with no tools, MCP servers,
+      settings or hooks) reads it against the docket in full and the other
+      open dockets, and proposes the intent revised (applied as a new
+      version, refused if the intent moved since), decisions, instructions
+      and questions for its agents, and separate tasks, each quoting the
+      call (checked against the transcript); Apply, Edit or Ignore each,
+      through the composer's own paths (`src/calls.rs`)
+- [ ] Phase 2: the call's audio captured on the Mac, and transcribed there
+- [ ] Phase 3: listening live, steering agents while the call goes on
 
 ### Changes
 

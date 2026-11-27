@@ -43,6 +43,9 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/subagents", get(docket_subagents))
         .route("/api/dockets/{id}/note", post(note))
         .route("/api/dockets/{id}/compose", post(compose))
+        .route("/api/calls", post(call_add).layer(axum::extract::DefaultBodyLimit::max(crate::calls::MAX_TRANSCRIPT * 2 + (64 << 10))))
+        .route("/api/dockets/{id}/calls/{call}/listen", post(call_listen))
+        .route("/api/dockets/{id}/proposals/{n}", post(call_proposal))
         .route("/api/dockets/{id}/set", post(set))
         .route("/api/dockets/{id}/open", post(open_in_rex))
         .route("/api/dockets/{id}/hold", post(hold))
@@ -63,6 +66,8 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/verify", get(verify_one))
         .route("/api/dockets/{id}/artifacts", get(artifacts_list).post(artifacts_attach).layer(axum::extract::DefaultBodyLimit::max(crate::artifacts::MAX * 4 / 3 + (1 << 20))))
         .route("/api/blobs/{digest}", get(blob))
+        .route("/api/images", post(image_stage).layer(axum::extract::DefaultBodyLimit::max(crate::images::MAX + (64 << 10))))
+        .route("/api/dockets/{id}/images", get(images_list))
         .route("/api/verify", get(verify_all))
         .route("/api/dockets/{id}/intent", post(set_intent))
         .route("/api/dockets/{id}/linear", post(link_linear))
@@ -399,7 +404,15 @@ async fn docket(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResu
     let decisions: Vec<Value> = crate::decisions::of_stored(&core.store.entries(&id).map_err(internal)?).iter().map(crate::decisions::Decision::json).collect();
     let numbered: Vec<(i64, record::Entry)> = entries.iter().filter_map(|v| v["seq"].as_i64()).zip(read.iter().cloned()).collect();
     let verify_view = crate::evidence::view(&core, &st, &numbered);
-    Ok(Json(json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions, "evidence": verify_view })))
+    let mut page = json!({ "docket": view(&core, &st), "entries": entries, "verify": report, "queued": queued, "decisions": decisions, "evidence": verify_view });
+    // Calls are kept on your own dockets only (never one shared with a team).
+    if id.starts_with("D-") && st.shared_as.is_none() {
+        let calls = crate::calls::view(&numbered, |c| crate::calls::is_listening(&id, c));
+        if calls.as_array().is_some_and(|a| !a.is_empty()) || st.protocol == crate::calls::PROTOCOL {
+            page["calls"] = calls;
+        }
+    }
+    Ok(Json(page))
 }
 
 /// What the docket's agents spawned, read live from their own files.
@@ -811,25 +824,79 @@ async fn send_to(shared: &Shared, id: String, req: SendReq) -> ApiResult {
 
 #[derive(Deserialize)]
 struct ComposeReq {
+    #[serde(default)]
     text: String,
+    /// Images staged with `POST /api/images`, sent with what you typed.
+    #[serde(default)]
+    images: Vec<crate::images::Ref>,
 }
 
 /// What you typed in a docket's composer (`crate::compose`): a note, an
 /// instruction to its agents, a question for them, a decision, or the
 /// prompt for another agent (the app opens Add an agent with it).
 async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<ComposeReq>) -> ApiResult {
+    // Images alone are a note of them.
+    let cmd = if req.text.trim().is_empty() && !req.images.is_empty() { crate::compose::Command::Note(String::new()) } else { crate::compose::parse(&req.text).map_err(bad)? };
+    // Every image checked before anything is kept or sent.
+    let checked = crate::images::check(&shared.lock(), &req.images).map_err(bad)?;
+    run_command_with(&shared, id, cmd, checked).await
+}
+
+/// Carry out a composer command on a docket: what you typed, or a call's
+/// proposal you applied (`crate::calls`).
+async fn run_command(shared: &Shared, id: String, cmd: crate::compose::Command) -> ApiResult {
+    run_command_with(shared, id, cmd, Vec::new()).await
+}
+
+/// Keep a command's images on the docket, as References, once the command
+/// went through: one that's refused keeps nothing on the record.
+fn keep_images(core: &mut crate::hub::Core, id: &str, images: &[crate::images::Shared]) -> Result<(), (StatusCode, Json<Value>)> {
+    if images.is_empty() {
+        return Ok(());
+    }
+    crate::images::keep(core, id, &Who::Owner, images).map_err(internal)
+}
+
+/// A prompt's images: kept like any others, unless you keep your prompts
+/// private on this shared docket. Then they stay as private as the prompt:
+/// written out here for the agent, and off the shared record.
+fn keep_prompt_images(core: &mut crate::hub::Core, id: &str, images: &[crate::images::Shared]) -> Result<(), (StatusCode, Json<Value>)> {
+    if crate::team::member::prompts_private(core, id) {
+        return Ok(());
+    }
+    keep_images(core, id, images)
+}
+
+/// What's typed to an agent, with its images' paths.
+fn with_images(shared: &Shared, id: &str, text: &str, images: &[crate::images::Shared]) -> String {
+    if images.is_empty() {
+        return text.to_string();
+    }
+    crate::images::with_block(text, &crate::images::block(&shared.lock(), id, images))
+}
+
+async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Command, images: Vec<crate::images::Shared>) -> ApiResult {
     use crate::compose::Command;
-    let cmd = crate::compose::parse(&req.text).map_err(bad)?;
     if shared.lock().store.state(&id).map_err(internal)?.is_none() {
         return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
     }
+    let shown: Vec<Value> = images.iter().map(|k| json!({ "digest": k.digest, "name": k.name })).collect();
+    let pinned = crate::images::digests(&images);
     let conflict = |e: anyhow::Error| fail(StatusCode::CONFLICT, format!("{e:#}"));
     match cmd {
         Command::Note(text) => {
-            let s = shared.lock().append(&id, "note", &Who::Owner, Some(text), Value::Null).map_err(internal)?;
-            Ok(Json(json!({ "did": "note", "seq": s.seq })))
+            let body =
+                if text.trim().is_empty() { format!("Shared {}", if images.len() == 1 { "an image".to_string() } else { format!("{} images", images.len()) }) } else { text };
+            let mut core = shared.lock();
+            let s = core.append_with(&id, "note", &Who::Owner, Some(body), crate::images::data_of(&images), pinned).map_err(internal)?;
+            keep_images(&mut core, &id, &images)?;
+            Ok(Json(json!({ "did": "note", "seq": s.seq, "images": shown })))
         }
-        Command::Task { prompt } => Ok(Json(json!({ "did": "task", "prompt": prompt }))),
+        Command::Task { prompt } => {
+            let prompt = with_images(shared, &id, &prompt, &images);
+            keep_prompt_images(&mut shared.lock(), &id, &images)?;
+            Ok(Json(json!({ "did": "task", "prompt": prompt, "images": shown })))
+        }
         Command::Instruct { to, text } => {
             let targets: Vec<(String, String)> = {
                 let core = shared.lock();
@@ -847,9 +914,11 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
                     .collect();
                 crate::compose::targets(&to, &here).map_err(conflict)?.into_iter().map(|(b, _, shown)| (b.clone(), shown.clone())).collect()
             };
+            // Over the limit with its images' paths: refused below, before anything is kept.
+            let text = with_images(shared, &id, &text, &images);
             let mut sent = Vec::new();
             for (block, shown) in targets {
-                let r = send_to(&shared, id.clone(), SendReq { text: text.clone(), queue: true, block: Some(block), steer: false }).await;
+                let r = send_to(shared, id.clone(), SendReq { text: text.clone(), queue: true, block: Some(block), steer: false }).await;
                 sent.push(match r {
                     Ok(Json(v)) => json!({ "to": shown, "ok": true, "queued": v["queued"].is_number() }),
                     Err((_, Json(e))) => json!({ "to": shown, "ok": false, "error": e["error"] }),
@@ -859,15 +928,17 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
                 let why: Vec<String> = sent.iter().map(|x| format!("{}: {}", x["to"].as_str().unwrap_or(""), x["error"].as_str().unwrap_or(""))).collect();
                 return Err(fail(StatusCode::CONFLICT, why.join("; ")));
             }
-            Ok(Json(json!({ "did": "instructed", "sent": sent })))
+            keep_prompt_images(&mut shared.lock(), &id, &images)?;
+            Ok(Json(json!({ "did": "instructed", "sent": sent, "images": shown })))
         }
         Command::Ask { question, options } => {
             let mut core = shared.lock();
             let me = crate::messages::caller(&core, None);
             // A short question is its own subject line.
             let subject = (!question.contains('\n') && question.len() <= crate::compose::MAX_SUBJECT).then(|| question.clone());
-            let m = crate::messages::send(&mut core, &me, &format!("@{id}"), subject, &question, options).map_err(conflict)?;
-            Ok(Json(json!({ "did": "asked", "message": m.id, "options": m.options })))
+            let m = crate::messages::send_with(&mut core, &me, &format!("@{id}"), subject, &question, options, crate::images::data_of(&images)).map_err(conflict)?;
+            keep_images(&mut core, &id, &images)?;
+            Ok(Json(json!({ "did": "asked", "message": m.id, "options": m.options, "images": shown })))
         }
         Command::Decide { key, subject, choice, text } => {
             let (out, restand) = {
@@ -882,7 +953,9 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
                     let answer = if by_key { text.strip_prefix(q.key.as_str()).unwrap_or(&text).trim().to_string() } else { choice.clone() };
                     let qkey = q.key.clone();
                     let me = crate::messages::caller(&core, None);
-                    let r = crate::messages::reply(&mut core, &me, m.id, &answer, None).map_err(conflict)?;
+                    // Its images on the answer's entry: each hub writes them out as it delivers it.
+                    let r = crate::messages::reply_with(&mut core, &me, m.id, &answer, None, crate::images::data_of(&images)).map_err(conflict)?;
+                    keep_images(&mut core, &id, &images)?;
                     // A question you put to several agents: the others hear the answer too.
                     let mut told = Vec::new();
                     if m.from_addr == crate::messages::ME
@@ -908,7 +981,12 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
                 let okey = crate::decisions::own_key(subject.as_deref().unwrap_or(&choice));
                 // Decided again: a rule that stood for it in a repo's notes is replaced.
                 let restand = ds.iter().find(|x| x.key == okey).filter(|x| x.answer.as_deref() != Some(choice.as_str())).and_then(|x| x.standing.clone()).is_some();
-                let s = core.append(&id, "decision", &Who::Owner, Some(text), json!({ "via": "composer", "subject": subject, "choice": choice })).map_err(internal)?;
+                let mut data = json!({ "via": "composer", "subject": subject, "choice": choice });
+                if !images.is_empty() {
+                    data["images"] = json!(images);
+                }
+                let s = core.append_with(&id, "decision", &Who::Owner, Some(text), data, pinned).map_err(internal)?;
+                keep_images(&mut core, &id, &images)?;
                 let line = match &subject {
                     Some(sub) => format!("Decided on {id}: {sub}: {choice}"),
                     None => format!("Decided on {id}: {choice}"),
@@ -923,7 +1001,7 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
             };
             let mut out = out;
             if let Some(k) = restand {
-                match make_standing(&shared, &id, &k) {
+                match make_standing(shared, &id, &k) {
                     Ok(v) => out["standing"] = v["repo"].clone(),
                     Err((_, Json(e))) => out["standing_error"] = e["error"].clone(),
                 }
@@ -931,6 +1009,216 @@ async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req)
             Ok(Json(out))
         }
     }
+}
+
+#[derive(Deserialize)]
+struct CallReq {
+    /// The docket the call was on; none for a call of its own.
+    #[serde(default)]
+    docket: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    transcript: String,
+}
+
+/// A new call: its transcript kept on its docket (or a docket of its own),
+/// and the Listener reading it (`crate::calls`).
+async fn call_add(State(shared): State<Shared>, Json(req): Json<CallReq>) -> ApiResult {
+    let docket = req.docket.as_deref().map(str::trim).filter(|d| !d.is_empty()).map(str::to_ascii_uppercase);
+    let (id, call) = crate::calls::add(&mut shared.lock(), docket.as_deref(), req.title.as_deref(), &req.transcript).map_err(bad)?;
+    listen_in_background(&shared, &id, call);
+    Ok(Json(json!({ "docket": id, "call": call })))
+}
+
+fn listen_in_background(shared: &Shared, id: &str, call: i64) {
+    let (sh, id) = (shared.clone(), id.to_string());
+    tokio::spawn(async move {
+        if let Err(e) = crate::calls::listen(sh, id.clone(), call).await {
+            say!("the Listener couldn't read {id}'s call {call}: {e:#}");
+        }
+    });
+}
+
+/// Read a call again: after a failure, or with its docket as it is now.
+async fn call_listen(State(shared): State<Shared>, Path((id, call)): Path<(String, i64)>) -> ApiResult {
+    {
+        let core = shared.lock();
+        let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+        own_calls(&id, &st)?;
+        crate::calls::transcript(&core, &id, call).map_err(|e| fail(StatusCode::NOT_FOUND, format!("{e:#}")))?;
+    }
+    if crate::calls::is_listening(&id, call) {
+        return Err(fail(StatusCode::CONFLICT, "the Listener is reading that call already"));
+    }
+    listen_in_background(&shared, &id, call);
+    Ok(Json(json!({ "listening": true })))
+}
+
+#[derive(Deserialize)]
+struct ProposalAct {
+    /// `apply` or `ignore`.
+    action: String,
+    /// Fields you changed before applying: docket, subject, choice,
+    /// question, options, text, title, intent.
+    #[serde(default)]
+    edit: Option<Value>,
+}
+
+/// Calls are kept on your own dockets, never one shared with a team: its
+/// record goes to the workspace.
+fn own_calls(id: &str, st: &crate::record::fold::DocketState) -> Result<(), (StatusCode, Json<Value>)> {
+    if !id.starts_with("D-") || st.shared_as.is_some() {
+        return Err(fail(StatusCode::BAD_REQUEST, format!("{id} is shared with your team: calls stay on your own dockets")));
+    }
+    Ok(())
+}
+
+/// One answer at a time, so a proposal is never applied twice.
+fn proposal_turn() -> &'static tokio::sync::Mutex<()> {
+    static T: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    T.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
+/// Apply a call's proposal (as edited), or ignore it. Applying goes through
+/// the composer's own paths, and the outcome goes on the record of the
+/// docket that keeps the call.
+async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String, usize)>, Json(req): Json<ProposalAct>) -> ApiResult {
+    use crate::compose::Command;
+    let _turn = proposal_turn().lock().await;
+    let (p, scope, transcript, versions) = {
+        let core = shared.lock();
+        let st = core.store.state(&id).map_err(internal)?.ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("no docket {id}")))?;
+        own_calls(&id, &st)?;
+        let numbered: Vec<(i64, record::Entry)> = core.store.entries(&id).map_err(internal)?.iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+        let (p, done) = crate::calls::proposal(&numbered, n).ok_or_else(|| fail(StatusCode::NOT_FOUND, format!("{id} has no proposal {n}")))?;
+        if let Some(d) = done {
+            return Err(fail(StatusCode::CONFLICT, format!("#{n} was {d} already")));
+        }
+        let open: Vec<String> = core.store.states().map_err(internal)?.into_iter().filter(|s| s.is_open() && s.protocol != crate::calls::PROTOCOL).map(|s| s.id).collect();
+        let focus = (st.protocol != crate::calls::PROTOCOL).then(|| id.clone());
+        let call = p["call"].as_i64().unwrap_or_default();
+        let transcript = crate::calls::transcript(&core, &id, call).map_err(internal)?;
+        let intent = st.intent.as_ref().filter(|_| focus.is_some()).map(|i| i.body.clone());
+        (p, crate::calls::Scope { focus, open, intent }, transcript, st.intent_versions)
+    };
+    match req.action.as_str() {
+        "ignore" => {
+            let s = shared.lock().append(&id, "decision", &Who::Owner, Some(format!("Ignored #{n}")), json!({ "proposal": n, "choice": "Ignore" })).map_err(internal)?;
+            return Ok(Json(json!({ "ignored": n, "seq": s.seq })));
+        }
+        "apply" => {}
+        other => return Err(fail(StatusCode::BAD_REQUEST, format!("apply or ignore, not {other}"))),
+    }
+    // What you changed, over what was proposed, checked the same way; too
+    // long is said, not cut.
+    let limits = [("subject", 200), ("choice", 500), ("question", 1000), ("text", 4000), ("title", 120), ("intent", crate::calls::MAX_INTENT)];
+    for (k, max) in limits {
+        if req.edit.as_ref().and_then(|e| e[k].as_str()).is_some_and(|x| x.trim().chars().count() > max) {
+            return Err(fail(StatusCode::BAD_REQUEST, format!("the {k} is at most {max} characters")));
+        }
+    }
+    if let Some(o) = req.edit.as_ref().and_then(|e| e["options"].as_array())
+        && (o.len() > 6 || o.iter().any(|x| x.as_str().is_some_and(|x| x.trim().chars().count() > 80)))
+    {
+        return Err(fail(StatusCode::BAD_REQUEST, "at most 6 options, each at most 80 characters"));
+    }
+    let mut v = p.clone();
+    let mut edited = serde_json::Map::new();
+    for k in ["docket", "subject", "choice", "question", "options", "text", "title", "intent"] {
+        if let Some(x) = req.edit.as_ref().and_then(|e| e.get(k))
+            && *x != p[k]
+        {
+            v[k] = x.clone();
+            edited.insert(k.into(), x.clone());
+        }
+    }
+    let call = p["call"].as_i64().unwrap_or_default();
+    let mut q = crate::calls::Proposal::from_value(&v, n, call, &transcript, &scope).map_err(|e| fail(StatusCode::BAD_REQUEST, e))?;
+    if q.kind != "task" && q.docket.is_none() && v["docket"].as_str().is_some_and(|d| !d.trim().is_empty()) {
+        return Err(fail(StatusCode::BAD_REQUEST, format!("{} isn't an open docket", v["docket"].as_str().unwrap_or(""))));
+    }
+    // A docket you cleared in Edit is one to pick, not the call's own.
+    if q.kind != "task" && q.kind != "intent" && edited.get("docket").is_some_and(|d| d.as_str().is_none_or(|d| d.trim().is_empty())) {
+        return Err(fail(StatusCode::BAD_REQUEST, "pick the docket it's for"));
+    }
+    // An intent you wrote is yours, as you wrote it: only the Listener's is made inert.
+    let mine = edited.get("intent").and_then(Value::as_str).map(|s| s.trim().to_string());
+    if q.kind == "intent"
+        && let Some(m) = &mine
+    {
+        if m.is_empty() {
+            return Err(fail(StatusCode::BAD_REQUEST, "an intent change with no intent"));
+        }
+        q.intent = Some(m.clone());
+    }
+    let need = |what: &str| fail(StatusCode::BAD_REQUEST, format!("pick the docket {what} is for"));
+    let result: Value = match q.kind.as_str() {
+        "intent" => {
+            let d = q.docket.clone().ok_or_else(|| need("this intent"))?;
+            let body = q.intent.clone().unwrap_or_default();
+            // The version this replaces: the one the call was read against, or,
+            // edited, the one you edited against. Moved since, it says so
+            // rather than write over what changed.
+            let against = if mine.is_some() { req.edit.as_ref().and_then(|e| e["version"].as_u64()).and_then(|v| u32::try_from(v).ok()) } else { q.base };
+            let mut core = shared.lock();
+            let now_v = core.store.state(&d).map_err(internal)?.map(|s| s.intent_versions).unwrap_or_default();
+            if against != Some(now_v) || now_v != versions {
+                let how = if mine.is_some() { "while you edited" } else { "since the call was read: Listen again, or Edit this one" };
+                return Err(fail(StatusCode::CONFLICT, format!("{d}'s intent changed {how}")));
+            }
+            let now = core.store.state(&d).map_err(internal)?.and_then(|s| s.intent.map(|i| i.body));
+            if now.as_deref().map(str::trim) == Some(body.trim()) {
+                return Err(fail(StatusCode::CONFLICT, "that's the intent already"));
+            }
+            if !crate::team::member::may(&core, &d, "intent") {
+                return Err(fail(StatusCode::FORBIDDEN, format!("only an owner (or their agents) changes {d}'s intent")));
+            }
+            // As `set_intent` saves one: its images pinned by its entry, then kept.
+            let body = crate::images::without_files(&body, &core.images_dir);
+            let found = crate::images::intent_images(&core, &body).map_err(bad)?;
+            let s = core.append_with(&d, "intent", &Who::Owner, Some(body), json!({ "source": "person", "call": call, "proposal": n }), found.digests()).map_err(internal)?;
+            crate::images::keep_intent(&mut core, &d, &Who::Owner, found).map_err(internal)?;
+            json!({ "docket": d, "did": "intent", "seq": s.seq })
+        }
+        "decide" => {
+            let d = q.docket.clone().ok_or_else(|| need("this decision"))?;
+            let choice = q.choice.clone().unwrap_or_default();
+            let text = match &q.subject {
+                Some(s) => format!("{s}: {choice}"),
+                None => choice.clone(),
+            };
+            let Json(r) = run_command(&shared, d.clone(), Command::Decide { key: None, subject: q.subject.clone(), choice, text }).await?;
+            json!({ "docket": d, "did": r["did"], "seq": r["seq"], "key": r["key"], "told": r["told"] })
+        }
+        "instruct" => {
+            let d = q.docket.clone().ok_or_else(|| need("this instruction"))?;
+            let Json(r) = run_command(&shared, d.clone(), Command::Instruct { to: "all".into(), text: q.text.clone().unwrap_or_default() }).await?;
+            json!({ "docket": d, "did": r["did"], "sent": r["sent"] })
+        }
+        "ask" => {
+            let d = q.docket.clone().ok_or_else(|| need("this question"))?;
+            let Json(r) = run_command(&shared, d.clone(), Command::Ask { question: q.question.clone().unwrap_or_default(), options: q.options.clone() }).await?;
+            json!({ "docket": d, "did": r["did"], "message": r["message"] })
+        }
+        _ => {
+            let mut core = shared.lock();
+            let title = q.title.clone().unwrap_or_default();
+            let d = core.open(&Who::Owner, &title, json!({ "protocol": "none", "title_source": "person" })).map_err(internal)?;
+            let mut body = q.intent.clone().unwrap_or_else(|| title.clone());
+            if !q.quote.is_empty() {
+                body.push_str(&format!("\n\n> {}\n\nFrom a call on {id}.", q.quote.lines().collect::<Vec<_>>().join(" ")));
+            }
+            let s = core.append(&d, "intent", &Who::Owner, Some(body), json!({ "source": "person", "call": call, "from": id, "proposal": n })).map_err(internal)?;
+            json!({ "docket": d, "did": "opened", "seq": s.seq })
+        }
+    };
+    let summary = q.summary();
+    let edited = (!edited.is_empty()).then_some(Value::Object(edited));
+    let s = shared
+        .lock()
+        .append(&id, "decision", &Who::Owner, Some(format!("Applied #{n}: {summary}")), json!({ "proposal": n, "choice": "Apply", "applied": result, "edited": edited }))
+        .map_err(internal)?;
+    Ok(Json(json!({ "applied": n, "seq": s.seq, "result": result })))
 }
 
 async fn approve(State(shared): State<Shared>, Path(id): Path<String>, Json(seen): Json<crate::approve::Seen>) -> ApiResult {
@@ -998,9 +1286,14 @@ async fn set_intent(State(shared): State<Shared>, Path(id): Path<String>, Json(r
         let s = core.append(&id, "intent", &Who::Hub, Some(body), json!({ "source": "linear", "key": l.key, "updated_at": l.updated_at, "taken_by": owner })).map_err(internal)?;
         return Ok(Json(json!({ "seq": s.seq })));
     }
-    let body = req.body.trim_end().to_string();
+    // Saved back from a brief: without the files it put beside the images' links.
+    let body = crate::images::without_files(req.body.trim_end(), &core.images_dir);
     if st.intent.as_ref().is_some_and(|t| t.body == body) {
         return Ok(Json(json!({ "unchanged": true })));
+    }
+    // Refused before anything's written: on a shared docket, only owners change it.
+    if !crate::team::member::may(&core, &id, "intent") {
+        return Err(fail(StatusCode::FORBIDDEN, format!("only an owner (or their agents) changes {id}'s intent")));
     }
     let (who, source) = match req.block.as_deref().and_then(|b| core.mirror.panes.get(b)).filter(|p| p.is_agent()) {
         Some(p) => (
@@ -1009,7 +1302,11 @@ async fn set_intent(State(shared): State<Shared>, Path(id): Path<String>, Json(r
         ),
         None => (Who::Owner, "person"),
     };
-    let s = core.append(&id, "intent", &who, Some(body), json!({ "source": source })).map_err(internal)?;
+    // Its images: every one checked, pinned by the intent's entry, then kept
+    // once the intent is on the record (a refused intent keeps none).
+    let found = crate::images::intent_images(&core, &body).map_err(bad)?;
+    let s = core.append_with(&id, "intent", &who, Some(body), json!({ "source": source }), found.digests()).map_err(internal)?;
+    crate::images::keep_intent(&mut core, &id, &who, found).map_err(internal)?;
     Ok(Json(json!({ "seq": s.seq })))
 }
 
@@ -1143,7 +1440,11 @@ async fn messages_read(State(shared): State<Shared>, Path(n): Path<i64>, axum::e
     let mut core = shared.lock();
     let who = crate::messages::caller(&core, q.block.as_deref());
     let m = crate::messages::read(&mut core, &who, n).map_err(bad)?;
-    Ok(Json(crate::messages::view(&core, &m)))
+    let mut v = crate::messages::view(&core, &m);
+    if let Some(b) = crate::messages::images_of(&core, &m) {
+        v["images"] = json!(b);
+    }
+    Ok(Json(v))
 }
 
 async fn messages_done(State(shared): State<Shared>, Path(n): Path<i64>) -> ApiResult {
@@ -1778,6 +2079,10 @@ struct Attach {
     url: Option<String>,
     #[serde(default)]
     block: Option<String>,
+    /// An image kept to compare with one already on the docket (its #):
+    /// a screenshot of what was built, against the reference it follows.
+    #[serde(default)]
+    against: Option<i64>,
 }
 
 /// Keep a file or a link on a docket: `wh attach`, or the app.
@@ -1795,9 +2100,82 @@ async fn artifacts_attach(State(shared): State<Shared>, Path(id): Path<String>, 
     let name = req.name.clone().or_else(|| req.url.as_ref().map(|u| u.rsplit('/').find(|p| !p.is_empty()).unwrap_or("link").to_string())).unwrap_or_else(|| "file".into());
     let source = if matches!(from.who, Who::Agent { .. }) { "agent" } else { "you" };
     let title = req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| crate::artifacts::clean_name(&name));
-    let a = crate::artifacts::New { title, name, bytes, url: req.url.clone(), source: source.into(), group: Some("Attached".into()), extra: json!({}) };
+    let mut extra = json!({});
+    // An image its bytes say is one, small enough for an agent to open, is
+    // kept as an image. Anything else is kept as a file, as it always was: a
+    // full-page screenshot taller than the limits, or a `.png` that isn't one.
+    // The same file attached before images had names and fields of their own
+    // (as `main` kept it): the same artifact, as it always was.
+    if req.against.is_none()
+        && let Some(b) = &bytes
+    {
+        let digest = format!("sha256:{}", crate::record::hex::encode(&<sha2::Sha256 as sha2::Digest>::digest(b)));
+        if let Some(seq) = crate::artifacts::existing(&core, &id, Some(&digest), None, &crate::artifacts::clean_name(&name), &json!({})).map_err(internal)? {
+            return Ok(Json(json!({ "seq": seq, "new": false })));
+        }
+    }
+    let as_image = bytes.as_deref().and_then(|b| crate::images::read(b).ok()).filter(|k| crate::images::fits(k).is_ok());
+    let (name, image) = match &as_image {
+        Some(k) => {
+            extra = json!({ "image": "attached", "width": k.width, "height": k.height });
+            (crate::images::name_for(&name, k), true)
+        }
+        None => (name, false),
+    };
+    if let Some(n) = req.against {
+        if !image {
+            let why = match bytes.as_deref().map(crate::images::sniff) {
+                Some(Err(e)) => format!("{e}"),
+                _ => "it isn't a PNG, JPEG, GIF or WebP".into(),
+            };
+            return Err(fail(StatusCode::BAD_REQUEST, format!("--against compares an image an agent can open with an image: {why}")));
+        }
+        let found = crate::images::list(&core, &id).map_err(internal)?.into_iter().any(|a| a["seq"] == n);
+        if !found {
+            return Err(fail(StatusCode::BAD_REQUEST, format!("#{n} isn't an image on {id}: `wh images {id}` lists them")));
+        }
+        extra["against"] = json!(n);
+    }
+    let a = crate::artifacts::New { title, name, bytes, url: req.url.clone(), source: source.into(), group: Some("Attached".into()), extra };
     let (seq, new) = crate::artifacts::attach(&mut core, &id, &from.who, a).map_err(bad)?;
     Ok(Json(json!({ "seq": seq, "new": new })))
+}
+
+#[derive(Deserialize)]
+struct StageQ {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Stage an image for the composer, the intent or the share sheet: its
+/// bytes as the body. Checked to be a PNG, JPEG, GIF or WebP; put in the
+/// blob store, on no record until it's sent (`crate::images`).
+async fn image_stage(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<StageQ>, body: axum::body::Bytes) -> ApiResult {
+    if body.is_empty() {
+        return Err(fail(StatusCode::BAD_REQUEST, "no image in the request"));
+    }
+    let staged = crate::images::stage(&mut shared.lock(), q.name.as_deref().unwrap_or("image"), &body).map_err(bad)?;
+    Ok(Json(json!(staged)))
+}
+
+/// A docket's images, each written out where an agent on this Mac can open
+/// it: `wh images`.
+async fn images_list(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let core = shared.lock();
+    if core.store.state(&id).map_err(internal)?.is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
+    }
+    let mut out = Vec::new();
+    for mut a in crate::images::list(&core, &id).map_err(internal)? {
+        if let (Some(d), Some(n)) = (a["digest"].as_str(), a["name"].as_str()) {
+            match crate::images::materialize(&core, &id, d, n) {
+                Ok(p) => a["path"] = json!(p.display().to_string()),
+                Err(e) => a["missing"] = json!(format!("{e:#}")),
+            }
+        }
+        out.push(a);
+    }
+    Ok(Json(json!({ "images": out })))
 }
 
 #[derive(Deserialize)]
@@ -2085,6 +2463,135 @@ mod tests {
         assert!(shared.lock().verify(&d).unwrap().ok);
     }
 
+    async fn post_bytes(app: &Router, uri: &str, body: Vec<u8>) -> (StatusCode, Value) {
+        let req = HttpRequest::builder().method("POST").uri(uri).header("host", "127.0.0.1:7500").header("x-wheelhouse", "1").header("content-type", "application/octet-stream");
+        let res = app.clone().oneshot(req.body(Body::from(body)).unwrap()).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        b.extend(w.to_be_bytes());
+        b.extend(h.to_be_bytes());
+        b.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        b
+    }
+
+    #[tokio::test]
+    async fn images_you_share_reach_the_agents_as_files_they_can_open() {
+        let mut core = crate::hub::test_core();
+        let fg = json!({ "foreground": { "name": "claude", "cwd": "/w" } });
+        let rec = crate::mirror::Record { state: "working".into(), app: Some("claude-code".into()), ..Default::default() };
+        core.mirror.apply_pane_status("s1", "b1", vec![rec], Some(&fg), None);
+        core.mirror.panes.get_mut("b1").unwrap().label = "builder".into();
+        agents::reconcile(&mut core, ["b1".to_string()]);
+        let d = agents::docket_of(&core, "b1").unwrap();
+        let dir = core.images_dir.clone();
+        let shared = Shared::new(core);
+        let app = router(shared.clone());
+
+        // Staged: checked by its bytes. SVG, HTML, nothing, and a cross-site post are refused.
+        let (st, mock) = post_bytes(&app, "/api/images?name=Settings%20mock.jpg", png(1440, 900)).await;
+        assert_eq!(st, StatusCode::OK, "{mock}");
+        assert_eq!((mock["name"].as_str(), mock["width"].as_u64(), mock["media_type"].as_str()), (Some("Settings-mock.png"), Some(1440), Some("image/png")));
+        assert_eq!(post_bytes(&app, "/api/images?name=x.svg", b"<svg onload=alert(1)/>".to_vec()).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(post_bytes(&app, "/api/images", Vec::new()).await.0, StatusCode::BAD_REQUEST);
+        let req = HttpRequest::builder().method("POST").uri("/api/images").header("host", "127.0.0.1:7500").header("origin", "https://evil.example");
+        assert_eq!(app.clone().oneshot(req.body(Body::from(png(2, 2))).unwrap()).await.unwrap().status(), StatusCode::FORBIDDEN);
+        let (_, before) = post_bytes(&app, "/api/images?name=before.png", png(1440, 899)).await;
+
+        // Sent to the builder with a pin: kept first, then its path goes with the prompt.
+        let uri = format!("/api/dockets/{d}/compose");
+        let one = json!([{ "digest": mock["digest"], "name": mock["name"], "caption": "The header, like this", "original": before["digest"], "pins": [{ "n": 1, "note": "Make this primary" }] }]);
+        let (st, v) = post_json(&app, &uri, json!({ "text": "@builder match this", "images": one })).await;
+        assert_eq!((st, v["did"].as_str()), (StatusCode::OK, Some("instructed")), "{v}");
+        let queued = shared.lock().store.queued_prompts(Some(&d)).unwrap();
+        let prompt = &queued[0].3;
+        let path = dir.join(&d).join(format!("{}-Settings-mock.png", &mock["digest"].as_str().unwrap()[7..19]));
+        assert!(prompt.starts_with("match this\n\nAn image comes with this"), "{prompt}");
+        assert!(prompt.contains(&path.display().to_string()) && prompt.contains("Make this primary"), "{prompt}");
+        assert_eq!(std::fs::read(&path).unwrap(), png(1440, 900));
+
+        // To an @name that isn't there: refused, and nothing kept.
+        let n = crate::images::list(&shared.lock(), &d).unwrap().len();
+        let (_, other) = post_bytes(&app, "/api/images?name=o.png", png(3, 3)).await;
+        let (st, _) = post_json(&app, &uri, json!({ "text": "@nobody look", "images": [{ "digest": other["digest"] }] })).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(crate::images::list(&shared.lock(), &d).unwrap().len(), n);
+        // A question with no agent to ask, or an answer to no question: refused, and nothing kept.
+        let lone = shared.lock().open(&Who::Owner, "Alone", json!({})).unwrap();
+        let lone_uri = format!("/api/dockets/{lone}/compose");
+        assert_eq!(post_json(&app, &lone_uri, json!({ "text": "/ask Which? | A | B", "images": [{ "digest": other["digest"] }] })).await.0, StatusCode::CONFLICT);
+        assert_eq!(post_json(&app, &lone_uri, json!({ "text": "/decide D9 yes", "images": [{ "digest": other["digest"] }] })).await.0, StatusCode::BAD_REQUEST);
+        assert!(crate::images::list(&shared.lock(), &lone).unwrap().is_empty());
+        // One that was never staged, or eleven: refused before anything happens.
+        let (st, _) = post_json(&app, &uri, json!({ "text": "hm", "images": [{ "digest": format!("sha256:{}", "c".repeat(64)) }] })).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        let many: Vec<Value> = (0..11).map(|_| json!({ "digest": mock["digest"] })).collect();
+        assert_eq!(post_json(&app, &uri, json!({ "text": "hm", "images": many })).await.0, StatusCode::BAD_REQUEST);
+
+        // Images alone are a note; a question carries them, and its delivery names the files.
+        let (st, v) = post_json(&app, &uri, json!({ "images": [{ "digest": other["digest"], "caption": "An inspiration" }] })).await;
+        assert_eq!((st, v["did"].as_str()), (StatusCode::OK, Some("note")), "{v}");
+        let (st, v) = post_json(&app, &uri, json!({ "text": "/ask Which of these? | A | B", "images": [{ "digest": other["digest"] }] })).await;
+        assert_eq!((st, v["did"].as_str()), (StatusCode::OK, Some("asked")), "{v}");
+        let m = shared.lock().store.message(v["message"].as_i64().unwrap()).unwrap().unwrap();
+        let said = crate::messages::images_of(&shared.lock(), &m).unwrap();
+        assert!(said.contains(&dir.join(&d).display().to_string()), "{said}");
+
+        // A screenshot against the reference; not against something that isn't an image.
+        let reference = crate::images::list(&shared.lock(), &d).unwrap().into_iter().find(|a| a["image"] == "reference" && a["caption"] == "The header, like this").unwrap();
+        use base64::Engine;
+        let shot = base64::engine::general_purpose::STANDARD.encode(png(1440, 900 + 7));
+        let art = format!("/api/dockets/{d}/artifacts");
+        let (st, v) = post_json(&app, &art, json!({ "name": "built.png", "content": shot, "against": reference["seq"] })).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        let listed = crate::images::list(&shared.lock(), &d).unwrap();
+        assert_eq!(listed.iter().find(|a| a["seq"] == v["seq"]).unwrap()["against"], reference["seq"]);
+        assert_eq!(post_json(&app, &art, json!({ "name": "built.png", "content": shot, "against": 9999 })).await.0, StatusCode::BAD_REQUEST);
+        // A screenshot attached before this change (no image fields, its own name): the same artifact again.
+        let old = png(30, 31);
+        let old_hex = crate::record::hex::encode(&<sha2::Sha256 as sha2::Digest>::digest(&old));
+        shared.lock().store.put_blob(&old_hex, &old, "2026-11-01T00:00:00.000Z").unwrap();
+        let was = shared
+            .lock()
+            .append_with(
+                &d,
+                "artifact",
+                &Who::Owner,
+                Some("Screen Shot 1.png".into()),
+                json!({ "name": "Screen Shot 1.png", "source": "you", "digest": format!("sha256:{old_hex}"), "media_type": "image/png", "size": old.len() }),
+                vec![format!("sha256:{old_hex}")],
+            )
+            .unwrap();
+        let (st, v) = post_json(&app, &art, json!({ "name": "Screen Shot 1.png", "content": base64::engine::general_purpose::STANDARD.encode(&old) })).await;
+        assert_eq!((st, v["seq"].as_i64(), v["new"].as_bool()), (StatusCode::OK, Some(was.seq), Some(false)), "{v}");
+        // Not an image, or too big for an agent: kept as a file, as before, but never against a reference.
+        let html = base64::engine::general_purpose::STANDARD.encode(b"<html></html>");
+        assert_eq!(post_json(&app, &art, json!({ "name": "fake.png", "content": html })).await.0, StatusCode::OK);
+        assert_eq!(post_json(&app, &art, json!({ "name": "fake.png", "content": html, "against": reference["seq"] })).await.0, StatusCode::BAD_REQUEST);
+        let tall = base64::engine::general_purpose::STANDARD.encode(png(1440, 24_000));
+        let (st, v) = post_json(&app, &art, json!({ "name": "full-page.png", "content": tall })).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        let kept = crate::artifacts::list(&shared.lock(), &d).unwrap().into_iter().find(|a| a["seq"] == v["seq"]).unwrap();
+        assert!(kept["image"].is_null(), "a file, not an image for agents: {kept}");
+
+        // In the intent: kept, pinned by the intent's entry, and a path in the brief.
+        let body = format!("The page.\n\n![The whole page](/api/blobs/{}?name=page.png)", mock["digest"].as_str().unwrap());
+        let (st, _) = post_json(&app, &format!("/api/dockets/{d}/intent"), json!({ "body": body })).await;
+        assert_eq!(st, StatusCode::OK);
+        // The intent's entry first, pinning it; then the image, kept once the intent is on the record.
+        let tail: Vec<crate::record::Entry> = shared.lock().store.entries(&d).unwrap().iter().rev().take(2).map(|s| s.entry().unwrap()).collect();
+        assert_eq!((tail[1].kind.as_str(), tail[1].blobs.clone()), ("intent", vec![mock["digest"].as_str().unwrap().to_string()]));
+        assert_eq!((tail[0].kind.as_str(), tail[0].data["image"].as_str()), ("artifact", Some("intent")));
+        let brief = crate::brief::brief(&shared.lock(), &d, None).unwrap();
+        assert!(brief.contains(") (file: ") && brief.contains("## Images") && brief.contains("Make this primary"), "{brief}");
+        assert!(shared.lock().verify(&d).unwrap().ok);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn a_comment_on_a_line_goes_on_the_record_and_to_the_agent() {
         let mut core = crate::hub::test_core();
@@ -2120,6 +2627,210 @@ mod tests {
         assert_eq!(listed[0]["by"], "you");
         assert_eq!(crate::comments::list(&numbered, &["sam"])[0]["by"], owner.as_str(), "a teammate's is theirs");
         assert!(shared.lock().verify(&d).unwrap().ok);
+    }
+
+    #[tokio::test]
+    async fn a_calls_proposals_are_applied_or_ignored_through_the_composer() {
+        let dir = std::env::temp_dir().join(format!("wh-calls-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut core = crate::hub::test_core();
+        // A builder at work on the retries docket, with an intent.
+        let fg = json!({ "foreground": { "name": "claude", "cwd": "/w" } });
+        let rec = crate::mirror::Record { state: "working".into(), app: Some("claude-code".into()), ..Default::default() };
+        core.mirror.apply_pane_status("s1", "b1", vec![rec], Some(&fg), None);
+        core.mirror.panes.get_mut("b1").unwrap().label = "builder".into();
+        agents::reconcile(&mut core, ["b1".to_string()]);
+        let d = agents::docket_of(&core, "b1").unwrap();
+        // Its intent has a mockup, pinned by its entry.
+        let mock = crate::images::stage(&mut core, "flow.png", &png(20, 10)).unwrap().digest;
+        let img = format!("![The retry flow](/api/blobs/{mock}?name=flow.png)");
+        core.append_with(
+            &d,
+            "intent",
+            &Who::Owner,
+            Some(format!("Retry failed webhooks.\n\n{img}\n\n## Acceptance\n- [ ] 5xx are retried")),
+            json!({ "source": "person" }),
+            vec![mock.clone()],
+        )
+        .unwrap();
+        // A stand-in Listener: it reads the prompt, and answers with what a call settled.
+        let revised = format!("Retry failed webhooks.\n\n{img}\n\n## Acceptance\n- [ ] 5xx are retried\n- [ ] Each attempt is logged");
+        let revised = revised.as_str();
+        let out = json!({ "type": "result", "is_error": false, "session_id": "s-listen", "usage": { "input_tokens": 9, "output_tokens": 3 }, "structured_output": { "proposals": [
+            { "kind": "decide", "subject": "Retries", "choice": "5xx and timeouts only", "quote": "let's do 5xx and timeouts only" },
+            { "kind": "intent", "subject": "Log each attempt", "intent": revised, "quote": "log each attempt, add that to the spec", "base": 99 },
+            { "kind": "instruct", "text": "Log each retry with its attempt number.", "quote": "log each attempt" },
+            { "kind": "ask", "question": "Do 429s count?", "options": ["Yes", "No"], "quote": "whether 429s count" },
+            { "kind": "task", "title": "Write the outage runbook", "intent": "A runbook for the outage page.", "quote": "write the runbook for the outage page" },
+            { "kind": "decide", "subject": "Backoff", "choice": "Linear", "quote": "never said" },
+        ] } });
+        let good = dir.join("listener.sh");
+        std::fs::write(&good, format!("#!/bin/sh\ncat > {}/prompt.txt\ncat <<'JSON'\n{out}\nJSON\n", dir.display())).unwrap();
+        let bad = dir.join("broken.sh");
+        std::fs::write(&bad, "#!/bin/sh\ncat >/dev/null\necho 'model overloaded' >&2\nexit 1\n").unwrap();
+        for f in [&good, &bad] {
+            std::fs::set_permissions(f, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        }
+        *crate::calls::TEST_LISTENER.lock().unwrap() = Some(bad.to_string_lossy().into_owned());
+        let shared = Shared::new(core);
+        let app = router(shared.clone());
+        let page = |x: &str| {
+            let core = shared.lock();
+            let numbered: Vec<(i64, record::Entry)> = core.store.entries(x).unwrap().iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+            crate::calls::view(&numbered, |c| crate::calls::is_listening(x, c))[0].clone()
+        };
+        let settled = |x: String, c: i64| async move {
+            for _ in 0..400 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                if !crate::calls::is_listening(&x, c) && page(&x)["listening"]["state"] != "started" {
+                    break;
+                }
+            }
+        };
+        let transcript = "Sam: let's do 5xx and timeouts only, max three.\nDana: someone should write the runbook for the outage page.\nSam: can the builder check whether 429s count?\nDana: and log each attempt, add that to the spec.";
+        let (st, v) = post_json(&app, "/api/calls", json!({ "docket": d.to_lowercase(), "title": "Webhooks sync", "transcript": transcript })).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        assert_eq!(v["docket"], d.as_str(), "kept on the docket it was about");
+        let call = v["call"].as_i64().unwrap();
+        settled(d.clone(), call).await;
+        let failed = page(&d);
+        assert_eq!((failed["call"].as_i64(), failed["title"].as_str()), (Some(call), Some("Webhooks sync")));
+        assert_eq!(failed["listening"]["state"], "failed", "{failed}");
+        assert!(failed["listening"]["why"].as_str().unwrap().contains("model overloaded"), "{failed}");
+
+        // Read again, with a Listener that answers.
+        *crate::calls::TEST_LISTENER.lock().unwrap() = Some(good.to_string_lossy().into_owned());
+        let listen = format!("/api/dockets/{d}/calls/{call}/listen");
+        assert_eq!(post_json(&app, &listen, json!({})).await.0, StatusCode::OK);
+        settled(d.clone(), call).await;
+        let v = page(&d);
+        assert_eq!(v["listening"]["state"], "done", "{v}");
+        let ps = v["proposals"].as_array().unwrap();
+        assert_eq!(ps.len(), 6);
+        assert_eq!(ps[0]["docket"], d.as_str(), "a docket left out is the call's own");
+        assert_eq!(ps[1]["base"], 1, "the version it read, not the one it claimed");
+        assert_eq!(ps[5]["quote_found"], false, "a quote nobody said is flagged");
+        let sent = std::fs::read_to_string(dir.join("prompt.txt")).unwrap();
+        assert!(
+            sent.starts_with(&format!("<docket>\n{d}: ")) && sent.contains("Intent (version 1):\nRetry failed webhooks.") && sent.contains("Agents on it: Claude Code"),
+            "{sent}"
+        );
+        // Read again: what it proposed already isn't proposed twice.
+        assert_eq!(post_json(&app, &listen, json!({})).await.0, StatusCode::OK);
+        settled(d.clone(), call).await;
+        let again = page(&d);
+        assert_eq!(again["proposals"].as_array().unwrap().len(), 6, "{again}");
+        assert!(again["listening"]["left_out"].to_string().contains("6 proposed already"), "{again}");
+        assert!(std::fs::read_to_string(dir.join("prompt.txt")).unwrap().contains("Proposed from this call already"), "the Listener is told");
+
+        let act = |n: usize, body: Value| {
+            let (app, uri) = (app.clone(), format!("/api/dockets/{d}/proposals/{n}"));
+            async move { post_json(&app, &uri, body).await }
+        };
+        // A decision, as /decide records it, told to the builder.
+        let (st, r) = act(1, json!({ "action": "apply" })).await;
+        assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("decided")), "{r}");
+        let ds = crate::decisions::of_stored(&shared.lock().store.entries(&d).unwrap());
+        assert_eq!(ds.iter().find(|x| x.question == "Retries").and_then(|x| x.answer.as_deref()), Some("5xx and timeouts only"));
+        assert_eq!(act(1, json!({ "action": "apply" })).await.0, StatusCode::CONFLICT, "never twice");
+        // The intent, as the call revised it: a new version.
+        let (st, r) = act(2, json!({ "action": "apply" })).await;
+        assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("intent")), "{r}");
+        let ns = shared.lock().store.state(&d).unwrap().unwrap();
+        let seq = ns.intent.as_ref().unwrap().seq;
+        assert_eq!((ns.intent_versions, ns.intent.unwrap().body.as_str()), (2, revised));
+        // Its mockup still pinned, so the brief still gives agents the file.
+        assert_eq!(crate::brief::intent_pins(&shared.lock(), &d, seq), vec![mock.clone()]);
+        assert!(crate::brief::brief(&shared.lock(), &d, None).unwrap().contains("flow.png) (file: "));
+        // Work for its agents, as @all sends it.
+        let (st, r) = act(3, json!({ "action": "apply" })).await;
+        assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("instructed")), "{r}");
+        assert!(r["result"]["sent"].to_string().contains("builder"), "{r}");
+        // A question, edited, as /ask asks it.
+        let (st, r) = act(4, json!({ "action": "apply", "edit": { "question": "Do 429s count as retryable?" } })).await;
+        assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("asked")), "{r}");
+        let asked = shared.lock().store.message(r["result"]["message"].as_i64().unwrap()).unwrap().unwrap();
+        assert_eq!((asked.body.as_str(), asked.options.len()), ("Do 429s count as retryable?", 2));
+        // A task: a docket of its own, its intent quoting the call.
+        let (st, r) = act(5, json!({ "action": "apply" })).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        let new = r["result"]["docket"].as_str().unwrap().to_string();
+        let ns = shared.lock().store.state(&new).unwrap().unwrap();
+        assert_eq!(ns.title, "Write the outage runbook");
+        let intent = ns.intent.unwrap().body;
+        assert!(intent.contains("> write the runbook for the outage page") && intent.contains(&format!("From a call on {d}")), "{intent}");
+        // A docket that isn't open, then ignored.
+        assert_eq!(act(6, json!({ "action": "apply", "edit": { "docket": "D-999" } })).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(act(6, json!({ "action": "ignore" })).await.0, StatusCode::OK);
+        assert_eq!(act(9, json!({ "action": "ignore" })).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(act(6, json!({ "action": "maybe" })).await.0, StatusCode::CONFLICT, "ignored already");
+        let v = page(&d);
+        let st: Vec<&str> = v["proposals"].as_array().unwrap().iter().map(|p| p["status"].as_str().unwrap()).collect();
+        assert_eq!(st, ["applied", "applied", "applied", "applied", "applied", "ignored"]);
+        assert_eq!(v["proposals"][3]["outcome"]["edited"]["question"], "Do 429s count as retryable?");
+
+        // A second call on the docket, read against the intent as it is now.
+        let (_, v) = post_json(&app, "/api/calls", json!({ "docket": d, "transcript": format!("{transcript}\nSam: one more.") })).await;
+        let second = v["call"].as_i64().unwrap();
+        settled(d.clone(), second).await;
+        assert!(std::fs::read_to_string(dir.join("prompt.txt")).unwrap().contains("Intent (version 2):"));
+        let page_all = |x: &str| {
+            let core = shared.lock();
+            let numbered: Vec<(i64, record::Entry)> = core.store.entries(x).unwrap().iter().filter_map(|s| Some((s.seq, s.entry().ok()?))).collect();
+            crate::calls::view(&numbered, |_| false)
+        };
+        let both = page_all(&d);
+        assert_eq!((both[0]["call"].as_i64(), both[1]["call"].as_i64()), (Some(second), Some(call)), "newest first");
+        let intent_n = both[0]["proposals"].as_array().unwrap().iter().find(|p| p["kind"] == "intent").unwrap()["n"].as_u64().unwrap() as usize;
+        // The intent moves before you apply: refused, unless you edit it against the intent now.
+        shared.lock().append(&d, "intent", &Who::Owner, Some("Retry failed webhooks, by hand.".into()), json!({ "source": "person" })).unwrap();
+        assert_eq!(act(intent_n, json!({ "action": "apply" })).await.0, StatusCode::CONFLICT);
+        let mine = "Retry failed webhooks, by hand, logged.\n\n- [ ] At most `<= 3` tries, `Vec<Try>`";
+        assert_eq!(act(intent_n, json!({ "action": "apply", "edit": { "intent": mine, "version": 2 } })).await.0, StatusCode::CONFLICT, "edited against an older one");
+        assert_eq!(act(intent_n, json!({ "action": "apply", "edit": { "intent": mine } })).await.0, StatusCode::CONFLICT, "edited against none said");
+        let (st, r) = act(intent_n, json!({ "action": "apply", "edit": { "intent": mine, "version": 3 } })).await;
+        assert_eq!(st, StatusCode::OK, "{r}");
+        assert_eq!(shared.lock().store.state(&d).unwrap().unwrap().intent.unwrap().body, mine, "yours, as you wrote it");
+        // A docket cleared in Edit is one to pick, never the call's own.
+        let decide_n = both[0]["proposals"].as_array().unwrap().iter().find(|p| p["kind"] == "decide").unwrap()["n"].as_u64().unwrap() as usize;
+        let (st, r) = act(decide_n, json!({ "action": "apply", "edit": { "docket": null } })).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{r}");
+
+        // Two calls read at once on one docket: each proposal its own number.
+        let slow = dir.join("slow.sh");
+        std::fs::write(&slow, format!("#!/bin/sh\ncat >/dev/null\nsleep 0.4\ncat <<'JSON'\n{out}\nJSON\n")).unwrap();
+        std::fs::set_permissions(&slow, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        *crate::calls::TEST_LISTENER.lock().unwrap() = Some(slow.to_string_lossy().into_owned());
+        let (_, a) = post_json(&app, "/api/calls", json!({ "docket": d, "transcript": "Sam: first of two." })).await;
+        let (_, b) = post_json(&app, "/api/calls", json!({ "docket": d, "transcript": "Sam: second of two." })).await;
+        settled(d.clone(), a["call"].as_i64().unwrap()).await;
+        settled(d.clone(), b["call"].as_i64().unwrap()).await;
+        let ns: Vec<u64> =
+            page_all(&d).as_array().unwrap().iter().flat_map(|c| c["proposals"].as_array().unwrap().iter().map(|p| p["n"].as_u64().unwrap()).collect::<Vec<_>>()).collect();
+        let unique: std::collections::HashSet<_> = ns.iter().collect();
+        assert_eq!(unique.len(), ns.len(), "{ns:?}");
+        *crate::calls::TEST_LISTENER.lock().unwrap() = Some(good.to_string_lossy().into_owned());
+
+        // A call of its own: about whichever docket it names, never an intent change.
+        let (_, v) = post_json(&app, "/api/calls", json!({ "title": "All hands", "transcript": "Sam: something else entirely." })).await;
+        let own = v["docket"].as_str().unwrap().to_string();
+        assert_ne!(own, d);
+        let own_call = v["call"].as_i64().unwrap();
+        settled(own.clone(), own_call).await;
+        let sent = std::fs::read_to_string(dir.join("prompt.txt")).unwrap();
+        assert!(!sent.contains("<docket>") && sent.contains(&format!("- {d}:")) && !sent.contains(&format!("- {own}:")), "{sent}");
+        let v = page(&own);
+        assert!(v["proposals"].as_array().unwrap().iter().all(|p| p["kind"] != "intent" && p["docket"].is_null()), "{v}");
+
+        // Refused: no transcript, a closed or unknown docket, and a call that isn't one.
+        assert_eq!(post_json(&app, "/api/calls", json!({ "transcript": "  " })).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(post_json(&app, "/api/calls", json!({ "docket": "D-999", "transcript": "x" })).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(post_json(&app, &format!("/api/dockets/{d}/calls/1/listen"), json!({})).await.0, StatusCode::NOT_FOUND);
+        for x in [&d, &new, &own] {
+            assert!(shared.lock().verify(x).unwrap().ok);
+        }
+        *crate::calls::TEST_LISTENER.lock().unwrap() = None;
     }
 
     #[tokio::test]

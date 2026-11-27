@@ -396,10 +396,15 @@ final class Store {
     /// What you typed in a docket's composer: a note, `@agent`, `/ask`,
     /// `/decide` or `/task` (src/compose.rs). The hub's answer, or nil when
     /// it refused (and said why in a toast).
-    func compose(_ id: String, _ text: String) async -> JSON? {
-        guard let r = await act("/api/dockets/\(id)/compose", ["text": text]) else { return nil }
+    func compose(_ id: String, _ text: String, images: [TrayImage] = []) async -> JSON? {
+        guard let r = await act("/api/dockets/\(id)/compose", Images.composeBody(text: text, tray: images)) else { return nil }
         if let t = Compose.toast(r) { toast(t.text, error: t.error) }
         return r
+    }
+
+    /// Stage an image for the composer or the intent (`POST /api/images`).
+    nonisolated func stage(name: String, data: Data) async throws -> StagedImage {
+        try await hub.stage(name: name, data: data)
     }
 
     func note(_ id: String, _ body: String) async -> Bool {
@@ -411,6 +416,38 @@ final class Store {
         if !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { _ = await self.note(id, note) }
         toast("\(id) created")
         return id
+    }
+
+    // ---- calls (src/calls.rs) ----
+
+    /// A call's transcript, kept on the docket it was about (nil: on a
+    /// docket of its own), and the Listener starts reading it. The docket
+    /// that keeps it, or nil when it was refused.
+    func addCall(docket: String?, title: String, transcript: String) async -> String? {
+        var body: [String: Any] = ["transcript": transcript]
+        if let docket { body["docket"] = docket }
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !t.isEmpty { body["title"] = t }
+        guard let r = await act("/api/calls", body), let id = r["docket"].text else { return nil }
+        toast("\(id): the Listener is reading the call")
+        return id
+    }
+
+    /// Read a docket's call again: after a failure, or with dockets that
+    /// have changed. `call`: the entry keeping its transcript.
+    @discardableResult
+    func listen(_ id: String, call: Int) async -> Bool {
+        await act("/api/dockets/\(id)/calls/\(call)/listen") != nil
+    }
+
+    /// Apply a proposal from one of a docket's calls (as edited), or ignore
+    /// it. True if it went through.
+    func answerProposal(_ id: String, _ n: Int, apply: Bool, edit: [String: Any]? = nil) async -> Bool {
+        var body: [String: Any] = ["action": apply ? "apply" : "ignore"]
+        if let edit { body["edit"] = edit }
+        guard let r = await act("/api/dockets/\(id)/proposals/\(n)", body) else { return false }
+        if apply { toast(Calls.appliedToast(r["result"])) }
+        return true
     }
 
     /// `?block=B`, for a pane action on one of a docket's agents; nothing

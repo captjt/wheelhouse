@@ -230,3 +230,15 @@ export const IconGlobe = glyph("M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2.
 export const IconLinkOut = glyph("M7 9a2.8 2.8 0 0 0 4 0l2-2a2.8 2.8 0 0 0-4-4l-.8.8M9 7a2.8 2.8 0 0 0-4 0l-2 2a2.8 2.8 0 0 0 4 4l.8-.8");
 // Chat.
 export const IconSend = glyph("M8 13V3.5M3.8 7.5 8 3.3l4.2 4.2");
+/** A call: two people talking. */
+export const IconCall = glyph("M2.5 3h7.5v5.5H6L3.5 10.5V8.5h-1V3ZM12 5.5h1.5v5.5h-1v2L10 11H7.5V9.8");
+// Images and markup.
+export const IconPaperclip = glyph("M10.5 5 6.2 9.3a1.1 1.1 0 0 0 1.6 1.6l4.4-4.4a2.3 2.3 0 0 0-3.2-3.2L4.5 7.8a3.4 3.4 0 0 0 4.8 4.8l3.7-3.7");
+export const IconBox = glyph("M3 4h10v8H3z");
+export const IconArrow = glyph("M3.5 12.5l9-9M7 3.5h5.5V9");
+export const IconPen = glyph("M3 13l1-3.5 6.5-6.5 2.5 2.5L6.5 12 3 13ZM9.5 4l2.5 2.5");
+export const IconText = glyph("M3.5 4V3h9v1M8 3v10M6 13h4");
+export const IconPin = glyph("M8 14s4.5-4.2 4.5-7.5a4.5 4.5 0 0 0-9 0C3.5 9.8 8 14 8 14ZM8 8.2a1.7 1.7 0 1 0 0-3.4 1.7 1.7 0 0 0 0 3.4Z");
+export const IconUndo = glyph("M5.5 6.5H10a3 3 0 0 1 0 6H7M5.5 6.5 8 4M5.5 6.5 8 9");
+export const IconRedo = glyph("M10.5 6.5H6a3 3 0 0 0 0 6h3M10.5 6.5 8 4M10.5 6.5 8 9");
+export const IconCompare = glyph("M8 2v12M2.5 3.5h11v9h-11z");

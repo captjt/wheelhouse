@@ -55,6 +55,14 @@ struct ActivityRow: View {
     let d: Docket
     let owner: String
     @Environment(Nav.self) private var nav
+    @Environment(\.docketImages) private var docketImages
+    @Environment(\.carriedImages) private var carriedImages
+
+    /// The images an entry carries (`data.images`: a note, a decision, a
+    /// question you sent with them).
+    private var carried: [DocketImage] {
+        e.data["images"].array.compactMap { DocketImage($0, known: docketImages) }
+    }
 
     var body: some View {
         switch shape {
@@ -80,20 +88,28 @@ struct ActivityRow: View {
                     Spacer()
                     Mark(mark: e.mark)
                 }
-                Clamp { MarkdownView(text: body) }
+                // The Listener's words, from a call: no image of theirs loads.
+                Clamp { MarkdownView(text: body, images: e.kind != "proposal") }
+                if !carried.isEmpty { ImageStrip(images: carried) }
             }
             .padding(12)
             .background(tone == "you" ? K.accentSoft.opacity(0.5) : K.elev, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(tone == "ask" ? K.blocked.opacity(0.35) : K.line))
         case let .file(avatar, name, title, group):
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                avatar.view(16).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
-                (Text(name).bold() + Text(e.data["url"].exists ? " linked " : " kept ") + Text(title).foregroundColor(K.link) + Text(group.map { " · \($0)" } ?? "").foregroundColor(K.muted) + Text("  ·  \(agoLong(e.at))").foregroundColor(K.faint))
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(K.text2)
-                    .onTapGesture { Artifacts.open(e) }
-                Spacer(minLength: 6)
-                Mark(mark: e.mark)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    avatar.view(16).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+                    (Text(name).bold() + Text(e.data["url"].exists ? " linked " : " kept ") + Text(title).foregroundColor(K.link) + Text(group.map { " · \($0)" } ?? "").foregroundColor(K.muted) + Text("  ·  \(agoLong(e.at))").foregroundColor(K.faint))
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(K.text2)
+                        .onTapGesture { Artifacts.open(e) }
+                    Spacer(minLength: 6)
+                    Mark(mark: e.mark)
+                }
+                // An image shows as itself; the original of a marked-up one is beside it already.
+                if let im = DocketImage(artifact: e), im.role != "original" {
+                    ImageStrip(images: [im], side: 96).padding(.leading, 24)
+                }
             }
             .padding(.leading, 4)
         case .none:
@@ -171,6 +187,15 @@ struct ActivityRow: View {
             return sys(.hub, [.b(agent), .t(src == "resume" ? " resumed session " : src == "clear" ? " cleared into session " : " started session "), .mono(s)])
         case "question":
             return .comment(writerAvatar, writer, "asked \(data["to"].str == "me" ? "you" : data["to"].str ?? "")\(data["subject"].str.map { " · \($0)" } ?? "") (#\(data["message"].int ?? 0))", "\(e.body ?? "")\n\nOptions: \(data["options"].strings.joined(separator: " · "))", "ask")
+        case "proposal":
+            // The Listener's, from a call's transcript (src/calls.rs).
+            return .comment(.app("claude-code"), "Listener", "proposed #\(data["n"].int ?? 0)", Calls.proposedBody(e.body, quote: data["quote"].str), nil)
+        case "decision" where data["proposal"].int != nil:
+            let n = data["proposal"].int ?? 0
+            var bits: [Bit] = [.b(youName), .t(" \(data["choice"].str == "Apply" ? "applied" : "ignored") #\(n)")]
+            if let to = data["applied"]["docket"].text { bits += [.t(" to "), .link(to, Calls.link(to))] }
+            if !(data["edited"].object?.isEmpty ?? true) { bits.append(.t(", edited")) }
+            return sys(you, bits)
         case "decision" where data["via"].str == "composer":
             return .comment(you, youName, "decided\(data["subject"].str.map { " · \($0)" } ?? "")", "**\(data["choice"].str ?? "")**", "you")
         case "decision":
@@ -217,6 +242,8 @@ struct ActivityRow: View {
         case "observed":
             switch data["what"].str {
             case "review" where data["source"].str == "wheelhouse": return .none
+            case "listen":
+                return sys(.hub, [.t(e.body ?? "")], data["state"].str == "failed" ? "error" : nil)
             case "review-event":
                 let ev = data["event"].str
                 return sys(.pr, [.t(e.body ?? "")], ev == "posted" || ev == "merged" ? "approved" : ev == "dismissed" || ev == "post-refused" ? "denied" : nil)
@@ -279,6 +306,8 @@ struct ActivityRow: View {
             let ok = data["decision"].str == "approve"
             return sys(you, [.b(youName), .t(" \(ok ? "approved" : "denied") \(agent)'s \(data["kind"].str ?? "prompt")"), e.body.map { .mono(": \($0)") } ?? .t("")], ok ? "approved" : "denied")
         case "artifact":
+            // Shown already, with what was said, by the entry that carried it.
+            if DocketImage.hiddenInActivity(e, carried: carriedImages) { return .none }
             return .file(writerAvatar, writer, e.body ?? data["name"].str ?? "a file", data["group"].str)
         case "release":
             return sys(.hub, [.b("Wheelhouse"), .t(" saw the session end: \(data["reason"].str ?? "released")")])

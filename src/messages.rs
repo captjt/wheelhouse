@@ -224,7 +224,7 @@ fn docket_addr(to: &str) -> Option<String> {
 
 /// A message to every agent on a docket (`@D-12`) but the sender: one to
 /// each, on one entry of the docket's record, so replies stay on its thread.
-fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<String>, body: String, options: Vec<String>) -> Result<Message> {
+fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<String>, body: String, options: Vec<String>, extra: Value) -> Result<Message> {
     let st = core.store.state(docket)?.ok_or_else(|| anyhow!("no docket {docket}"))?;
     let me = core.team.as_ref().map(|t| t.config.handle.clone());
     let to = own_agents(core, docket, from.block.as_deref())?;
@@ -283,7 +283,14 @@ fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<Str
     if !remote.is_empty() {
         data["team_to"] = Value::Array(remote);
     }
-    let s = core.append(docket, kind, &from.who, Some(body), data)?;
+    // Images it carries: pinned by its entry, so each hub writes them out.
+    let pins = images_pinned(&extra);
+    if let Some(m) = extra.as_object() {
+        for (k, v) in m {
+            data[k] = v.clone();
+        }
+    }
+    let s = core.append_with(docket, kind, &from.who, Some(body), data, pins)?;
     for m in &mut sent {
         m.docket = Some(docket.to_string());
         m.seq = Some(s.seq);
@@ -310,6 +317,12 @@ fn waiting_room(core: &Core, from: &Caller, block: &str, addr: &str) -> Result<(
 /// Send a message. Returns its number. `@D-12` sends it to every agent on
 /// that docket.
 pub fn send(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, body: &str, options: Vec<String>) -> Result<Message> {
+    send_with(core, from, to, subject, body, options, Value::Null)
+}
+
+/// `send`, with more on its entry: `images`, which each hub writes out for
+/// its agents as it delivers the message.
+pub fn send_with(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, body: &str, options: Vec<String>, extra: Value) -> Result<Message> {
     let body = body.trim_end().to_string();
     if body.trim().is_empty() {
         bail!("an empty message");
@@ -323,7 +336,7 @@ pub fn send(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, b
     }
     let subject = subject.map(|s| one_line(&s, MAX_SUBJECT, "a subject")).transpose()?;
     if let Some(d) = docket_addr(to) {
-        return send_docket(core, from, &d, subject, body, options);
+        return send_docket(core, from, &d, subject, body, options, extra);
     }
     let (to_addr, to_block) = if to.trim() == ME {
         if from.addr == ME {
@@ -408,7 +421,18 @@ pub fn answer_to(core: &Core, id: i64) -> Option<Message> {
 
 /// Answer a message: with words, an option, or both. Your answer to an
 /// agent goes to its pane; an agent's answer to you is open in your inbox.
+/// The digests an entry pins for the images in `extra` (`crate::images`).
+fn images_pinned(extra: &Value) -> Vec<String> {
+    extra.get("images").and_then(|v| serde_json::from_value::<Vec<crate::images::Shared>>(v.clone()).ok()).map(|i| crate::images::digests(&i)).unwrap_or_default()
+}
+
 pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option<&str>) -> Result<Message> {
+    reply_with(core, from, id, body, choice, Value::Null)
+}
+
+/// `reply`, with more on its entry: `images`, written out by the hub that
+/// delivers it.
+pub fn reply_with(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option<&str>, extra: Value) -> Result<Message> {
     let orig = core.store.message(id)?.ok_or_else(|| anyhow!("no message #{id}"))?;
     let mine = |addr: &str| addr == from.addr || (from.addr == ME && addr == ME);
     if !mine(&orig.to_addr) && !mine(&orig.from_addr) {
@@ -469,7 +493,13 @@ pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option
         if let Some((member, block)) = &remote {
             data["team_to"] = json!([{ "member": member, "block": block }]);
         }
-        let s = core.append(&d, kind, &from.who, Some(m.body.clone()), data)?;
+        let pins = images_pinned(&extra);
+        if let Some(x) = extra.as_object() {
+            for (k, v) in x {
+                data[k] = v.clone();
+            }
+        }
+        let s = core.append_with(&d, kind, &from.who, Some(m.body.clone()), data, pins)?;
         m.docket = Some(d.clone());
         m.seq = Some(s.seq);
         core.store.set_message_place(m.id, &d, s.seq)?;
@@ -518,6 +548,38 @@ pub fn render(m: &Message, docket: Option<&str>) -> String {
     out
 }
 
+/// A message placed at an entry that carries images (`data.images`: a
+/// question, a decision): their paths, written out on this hub, after it.
+fn with_images(core: &Core, m: &Message, text: String) -> String {
+    // Announced as long: `wh read` shows the images there.
+    if m.body.len() > MAX_PASTE {
+        return text;
+    }
+    let Some(block) = images_of(core, m) else { return text };
+    // Too long to paste with its images: named, for `wh read` to show.
+    let block = if text.len() + block.len() > MAX_PASTE { format!("Images come with this: `wh read {}` lists them, with their paths.", m.id) } else { block };
+    // Before the line on how to reply, so that stays last.
+    match text.rfind("\n\nReply with `wh reply") {
+        Some(at) => format!("{}\n\n{}{}", &text[..at], block.trim_end(), &text[at..]),
+        None => crate::images::with_block(&text, &block),
+    }
+}
+
+/// The images a message's entry carries, written out on this hub, as the
+/// text that names them: none when it has none.
+pub fn images_of(core: &Core, m: &Message) -> Option<String> {
+    let docket = m.docket.as_deref()?;
+    // By its entry's id: the same on every hub, and there before the
+    // workspace orders a shared docket's entries. Else by its number.
+    let stored = match (&m.entry, m.seq) {
+        (Some(id), _) => core.store.entry_by_id(docket, id).ok()??,
+        (None, Some(seq)) if seq > 0 => core.store.entries_after(docket, seq - 1, 1).ok()?.into_iter().next().filter(|s| s.seq == seq)?,
+        _ => return None,
+    };
+    let images = crate::images::of_entry(&stored.entry().ok()?);
+    (!images.is_empty()).then(|| crate::images::block(core, docket, &images))
+}
+
 /// Messages to a pane (or to you) not yet delivered or read.
 pub fn inbox(core: &Core, who: &Caller) -> Result<Vec<Message>> {
     match &who.block {
@@ -551,13 +613,23 @@ pub async fn deliver_loop(shared: Shared) {
         if swept.elapsed() > Duration::from_secs(600) {
             swept = Instant::now();
             expire(&shared);
+            // What images leave behind: staged ones never sent, and old files written out for agents.
+            let pruned = crate::images::prune(&mut shared.lock());
+            match pruned {
+                Ok((0, 0)) => {}
+                Ok((b, f)) => say!("images: let go of {b} unsent and {f} old files"),
+                Err(e) => say!("images: couldn't tidy up: {e:#}"),
+            }
         }
         let due = {
             let core = shared.lock();
             plan(&core, &last)
         };
         for (m, session, block, root, docket) in due {
-            let text = render(&m, docket.as_deref());
+            let text = {
+                let core = shared.lock();
+                with_images(&core, &m, render(&m, docket.as_deref()))
+            };
             let ok = crate::runtime::for_id(&block).submit(&session, &block, &text).await;
             let mut core = shared.lock();
             // Tried this turn, whatever happened: a paste that went in but

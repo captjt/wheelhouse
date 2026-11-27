@@ -47,6 +47,9 @@ Load the wheelhouse skill for how.
 - You made something the user should be able to open later (a report, a
   page, a design, a screenshot): `wh attach FILE|URL --title "…"`, so it
   stays with the docket after `.tmp/` or a scratch folder is gone.
+- A prompt or message names image paths, or your brief lists Images:
+  open each one before you work from it (they show what it should look
+  like). Screenshot what you built and `wh attach shot.png --against N`.
 - Your brief lists other agents on the docket: you share the work. Split
   it with them; `wh send --to @D-N` reaches all of them.
 - A "[wheelhouse] Message #N" arrives: answer it with `wh reply N`, only

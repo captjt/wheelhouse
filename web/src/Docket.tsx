@@ -9,6 +9,9 @@ import { IconBack, IconBuild, IconInfo } from "./icons";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
 import { QuestionPicker } from "./Picker";
 import { DecisionsSection, IntentSection } from "./Intent";
+import { CallsSection } from "./Call";
+import { NewCallModal, callable } from "./Palette";
+import { IconCall } from "./icons";
 import { ArtifactViewer, ArtifactsSection, RecordViewer } from "./Artifacts";
 import { ChatView } from "./Chat";
 import { IconTerminal } from "./icons";
@@ -28,7 +31,12 @@ import { IconAgents, IconPause, IconPlay } from "./icons";
 import { SubagentsSection } from "./Subagents";
 import { IconCode } from "./icons";
 import { commentPlace, diffPath, fenceFor, type DiffView } from "./diffview";
-import { composeButton, composeHint, composeKind, composeToast, composeWarning, suggestions, type ComposeResult, type Suggestion } from "./compose";
+import { composeButton, composeHint, composeKind, composeToast, composeWarning, imagesHint, suggestions, type ComposeResult, type Suggestion } from "./compose";
+import { addFiles, imageFiles, refsOf, release, takeHanded, trayState, type TrayItem } from "./images";
+import { ImageTray } from "./ImageTray";
+import { Thumbs } from "./Compare";
+import { carriedBy, entryImages, imagesOf, splitImageBlock } from "./images";
+import { IconPaperclip } from "./icons";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
   const hub = useHub();
@@ -45,6 +53,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
   const [viewing, setViewing] = useState<EntryView | null>(null);
   const [record, setRecord] = useState(false);
   const [checkOut, setCheckOut] = useState<CheckRun | null>(null);
+  const [addingCall, setAddingCall] = useState(false);
   // An agent's docket opens to its conversation on a phone; the record is a tap away.
   const [tab, setTab] = useState<"chat" | "docket" | null>(null);
   // A long record shows its latest entries first; the rest are a tap away.
@@ -132,7 +141,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </a>
             </Prop>
           )}
-          {d.protocol !== "review" && (
+          {d.protocol !== "review" && d.protocol !== "call" && (
             <Prop label="Build">
               {hub.state?.build?.tasks.some((t) => t.docket === d.id) ? (
                 <span className="prop-val">{(() => { const t = hub.state!.build!.tasks.find((x) => x.docket === d.id)!; return `${t.repo} · ${t.state === "active" ? t.phase?.replace("_", " ") : t.state}`; })()}</span>
@@ -164,6 +173,13 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               </button>
             )}
           </Prop>
+          {callable(d) && !data.calls?.length && (
+            <Prop label="Calls">
+              <button className="prop-btn muted" onClick={() => setAddingCall(true)} title="Paste or drop a call's transcript: the Listener reads it against this docket and proposes what it settled">
+                <IconCall size={14} /> Add a call…
+              </button>
+            </Prop>
+          )}
           {!d.agent && !building && canStartAgent(d) && (
             <Prop label="Agent">
               <button className="prop-btn muted" onClick={() => hub.setDialog({ kind: "agent", id: d.id })} title={`Start Claude Code, Codex, Antigravity or Pi on this docket, in a new ${spawnRuntime(hub.state)} pane`}>
@@ -234,9 +250,9 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             </>
           )}
           <Prop label="Protocol">
-            <span className="prop-val">{building ? "Build" : d.protocol === "agent" ? "Agent" : d.protocol === "review" ? "Review" : "By hand"}</span>
+            <span className="prop-val">{building ? "Build" : d.protocol === "agent" ? "Agent" : d.protocol === "review" ? "Review" : d.protocol === "call" ? "Call" : "By hand"}</span>
           </Prop>
-          {d.protocol !== "review" && !building && <Prop label="Work">
+          {d.protocol !== "review" && d.protocol !== "call" && !building && <Prop label="Work">
             <span className="prop-val">
               {d.prompts} prompt{d.prompts === 1 ? "" : "s"} · {d.turns} turn{d.turns === 1 ? "" : "s"}
             </span>
@@ -439,7 +455,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
               <MessageCard key={m.id} m={m} />
             ))}
 
-          <IntentSection d={d} entries={entries} onSaved={reload} />
+          {d.protocol !== "call" && <IntentSection d={d} entries={entries} onSaved={reload} />}
+          {data.calls && <CallsSection d={d} calls={data.calls} entries={entries} reload={reload} onAdd={callable(d) ? () => setAddingCall(true) : undefined} />}
           <DecisionsSection decisions={data.decisions ?? []} docket={d.id} repo={ev?.repo ?? null} />
           {ev && verifying && <VerifySection d={d} ev={ev} onCheck={setCheckOut} />}
           <ArtifactsSection entries={entries} onOpen={setViewing} />
@@ -472,7 +489,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
             {(earlier || entries.length <= 200 ? entries : entries.slice(-150))
               .filter((e) => !only || entryBlock(e) === only)
               .map((e) => (
-              <Activity key={e.seq} e={e} d={d} owner={hub.state?.owner || "you"} me={hub.state?.team?.workspace?.you} onOpen={setViewing} onCheck={setCheckOut} />
+              <Activity key={e.seq} e={e} d={d} entries={entries} owner={hub.state?.owner || "you"} me={hub.state?.team?.workspace?.you} onOpen={setViewing} onCheck={setCheckOut} />
             ))}
           </div>
           <Composer ref={composerRef} d={d} onDone={reload} />
@@ -491,7 +508,8 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
       </div>
       )}
       {menu.node}
-      {viewing && <ArtifactViewer e={viewing} docket={d.id} onClose={() => setViewing(null)} />}
+      {addingCall && d && <NewCallModal docket={d.id} onClose={() => setAddingCall(false)} onAdded={reload} />}
+      {viewing && <ArtifactViewer key={viewing.seq} e={viewing} docket={d.id} entries={data?.entries ?? []} onOpen={setViewing} onClose={() => setViewing(null)} />}
       {checkOut && <CheckOutput c={checkOut} onClose={() => setCheckOut(null)} />}
       {record && <RecordViewer d={d} onClose={() => setRecord(false)} />}
       {linking !== false && (
@@ -626,7 +644,7 @@ function Prop({ label, children }: { label: string; children: ReactNode }) {
 
 // ---- the activity feed ----
 
-function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docket; owner: string; me?: string; onOpen: (e: EntryView) => void; onCheck: (c: CheckRun) => void }) {
+function Activity({ e, d, entries, owner, me, onOpen, onCheck }: { e: EntryView; d: Docket; entries: EntryView[]; owner: string; me?: string; onOpen: (e: EntryView) => void; onCheck: (c: CheckRun) => void }) {
   // On a shared docket, whose it is: a teammate's (`sam`, `hub@sam`,
   // `codex@sam`) is named for them, never "You".
   const mate = mateOf(e.actor, d.id, me);
@@ -651,7 +669,9 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
       {mark}
     </div>
   );
-  const comment = (avatar: ReactNode, name: ReactNode, verb: string, body: string, tone = "") => (
+  // The images an entry carries (src/images.rs), shown under what it says.
+  const carried = entryImages(e, entries);
+  const comment = (avatar: ReactNode, name: ReactNode, verb: string, body: string, tone = "", images = true) => (
     <div className={`act act-comment${tone ? ` tone-${tone}` : ""}`}>
       <div className="act-card">
         <div className="act-card-head">
@@ -664,8 +684,9 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
           {mark}
         </div>
         <Clamp>
-          <Prose text={body} />
+          <Prose text={body} images={images} />
         </Clamp>
+        <Thumbs items={carried} onOpen={onOpen} />
       </div>
     </div>
   );
@@ -720,7 +741,10 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
     }
     case "question":
       return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, e.actor.type === "agent" ? actorApp : youName, `asked ${data.to === "me" ? "you" : data.to}${data.subject ? ` · ${data.subject}` : ""} (#${data.message})`, `${e.body || ""}\n\nOptions: ${(data.options || []).join(" · ")}`, "ask");
+    case "proposal":
+      return comment(<AppAvatar app="claude-code" size={18} />, "Listener", `proposed #${data.n}`, `${e.body || ""}\n\n> ${String(data.quote || "").replace(/\n/g, " ")}`, "", false);
     case "decision":
+      if (data.proposal != null) return sys(you, <><b>{youName}</b> {data.choice === "Apply" ? "applied" : "ignored"} #{data.proposal}{data.applied?.docket ? <> to <a className="act-link" href={`#/d/${data.applied.docket}`}>{data.applied.docket}</a></> : null}{data.edited ? ", edited" : ""}</>);
       if (data.via === "composer")
         return comment(you, youName, `decided${data.subject ? ` · ${data.subject}` : ""}`, `**${data.choice}**`, "you");
       return comment(e.actor.type === "person" ? you : <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} />, e.actor.type === "person" ? youName : actorApp, `chose “${data.choice}” (#${data.replies_to})`, e.body && e.body !== data.choice ? e.body : `**${data.choice}**`, e.actor.type === "person" ? "you" : "");
@@ -730,7 +754,11 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
         const verb = data.replies_to ? `replied to #${data.replies_to}` : data.to === "me" ? `wrote to you${data.subject ? ` · ${data.subject}` : ""}` : `wrote to ${data.to}`;
         return comment(e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : you, writer, verb, e.body || "", e.actor.type === "person" ? "you" : "");
       }
-      if (data.via === "prompt") return comment(you, youName, `asked ${agent}`, e.body || "", "you");
+      if (data.via === "prompt") {
+        // The images' paths are for the agent; the thumbnails are just above, where they were kept.
+        const p = splitImageBlock(e.body || "");
+        return comment(you, youName, `asked ${agent}${p.images ? ` · with ${p.images === 1 ? "an image" : `${p.images} images`}` : ""}`, p.text, "you");
+      }
       // A comment on a diff's lines (src/comments.rs): where, then what it says, and the code it's on.
       if (data.via === "diff" && data.diff) {
         const place = commentPlace(data.diff);
@@ -783,6 +811,7 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
         return sys(<IconPR size={16} />, <>Round {data.round}'s review is <a className="act-link" href={data.url} target="_blank" rel="noreferrer">on GitHub</a></>, "approved");
       return sys(hubA, <>Linked {e.body}</>);
     case "observed":
+      if (data.what === "listen") return sys(hubA, <>{e.body}</>, data.state === "failed" ? "error" : undefined);
       if (data.what === "review" && data.source === "wheelhouse") return null;
       if (data.what === "review-event") {
         const tone = data.event === "posted" ? "approved" : data.event === "dismissed" || data.event === "post-refused" ? "denied" : data.event === "merged" ? "approved" : undefined;
@@ -845,6 +874,32 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
     case "artifact": {
       const by = e.actor.type === "person" ? you : e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : hubA;
       const name = e.actor.type === "person" ? youName : e.actor.type === "agent" ? actorApp : "Wheelhouse";
+      // Shown already, under the message it went with.
+      if (carriedBy(e, entries)) return null;
+      // An image: shown, not only named. An original before markup stays a line.
+      if (imagesOf([e]).length && data.image !== "original") {
+        const against = data.against != null ? entries.find((x) => x.seq === data.against) : undefined;
+        return (
+          <div className="act act-sys act-image">
+            <span className="act-avatar">{by}</span>
+            <span className="act-text">
+              <b>{name}</b> {data.image === "attached" && against ? "attached a screenshot to compare with" : data.image === "intent" ? "put an image in the intent" : "shared an image"}
+              {against ? (
+                <>
+                  {" "}
+                  <button className="act-link link-btn" onClick={() => onOpen(e)}>
+                    #{against.seq} {against.data?.caption || against.body}
+                  </button>
+                </>
+              ) : null}{" "}
+              <span className="act-dot">·</span> {time}
+              <Thumbs items={[e]} onOpen={onOpen} />
+              {data.caption ? <span className="act-caption">{data.caption}</span> : null}
+            </span>
+            {mark}
+          </div>
+        );
+      }
       return sys(
         by,
         <>
@@ -962,6 +1017,30 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
   const toast = useToast();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [tray, setTray] = useState<TrayItem[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+  const trayOk = trayState(tray);
+  // The tray as it is now, for handlers made on an earlier render.
+  const trayNow = useRef(tray);
+  trayNow.current = tray;
+  const add = (files: File[]) => {
+    // While sending: the tray goes with the send, so nothing's added to it.
+    if (busy) return toast("Sending: add images after it's gone", "error");
+    const said = addFiles(files, setTray, trayNow.current.length);
+    if (said) toast(said, "error");
+  };
+  // Images from the Share page (#/share): handed on before this page opened, or while it's open.
+  useEffect(() => {
+    const take = () => {
+      const h = takeHanded(d.id);
+      if (!h) return;
+      add(h.files);
+    };
+    take();
+    window.addEventListener("wh-share-images", take);
+    return () => window.removeEventListener("wh-share-images", take);
+  }, [d.id]);
   const [pick, setPick] = useState(0);
   const kind = composeKind(text);
   const sugg = suggestions(text, d);
@@ -974,11 +1053,16 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
   const complete = (s: Suggestion) => (setText(s.insert), setPick(0));
   const send = () => {
     const t = text.trim();
-    if (!t || busy) return;
+    if ((!t && !tray.length) || busy || !trayOk.ok) return;
     setBusy(true);
-    post<ComposeResult>(`/api/dockets/${encodeURIComponent(d.id)}/compose`, { text: t }).then(
+    const sending = tray;
+    post<ComposeResult>(`/api/dockets/${encodeURIComponent(d.id)}/compose`, { text: t, images: refsOf(sending) }).then(
       (r) => {
         setBusy(false);
+        // Kept on the docket now: the images that went leave the tray, whatever the command was.
+        const went = new Set(sending.map((x) => x.id));
+        release(sending);
+        setTray((now) => now.filter((x) => !went.has(x.id)));
         // A task's text stays until its dialog starts the agent: cancelling it loses nothing.
         if (r.did === "task") hub.setDialog({ kind: "agent", id: d.id, prompt: r.prompt });
         else setText("");
@@ -990,7 +1074,20 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
     );
   };
   return (
-    <div className="composer">
+    <div
+      className={`composer${dragging ? " dropping" : ""}`}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.items).some((i) => i.kind === "file")) (e.preventDefault(), setDragging(true));
+      }}
+      onDragLeave={(e) => e.currentTarget.contains(e.relatedTarget as Node) || setDragging(false)}
+      onDrop={(e) => {
+        const files = imageFiles(e.dataTransfer);
+        setDragging(false);
+        if (!files.length) return;
+        e.preventDefault();
+        add(files);
+      }}
+    >
       {sugg.length > 0 && (
         <div className="compose-sugg" role="listbox" aria-label="Commands and agents">
           {sugg.map((s, i) => (
@@ -1007,6 +1104,12 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
         value={text}
         rows={text.split("\n").length > 2 ? 5 : 2}
         onChange={(e) => (setText(e.target.value), setPick(0))}
+        onPaste={(e) => {
+          const files = imageFiles(e.clipboardData);
+          if (!files.length) return;
+          e.preventDefault();
+          add(files);
+        }}
         onKeyDown={(e) => {
           if (sugg.length && (e.key === "Tab" || (e.key === "Enter" && !e.metaKey && !e.ctrlKey && !e.shiftKey))) return (e.preventDefault(), complete(sugg[pick % sugg.length]));
           if (sugg.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) return (e.preventDefault(), setPick((p) => (p + (e.key === "ArrowDown" ? 1 : sugg.length - 1)) % sugg.length));
@@ -1015,10 +1118,25 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
           markdownKeys(e);
         }}
       />
+      <ImageTray tray={tray} set={setTray} disabled={busy} />
       <div className="composer-bar">
-        <span className={warn ? "small compose-warn" : "muted small"}>{warn?.text ?? composeHint(kind, d.id)}</span>
+        <button className="icon-btn" title="Add images: or paste or drop them here" aria-label="Add images" disabled={busy} onClick={() => picker.current?.click()}>
+          <IconPaperclip size={15} />
+        </button>
+        <input
+          ref={picker}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          onChange={(e) => {
+            add(Array.from(e.target.files ?? []));
+            e.target.value = "";
+          }}
+        />
+        <span className={warn || !trayOk.ok ? "small compose-warn" : "muted small"}>{warn?.text ?? trayOk.why ?? (tray.length ? imagesHint(kind, tray.length) : composeHint(kind, d.id))}</span>
         <span className="spacer" />
-        <button className="btn btn-primary btn-small" disabled={!text.trim() || busy || !!warn?.blocked} onClick={send}>
+        <button className="btn btn-primary btn-small" disabled={(!text.trim() && !tray.length) || busy || !!warn?.blocked || !trayOk.ok} onClick={send}>
           {composeButton(kind)} <Kbd>⌘↩</Kbd>
         </button>
       </div>

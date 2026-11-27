@@ -66,7 +66,7 @@ enum GroupBy: String, CaseIterable {
 
 /// What a new docket starts as.
 enum NewMode: String, Identifiable {
-    case blank, linear, agent
+    case blank, linear, agent, call
     var id: String { rawValue }
 }
 
@@ -93,6 +93,10 @@ final class Nav {
     var startingPrompt: String?
     /// Done was refused for want of evidence: its checks, or your word.
     var closing: Closing?
+    /// Adding a call's transcript to a docket, from its page.
+    var addingCall: String?
+    /// The docket New Docket's Call starts About on: the one you were on.
+    var callOn: String?
     var inspector = true
     var shortcuts = false
     /// The docket the window is about now: the one selected and shown.

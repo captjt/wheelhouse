@@ -139,6 +139,24 @@ Rex pane or Herdr terminal.
 - **It ends with the session** and moves to Done on its own. Short
   sessions (one prompt, a few minutes) collapse into one **Quick** line.
 
+### Calls (what a call settled)
+
+Calls happen in a docket's life: as its intent and design move, people
+meet. A call's transcript is kept on the docket it was about (an
+artifact under Calls; a call about no one docket gets a docket of its
+own, protocol `call`). Its Listener, Claude Code run headless with no
+tools, MCP servers, settings or hooks, reads it against that docket in
+full (intent, decisions in force, agents, what happened lately) and a
+line on each other open docket, and proposes the intent as the call
+revised it, decisions, instructions and questions for its agents, and,
+for clearly separate work, a new docket, each quoting the call. Nothing
+changes until you apply it, and applying goes through the composer's
+paths: the intent as its next version (refused if it moved since the
+call was read), a decision as `/decide`, an instruction as `@all`, a
+question as `/ask`, a task as a new docket with its intent. Phase 1
+takes transcripts; capturing audio and listening live come later
+(`src/calls.rs`, `site/…/features/calls.mdx`).
+
 ### Where the protocols meet
 
 These things come only from having the protocols on one record:

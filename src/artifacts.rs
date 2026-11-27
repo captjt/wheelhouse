@@ -84,14 +84,18 @@ pub fn links_in(text: &str) -> Vec<String> {
     out
 }
 
-fn existing(core: &Core, docket: &str, digest: Option<&str>, url: Option<&str>, name: &str) -> Result<Option<i64>> {
+/// `extra`'s image fields (`crate::images`): an image kept again with
+/// another role, caption, pins or reference is its own artifact, so what
+/// was said about it each time is kept.
+pub fn existing(core: &Core, docket: &str, digest: Option<&str>, url: Option<&str>, name: &str, extra: &Value) -> Result<Option<i64>> {
+    const IMAGE: [&str; 4] = ["image", "caption", "pins", "against"];
     for s in core.store.entries(docket)? {
         let Ok(e) = s.entry() else { continue };
         if e.kind != "artifact" {
             continue;
         }
         let same = match (digest, url) {
-            (Some(d), _) => e.data["digest"].as_str() == Some(d) && e.data["name"].as_str() == Some(name),
+            (Some(d), _) => e.data["digest"].as_str() == Some(d) && e.data["name"].as_str() == Some(name) && IMAGE.iter().all(|k| e.data[*k] == extra[*k]),
             (None, Some(u)) => e.data["url"].as_str() == Some(u),
             _ => false,
         };
@@ -123,7 +127,7 @@ pub fn attach(core: &mut Core, docket: &str, who: &Who, a: New) -> Result<(i64, 
             }
             let hex = hex::encode(&Sha256::digest(&bytes));
             let digest = format!("sha256:{hex}");
-            if let Some(seq) = existing(core, docket, Some(&digest), None, &name)? {
+            if let Some(seq) = existing(core, docket, Some(&digest), None, &name, &a.extra)? {
                 return Ok((seq, false));
             }
             core.store.put_blob(&hex, &bytes, &crate::time::now_ms())?;
@@ -136,7 +140,7 @@ pub fn attach(core: &mut Core, docket: &str, who: &Who, a: New) -> Result<(i64, 
             if !url.starts_with("https://") {
                 bail!("a linked artifact is an https:// link");
             }
-            if let Some(seq) = existing(core, docket, None, Some(&url), &name)? {
+            if let Some(seq) = existing(core, docket, None, Some(&url), &name, &a.extra)? {
                 return Ok((seq, false));
             }
             if url.starts_with("https://claude.ai/") {
@@ -163,6 +167,10 @@ pub fn list(core: &Core, docket: &str) -> Result<Vec<Value>> {
             "title": e.body, "name": e.data["name"], "media_type": e.data["media_type"], "size": e.data["size"],
             "digest": e.data["digest"], "url": e.data["url"], "provider": e.data["provider"], "source": e.data["source"],
             "group": e.data["group"], "round": e.data["round"], "role": e.data["role"], "reviewer": e.data["reviewer"],
+            "image": e.data["image"], "caption": e.data["caption"], "width": e.data["width"], "height": e.data["height"],
+            "pins": e.data["pins"], "original": e.data["original"], "against": e.data["against"],
+            // Whether its entry pins the file it names, as docs/record.md says it must.
+            "pinned": e.data["digest"].as_str().is_some_and(|d| e.blobs.iter().any(|b| b == d)),
         }));
     }
     out.reverse();

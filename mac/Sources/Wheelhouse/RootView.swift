@@ -45,6 +45,7 @@ struct RootView: View {
         .sheet(item: Binding(get: { nav.holding.map(IdBox.init) }, set: { nav.holding = $0?.id })) { b in HoldSheet(id: b.id) }
         .sheet(item: Binding(get: { nav.starting.map(IdBox.init) }, set: { nav.starting = $0?.id; if $0 == nil { nav.startingPrompt = nil } })) { b in StartAgentSheet(id: b.id, prompt: nav.startingPrompt) }
         .sheet(item: $nav.closing) { c in CloseOnWordSheet(closing: c) }
+        .modifier(AddCallSheets(nav: nav))
         .background(WindowReader { Windows.register($0, nav) })
         // G, then a letter: go there, as in the web app.
         .onKeyPress(phases: .down) { press in

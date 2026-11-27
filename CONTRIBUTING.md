@@ -79,6 +79,12 @@ WH_STATE=/tmp/wh-try WH_HTTP=127.0.0.1:7610 WH_TAILNET=off WH_NOTIFY=off \
 `wh serve` refuses to start beside a hub that's already running on the
 same socket or port.
 
+Test the Herdr runtime through `scripts/fake-hc`, never the real `hc`
+with a scratch `HOME`: herdr-core starts a server for each home it's
+given, and under a `mktemp -d` folder its socket path is too long
+("the socket path for session "default" is too long"). A stray one
+started that way stops with `HOME=<that folder> hc server stop`.
+
 **The made-up world.** `just screenshots` (`scripts/screenshots.sh`) builds
 the binary, makes a world of agents in Rex and Herdr (through `scripts/fake-rex` and `scripts/fake-hc`),
 plays their prompts and replies through the same hooks Claude Code calls,

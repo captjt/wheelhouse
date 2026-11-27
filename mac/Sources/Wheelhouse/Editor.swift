@@ -14,11 +14,15 @@ struct Editor: View {
     var focus = false
     var onSubmit: () -> Void = {}
     var onCancel: (() -> Void)?
+    /// Images pasted or dropped in: their names and bytes, and how to put
+    /// text where the cursor was when they came (the intent's Markdown).
+    /// Nil: the box takes text only.
+    var onImages: ImagesIn?
     @State private var height: CGFloat = 0
     @Environment(\.isEnabled) private var enabled
 
     var body: some View {
-        TextViewBox(text: $text, height: $height, returnSends: returnSends, font: font, focus: focus, enabled: enabled, onSubmit: onSubmit, onCancel: onCancel)
+        TextViewBox(text: $text, height: $height, returnSends: returnSends, font: font, focus: focus, enabled: enabled, onSubmit: onSubmit, onCancel: onCancel, onImages: onImages)
             .frame(height: min(max(height, minHeight), maxHeight))
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
@@ -27,6 +31,10 @@ struct Editor: View {
             }
     }
 }
+
+/// Images pasted or dropped into an Editor, and how to insert text where
+/// they came in.
+typealias ImagesIn = (_ images: [(name: String, data: Data)], _ insert: @escaping (String) -> Void) -> Void
 
 /// Editable only while it has the keyboard. On macOS 26 an editable text
 /// view that has never had the keyboard keeps its insertion point
@@ -37,6 +45,48 @@ private final class NoteTextView: NSTextView {
     /// Whether it may be edited at all (the Editor's `isEnabled`).
     var wantsEditable = true {
         didSet { isEditable = wantsEditable && window?.firstResponder === self }
+    }
+
+    var onImages: ImagesIn?
+
+    /// Hand images to `onImages`, with a way to put text where they came in.
+    private func take(_ pb: NSPasteboard, at range: NSRange) -> Bool {
+        guard let onImages, isEditable || wantsEditable else { return false }
+        let images = Images.read(pb)
+        guard !images.isEmpty else { return false }
+        onImages(images) { [weak self] s in
+            guard let self else { return }
+            let len = (self.string as NSString).length
+            let r = NSRange(location: min(range.location, len), length: 0)
+            if self.shouldChangeText(in: r, replacementString: s) {
+                self.replaceCharacters(in: r, with: s)
+                self.didChangeText()
+            }
+        }
+        return true
+    }
+
+    override func paste(_ sender: Any?) {
+        if take(NSPasteboard.general, at: selectedRange()) { return }
+        super.paste(sender)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if onImages != nil, Images.has(sender.draggingPasteboard) { return .copy }
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if onImages != nil, Images.has(sender.draggingPasteboard) { return .copy }
+        return super.draggingUpdated(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if onImages != nil {
+            let at = characterIndexForInsertion(at: convert(sender.draggingLocation, from: nil))
+            if take(sender.draggingPasteboard, at: NSRange(location: at, length: 0)) { return true }
+        }
+        return super.performDragOperation(sender)
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -60,6 +110,7 @@ private struct TextViewBox: NSViewRepresentable {
     let enabled: Bool
     let onSubmit: () -> Void
     let onCancel: (() -> Void)?
+    let onImages: ImagesIn?
 
     func makeCoordinator() -> Coord { Coord(self) }
 
@@ -71,6 +122,8 @@ private struct TextViewBox: NSViewRepresentable {
         let tv = scroll.documentView as! NoteTextView
         tv.delegate = context.coordinator
         tv.wantsEditable = enabled
+        tv.onImages = onImages
+        if onImages != nil { tv.registerForDraggedTypes([.png, .tiff, .fileURL]) }
         tv.drawsBackground = false
         tv.isRichText = false
         tv.allowsUndo = true
@@ -91,6 +144,7 @@ private struct TextViewBox: NSViewRepresentable {
         context.coordinator.parent = self
         guard let tv = scroll.documentView as? NoteTextView else { return }
         tv.wantsEditable = enabled
+        tv.onImages = onImages
         tv.isSelectable = enabled
         if tv.string != text {
             // Set from outside (sent, so cleared; or a new draft): the

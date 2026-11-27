@@ -513,7 +513,44 @@ export type Decision = {
   at?: string | null;
 };
 
-export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify; queued?: { id: number; body: string; at: string }[]; decisions?: Decision[]; evidence?: Evidence };
+/** What a call proposes for a docket (src/calls.rs `Proposal`), and what became of it. */
+export type Proposal = {
+  n: number;
+  seq: number;
+  at: string;
+  /** The call it came from: the number of the entry keeping its transcript. */
+  call: number;
+  kind: "intent" | "decide" | "instruct" | "ask" | "task";
+  docket?: string | null;
+  subject?: string | null;
+  choice?: string | null;
+  question?: string | null;
+  options: string[];
+  /** An instruction to the docket's agents. */
+  text?: string | null;
+  title?: string | null;
+  /** A task's intent, or the docket's whole intent as the call revised it. */
+  intent?: string | null;
+  /** For an intent change: the intent version the call was read against. */
+  base?: number | null;
+  quote: string;
+  quote_found: boolean;
+  why?: string | null;
+  status: "open" | "applied" | "ignored";
+  outcome?: { seq: number; at: string; applied?: { docket?: string; did?: string } | null; edited?: Record<string, unknown> | null };
+};
+
+/** A call kept on a docket: its proposals and how the Listener's reading went (src/calls.rs `view`). */
+export type CallView = {
+  /** The number of the entry keeping its transcript. */
+  call: number;
+  title: string;
+  at: string;
+  listening: { state: "started" | "done" | "failed" | "stopped" | null; at?: string; why?: string | null; left_out?: string[] | null; proposals?: number | null };
+  proposals: Proposal[];
+};
+
+export type DocketPage = { docket: Docket; entries: EntryView[]; verify: Verify; queued?: { id: number; body: string; at: string }[]; decisions?: Decision[]; evidence?: Evidence; calls?: CallView[] };
 
 /** A refusal from the hub: its sentence, and its status (409: not now, or not on what was said). */
 export type ApiError = Error & { status?: number };

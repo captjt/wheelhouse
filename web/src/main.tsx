@@ -21,6 +21,7 @@ import { post } from "./api";
 import { AgentsView, DocketListView } from "./views";
 import { SettingsView } from "./Settings";
 import { HoldDialog, RefusedDialog } from "./Verify";
+import { ShareView } from "./Share";
 import "./styles.css";
 
 // A docket's code changes: its own chunk, with the highlighter, loaded on first open.
@@ -106,6 +107,7 @@ function RouteView({ route }: { route: string[] }) {
   if (page === "builds") return <BuildsView />;
   if (page === "team") return <TeamView />;
   if (page === "settings") return <SettingsView section={route[1]} />;
+  if (page === "share") return <ShareView staged={route[1]} />;
   if (page === "session" && route[1]) {
     const s = route[1];
     return (
@@ -151,7 +153,7 @@ function App() {
   const hub = useHub();
   const route = useRoute();
   const [palette, setPalette] = useState(false);
-  const [creating, setCreating] = useState<false | "blank" | "linear" | "agent">(false);
+  const [creating, setCreating] = useState<false | "blank" | "linear" | "agent" | "call">(false);
   const [drawer, setDrawer] = useState(false);
   const [more, setMore] = useState(false);
   const phone = usePhone();
@@ -188,7 +190,7 @@ function App() {
   useEffect(() => {
     if (page === "d") return;
     const path = `/${route.map(encodeURIComponent).join("/")}` || "/view/active";
-    const titles: Record<string, string> = { inbox: "Inbox", reviews: "Reviews", builds: "Builds", recap: "Recap", agents: "Agents", team: "Team", settings: "Settings" };
+    const titles: Record<string, string> = { share: "Share", inbox: "Inbox", reviews: "Reviews", builds: "Builds", recap: "Recap", agents: "Agents", team: "Team", settings: "Settings" };
     const views: Record<string, string> = { active: "Active", all: "All dockets", done: "Done" };
     const title = page === "session" ? route[1] : page === "view" ? views[route[1] || "active"] : titles[page];
     if (!title) return;
@@ -236,6 +238,7 @@ function App() {
   const openNew = useCallback(() => setCreating("blank"), []);
   const openNewLinear = useCallback(() => setCreating("linear"), []);
   const openNewAgent = useCallback(() => setCreating("agent"), []);
+  const openNewCall = useCallback(() => setCreating("call"), []);
 
   const sessions = useMemo(() => {
     const m = new Map<string, number>();
@@ -285,8 +288,8 @@ function App() {
   const closeDialog = useCallback(() => hub.setDialog(null), [hub.setDialog]);
   const overlays = (
     <>
-      {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} onNewAgent={openNewAgent} context={context} />}
-      {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} onClose={() => setCreating(false)} />}
+      {palette && <Palette onClose={closePalette} onNew={openNew} onNewLinear={openNewLinear} onNewAgent={openNewAgent} onNewCall={openNewCall} context={context} />}
+      {creating && <NewDocket linear={creating === "linear"} agent={creating === "agent"} call={creating === "call"} docket={context?.id} onClose={() => setCreating(false)} />}
       {hub.dialog?.kind === "refused" && <RefusedDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
       {hub.dialog?.kind === "hold" && <HoldDialog key={hub.dialog.id} id={hub.dialog.id} onClose={closeDialog} />}
       {hub.dialog?.kind === "agent" && <StartAgent key={`${hub.dialog.id}:${hub.dialog.prompt ?? ""}`} id={hub.dialog.id} prompt={hub.dialog.prompt} onClose={closeDialog} />}

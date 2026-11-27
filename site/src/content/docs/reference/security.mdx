@@ -57,6 +57,18 @@ Files an agent keeps (an HTML page, an SVG) open in a sandboxed frame with no
 access to the app's origin. Opened directly, they're served with a sandbox
 content security policy.
 
+### An image is checked by its bytes
+
+The hub takes an image for agents only when its header says it's a PNG, JPEG,
+GIF or WebP (never SVG, whatever it's called), refuses one claiming more than
+100 megapixels before anything decodes it, and keeps at most 15 MB. It writes
+images out only under its own state folder, by hash, with a cleaned name,
+readable by you alone, and only an image the entry naming it pins: a
+teammate's entry can't have it write out anything else this hub keeps. A brief
+credits each image to whoever signed its entry. The phone's share target takes
+images only, never words, since another site can post a form to it as well as
+the share sheet can. See [Images](/features/images/).
+
 ### Text typed into a pane is only text
 
 - Messages and queued prompts lose every control character, escape sequences

@@ -7,13 +7,14 @@ import { appName, liveAgents, type Docket, type DocketAgent } from "./api.ts";
 export type ComposeKind = "note" | "instruct" | "ask" | "decide" | "task";
 
 /** What the hub answers (`POST /api/dockets/{id}/compose`). */
-export type ComposeResult =
+export type ComposeResult = (
   | { did: "note"; seq: number }
   | { did: "instructed"; sent: { to: string; ok: boolean; queued?: boolean; error?: string }[] }
   | { did: "asked"; message: number; options: string[] }
   | { did: "answered"; key: string; message: number; choice?: string | null }
   | { did: "decided"; key: string; seq: number; told: string[] }
-  | { did: "task"; prompt: string };
+  | { did: "task"; prompt: string }
+) & { images?: { digest: string; name: string }[] };
 
 export const COMMANDS: { word: string; kind: ComposeKind; what: string }[] = [
   { word: "ask", kind: "ask", what: "Ask the agents here: Which store? | Postgres | SQLite" },
@@ -48,6 +49,22 @@ export function composeHint(k: ComposeKind, id: string): string {
       return "Opens Add an agent with this prompt";
     default:
       return "Signed as you · @agent, /ask, /decide, /task";
+  }
+}
+
+/** What happens to the images in the tray, by what you're sending. */
+export function imagesHint(k: ComposeKind, n: number): string {
+  const them = n === 1 ? "The image goes" : `The ${n} images go`;
+  switch (k) {
+    case "instruct":
+      return `${them} to that agent as ${n === 1 ? "a file" : "files"} it opens`;
+    case "ask":
+    case "decide":
+      return `${them} to the agents with it`;
+    case "task":
+      return `${them} with the new agent's prompt`;
+    default:
+      return `${n === 1 ? "Kept" : "All kept"} with the docket: agents see ${n === 1 ? "it" : "them"} in wh brief`;
   }
 }
 

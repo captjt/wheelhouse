@@ -186,8 +186,10 @@ function pre(text: string): DocumentFragment {
  * Markdown as sanitized nodes, cached by the text. Callers insert a clone
  * (`.cloneNode(true)`), never the cached fragment itself.
  */
-export function renderMarkdown(text: string): DocumentFragment {
-  const hit = cache.get(text);
+export function renderMarkdown(text: string, opts: { images?: boolean } = {}): DocumentFragment {
+  const images = opts.images !== false;
+  const key = images ? text : `\u0000noimg\u0000${text}`;
+  const hit = cache.get(key);
   if (hit) return hit;
   let frag: DocumentFragment;
   if (text.length > LIMIT) {
@@ -199,10 +201,10 @@ export function renderMarkdown(text: string): DocumentFragment {
     } catch {
       html = null;
     }
-    frag = html === null ? pre(text) : finish(purify(html));
+    frag = html === null ? pre(text) : finish(purify(html, images ? [] : ["img", "picture"]));
   }
   if (cache.size > 400) cache.delete(cache.keys().next().value as string);
-  cache.set(text, frag);
+  cache.set(key, frag);
   return frag;
 }
 

@@ -18,14 +18,15 @@ struct ChatView: View {
 
     enum Item: Identifiable {
         case you(Int, String, String, note: Bool, to: String?)
-        case agent(Int, String, String, app: String, who: String?, ask: [String]?, subject: String?)
+        /// `images`: false for words from outside (the Listener's), which load none.
+        case agent(Int, String, String, app: String, who: String?, ask: [String]?, subject: String?, images: Bool = true)
         case chose(Int, String)
         case sys(Int, String, LiveState?)
         case file(Entry)
         case pause(Int, String)
         var id: Int {
             switch self {
-            case let .you(s, _, _, _, _), let .agent(s, _, _, _, _, _, _), let .chose(s, _), let .sys(s, _, _), let .pause(s, _): s
+            case let .you(s, _, _, _, _), let .agent(s, _, _, _, _, _, _, _), let .chose(s, _), let .sys(s, _, _), let .pause(s, _): s
             case let .file(e): e.seq
             }
         }
@@ -65,6 +66,10 @@ struct ChatView: View {
                 else if e.actorType == "person", !x["message"].exists { put(.you(e.seq, e.at, e.body ?? "", note: true, to: nil), nil) }
             case "question":
                 put(.agent(e.seq, e.at, e.body ?? "", app: app, who: who, ask: x["options"].strings, subject: x["subject"].str), by)
+            case "proposal":
+                put(.agent(e.seq, e.at, Calls.proposedBody("Proposed #\(x["n"].int ?? 0): \(e.body ?? "")", quote: x["quote"].str), app: "claude-code", who: "Listener", ask: nil, subject: nil, images: false), nil)
+            case "decision" where x["proposal"].int != nil:
+                put(.sys(e.seq, Calls.answered(x), nil), nil)
             case "decision" where x["via"].str == "composer":
                 // One of yours: a subject, not a question it answers.
                 let c = x["choice"].str ?? ""
@@ -76,6 +81,7 @@ struct ChatView: View {
                 if let b = e.body, !b.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { put(.agent(e.seq, e.at, b, app: app, who: who, ask: nil, subject: nil), by) }
             case "observed":
                 if x["what"].str == "blocked" { put(.sys(e.seq, "\(who.map { "\($0) waited" } ?? "Waited") on you\(x["kind"].str.map { " (\($0))" } ?? "")\(e.body.map { ": \($0)" } ?? "")", .blocked), by) }
+                else if x["what"].str == "listen" { put(.sys(e.seq, e.body ?? "", x["state"].str == "failed" ? .error : nil), nil) }
                 else if x["what"].str == "error" { put(.sys(e.seq, "\(who.map { "\($0) failed" } ?? "Failed")\(e.body.map { ": \($0)" } ?? "")", .error), by) }
             case "approval":
                 if x["decision"].str == "answer" {
@@ -219,7 +225,7 @@ struct ChatView: View {
                 YouBubble(text: text, note: note).help(stamp(at))
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
-        case let .agent(_, at, text, app, who, ask, subject):
+        case let .agent(_, at, text, app, who, ask, subject, images):
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 7) {
                     AppAvatar(app: app, size: 18)
@@ -230,7 +236,7 @@ struct ChatView: View {
                 }
                 .font(.system(size: 12.5))
                 Clamp(limit: 520) {
-                    MarkdownView(text: (ask?.isEmpty == false) ? "\(text)\n\nOptions: \(ask!.joined(separator: " · "))" : text)
+                    MarkdownView(text: (ask?.isEmpty == false) ? "\(text)\n\nOptions: \(ask!.joined(separator: " · "))" : text, images: images)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

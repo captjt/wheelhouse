@@ -144,6 +144,21 @@ refused() { # pattern command...  (fails, and says pattern)
   echo "$out" | grep -iE "$pat" >/dev/null
 }
 head_of() { as "$1" show "$2" | sed -n 's/.*head \([0-9a-f]*\).*/\1/p' | head -1; }
+png() { # file width height  (a real PNG header: enough for the hub to take it)
+  python3 -I -c 'import struct,sys,zlib
+w,h=int(sys.argv[2]),int(sys.argv[3])
+c=lambda t,d: struct.pack(">I",len(d))+t+d+struct.pack(">I",zlib.crc32(t+d)&0xffffffff)
+open(sys.argv[1],"wb").write(b"\x89PNG\r\n\x1a\n"+c(b"IHDR",struct.pack(">IIBBBBB",w,h,8,2,0,0,0))+c(b"IDAT",zlib.compress(b"\0"*(w*3+1)*h))+c(b"IEND",b""))' "$@"
+}
+stage() { # who file  (stages an image; prints its digest)
+  curl -fsS --max-time 20 -H 'x-wheelhouse: 1' --data-binary @"$2" "http://127.0.0.1:$(port_of "$1")/api/images?name=$(basename "$2")" | jq -r .digest
+}
+compose() { # who docket json
+  curl -fsS --max-time 20 -H 'x-wheelhouse: 1' -H 'content-type: application/json' -d "$3" "http://127.0.0.1:$(port_of "$1")/api/dockets/$2/compose"
+}
+blob_code() { # who digest
+  curl -s -o /dev/null -w '%{http_code}' -H 'x-wheelhouse: 1' "http://127.0.0.1:$(port_of "$1")/api/blobs/$2?name=x.png"
+}
 
 mkdir -p "$t/ws"
 start_ws
@@ -184,18 +199,27 @@ ok "Sam is in; both hubs have the same member log, and it checks"
 
 step "Jordan shares a docket; its history stays on Jordan's Mac"
 D=$(as jordan new "Rate limits on the public API")
-as jordan intent "$D" "Every public route answers 429 past its bucket." >/dev/null
+png "$t/page.png" 40 30
+mock=$(stage jordan "$t/page.png")
+as jordan intent "$D" "Every public route answers 429 past its bucket.
+
+![The rate limit page](/api/blobs/$mock?name=page.png)" >/dev/null
 as jordan note "$D" "Start with the token bucket in middleware." >/dev/null
 out=$(as jordan team share "$D")
 S=$(echo "$out" | sed -n 's/.* shared as \(ACME-[0-9]*\).*/\1/p')
 [ "$S" = "ACME-1" ] || fail "the share: $out"
 as jordan show "$D" | grep >/dev/null "shared_as" || fail "$D doesn't say it was shared"
+# The intent, pinned again with its image, goes from Jordan's outbox.
+sync jordan
 sync sam
 as sam show "$S" | grep >/dev/null "Rate limits on the public API" || fail "Sam doesn't see $S"
 api sam "/api/dockets/$S" | jq -e '.docket.intent.body | contains("429")' >/dev/null || fail "Sam doesn't see the intent"
 as sam verify "$S" >/dev/null || fail "$S doesn't check on Sam's hub"
 api sam "/api/dockets/$S" | jq -e '[.entries[] | select(.kind == "share")][0] | (.data.history == null) and (.data.head | length == 64)' >/dev/null || fail "the share carries the history, or no head"
-ok "$D went on as $S; Sam's hub has it, intent and all, and it checks"
+# The intent's mockup goes with it: pinned on the shared docket, so Sam's hub fetches it.
+[ "$(blob_code sam "$mock")" = 200 ] || fail "Sam's hub didn't get the intent's image"
+as sam brief "$S" | grep >/dev/null "(file: " || fail "Sam's brief doesn't give the intent's image as a file"
+ok "$D went on as $S; Sam's hub has it, intent, its image and all, and it checks"
 
 step "Writes from both, at once, land in one order"
 as jordan note "$S" "jordan: middleware first" >/dev/null &
@@ -212,6 +236,13 @@ ok "both notes are on both hubs, at head $hj"
 
 step "Only owners change the intent; an owner can make Sam one"
 refused "only an owner" as sam intent "$S" "Sam's version" || fail "Sam changed the intent as a member"
+# With a mockup in it: refused before anything's written, so nothing of it reaches the record.
+png "$t/sams.png" 41 30
+sams=$(stage sam "$t/sams.png")
+refused "only an owner" as sam intent "$S" "Sam's version ![Sam's mockup](/api/blobs/$sams?name=sams.png)" || fail "Sam changed the intent with an image"
+sync sam
+sync jordan
+api jordan "/api/dockets/$S" | jq -e --arg d "$sams" '[.entries[] | select(.kind == "artifact" and .data.digest == $d)] | length == 0' >/dev/null || fail "Sam's refused intent kept its image"
 as sam team people "$S" sam >/dev/null
 as jordan team people "$S" sam --owner >/dev/null
 # Sam's join may land after Jordan made Sam an owner: Sam stays one.
@@ -221,7 +252,24 @@ as sam intent "$S" "Every public route answers 429 past its bucket, with Retry-A
 sync sam
 sync jordan
 api jordan "/api/dockets/$S" | jq -e '(.docket.intent.body | contains("Retry-After")) and (.docket.owners | index("sam"))' >/dev/null || fail "Jordan doesn't see Sam's intent"
-ok "a member's intent was refused; Sam, made an owner, changed it"
+ok "a member's intent was refused, its image too; Sam, made an owner, changed it"
+
+step "A private prompt's images stay off the shared record"
+as jordan team trust "$S" --private-prompts on >/dev/null
+sync jordan
+png "$t/admin.png" 42 30
+admin=$(stage jordan "$t/admin.png")
+compose jordan "$S" "{\"text\": \"/task match the admin console\", \"images\": [{\"digest\": \"$admin\", \"caption\": \"Internal admin console\"}]}" | jq -e '.did == "task" and (.prompt | contains("Internal admin console"))' >/dev/null || fail "the task didn't carry its image"
+png "$t/public.png" 43 30
+public=$(stage jordan "$t/public.png")
+compose jordan "$S" "{\"text\": \"The public page\", \"images\": [{\"digest\": \"$public\"}]}" | jq -e '.did == "note"' >/dev/null || fail "the note didn't go"
+sync jordan
+sync sam
+api sam "/api/dockets/$S" | jq -e --arg a "$admin" --arg p "$public" '([.entries[] | select(.data.digest == $a or (.data.images // [] | map(.digest) | index($a)))] | length == 0) and ([.entries[] | select(.kind == "artifact" and .data.digest == $p)] | length == 1)' >/dev/null || fail "a private prompt's image reached Sam, or a note's didn't"
+[ "$(blob_code sam "$admin")" = 404 ] || fail "Sam's hub has the private prompt's image"
+[ "$(blob_code sam "$public")" = 200 ] || fail "Sam's hub doesn't have the note's image"
+as jordan team trust "$S" --private-prompts off >/dev/null
+ok "the task's image stayed on Jordan's Mac; the note's went to Sam"
 
 step "Sam's agent joins from Sam's Mac; Jordan's hub leaves it alone"
 in_pane sam join "$S" --role web | grep >/dev/null "on $S" || fail "Sam's agent didn't join"

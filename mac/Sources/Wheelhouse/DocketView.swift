@@ -21,6 +21,7 @@ struct DocketWindow: View {
 
     var body: some View {
         DocketView(id: id, standalone: true)
+            .modifier(AddCallSheets(nav: nav))
             .environment(nav)
             .frame(minWidth: 620, minHeight: 480)
             .background(K.main)
@@ -85,6 +86,15 @@ struct DocketView: View {
             }
         }
         .task(id: store.version) { await load() }
+        // While the Listener reads a call, look again now and then: it can take minutes.
+        .task(id: page?.calls?.contains(where: \.reading) == true) {
+            guard page?.calls?.contains(where: \.reading) == true else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                if Task.isCancelled { return }
+                await load()
+            }
+        }
         .onAppear { nav.current = id }
         .focusedSceneValue(\.docket, embedded ? nil : DocketFocus(id: id, nav: nav))
         .onReceive(NotificationCenter.default.publisher(for: .snapshotTab)) { tab = $0.object as? String }
@@ -193,12 +203,15 @@ struct DocketBody: View {
                     }
                 }
             }
-            AgentsSection(d: d)
+            if !d.isCall { AgentsSection(d: d) }
             ReviewPanel(d: d)
             BuildPanel(d: d)
             SubagentsSection(d: d)
             ForEach((store.state?.messages ?? []).filter { $0.docket == d.id }) { m in MessageCard(m: m) }
-            IntentSection(d: d, entries: page.entries)
+            if !d.isCall { IntentSection(d: d, entries: page.entries) }
+            if let calls = page.calls {
+                CallsSection(d: d, calls: calls, entries: page.entries, onAdd: d.callable ? { nav.addingCall = d.id } : nil).id("calls")
+            }
             DecisionsSection(decisions: page.decisions, docket: d.id, repo: page.evidence.repo)
             VerifySection(page: page)
             ArtifactsSection(d: d, entries: page.entries)
@@ -220,8 +233,11 @@ struct DocketBody: View {
                     ForEach(shown) { e in ActivityRow(e: e, d: d, owner: store.state?.owner ?? "you") }
                 }
             }
+            .id("activity")
             Composer(d: d)
         }
+        .environment(\.docketImages, DocketImage.all(page.entries))
+        .environment(\.carriedImages, DocketImage.carried(page.entries))
     }
 }
 
@@ -411,7 +427,7 @@ struct Properties: View {
                         }
                     }
                 }
-                if d.proto != "review" {
+                if d.proto != "review", !d.isCall {
                     prop("Build") {
                         if let t = task {
                             Text("\(t.repo) · \(t.state == "active" ? (t.phase ?? "").replacingOccurrences(of: "_", with: " ") : t.state)")
@@ -433,6 +449,13 @@ struct Properties: View {
                         Button("Link issue…") { nav.linking = d.id }.buttonStyle(.link)
                     }
                 }
+                // A docket that has had no call yet: add one here (one that has, in its Calls section).
+                if d.callable, page.calls?.isEmpty ?? true {
+                    prop("Calls") {
+                        Button("Add a call…") { nav.addingCall = d.id }.buttonStyle(.link)
+                            .help("Paste or drop a call's transcript: the Listener reads it against this docket and proposes what it settled")
+                    }
+                }
                 if d.crew.isEmpty, task == nil, d.canStartAgent {
                     prop("Agent") {
                         Button("Start an agent…") { nav.starting = d.id }.buttonStyle(.link)
@@ -440,7 +463,7 @@ struct Properties: View {
                     }
                 }
                 // The lead (or the one agent); the Agents section lists them all.
-                if let a = d.onAgents.first ?? d.leftAgents.first, d.proto != "review", task == nil {
+                if let a = d.onAgents.first ?? d.leftAgents.first, d.proto != "review", !d.isCall, task == nil {
                     let on = d.onAgents.count
                     prop(d.several ? "Lead" : "Agent") {
                         HStack(spacing: 6) {
@@ -480,7 +503,7 @@ struct Properties: View {
                         prop("Session") { Button(String(s.prefix(8))) { copy(s) }.buttonStyle(.plain).font(.system(size: 12, design: .monospaced)).help("Copy the agent's session id") }
                     }
                 }
-                prop("Protocol") { Text(task != nil ? "Build" : d.proto == "agent" ? "Agent" : d.proto == "review" ? "Review" : "By hand") }
+                prop("Protocol") { Text(task != nil ? "Build" : d.proto == "agent" ? "Agent" : d.proto == "review" ? "Review" : d.isCall ? "Call" : "By hand") }
                 prop("Hold") {
                     if let why = d.hold {
                         HStack(spacing: 8) {
@@ -492,7 +515,7 @@ struct Properties: View {
                             .help("Build and Review take no steps on it until you resume it")
                     }
                 }
-                if d.proto != "review", task == nil {
+                if d.proto != "review", !d.isCall, task == nil {
                     prop("Work") { Text("\(plural(d.prompts, "prompt")) · \(plural(d.turns, "turn"))") }
                 }
                 prop("Created") { Text(stamp(d.createdAt)) }
@@ -774,12 +797,20 @@ struct Composer: View {
     @Environment(Nav.self) private var nav
     @State private var text = ""
     @State private var busy = false
+    /// Images to send with it: staged as they're added.
+    @State private var tray: [TrayImage] = []
+    @State private var marking: UUID?
+    /// The images a `/task` sent: taken out of the tray once its agent starts.
+    @State private var taskSent: Set<UUID> = []
+    @State private var dropping = false
 
     var body: some View {
         let kind = Compose.kind(text)
         let agents = d.onAgents.filter { $0.live != nil }.map { (pane: $0.pane, role: $0.role, app: $0.app) }
         let sugg = Compose.suggestions(text, agents: agents, docket: d.id)
         let warn = Compose.warning(text, agents: agents)
+        let blank = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let trayWarn = tray.contains { $0.failure != nil } ? "Remove the image that couldn't be added" : !Images.ready(tray) ? "Adding the images…" : nil
         VStack(alignment: .leading, spacing: 8) {
             if !sugg.isEmpty {
                 VStack(alignment: .leading, spacing: 1) {
@@ -798,40 +829,237 @@ struct Composer: View {
                 }
                 Divider()
             }
-            Editor(text: $text, placeholder: "Leave a note… (Markdown) · @agent, /ask, /decide, /task", minHeight: 40, maxHeight: 240, onSubmit: send)
+            if !tray.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach($tray) { $t in TrayTile(t: $t, onMarkUp: { marking = t.id }, onRemove: { tray.removeAll { $0.id == t.id } }) }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            Editor(text: $text, placeholder: tray.isEmpty ? "Leave a note… (Markdown) · @agent, /ask, /decide, /task · paste or drop images" : "Say what they show, or @agent what to do with them", minHeight: 40, maxHeight: 240, onSubmit: send, onImages: { images, _ in add(images) })
             HStack {
-                Text(warn?.text ?? Compose.hint(kind, d.id)).font(.system(size: 11.5)).foregroundStyle(warn == nil ? K.faint : K.blocked)
+                Button { add(Images.pick()) } label: { Image(systemName: "paperclip") }
+                    .buttonStyle(.borderless)
+                    .help("Add images: what it should look like, an inspiration, a screenshot to mark up. Or paste (⌘V) or drop them here.")
+                    .disabled(tray.count >= Images.maxPer)
+                Text(trayWarn ?? warn?.text ?? (blank && !tray.isEmpty ? "A note of \(tray.count == 1 ? "this image" : "these images"); the agents find them in their brief" : Compose.hint(kind, d.id)))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(warn == nil && trayWarn == nil ? K.faint : K.blocked)
+                    .lineLimit(1)
                 Spacer()
                 Button(action: send) { Text("\(Compose.button(kind))  ⌘↩") }
                     .buttonStyle(.borderedProminent)
                     .tint(K.accent)
                     .controlSize(.small)
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy || warn?.blocked == true)
+                    .disabled((blank && tray.isEmpty) || busy || warn?.blocked == true || trayWarn != nil)
             }
         }
         .padding(12)
         .background(K.elev, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(K.line))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(dropping ? K.accent : K.line, lineWidth: dropping ? 2 : 1))
+        .onDrop(of: [.fileURL, .image], isTargeted: $dropping) { providers in
+            Task { add(await Self.load(providers)) }
+            return true
+        }
         .onReceive(NotificationCenter.default.publisher(for: .taskStarted)) { n in
-            if n.object as? String == d.id, Compose.kind(text) == .task { text = "" }
+            if n.object as? String == d.id, Compose.kind(text) == .task {
+                text = ""
+                tray = Images.afterSend(tray, sent: taskSent)
+                taskSent = []
+            }
+        }
+        .sheet(item: Binding(get: { marking.flatMap { id in tray.first { $0.id == id } } }, set: { if $0 == nil { marking = nil } })) { t in
+            MarkupSheet(data: t.base ?? t.data, name: t.name, initial: t.marks) { marks in
+                marking = nil
+                if let marks { markedUp(t.id, marks) }
+            }
+        }
+    }
+
+    /// Images dropped from elsewhere (Finder, a browser): their bytes.
+    private static func load(_ providers: [NSItemProvider]) async -> [(name: String, data: Data)] {
+        var out: [(String, Data)] = []
+        for p in providers {
+            if p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
+               let url = await withCheckedContinuation({ (c: CheckedContinuation<URL?, Never>) in _ = p.loadObject(ofClass: URL.self) { u, _ in c.resume(returning: u) } }),
+               let t = UTType(filenameExtension: url.pathExtension), t.conforms(to: .image), !t.conforms(to: .svg),
+               let data = try? Data(contentsOf: url) {
+                out.append((url.lastPathComponent, data))
+            } else if p.hasItemConformingToTypeIdentifier(UTType.image.identifier),
+                      let data = await withCheckedContinuation({ (c: CheckedContinuation<Data?, Never>) in _ = p.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { d, _ in c.resume(returning: d) } }) {
+                out.append(((p.suggestedName ?? "image") + ".png", data))
+            }
+        }
+        return out
+    }
+
+    /// Add images to the tray: each fitted (off the main actor) to what an
+    /// agent can open, then staged. Not while a send is on its way.
+    private func add(_ images: [(name: String, data: Data)]) {
+        guard !images.isEmpty else { return }
+        if busy {
+            store.toast("Sending: add the images once it's gone", error: true)
+            return
+        }
+        for (name, raw) in images {
+            guard tray.count < Images.maxPer else {
+                store.toast("At most \(Images.maxPer) images go at once", error: true)
+                return
+            }
+            let t = TrayImage(name: name, data: raw)
+            tray.append(t)
+            Task {
+                let fitted = await Task.detached(priority: .userInitiated) { Images.fit(name: name, data: raw) }.value
+                guard let i = tray.firstIndex(where: { $0.id == t.id }) else { return }
+                guard let (n, data) = fitted else {
+                    tray[i].stage = .failed("It isn't an image this can read")
+                    return
+                }
+                tray[i].name = n
+                tray[i].data = data
+                if data.count > Images.maxBytes {
+                    tray[i].stage = .failed("It's \(data.count >> 20) MB; an image is at most \(Images.maxBytes >> 20) MB")
+                    return
+                }
+                stage(t.id, data: data, name: n)
+            }
+        }
+    }
+
+    private func stage(_ id: UUID, data: Data, name: String) {
+        Task {
+            let stage: TrayImage.Stage
+            do { stage = .staged(try await store.stage(name: name, data: data)) } catch { stage = .failed(Store.words(error)) }
+            // Only if it's still that image: marked up again meanwhile, a later staging stands.
+            if let i = tray.firstIndex(where: { $0.id == id }), tray[i].data == data { tray[i].stage = stage }
+        }
+    }
+
+    /// Marked up: what's sent is drawn from the original, which is kept beside it.
+    private func markedUp(_ id: UUID, _ marks: [MarkupMark]) {
+        guard let i = tray.firstIndex(where: { $0.id == id }) else { return }
+        var t = tray[i]
+        let base = t.base ?? t.data
+        if marks.isEmpty {
+            // No marks: back to the image as it was.
+            guard t.base != nil else { return }
+            t.data = base
+            t.base = nil
+            t.marks = []
+            t.pins = []
+            t.name = t.baseName ?? t.name
+            if let o = t.baseDigest, let size = Images.pixelSize(base) {
+                t.stage = .staged(StagedImage(digest: o, name: t.name, width: Int(size.width), height: Int(size.height)))
+            } else {
+                t.stage = .staging
+                stage(id, data: base, name: t.name)
+            }
+            t.baseDigest = nil
+            t.baseName = nil
+            tray[i] = t
+            return
+        }
+        if t.base == nil {
+            t.base = base
+            t.baseDigest = t.staged?.digest
+            t.baseName = t.name
+        }
+        t.marks = marks
+        t.pins = ImageMarks.pins(marks)
+        t.stage = .staging
+        tray[i] = t
+        let stem = ((t.baseName ?? t.name) as NSString).deletingPathExtension
+        Task {
+            guard let (name, data) = await ImageMarks.flatten(base, name: "\(stem)-marked.png", marks: marks), let j = tray.firstIndex(where: { $0.id == id }) else {
+                store.toast("Couldn't draw the marks into \(t.name)", error: true)
+                if let j = tray.firstIndex(where: { $0.id == id }) { tray[j].stage = .failed("Couldn't draw the marks") }
+                return
+            }
+            // Marked again while this one was drawn: the newer marks stand.
+            guard tray[j].marks == marks else { return }
+            tray[j].name = name
+            tray[j].data = data
+            if data.count > Images.maxBytes {
+                tray[j].stage = .failed("Marked up, it's over \(Images.maxBytes >> 20) MB")
+            } else {
+                stage(id, data: data, name: name)
+            }
+            // The original was still on its way: stage it again, for its digest.
+            if tray[j].baseDigest == nil {
+                if let s = try? await store.stage(name: t.baseName ?? t.name, data: base), let k = tray.firstIndex(where: { $0.id == id }) { tray[k].baseDigest = s.digest }
+            }
         }
     }
 
     private func send() {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, !busy else { return }
+        guard !t.isEmpty || !tray.isEmpty, !busy, Images.ready(tray) else { return }
         busy = true
+        let images = tray
+        let sent = Set(images.map(\.id))
         Task {
-            if let r = await store.compose(d.id, t) {
+            if let r = await store.compose(d.id, t, images: images) {
                 // A task's text stays until its sheet starts the agent: cancelling it loses nothing.
                 if r["did"].str == "task" {
+                    taskSent = sent
                     nav.startingPrompt = r["prompt"].str
                     nav.starting = d.id
                 } else {
-                    text = ""
+                    // Only what went: words or images added meanwhile stay.
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines) == t { text = "" }
+                    tray = Images.afterSend(tray, sent: sent)
                 }
             }
             busy = false
+        }
+    }
+}
+
+/// An image in the composer's tray: its thumbnail, how its staging went,
+/// its caption, and Mark Up.
+struct TrayTile: View {
+    @Binding var t: TrayImage
+    let onMarkUp: () -> Void
+    let onRemove: () -> Void
+    @State private var thumb: NSImage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ZStack(alignment: .topTrailing) {
+                ZStack {
+                    K.recessed
+                    if let thumb { Image(nsImage: thumb).resizable().scaledToFill() }
+                    if t.stage == .staging { ProgressView().controlSize(.small) }
+                    if t.failure != nil {
+                        K.dangerTint.opacity(0.85)
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(K.error)
+                    }
+                }
+                .frame(width: 132, height: 88)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(t.failure != nil ? K.error : K.line))
+                .onTapGesture(count: 2) { if t.staged != nil { onMarkUp() } }
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 15)).symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .padding(4)
+                .help("Don't send it")
+            }
+            if let why = t.failure {
+                Text(why).font(.system(size: 11)).foregroundStyle(K.error).lineLimit(3).frame(width: 132, alignment: .leading).help(why)
+            } else {
+                TextField("Caption", text: $t.caption).textFieldStyle(.roundedBorder).font(.system(size: 11.5)).frame(width: 132)
+                HStack(spacing: 6) {
+                    Button(t.marks.isEmpty ? "Mark Up" : "Edit Marks", action: onMarkUp).buttonStyle(.link).font(.system(size: 11.5)).disabled(t.staged == nil)
+                    if !t.pins.isEmpty { Text("\(t.pins.count) pin\(t.pins.count == 1 ? "" : "s")").font(.system(size: 11)).foregroundStyle(K.muted) }
+                }
+            }
+        }
+        .task(id: t.data) {
+            let d = t.data
+            thumb = await Task.detached(priority: .userInitiated) { Images.thumbnail(d, max: 300).flatMap { Images.pngData($0) } }.value.flatMap(NSImage.init(data:))
         }
     }
 }
