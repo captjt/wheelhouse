@@ -1,7 +1,7 @@
 # Wheelhouse
 
 Product design, draft, 2026-11-17. The decisions table marks what's
-settled. The repo is `captjt/wheelhouse` (private for now). The product
+settled. The repo is `captjt/wheelhouse`, open source under MIT. The product
 is Wheelhouse. This is the design: what's built so far is in
 [docs/roadmap.md](docs/roadmap.md), and the commands that exist are in
 README.md and `wh --help`.
@@ -540,7 +540,7 @@ Build also gains pre-review by landing second.
 | UX bar | It looks, feels, and works like Linear: a sidebar with Inbox and views, dense lists grouped under headers, a board, a docket page with a properties rail and an activity feed, ⌘K, single-key shortcuts, menus with numbered choices, and a new-docket dialog. The UX is vital; the brand stays Wheelhouse's own. | decided |
 | The pane off the Mac | Rex has no link that opens a pane in its iOS app, so off the Mac, "Open in Rex" becomes **View pane**: the agent's terminal, live, in the app, with a box to message the agent between turns. On the Mac it stays "Open in Rex", or "Open in Herdr" for a Herdr terminal. | decided |
 | Theme | Colors from Cloudflare's open-source Kumo design system: neutral oklch surfaces, Cloudflare blue for actions and links, Cloudflare orange (`#f6821f`) for the brand, Kumo's success, warning and danger colors and tints. Every token is a CSS `light-dark()`: the mode follows the system by default, or you pin Light or Dark in the sidebar or ⌘K. | decided |
-| Repo | Private for now, and possibly open source later. Fixtures and screenshots use a made-up workspace from the start. | decided |
+| Repo | Public, under MIT. Fixtures and screenshots use a made-up workspace from the start. | decided |
 | Teams | A workspace hub (Linux or an always-on Mac) orders shared dockets; each engineer's hub stays theirs. Opt-in sharing, owners and members, member keys in a signed member log, teammates' agents' messages held until let in (docs/teams.md, D-187). | decided |
 | Language | A Rust daemon (rex-inbox's code ports directly), a React UI, and a SwiftUI Mac app (`mac/`). | decided |
 | Protocol rules | Ported to Rust as pure functions, tested by replaying the tools' fixtures | proposed |

@@ -145,4 +145,5 @@ or `wh team drop N`.
 
 ## Feedback
 
-Leave what you find on D-187 (`wh note D-187 "…"`), or tell Jordan.
+Open an issue at https://github.com/captjt/wheelhouse/issues. For anything
+security-related, see [SECURITY.md](../SECURITY.md) instead.
