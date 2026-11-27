@@ -2,7 +2,8 @@
 // One screenshot as the theme wants it: the light capture in light mode and
 // the dark one in dark, each at full resolution for a Retina screen. Both are
 // lazy: the one the theme hides (display: none) is never fetched, and the
-// one in view loads at once.
+// one in view loads at once. With `only`, just that mode's capture, for a
+// caller that wraps each mode in its own frame (Phone.astro).
 import { Image } from "astro:assets";
 import { shot, widths } from "../lib/shots";
 
@@ -12,15 +13,20 @@ interface Props {
   /** The width it's shown at, for the browser to pick a file: "100vw", "36rem". */
   sizes: string;
   class?: string;
+  only?: "light" | "dark";
 }
 
-const { name, alt, sizes, class: cls } = Astro.props;
+const { name, alt, sizes, class: cls, only } = Astro.props;
 const s = await shot(name);
 const want = s.phone ? [390, 780, 1170] : [1024, 1600, 2048, 2560, 2880];
-const pair = s.light === s.dark ? [{ src: s.light, mode: "" }] : [
-  { src: s.light, mode: "wh-only-light" },
-  { src: s.dark, mode: "wh-only-dark" },
-];
+const pair = only
+  ? [{ src: s[only], mode: "" }]
+  : s.light === s.dark
+    ? [{ src: s.light, mode: "" }]
+    : [
+        { src: s.light, mode: "wh-only-light" },
+        { src: s.dark, mode: "wh-only-dark" },
+      ];
 ---
 
 {

@@ -489,19 +489,85 @@ body.wh-site {
 .wh-window img {
   width: 100%;
 }
+/* Sized by its width (each use sets one): everything inside is in cqw, so a
+ * 170px phone in the hero is the same phone as a 270px one, scaled. */
 .wh-phone {
   margin: 0;
   position: relative;
-  border-radius: 38px;
-  padding: 9px;
+  container-type: inline-size;
+}
+.wh-phone-body {
+  border-radius: 16.4cqw;
+  padding: 3.4cqw;
   background: linear-gradient(160deg, oklch(34% 0 0), oklch(16% 0 0));
   box-shadow:
     var(--wh-shadow),
     inset 0 0 0 1px oklch(100% 0 0 / 0.12);
 }
-.wh-phone img {
-  border-radius: 30px;
+.wh-phone-screen {
+  position: relative;
+  border-radius: 13cqw;
+  overflow: hidden;
+  background: var(--bottom);
+}
+.wh-phone-screen img {
+  display: block;
   width: 100%;
+  height: auto;
+}
+.wh-phone-status {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 34cqw 1fr;
+  align-items: center;
+  height: 12.8cqw;
+  padding-top: 0.8cqw;
+  background: var(--top);
+  color: var(--top-ink);
+}
+.wh-phone-time {
+  justify-self: center;
+  font-size: 4cqw;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.wh-phone-island {
+  position: absolute;
+  top: 2.6cqw;
+  left: 50%;
+  width: 30cqw;
+  height: 8.8cqw;
+  translate: -50% 0;
+  border-radius: 999px;
+  background: #000;
+}
+.wh-phone-icons {
+  grid-column: 3;
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: 1.4cqw;
+}
+.wh-phone-icons svg {
+  display: block;
+  height: 2.9cqw;
+  width: auto;
+}
+.wh-phone-home {
+  display: grid;
+  place-items: end center;
+  height: 7.6cqw;
+  padding-bottom: 2.2cqw;
+  background: var(--bottom);
+  color: var(--bottom-ink);
+}
+.wh-phone-home i {
+  width: 33cqw;
+  height: 1.3cqw;
+  border-radius: 999px;
+  background: currentColor;
 }
 
 /* ---- the strip ---- */
@@ -960,6 +1026,9 @@ body.wh-site {
 /* phones side by side */
 .phones {
   display: flex;
+  /* Not stretched to the pair's height: phone-b's offset would leave the
+   * first phone's bezel running on past its screen. */
+  align-items: flex-start;
   justify-content: center;
   gap: 24px;
   padding-block: 12px;

@@ -1,6 +1,11 @@
 ---
-// A phone screenshot in a phone: a bezel, rounded as an iPhone's.
+// A phone screenshot in a phone: a bezel, rounded as an iPhone's, with the
+// status bar and home indicator the capture doesn't have. The capture is the
+// app's viewport alone, its header at the very top, so without them the
+// screen's rounded corners cut into the app. Each bar takes the color of the
+// capture's own edge, so it reads as part of the screen.
 import Pic from "../Pic.astro";
+import { shot } from "../../lib/shots";
 
 interface Props {
   name: string;
@@ -8,8 +13,56 @@ interface Props {
   class?: string;
 }
 const { name, alt, class: cls } = Astro.props;
+const s = await shot(name);
+if (!s.edges) throw new Error(`"${name}" isn't a phone capture`);
+const edges = s.edges;
+const screens: { mode: "light" | "dark"; cls: string }[] =
+  s.light === s.dark
+    ? [{ mode: "light", cls: "" }]
+    : [
+        { mode: "light", cls: "wh-only-light" },
+        { mode: "dark", cls: "wh-only-dark" },
+      ];
+const ink = (dark: boolean) => (dark ? "#fff" : "#000");
 ---
 
 <figure class:list={["wh-phone", cls]}>
-  <Pic name={name} alt={alt} sizes="(min-width: 50rem) 18rem, 70vw" />
+  <div class="wh-phone-body">
+    {
+      screens.map(({ mode, cls }) => {
+        const e = edges[mode];
+        return (
+          <div
+            class:list={["wh-phone-screen", cls]}
+            style={`--top: ${e.top}; --top-ink: ${ink(e.topDark)}; --bottom: ${e.bottom}; --bottom-ink: ${ink(e.bottomDark)}`}
+          >
+            <div class="wh-phone-status" aria-hidden="true">
+              <span class="wh-phone-time">9:41</span>
+              <i class="wh-phone-island" />
+              <span class="wh-phone-icons">
+                <svg viewBox="0 0 18 12" fill="currentColor">
+                  <rect x="0" y="7.5" width="3" height="4.5" rx="1" />
+                  <rect x="5" y="5" width="3" height="7" rx="1" />
+                  <rect x="10" y="2.5" width="3" height="9.5" rx="1" />
+                  <rect x="15" y="0" width="3" height="12" rx="1" />
+                </svg>
+                <svg viewBox="0 0 16 12" fill="currentColor">
+                  <path d="M1.4 4.6a9.6 9.6 0 0 1 13.2 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                  <path d="M4.1 7.4a5.8 5.8 0 0 1 7.8 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" />
+                  <circle cx="8" cy="10.2" r="1.6" />
+                </svg>
+                <svg viewBox="0 0 27 12" fill="currentColor">
+                  <rect x="0.5" y="0.5" width="23" height="11" rx="3.2" fill="none" stroke="currentColor" opacity="0.4" />
+                  <rect x="2" y="2" width="20" height="8" rx="1.8" />
+                  <path d="M25 4.2v3.6a1.9 1.9 0 0 0 0-3.6z" opacity="0.4" />
+                </svg>
+              </span>
+            </div>
+            <Pic name={name} alt={alt} sizes="(min-width: 50rem) 18rem, 70vw" only={mode} />
+            <div class="wh-phone-home" aria-hidden="true"><i /></div>
+          </div>
+        );
+      })
+    }
+  </div>
 </figure>

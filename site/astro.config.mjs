@@ -16,6 +16,9 @@ export default defineConfig({
   markdown: { syntaxHighlight: false },
   vite: {
     server: { fs: { allow: [repo] } },
+    // Where the captures are on disk, for shots.ts to read a phone
+    // capture's edges at build time (the glob only gives built URLs).
+    define: { __WH_IMAGES__: JSON.stringify(fileURLToPath(new URL("../docs/images/", import.meta.url))) },
   },
   integrations: [
     starlight({
