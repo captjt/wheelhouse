@@ -25,13 +25,17 @@ pub fn brief(core: &Core, id: &str, me: Option<&str>) -> Result<String> {
     out.push_str("\n\n## Intent\n\n");
     match &st.intent {
         Some(t) => {
-            // Its images as files an agent can open.
-            out.push_str(crate::images::intent_for_agent(core, &core.images_dir, id, t.body.trim()).trim());
+            // Its images' files beside their links, for what its entry pins.
+            out.push_str(crate::images::intent_for_agent(core, &core.images_dir, id, t.body.trim(), &intent_pins(core, id, t.seq)).trim());
             out.push_str(&format!("\n\n(version {}, from {})\n", st.intent_versions, t.source));
         }
         None => out.push_str("None yet. If the work's goal is clear, write it: what must be true when it's done, and what's out of scope.\n"),
     }
-    out.push_str(&crate::images::brief_section(core, &core.images_dir, id).unwrap_or_default());
+    let pins = st.intent.as_ref().map(|t| intent_pins(core, id, t.seq)).unwrap_or_default();
+    match crate::images::brief_section(core, &core.images_dir, id, &pins) {
+        Ok(images) => out.push_str(&images),
+        Err(e) => say!("{id}: the brief's images: {e:#}"),
+    }
     out.push_str(&agents_on(core, &st, me));
     let entries = core.store.entries(id)?;
     let ds = crate::decisions::of_stored(&entries);
@@ -117,6 +121,14 @@ Its intent has acceptance items, so it closes on evidence (passing checks, a mer
         "\n## Writing back\n\n- A note on the record: `wh note {id} \"...\"`\n- When the goal or scope changes, update the intent: `wh intent {id} - < intent.md`\n- The whole record: `wh show {id}`\n"
     ));
     Ok(out)
+}
+
+/// The digests the intent's entry pins: its images (`crate::images`).
+pub fn intent_pins(core: &Core, id: &str, seq: i64) -> Vec<String> {
+    if seq <= 0 {
+        return Vec::new();
+    }
+    core.store.entries_after(id, seq - 1, 1).ok().and_then(|v| v.into_iter().next()).filter(|s| s.seq == seq).and_then(|s| s.entry().ok()).map(|e| e.blobs).unwrap_or_default()
 }
 
 /// The agents on the docket besides `me`, and how to reach them. Nothing

@@ -47,8 +47,15 @@ whether they run in Rex or in Herdr. On a shared docket, each teammate's hub
 writes the image out on their own Mac, so their agents' paths work too.
 
 `wh brief` lists a docket's images under **Images**, so an agent that joins
-later sees them as well. `wh images` writes them all out and prints their
-paths.
+later sees them as well, each with who shared it: you, a teammate, or an
+agent. `wh images` writes them all out and prints their paths. A hub writes
+out only an image an entry pins, and only as an image: a teammate's entry
+can't have it write out anything else.
+
+On a shared docket where you keep your prompts private (`wh team trust
+ACME-1 --private-prompts on`), the images you send with an `@agent` prompt
+or a `/task` stay as private as the prompt: written out for the agent on
+your Mac, and off the shared record.
 
 ## In the intent
 
@@ -56,8 +63,12 @@ Paste or drop a mockup into the intent while you edit it, or use the image
 button in its toolbar. It goes in as Markdown
 (`![The settings page](/api/blobs/sha256:…)`), shows in both apps, and is
 kept with the docket when you save. The intent's entry pins it. In
-`wh brief`, the link becomes the image's path, so the spec an agent reads
-points at a file it can open.
+`wh brief`, each link is followed by the file it's written out as
+(`![The settings page](/api/blobs/sha256:…) (file: …/page.png)`), so the
+spec an agent reads points at a file it can open. An agent that saves the
+intent back with `wh intent` keeps the link; the hub drops the file notes.
+On a shared docket only owners change the intent, so a member's intent is
+refused before any of its images is kept.
 
 ## Comparing what was built
 
@@ -70,14 +81,18 @@ wh attach shot.png --against 12
 
 Open either image on the docket to see the two **side by side**, as a
 **swipe**, or as an **onion skin** (one over the other, with a slider). You
-can also compare any image with any other on the docket.
+can also compare any image with any other on the docket. A full-page
+screenshot too big for an agent (over 20,000 pixels on a side) is still kept
+by `wh attach`, as a file, but can't be attached `--against` a reference.
 
 ## From the phone's share sheet
 
 **Android, and Chrome on desktop.** Install the web app (Add to Home
 Screen). Wheelhouse then shows up in the share sheet: share a screenshot to
 it, pick a docket (or start a new one), and the image waits in that docket's
-composer for you to caption, mark up and send.
+composer for you to caption, mark up and send. Only images come through,
+never words: the app can't tell the share sheet from another site's form,
+so nothing is typed into the composer for you.
 
 **iPhone and iPad.** Safari doesn't let a web app show up in the share
 sheet. A Shortcut does the same job:
@@ -102,7 +117,9 @@ then.
 ## Limits
 
 - PNG, JPEG, GIF and WebP, checked by their bytes, not their names. SVG is
-  never taken as an image, because it can run scripts.
+  never taken as an image, because it can run scripts. Both apps redraw a
+  phone's HEIC, an AVIF, and anything over the limits before it goes up: a
+  photo as JPEG, a screenshot as PNG, as large as fits.
 - At most 15 MB per image, 20,000 pixels on a side, and 100 megapixels in
   all. At most 10 images per message, and 40 pins per image.
 - Captions and pin notes are one line each, at most 500 characters, and at

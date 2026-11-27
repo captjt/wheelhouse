@@ -11,24 +11,23 @@ import { useToast } from "./ui";
 
 const SHARE_CACHE = "wh-share";
 
-/** What the service worker kept from a share: the images, and any words. */
-async function fromServiceWorker(): Promise<{ files: File[]; text: string }> {
-  if (!("caches" in window)) return { files: [], text: "" };
+/** What the service worker kept from a share: images only, never words
+ * (another site can post a form there as well as the share sheet can). */
+async function fromServiceWorker(): Promise<{ files: File[] }> {
+  if (!("caches" in window)) return { files: [] };
   const c = await caches.open(SHARE_CACHE);
   const files: File[] = [];
-  let text = "";
   for (const req of await c.keys()) {
     const res = await c.match(req);
     if (!res) continue;
     const path = new URL(req.url).pathname;
-    if (path === "/share-inbox/text") text = await res.text();
-    else if (path.startsWith("/share-inbox/file/")) {
+    if (path.startsWith("/share-inbox/file/")) {
       const name = decodeURIComponent(res.headers.get("x-name") || "shared.png");
       files.push(new File([await res.blob()], name, { type: res.headers.get("content-type") || "" }));
     }
     await c.delete(req);
   }
-  return { files, text };
+  return { files };
 }
 
 /** Images a Shortcut staged already, by digest: fetched back as files. */
@@ -47,7 +46,7 @@ async function fromDigests(list: string[]): Promise<File[]> {
 export function ShareView({ staged }: { staged?: string }) {
   const hub = useHub();
   const toast = useToast();
-  const [got, setGot] = useState<{ files: File[]; text: string } | null>(null);
+  const [got, setGot] = useState<{ files: File[] } | null>(null);
   const [q, setQ] = useState("");
   const [title, setTitle] = useState("");
   const urls = useMemo(() => (got?.files ?? []).map((f) => URL.createObjectURL(f)), [got]);
@@ -55,9 +54,9 @@ export function ShareView({ staged }: { staged?: string }) {
 
   useEffect(() => {
     let live = true;
-    (staged ? fromDigests(staged.split(",")).then((files) => ({ files, text: "" })) : fromServiceWorker()).then(
+    (staged ? fromDigests(staged.split(",")).then((files) => ({ files })) : fromServiceWorker()).then(
       (g) => live && setGot(g),
-      () => live && setGot({ files: [], text: "" }),
+      () => live && setGot({ files: [] }),
     );
     return () => {
       live = false;
@@ -72,7 +71,7 @@ export function ShareView({ staged }: { staged?: string }) {
 
   const pick = (d: Pick<Docket, "id">) => {
     if (!got?.files.length) return;
-    handOn(d.id, got.files, got.text);
+    handOn(d.id, got.files);
     go(`/d/${d.id}`);
   };
   const create = () => {
@@ -106,7 +105,7 @@ export function ShareView({ staged }: { staged?: string }) {
               ))}
             </div>
             <p className="muted small">
-              {got.files.length === 1 ? "This image goes" : `These ${got.files.length} images go`} to the composer of the docket you pick, to caption, mark up and send to its agents.
+              {got.files.length === 1 ? "This image came" : `These ${got.files.length} images came`} from another app or a shortcut. {got.files.length === 1 ? "It goes" : "They go"} to the composer of the docket you pick, where nothing is sent until you look, add your words and press Send.
             </p>
             <input className="share-search" placeholder="Find a docket…" value={q} autoFocus onChange={(e) => setQ(e.target.value)} />
             <div className="share-list">

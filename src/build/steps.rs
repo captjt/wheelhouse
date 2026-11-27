@@ -192,7 +192,12 @@ pub async fn prep(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> {
     let (intent, issue) = {
         let core = shared.lock();
         let st = core.store.state(&t.docket)?;
-        let intent = st.as_ref().and_then(|s| s.intent.as_ref()).map(|i| i.body.clone()).unwrap_or_default();
+        // Its images' files beside their links, as in the brief.
+        let intent = st
+            .as_ref()
+            .and_then(|s| s.intent.as_ref())
+            .map(|i| crate::images::intent_for_agent(&core, &core.images_dir, &t.docket, &i.body, &crate::brief::intent_pins(&core, &t.docket, i.seq)))
+            .unwrap_or_default();
         let issue = st
             .as_ref()
             .and_then(|s| s.linear.as_ref())

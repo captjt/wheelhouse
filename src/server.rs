@@ -855,6 +855,16 @@ fn keep_images(core: &mut crate::hub::Core, id: &str, images: &[crate::images::S
     crate::images::keep(core, id, &Who::Owner, images).map_err(internal)
 }
 
+/// A prompt's images: kept like any others, unless you keep your prompts
+/// private on this shared docket. Then they stay as private as the prompt:
+/// written out here for the agent, and off the shared record.
+fn keep_prompt_images(core: &mut crate::hub::Core, id: &str, images: &[crate::images::Shared]) -> Result<(), (StatusCode, Json<Value>)> {
+    if crate::team::member::prompts_private(core, id) {
+        return Ok(());
+    }
+    keep_images(core, id, images)
+}
+
 /// What's typed to an agent, with its images' paths.
 fn with_images(shared: &Shared, id: &str, text: &str, images: &[crate::images::Shared]) -> String {
     if images.is_empty() {
@@ -882,7 +892,7 @@ async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Comm
         }
         Command::Task { prompt } => {
             let prompt = with_images(shared, &id, &prompt, &images);
-            keep_images(&mut shared.lock(), &id, &images)?;
+            keep_prompt_images(&mut shared.lock(), &id, &images)?;
             Ok(Json(json!({ "did": "task", "prompt": prompt, "images": shown })))
         }
         Command::Instruct { to, text } => {
@@ -916,7 +926,7 @@ async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Comm
                 let why: Vec<String> = sent.iter().map(|x| format!("{}: {}", x["to"].as_str().unwrap_or(""), x["error"].as_str().unwrap_or(""))).collect();
                 return Err(fail(StatusCode::CONFLICT, why.join("; ")));
             }
-            keep_images(&mut shared.lock(), &id, &images)?;
+            keep_prompt_images(&mut shared.lock(), &id, &images)?;
             Ok(Json(json!({ "did": "instructed", "sent": sent, "images": shown })))
         }
         Command::Ask { question, options } => {
@@ -1257,9 +1267,14 @@ async fn set_intent(State(shared): State<Shared>, Path(id): Path<String>, Json(r
         let s = core.append(&id, "intent", &Who::Hub, Some(body), json!({ "source": "linear", "key": l.key, "updated_at": l.updated_at, "taken_by": owner })).map_err(internal)?;
         return Ok(Json(json!({ "seq": s.seq })));
     }
-    let body = req.body.trim_end().to_string();
+    // Saved back from a brief: without the files it put beside the images' links.
+    let body = crate::images::without_files(req.body.trim_end(), &core.images_dir);
     if st.intent.as_ref().is_some_and(|t| t.body == body) {
         return Ok(Json(json!({ "unchanged": true })));
+    }
+    // Refused before anything's written: on a shared docket, only owners change it.
+    if !crate::team::member::may(&core, &id, "intent") {
+        return Err(fail(StatusCode::FORBIDDEN, format!("only an owner (or their agents) changes {id}'s intent")));
     }
     let (who, source) = match req.block.as_deref().and_then(|b| core.mirror.panes.get(b)).filter(|p| p.is_agent()) {
         Some(p) => (
@@ -1268,9 +1283,11 @@ async fn set_intent(State(shared): State<Shared>, Path(id): Path<String>, Json(r
         ),
         None => (Who::Owner, "person"),
     };
-    // Its images: kept on the docket, and pinned by the intent's entry.
-    let pinned = crate::images::keep_intent(&mut core, &id, &who, &body).map_err(bad)?;
-    let s = core.append_with(&id, "intent", &who, Some(body), json!({ "source": source }), pinned).map_err(internal)?;
+    // Its images: every one checked, pinned by the intent's entry, then kept
+    // once the intent is on the record (a refused intent keeps none).
+    let found = crate::images::intent_images(&core, &body).map_err(bad)?;
+    let s = core.append_with(&id, "intent", &who, Some(body), json!({ "source": source }), found.digests()).map_err(internal)?;
+    crate::images::keep_intent(&mut core, &id, &who, found).map_err(internal)?;
     Ok(Json(json!({ "seq": s.seq })))
 }
 
@@ -2065,18 +2082,24 @@ async fn artifacts_attach(State(shared): State<Shared>, Path(id): Path<String>, 
     let source = if matches!(from.who, Who::Agent { .. }) { "agent" } else { "you" };
     let title = req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| crate::artifacts::clean_name(&name));
     let mut extra = json!({});
-    // An image is checked by its bytes, and named the way they say.
-    let (name, image) = match &bytes {
-        Some(b) if crate::artifacts::media_type(&name).starts_with("image/") && crate::artifacts::media_type(&name) != "image/svg+xml" => {
-            let k = crate::images::sniff(b).map_err(bad)?;
+    // An image its bytes say is one, small enough for an agent to open, is
+    // kept as an image. Anything else is kept as a file, as it always was: a
+    // full-page screenshot taller than the limits, or a `.png` that isn't one.
+    let as_image = bytes.as_deref().and_then(|b| crate::images::read(b).ok()).filter(|k| crate::images::fits(k).is_ok());
+    let (name, image) = match &as_image {
+        Some(k) => {
             extra = json!({ "image": "attached", "width": k.width, "height": k.height });
-            (crate::images::name_for(&name, &k), true)
+            (crate::images::name_for(&name, k), true)
         }
-        _ => (name, false),
+        None => (name, false),
     };
     if let Some(n) = req.against {
         if !image {
-            return Err(fail(StatusCode::BAD_REQUEST, "--against compares an image with an image: attach a PNG, JPEG, GIF or WebP"));
+            let why = match bytes.as_deref().map(crate::images::sniff) {
+                Some(Err(e)) => format!("{e}"),
+                _ => "it isn't a PNG, JPEG, GIF or WebP".into(),
+            };
+            return Err(fail(StatusCode::BAD_REQUEST, format!("--against compares an image an agent can open with an image: {why}")));
         }
         let found = crate::images::list(&core, &id).map_err(internal)?.into_iter().any(|a| a["seq"] == n);
         if !found {
@@ -2499,17 +2522,26 @@ mod tests {
         let listed = crate::images::list(&shared.lock(), &d).unwrap();
         assert_eq!(listed.iter().find(|a| a["seq"] == v["seq"]).unwrap()["against"], reference["seq"]);
         assert_eq!(post_json(&app, &art, json!({ "name": "built.png", "content": shot, "against": 9999 })).await.0, StatusCode::BAD_REQUEST);
+        // Not an image, or too big for an agent: kept as a file, as before, but never against a reference.
         let html = base64::engine::general_purpose::STANDARD.encode(b"<html></html>");
-        assert_eq!(post_json(&app, &art, json!({ "name": "fake.png", "content": html })).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(post_json(&app, &art, json!({ "name": "fake.png", "content": html })).await.0, StatusCode::OK);
+        assert_eq!(post_json(&app, &art, json!({ "name": "fake.png", "content": html, "against": reference["seq"] })).await.0, StatusCode::BAD_REQUEST);
+        let tall = base64::engine::general_purpose::STANDARD.encode(png(1440, 24_000));
+        let (st, v) = post_json(&app, &art, json!({ "name": "full-page.png", "content": tall })).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        let kept = crate::artifacts::list(&shared.lock(), &d).unwrap().into_iter().find(|a| a["seq"] == v["seq"]).unwrap();
+        assert!(kept["image"].is_null(), "a file, not an image for agents: {kept}");
 
         // In the intent: kept, pinned by the intent's entry, and a path in the brief.
         let body = format!("The page.\n\n![The whole page](/api/blobs/{}?name=page.png)", mock["digest"].as_str().unwrap());
         let (st, _) = post_json(&app, &format!("/api/dockets/{d}/intent"), json!({ "body": body })).await;
         assert_eq!(st, StatusCode::OK);
-        let last = shared.lock().store.entries(&d).unwrap().last().unwrap().entry().unwrap();
-        assert_eq!((last.kind.as_str(), last.blobs.clone()), ("intent", vec![mock["digest"].as_str().unwrap().to_string()]));
+        // The intent's entry first, pinning it; then the image, kept once the intent is on the record.
+        let tail: Vec<crate::record::Entry> = shared.lock().store.entries(&d).unwrap().iter().rev().take(2).map(|s| s.entry().unwrap()).collect();
+        assert_eq!((tail[1].kind.as_str(), tail[1].blobs.clone()), ("intent", vec![mock["digest"].as_str().unwrap().to_string()]));
+        assert_eq!((tail[0].kind.as_str(), tail[0].data["image"].as_str()), ("artifact", Some("intent")));
         let brief = crate::brief::brief(&shared.lock(), &d, None).unwrap();
-        assert!(!brief.contains("/api/blobs/") && brief.contains("## Images") && brief.contains("Make this primary"), "{brief}");
+        assert!(brief.contains(") (file: ") && brief.contains("## Images") && brief.contains("Make this primary"), "{brief}");
         assert!(shared.lock().verify(&d).unwrap().ok);
         let _ = std::fs::remove_dir_all(&dir);
     }

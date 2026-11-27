@@ -39,22 +39,20 @@ self.addEventListener("notificationclick", (e) => {
   );
 });
 
-// Shared from another app: the images (and any words) kept for the Share
-// page, which reads them with the app's own headers, then opens it. Nothing
-// is sent to the hub from here.
+// Shared from another app: the images kept for the Share page, which reads
+// them with the app's own headers, then opens it. Nothing is sent to the hub
+// from here. A worker can't tell the share sheet from another site's form
+// posting here (the browser adds Sec-Fetch-* after the worker), so only
+// images come through, never words, and the Share page says where they came
+// from: nothing is typed for you.
 const SHARE_CACHE = "wh-share";
 const MAX_SHARED = 10;
 const SENDABLE = /^image\/(png|jpeg|gif|webp|heic|heif|avif)$/;
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "POST" || url.origin !== self.location.origin || url.pathname !== "/share-target") return;
-  // From the share sheet (the browser's own, "none") or this app; never a
-  // form another site posts here.
-  const from = e.request.headers.get("Sec-Fetch-Site");
-  const ok = !from || from === "none" || from === "same-origin";
   e.respondWith(
     (async () => {
-      if (!ok) return Response.redirect("/#/share", 303);
       try {
         const form = await e.request.formData();
         const c = await caches.open(SHARE_CACHE);
@@ -64,10 +62,9 @@ self.addEventListener("fetch", (e) => {
           if (typeof f === "string" || !SENDABLE.test(f.type) || n >= MAX_SHARED) continue;
           await c.put(`/share-inbox/file/${n++}`, new Response(f, { headers: { "content-type": f.type, "x-name": encodeURIComponent(f.name || "shared") } }));
         }
-        const words = [form.get("title"), form.get("text"), form.get("url")].filter((x) => typeof x === "string" && x.trim()).join("\n");
-        if (words) await c.put("/share-inbox/text", new Response(words.slice(0, 4000)));
-      } catch {
+      } catch (err) {
         // The Share page says nothing came.
+        console.error("share-target:", err);
       }
       return Response.redirect("/#/share", 303);
     })(),

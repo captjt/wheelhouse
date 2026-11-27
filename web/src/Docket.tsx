@@ -1033,7 +1033,6 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
       const h = takeHanded(d.id);
       if (!h) return;
       add(h.files);
-      if (h.text) setText((x) => x || h.text);
     };
     take();
     window.addEventListener("wh-share-images", take);

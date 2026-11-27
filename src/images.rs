@@ -51,6 +51,23 @@ pub struct Kind {
 /// can script, HTML, a PDF) is refused, as is a header that claims more
 /// pixels than any screenshot has.
 pub fn sniff(b: &[u8]) -> Result<Kind> {
+    let k = read(b)?;
+    fits(&k)?;
+    Ok(k)
+}
+
+/// Whether an image is small enough to go to an agent: at most `MAX_SIDE`
+/// on a side and `MAX_PIXELS` in all. A file kept with `wh attach` needn't be.
+pub fn fits(k: &Kind) -> Result<()> {
+    let (width, height) = (k.width, k.height);
+    if width > MAX_SIDE || height > MAX_SIDE || u64::from(width) * u64::from(height) > MAX_PIXELS {
+        bail!("that image is {width}×{height}: at most {MAX_SIDE} on a side and {} megapixels", MAX_PIXELS / 1_000_000);
+    }
+    Ok(())
+}
+
+/// An image's type and size from its header, whatever its size.
+pub fn read(b: &[u8]) -> Result<Kind> {
     let (media_type, ext, (width, height)) = if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         ("image/png", "png", png(b)?)
     } else if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
@@ -64,9 +81,6 @@ pub fn sniff(b: &[u8]) -> Result<Kind> {
     };
     if width == 0 || height == 0 {
         bail!("that image has no pixels");
-    }
-    if width > MAX_SIDE || height > MAX_SIDE || u64::from(width) * u64::from(height) > MAX_PIXELS {
-        bail!("that image is {width}×{height}: at most {MAX_SIDE} on a side and {} megapixels", MAX_PIXELS / 1_000_000);
     }
     Ok(Kind { media_type, ext, width, height })
 }
@@ -373,6 +387,10 @@ pub fn keep(core: &mut Core, docket: &str, who: &Who, images: &[Shared]) -> Resu
     Ok(())
 }
 
+/// How much of a blob is read to tell an image's type and size: a JPEG's
+/// size can come after a large EXIF block; past this, the whole is read.
+const HEAD: usize = 256 << 10;
+
 /// An image's file for agents: `<base>/<docket>/<first 12 of its hash>-<name>`.
 pub fn path_in(base: &Path, docket: &str, digest: &str, name: &str) -> Result<PathBuf> {
     let hex = hex_of(digest)?;
@@ -387,8 +405,14 @@ pub fn path_in(base: &Path, docket: &str, digest: &str, name: &str) -> Result<Pa
 /// (as many bytes as the kept one: only you can write there). Only you can
 /// read it (0600, in a 0700 folder).
 pub fn materialize_in(core: &Core, base: &Path, docket: &str, digest: &str, name: &str) -> Result<PathBuf> {
-    let path = path_in(base, docket, digest, name)?;
     let hex = hex_of(digest)?;
+    // Only an image, whatever an entry calls it, and named the way its bytes say.
+    let head = core.store.blob_head(&hex, HEAD)?.ok_or_else(|| anyhow!("this hub doesn't have the image {}", &hex[..12]))?;
+    let k = match read(&head) {
+        Ok(k) => k,
+        Err(_) => read(&core.store.blob(&hex)?.unwrap_or_default()).map_err(|e| anyhow!("{} isn't an image: {e}", &hex[..12]))?,
+    };
+    let path = path_in(base, docket, digest, &name_for(name, &k))?;
     let size = core.store.blob_size(&hex)?.ok_or_else(|| anyhow!("this hub doesn't have the image {}", &hex[..12]))?;
     if std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() == size) {
         return Ok(path);
@@ -440,7 +464,10 @@ pub fn block_in(core: &Core, base: &Path, docket: &str, images: &[Shared]) -> St
     for (i, im) in images.iter().enumerate() {
         let at = match materialize_in(core, base, docket, &im.digest, &im.name) {
             Ok(p) => p.display().to_string(),
-            Err(_) => format!("(not on this Mac yet: `wh images {docket}` fetches it)"),
+            Err(e) => {
+                say!("{docket}: couldn't write out an image for an agent: {e:#}");
+                format!("(not on this Mac yet: `wh images {docket}` fetches it)")
+            }
         };
         let size = if im.width > 0 { format!(" ({}×{})", im.width, im.height) } else { String::new() };
         out.push_str(&format!("{}. {at}{size}", i + 1));
@@ -491,7 +518,8 @@ pub fn with_block(text: &str, block: &str) -> String {
 pub fn list(core: &Core, docket: &str) -> Result<Vec<Value>> {
     let mut out = Vec::new();
     for a in crate::artifacts::list(core, docket)? {
-        if !a["media_type"].as_str().is_some_and(|t| t.starts_with("image/") && t != "image/svg+xml") {
+        // Only what its entry pins (a teammate's entry can name any digest).
+        if !a["media_type"].as_str().is_some_and(|t| t.starts_with("image/") && t != "image/svg+xml") || a["pinned"] != true {
             continue;
         }
         out.push(a);
@@ -549,28 +577,82 @@ fn pct_decode(s: &str) -> String {
 
 /// An intent's Markdown for an agent: each image link it has becomes the
 /// image's path on this Mac, so `wh brief` shows the mockups as files.
-pub fn intent_for_agent(core: &Core, base: &Path, docket: &str, md: &str) -> String {
+pub fn intent_for_agent(core: &Core, base: &Path, docket: &str, md: &str, pinned: &[String]) -> String {
     let mut out = md.to_string();
     for (digest, name, _) in in_markdown(md) {
+        // Only what the intent's entry pins: a link to anything else stays a link.
+        if !pinned.iter().any(|p| p.eq_ignore_ascii_case(&digest)) {
+            continue;
+        }
         let hex = digest.trim_start_matches("sha256:");
-        let Ok(p) = materialize_in(core, base, docket, &digest, &name) else { continue };
-        // Every spelling of this image's link, up to the end of the URL.
+        let p = match materialize_in(core, base, docket, &digest, &name) {
+            Ok(p) => p,
+            Err(e) => {
+                say!("{docket}: couldn't write out the intent's image {}: {e:#}", &hex[..12]);
+                continue;
+            }
+        };
+        // The link stays as it is (an agent that saves the intent back keeps
+        // it), with the file beside it: after each `![…](/api/blobs/…)`.
+        let note = format!("{FILE_NOTE}{})", p.display());
         let mut i = 0;
         while let Some(at) = out[i..].find(&format!("/api/blobs/sha256:{hex}")) {
             let s = i + at;
-            let e = out[s..].find(|c: char| c == ')' || c.is_whitespace()).map_or(out.len(), |n| s + n);
-            let path = p.display().to_string();
-            out.replace_range(s..e, &path);
-            i = s + path.len();
+            let Some(close) = out[s..].find([')', '\n']).filter(|n| out[s + n..].starts_with(')')) else {
+                i = s + 1;
+                continue;
+            };
+            let end = s + close + 1;
+            if out[end..].starts_with(FILE_NOTE) {
+                i = end;
+                continue;
+            }
+            out.insert_str(end, &note);
+            i = end + note.len();
         }
     }
+    out
+}
+
+/// What follows an image's link in a brief: the file it's written out as.
+const FILE_NOTE: &str = " (file: ";
+
+/// An intent as an agent may save it back from its brief: without the
+/// files the brief put beside its images' links.
+pub fn without_files(md: &str, base: &Path) -> String {
+    let at = format!("{FILE_NOTE}{}", base.display());
+    let mut out = String::with_capacity(md.len());
+    let mut rest = md;
+    while let Some(i) = rest.find(&at) {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        match rest.find([')', '\n']).filter(|n| rest[*n..].starts_with(')')) {
+            Some(n) => rest = &rest[n + 1..],
+            None => {
+                out.push_str(&rest[..at.len()]);
+                rest = &rest[at.len()..];
+            }
+        }
+    }
+    out.push_str(rest);
     out
 }
 
 /// Keep the images an intent names, as References under "Intent": every
 /// one checked before any is kept. Returns their digests, for the intent's
 /// entry to pin.
-pub fn keep_intent(core: &mut Core, docket: &str, who: &Who, md: &str) -> Result<Vec<String>> {
+/// The images an intent names, each checked: what its entry pins, and what
+/// `keep_intent` keeps once the intent is on the record.
+pub struct IntentImages(Vec<(String, String, String, Kind, Vec<u8>)>);
+
+impl IntentImages {
+    pub fn digests(&self) -> Vec<String> {
+        self.0.iter().map(|x| x.0.clone()).collect()
+    }
+}
+
+/// Check the images an intent names, before anything is written.
+pub fn intent_images(core: &Core, md: &str) -> Result<IntentImages> {
     let mut found = Vec::new();
     for (digest, name, alt) in in_markdown(md) {
         let hex = hex_of(&digest)?;
@@ -578,8 +660,13 @@ pub fn keep_intent(core: &mut Core, docket: &str, who: &Who, md: &str) -> Result
         let k = sniff(&bytes)?;
         found.push((digest, name_for(&name, &k), alt, k, bytes));
     }
-    let mut digests = Vec::new();
-    for (digest, name, alt, k, bytes) in found {
+    Ok(IntentImages(found))
+}
+
+/// Keep an intent's images as References under "Intent", once the intent
+/// is on the record.
+pub fn keep_intent(core: &mut Core, docket: &str, who: &Who, found: IntentImages) -> Result<()> {
+    for (digest, name, alt, k, bytes) in found.0 {
         let mut extra = json!({ "image": "intent", "width": k.width, "height": k.height });
         if !alt.is_empty() {
             extra["caption"] = json!(alt);
@@ -599,29 +686,32 @@ pub fn keep_intent(core: &mut Core, docket: &str, who: &Who, md: &str) -> Result
             },
         )?;
         core.store.unstage(digest.trim_start_matches("sha256:"))?;
-        digests.push(digest);
     }
-    Ok(digests)
+    Ok(())
 }
 
 /// The References on a docket, for its brief: what you shared and the
 /// intent's, newest first, each written out where an agent can open it.
-pub fn brief_section(core: &Core, base: &Path, docket: &str) -> Result<String> {
+pub fn brief_section(core: &Core, base: &Path, docket: &str, intent_pins: &[String]) -> Result<String> {
     let mut lines = Vec::new();
     let all = list(core, docket)?;
-    let refs: Vec<&Value> = all.iter().filter(|a| matches!(a["image"].as_str(), Some("reference" | "intent"))).collect();
+    // "In the intent" only for what the intent pins now, whoever kept it.
+    let in_intent = |a: &Value| a["digest"].as_str().is_some_and(|d| intent_pins.iter().any(|p| p.eq_ignore_ascii_case(d)));
+    let refs: Vec<&Value> = all.iter().filter(|a| a["image"] == "reference" || (a["image"] == "intent" && in_intent(a))).collect();
     for a in refs.iter().take(12) {
         let (Some(d), Some(n)) = (a["digest"].as_str(), a["name"].as_str()) else { continue };
         let at = match materialize_in(core, base, docket, d, n) {
             Ok(p) => p.display().to_string(),
-            Err(_) => format!("(not on this Mac: `wh images {docket}`)"),
+            Err(e) => {
+                say!("{docket}: couldn't write out image #{}: {e:#}", a["seq"]);
+                format!("(not on this Mac: `wh images {docket}`)")
+            }
         };
         let mut l = format!("- {at}");
         if let Some(c) = a["caption"].as_str() {
             l.push_str(&format!(": {}", line(c, MAX_CAPTION)));
         }
-        let by = if a["source"] == "agent" { "an agent" } else { "you" };
-        l.push_str(&format!(" ({by}, #{}{})", a["seq"], if a["image"] == "intent" { ", in the intent" } else { "" }));
+        l.push_str(&format!(" ({}, #{}{})", kept_by(core, &a["actor"]), a["seq"], if in_intent(a) { ", in the intent" } else { "" }));
         let pins: Vec<Pin> = a["pins"]
             .as_array()
             .into_iter()
@@ -642,6 +732,24 @@ pub fn brief_section(core: &Core, base: &Path, docket: &str) -> Result<String> {
         "\n## Images\n\nWhat the work should look like, and what inspired it (newest first). Open each one to see it. To show yours against one, `wh attach shot.png --against <#>`.\n\n{}{more}\n",
         lines.join("\n")
     ))
+}
+
+/// Who kept an image, from its entry's signer (never its data, which a
+/// teammate's hub writes): "you" only for this hub's own person.
+pub fn kept_by(core: &Core, actor: &Value) -> String {
+    let id = actor["id"].as_str().unwrap_or("");
+    let me = core.team.as_ref().map(|t| t.config.handle.clone());
+    let member = id.rsplit_once('@').map(|(_, m)| m.to_string());
+    let mine = |m: &str| m == core.owner || me.as_deref() == Some(m) || m == "local";
+    match actor["type"].as_str() {
+        Some("person") if mine(id) => "you".into(),
+        Some("person") => format!("{}, a teammate", line(id, 40)),
+        Some("agent") => match member.filter(|m| !mine(m)) {
+            Some(m) => format!("{}'s agent, a teammate's", line(&m, 40)),
+            None => "an agent".into(),
+        },
+        _ => "Wheelhouse".into(),
+    }
 }
 
 /// How long a staged image waits to be sent before it's let go, and how
@@ -845,13 +953,15 @@ mod tests {
         assert_eq!(send(&mut core, "Like this", vec![]), 1, "the same, said the same: one artifact");
         assert_eq!(send(&mut core, "Like this", vec![Pin { n: 1, note: "Bigger".into() }]), 2);
         // Put in the intent too: its own, and the reference keeps its pins.
-        keep_intent(&mut core, &d, &Who::Owner, &format!("![The page](/api/blobs/{}?name=mock.png)", s.digest)).unwrap();
-        keep_intent(&mut core, &d, &Who::Owner, &format!("Saved again.\n\n![The page](/api/blobs/{}?name=mock.png)", s.digest)).unwrap();
+        for md in [format!("![The page](/api/blobs/{}?name=mock.png)", s.digest), format!("Saved again.\n\n![The page](/api/blobs/{}?name=mock.png)", s.digest)] {
+            let found = intent_images(&core, &md).unwrap();
+            keep_intent(&mut core, &d, &Who::Owner, found).unwrap();
+        }
         let all = list(&core, &d).unwrap();
         assert_eq!(all.len(), 3, "{all:?}");
         assert!(all.iter().any(|a| a["pins"][0]["note"] == "Bigger"));
         let tmp = std::env::temp_dir().join(format!("wh-again-{}", std::process::id()));
-        assert!(brief_section(&core, &tmp, &d).unwrap().contains("1. Bigger"));
+        assert!(brief_section(&core, &tmp, &d, &[]).unwrap().contains("1. Bigger"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -866,25 +976,74 @@ mod tests {
         );
         let found = in_markdown(&md);
         assert_eq!(found, vec![(s.digest.clone(), "settings-mock.png".into(), "The settings page".into())]);
-        let pinned = keep_intent(&mut core, &d, &Who::Owner, &md).unwrap();
+        let found = intent_images(&core, &md).unwrap();
+        let pinned = found.digests();
         assert_eq!(pinned, vec![s.digest.clone()]);
+        keep_intent(&mut core, &d, &Who::Owner, found).unwrap();
         let tmp = std::env::temp_dir().join(format!("wh-intent-{}", std::process::id()));
-        let out = intent_for_agent(&core, &tmp, &d, &md);
-        assert!(!out.contains("/api/blobs/"), "{out}");
-        assert!(out.contains(&tmp.display().to_string()), "{out}");
+        let out = intent_for_agent(&core, &tmp, &d, &md, &pinned);
+        // The link stays (an agent may save the intent back), with the file beside it.
+        assert!(out.contains(&format!("![The settings page](/api/blobs/{}?name=settings%20mock.png) (file: {}", s.digest, tmp.display())), "{out}");
         assert!(out.contains("https://example.com/a.png"));
-        assert!(out.ends_with("\nnext line"), "a bare link ends at its line: {out}");
+        assert!(out.ends_with(&format!("/api/blobs/{}\nnext line", s.digest)), "a bare link is left alone: {out}");
+        assert_eq!(intent_for_agent(&core, &tmp, &d, &out, &pinned), out, "written out once");
+        // Saved back from the brief: the same intent, without the files.
+        assert_eq!(without_files(&out, &tmp), md);
+        assert_eq!(without_files("a (file: /elsewhere/x.png) b", &tmp), "a (file: /elsewhere/x.png) b");
+        // A link its entry doesn't pin stays a link: nothing is written for it.
+        assert_eq!(intent_for_agent(&core, &tmp, &d, &md, &[]), md);
         // The brief's file is the kept artifact's: one file, not two.
-        let sec = brief_section(&core, &tmp, &d).unwrap();
+        let sec = brief_section(&core, &tmp, &d, &pinned).unwrap();
         assert!(sec.contains("The settings page") && sec.contains("in the intent"), "{sec}");
+        assert!(brief_section(&core, &tmp, &d, &[]).unwrap().is_empty(), "no longer in the intent: not listed as the intent's");
         assert_eq!(std::fs::read_dir(tmp.join(&d)).unwrap().count(), 1);
-        // One the hub doesn't have: refused, and nothing of the intent kept.
-        let n = list(&core, &d).unwrap().len();
+        // One the hub doesn't have: refused before anything is kept.
         let s2 = stage(&mut core, "two.png", &png_bytes(11, 11)).unwrap();
         let bad = format!("![a](/api/blobs/{}?name=two.png) ![b](/api/blobs/sha256:{})", s2.digest, "b".repeat(64));
-        assert!(keep_intent(&mut core, &d, &Who::Owner, &bad).is_err());
-        assert_eq!(list(&core, &d).unwrap().len(), n);
+        assert!(intent_images(&core, &bad).is_err());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn only_a_pinned_image_is_written_out_and_only_as_an_image() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Settings page", json!({})).unwrap();
+        // Something this hub keeps that isn't an image (a redacted prompt, say).
+        let secret = b"the private prompt's text";
+        let hex = hex::encode(&sha2::Sha256::digest(secret));
+        core.store.put_blob(&hex, secret, "2026-11-27T00:00:00.000Z").unwrap();
+        // An artifact entry naming it, as a teammate's hub could write one, without pinning it.
+        let data = json!({ "name": "spec.json", "digest": format!("sha256:{hex}"), "media_type": "image/png", "image": "reference", "caption": "Open it" });
+        core.append_with(&d, "artifact", &Who::Owner, Some("spec".into()), data, vec![]).unwrap();
+        assert!(list(&core, &d).unwrap().is_empty(), "not listed: its entry doesn't pin it");
+        let tmp = std::env::temp_dir().join(format!("wh-pinned-{}", std::process::id()));
+        assert!(brief_section(&core, &tmp, &d, &[]).unwrap().is_empty());
+        // And never written out as anything but an image, named by its bytes.
+        assert!(materialize_in(&core, &tmp, &d, &format!("sha256:{hex}"), "spec.json").is_err());
+        let s = stage(&mut core, "shot.json", &png_bytes(5, 5)).unwrap();
+        let p = materialize_in(&core, &tmp, &d, &s.digest, "shot.json").unwrap();
+        assert!(p.display().to_string().ends_with("-shot.png"), "{}", p.display());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn an_image_is_credited_to_who_signed_it() {
+        let core = test_core();
+        let me = core.owner.clone();
+        assert_eq!(kept_by(&core, &json!({ "type": "person", "id": me })), "you");
+        assert_eq!(kept_by(&core, &json!({ "type": "person", "id": "sam" })), "sam, a teammate");
+        assert_eq!(kept_by(&core, &json!({ "type": "agent", "id": "claude-code@sam" })), "sam's agent, a teammate's");
+        assert_eq!(kept_by(&core, &json!({ "type": "agent", "id": "claude-code" })), "an agent");
+        assert_eq!(kept_by(&core, &json!({ "type": "hub", "id": "hub" })), "Wheelhouse");
+    }
+
+    #[test]
+    fn a_full_page_screenshot_is_read_but_too_big_for_an_agent() {
+        let k = read(&png_bytes(1440, 24_000)).unwrap();
+        assert_eq!((k.width, k.height), (1440, 24_000));
+        assert!(fits(&k).is_err());
+        assert!(sniff(&png_bytes(1440, 24_000)).is_err());
+        assert!(fits(&read(&png_bytes(1440, 9_000)).unwrap()).is_ok());
     }
 
     #[test]

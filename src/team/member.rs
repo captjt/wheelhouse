@@ -200,6 +200,13 @@ fn key_entry(core: &mut Core, log: &str, workspace: &str, handle: &str, key_name
     Ok(e)
 }
 
+/// Whether this hub's person keeps their prompts on `docket` private (a
+/// shared one): a prompt's images stay off the shared record too.
+pub fn prompts_private(core: &Core, docket: &str) -> bool {
+    let Some(t) = &core.team else { return false };
+    t.shares(docket) && t.people.get(docket).is_some_and(|p| p.private_prompts.contains(&t.config.handle))
+}
+
 /// Write an entry on a shared docket: redact what never leaves, check it
 /// against the rules as this hub knows them, sign it, and put it in the
 /// outbox. Its `seq` is 0 until the workspace hub orders it.
@@ -778,6 +785,24 @@ pub async fn share(shared: &Shared, local: &str) -> Result<Value> {
             t.aliases.insert(local.to_string(), id.clone());
         }
         save(&mut core)?;
+        // The intent's images: a share carries no files, so the intent is
+        // written again on the shared docket, pinning them, for teammates'
+        // hubs to fetch.
+        if let Some(body) = st.intent.as_ref().map(|i| i.body.clone()) {
+            match crate::images::intent_images(&core, &body) {
+                Ok(found) if !found.digests().is_empty() => {
+                    let digests = found.digests();
+                    let kept = core
+                        .append_with(&id, "intent", &Who::Owner, Some(body), json!({ "source": "person", "images_from": local }), digests)
+                        .and_then(|_| crate::images::keep_intent(&mut core, &id, &Who::Owner, found));
+                    if let Err(e) = kept {
+                        say!("{id}: the intent's images didn't go with it: {e:#}");
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => say!("{id}: the intent's images didn't go with it: {e:#}"),
+            }
+        }
         // This hub's agents on it go with it.
         let moving: Vec<String> = core.agents.by_block.iter().filter(|(_, t)| t.docket == local).map(|(b, _)| b.clone()).collect();
         for b in moving {

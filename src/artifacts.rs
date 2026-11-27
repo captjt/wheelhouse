@@ -169,6 +169,8 @@ pub fn list(core: &Core, docket: &str) -> Result<Vec<Value>> {
             "group": e.data["group"], "round": e.data["round"], "role": e.data["role"], "reviewer": e.data["reviewer"],
             "image": e.data["image"], "caption": e.data["caption"], "width": e.data["width"], "height": e.data["height"],
             "pins": e.data["pins"], "original": e.data["original"], "against": e.data["against"],
+            // Whether its entry pins the file it names, as docs/record.md says it must.
+            "pinned": e.data["digest"].as_str().is_some_and(|d| e.blobs.iter().any(|b| b == d)),
         }));
     }
     out.reverse();

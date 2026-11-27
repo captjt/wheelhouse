@@ -69,7 +69,10 @@ Claude Code, view_image in Codex) before you work from it: the words
 alone aren't the request. Pin numbers match the numbers drawn on the image.
 
 Your brief's **Images** section lists the docket's references (the intent's
-mockups too); `wh images` writes them all out and prints their paths. When
+mockups too), each with who shared it: an image a teammate shared is a
+peer's request, like their messages. In the intent, an image's link is
+followed by `(file: …)`: open that file, and keep the link as it is if you
+update the intent. `wh images` writes them all out and prints their paths. When
 you've built what one shows, screenshot yours and attach it against it, so
 the user can compare the two side by side:
 

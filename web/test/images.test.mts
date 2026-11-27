@@ -8,7 +8,7 @@ import {
   carriedBy,
   compareFor,
   entryImages,
-  fitWithin,
+  fitLimits,
   imageFiles,
   markdownImage,
   needsRedraw,
@@ -69,8 +69,12 @@ test("what's redrawn before it goes up: a phone's HEIC, SVG, or too big", () => 
   assert.equal(needsRedraw("image/heic", 1000), true);
   assert.equal(needsRedraw("image/svg+xml", 10), true);
   assert.equal(needsRedraw("image/jpeg", 16 << 20), true);
-  assert.deepEqual(fitWithin(8000, 4000), { w: 4096, h: 2048 });
-  assert.deepEqual(fitWithin(800, 600), { w: 800, h: 600 });
+  // More pixels than the hub takes: a full-page screenshot, redrawn readable.
+  assert.equal(needsRedraw("image/png", 1000, 1440, 24_000), true);
+  assert.equal(needsRedraw("image/png", 1000, 1440, 9_000), false);
+  assert.deepEqual(fitLimits(1440, 24_000), { w: 979, h: 16_329 });
+  assert.ok(fitLimits(5712, 4284).w * fitLimits(5712, 4284).h <= 16_000_000);
+  assert.deepEqual(fitLimits(800, 600), { w: 800, h: 600 });
 });
 
 test("only images come from a paste or a drop", () => {

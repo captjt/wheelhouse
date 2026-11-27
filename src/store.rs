@@ -277,6 +277,11 @@ impl Store {
         Ok(self.conn.query_row("SELECT bytes FROM blobs WHERE digest = ?1", params![digest], |r| r.get::<_, Vec<u8>>(0)).optional()?)
     }
 
+    /// The first `n` bytes of a file kept (all of it, if it's shorter).
+    pub fn blob_head(&self, digest: &str, n: usize) -> Result<Option<Vec<u8>>> {
+        Ok(self.conn.query_row("SELECT substr(bytes, 1, ?2) FROM blobs WHERE digest = ?1", params![digest, n as i64], |r| r.get::<_, Vec<u8>>(0)).optional()?)
+    }
+
     pub fn blob_size(&self, digest: &str) -> Result<Option<u64>> {
         Ok(self.conn.query_row("SELECT size FROM blobs WHERE digest = ?1", params![digest], |r| r.get::<_, i64>(0)).optional()?.map(|n| n.max(0) as u64))
     }

@@ -62,17 +62,24 @@ export function imageFiles(dt: { items?: ArrayLike<{ kind: string; type: string;
   return out;
 }
 
-/** Whether a file can go to the hub as it is, or has to be redrawn first
- * (HEIC from a phone, AVIF, BMP, SVG, or too big). */
-export function needsRedraw(type: string, size: number): boolean {
-  return !(SENDABLE as readonly string[]).includes(type) || size > MAX_BYTES;
+/** The hub's limit in pixels (src/images.rs `fits`). */
+export const MAX_PIXELS = 100_000_000;
+/** What a browser's canvas draws safely everywhere (Safari's is smallest). */
+const CANVAS_SIDE = 16_384;
+const CANVAS_AREA = 16_000_000;
+
+/** Whether a file can go to the hub as it is, or has to be redrawn first:
+ * HEIC from a phone, AVIF, BMP, SVG, over 15 MB, or more pixels than the
+ * hub takes (a full-page screenshot). */
+export function needsRedraw(type: string, size: number, w = 0, h = 0): boolean {
+  return !(SENDABLE as readonly string[]).includes(type) || size > MAX_BYTES || w > MAX_SIDE || h > MAX_SIDE || w * h > MAX_PIXELS;
 }
 
-/** The size to redraw an image at: within the hub's limits, and no more
- * than 4096 on a side, which agents read well. */
-export function fitWithin(w: number, h: number, max = 4096): { w: number; h: number } {
-  const s = Math.min(1, max / Math.max(w, h, 1));
-  return { w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)) };
+/** The size to redraw an image at: as large as a canvas draws safely, so a
+ * full-page screenshot stays readable (1440×24000 comes out 979×16329). */
+export function fitLimits(w: number, h: number): { w: number; h: number } {
+  const s = Math.min(1, CANVAS_SIDE / Math.max(w, h, 1), Math.sqrt(CANVAS_AREA / Math.max(1, w * h)));
+  return { w: Math.max(1, Math.floor(w * s)), h: Math.max(1, Math.floor(h * s)) };
 }
 
 /** A name for a pasted image, which has none of its own. */
@@ -151,11 +158,15 @@ export async function stage(blob: Blob, name: string): Promise<Staged> {
 /** An image the hub can take: as it is, or redrawn (a phone's HEIC as a
  * JPEG, something huge made smaller). Throws when the browser can't read it. */
 export async function sendable(file: Blob): Promise<Blob> {
-  if (!needsRedraw(file.type, file.size)) return file;
+  // Read to know its size, unless its type alone says it must be redrawn.
   const bmp = await createImageBitmap(file).catch(() => {
     throw new Error("This browser can't read that image: try a PNG or JPEG");
   });
-  const { w, h } = fitWithin(bmp.width, bmp.height);
+  if (!needsRedraw(file.type, file.size, bmp.width, bmp.height)) {
+    bmp.close();
+    return file;
+  }
+  const { w, h } = fitLimits(bmp.width, bmp.height);
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
@@ -258,8 +269,8 @@ export const stillAdding = (md: string) => /!\[Adding [^\]\n]*…\]\(\)/.test(md
 /** Images handed to a docket's composer from elsewhere (the Share page):
  * waiting until that docket's composer takes them. */
 let handed: { id: string; files: File[]; text: string } | null = null;
-export function handOn(id: string, files: File[], text = "") {
-  handed = { id, files, text };
+export function handOn(id: string, files: File[]) {
+  handed = { id, files, text: "" };
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("wh-share-images", { detail: handed }));
 }
 /** The images handed to this docket, once. */
