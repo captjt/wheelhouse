@@ -212,7 +212,7 @@ in_pane sam 1 send --to me --subject "Empty bucket" --option 429 --option 503 \
 sync_all
 until_ "Alex's Inbox didn't get the gate" sh -c "curl -fsS -H 'x-wheelhouse: 1' http://127.0.0.1:$(port_of alex)/api/messages | jq -e '[.[] | select(.status == \"open\" and .subject == \"Empty bucket\")] | length == 1'"
 # Something Alex wrote that looks like a token: held on Alex's Mac.
-as alex note "$S" "Load test key for staging: ghp_4f9KcQ2mZx7LrT0bWv8sNy3hJd6aPe1uGo5i" >/dev/null
+as alex note "$S" "Load test key for staging: ghp_4f9KcQ2mZx7LrT0bWv8sNy3hJd6aPe1uGo5i" >/dev/null # gitleaks:allow (made-up token)
 get alex /api/team | jq -e '[.outbox[] | select(.status == "held")] | length == 1' >/dev/null || fail "the token wasn't held"
 sleep 2
 

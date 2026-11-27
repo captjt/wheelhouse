@@ -489,9 +489,9 @@ mod tests {
     #[test]
     fn secrets_are_spotted() {
         assert!(secret_in(Some("use ghp_abcdefghijklmnopqrstuvwxyz0123456789 for it"), &Value::Null).is_some());
-        assert!(secret_in(None, &json!({ "x": "AKIAABCDEFGHIJKLMNOP" })).is_some());
+        assert!(secret_in(None, &json!({ "x": "AKIAABCDEFGHIJKLMNOP" })).is_some()); // gitleaks:allow (made-up key)
         assert!(secret_in(Some("-----BEGIN OPENSSH PRIVATE KEY-----\nb3Bl"), &Value::Null).is_some());
-        assert!(secret_in(Some("password=Xk92mPq7Lr4tZw8vNb3s"), &Value::Null).is_some());
+        assert!(secret_in(Some("password=Xk92mPq7Lr4tZw8vNb3s"), &Value::Null).is_some()); // gitleaks:allow (made-up password)
         assert!(secret_in(Some("API_KEY: \"a8F3kL92mQx7Rt5vWz1p\""), &Value::Null).is_some());
         // Words, placeholders and talk about tokens are fine.
         assert!(secret_in(Some("the token bucket refills every second"), &Value::Null).is_none());
