@@ -87,7 +87,7 @@ pub fn links_in(text: &str) -> Vec<String> {
 /// `extra`'s image fields (`crate::images`): an image kept again with
 /// another role, caption, pins or reference is its own artifact, so what
 /// was said about it each time is kept.
-fn existing(core: &Core, docket: &str, digest: Option<&str>, url: Option<&str>, name: &str, extra: &Value) -> Result<Option<i64>> {
+pub fn existing(core: &Core, docket: &str, digest: Option<&str>, url: Option<&str>, name: &str, extra: &Value) -> Result<Option<i64>> {
     const IMAGE: [&str; 4] = ["image", "caption", "pins", "against"];
     for s in core.store.entries(docket)? {
         let Ok(e) = s.entry() else { continue };

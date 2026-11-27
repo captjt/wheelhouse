@@ -7,7 +7,7 @@ let adding = 0;
 
 /** Put images in Markdown: a placeholder at the cursor at once, then the
  * image's link when the hub has it (src/images.rs keeps it with the docket). */
-function insertImages(ta: HTMLTextAreaElement, files: File[], onError: (msg: string) => void) {
+function insertImages(ta: HTMLTextAreaElement, files: File[], value: { get: () => string; set: (v: string) => void }, onError: (msg: string) => void) {
   for (const f of files) {
     // No brackets in it, so the editor can always tell it's still going up.
     const tag = `![Adding ${(f.name || "image").replace(/[[\]()\n]/g, "")} (${++adding})…]()`;
@@ -16,10 +16,17 @@ function insertImages(ta: HTMLTextAreaElement, files: File[], onError: (msg: str
     const name = f.name && f.name !== "image.png" ? f.name : pastedName();
     const alt = name.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ");
     const swap = (text: string) => {
-      const i = ta.value.indexOf(tag);
-      if (i < 0) return;
-      const caret = ta.selectionStart;
-      put(ta, i, i + tag.length, text, caret > i ? [caret + text.length - tag.length, caret + text.length - tag.length] : [caret, caret]);
+      // Still the textarea on screen: through its own editing, so ⌘Z undoes it.
+      if (ta.isConnected && ta.value.includes(tag)) {
+        const i = ta.value.indexOf(tag);
+        const caret = ta.selectionStart;
+        put(ta, i, i + tag.length, text, caret > i ? [caret + text.length - tag.length, caret + text.length - tag.length] : [caret, caret]);
+        return;
+      }
+      // Gone (Preview, say): in the editor's value, never through what has focus now.
+      const v = value.get();
+      const i = v.indexOf(tag);
+      if (i >= 0) value.set(v.slice(0, i) + text + v.slice(i + tag.length));
     };
     sendable(f)
       .then((b) => stage(b, name))
@@ -225,7 +232,11 @@ export const MarkdownEditor = forwardRef<
   const ta = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const toast = useToast();
-  const addImages = (files: File[]) => ta.current && files.length && insertImages(ta.current, files, (m) => toast(m, "error"));
+  // The value as it is now, for an image that finishes going up after a re-render.
+  const latest = useRef({ value, onChange });
+  latest.current = { value, onChange };
+  const addImages = (files: File[]) =>
+    ta.current && files.length && insertImages(ta.current, files, { get: () => latest.current.value, set: (v) => latest.current.onChange(v) }, (m) => toast(m, "error"));
   const [tab, setTab] = useState<"write" | "preview">("write");
   useImperativeHandle(ref, () => ({ focus: () => (setTab("write"), window.setTimeout(() => ta.current?.focus(), 0)) }), []);
   const run = (t: Tool) => {

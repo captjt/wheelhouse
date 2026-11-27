@@ -2092,6 +2092,16 @@ async fn artifacts_attach(State(shared): State<Shared>, Path(id): Path<String>, 
     // An image its bytes say is one, small enough for an agent to open, is
     // kept as an image. Anything else is kept as a file, as it always was: a
     // full-page screenshot taller than the limits, or a `.png` that isn't one.
+    // The same file attached before images had names and fields of their own
+    // (as `main` kept it): the same artifact, as it always was.
+    if req.against.is_none()
+        && let Some(b) = &bytes
+    {
+        let digest = format!("sha256:{}", crate::record::hex::encode(&<sha2::Sha256 as sha2::Digest>::digest(b)));
+        if let Some(seq) = crate::artifacts::existing(&core, &id, Some(&digest), None, &crate::artifacts::clean_name(&name), &json!({})).map_err(internal)? {
+            return Ok(Json(json!({ "seq": seq, "new": false })));
+        }
+    }
     let as_image = bytes.as_deref().and_then(|b| crate::images::read(b).ok()).filter(|k| crate::images::fits(k).is_ok());
     let (name, image) = match &as_image {
         Some(k) => {
@@ -2529,6 +2539,23 @@ mod tests {
         let listed = crate::images::list(&shared.lock(), &d).unwrap();
         assert_eq!(listed.iter().find(|a| a["seq"] == v["seq"]).unwrap()["against"], reference["seq"]);
         assert_eq!(post_json(&app, &art, json!({ "name": "built.png", "content": shot, "against": 9999 })).await.0, StatusCode::BAD_REQUEST);
+        // A screenshot attached before this change (no image fields, its own name): the same artifact again.
+        let old = png(30, 31);
+        let old_hex = crate::record::hex::encode(&<sha2::Sha256 as sha2::Digest>::digest(&old));
+        shared.lock().store.put_blob(&old_hex, &old, "2026-11-01T00:00:00.000Z").unwrap();
+        let was = shared
+            .lock()
+            .append_with(
+                &d,
+                "artifact",
+                &Who::Owner,
+                Some("Screen Shot 1.png".into()),
+                json!({ "name": "Screen Shot 1.png", "source": "you", "digest": format!("sha256:{old_hex}"), "media_type": "image/png", "size": old.len() }),
+                vec![format!("sha256:{old_hex}")],
+            )
+            .unwrap();
+        let (st, v) = post_json(&app, &art, json!({ "name": "Screen Shot 1.png", "content": base64::engine::general_purpose::STANDARD.encode(&old) })).await;
+        assert_eq!((st, v["seq"].as_i64(), v["new"].as_bool()), (StatusCode::OK, Some(was.seq), Some(false)), "{v}");
         // Not an image, or too big for an agent: kept as a file, as before, but never against a reference.
         let html = base64::engine::general_purpose::STANDARD.encode(b"<html></html>");
         assert_eq!(post_json(&app, &art, json!({ "name": "fake.png", "content": html })).await.0, StatusCode::OK);

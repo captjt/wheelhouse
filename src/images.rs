@@ -543,16 +543,23 @@ pub fn list(core: &Core, docket: &str) -> Result<Vec<Value>> {
 pub fn in_markdown(md: &str) -> Vec<(String, String, String)> {
     let mut out: Vec<(String, String, String)> = Vec::new();
     let mut from = 0;
+    // An image's link is on one line: each search stops at its end, so a
+    // long run of `![` costs no more than reading the text once.
     while let Some(at) = md[from..].find("![") {
         let start = from + at;
+        let eol = md[start..].find('\n').map_or(md.len(), |n| start + n);
         from = start + 2;
-        let Some(close) = md[start + 2..].find("](") else { continue };
-        let alt = &md[start + 2..start + 2 + close];
-        if alt.contains('\n') {
+        // Nothing to close it before the line ends: nothing later on the line closes either.
+        let Some(close) = md[start + 2..eol].find("](") else {
+            from = eol;
             continue;
-        }
+        };
+        let alt = &md[start + 2..start + 2 + close];
         let url_at = start + 2 + close + 2;
-        let Some(end) = md[url_at..].find(')') else { continue };
+        let Some(end) = md[url_at..eol].find(')') else {
+            from = eol;
+            continue;
+        };
         let url = md[url_at..url_at + end].trim();
         let url = url.split_whitespace().next().unwrap_or("");
         let Some(rest) = url.strip_prefix("/api/blobs/") else { continue };
@@ -632,11 +639,19 @@ pub fn for_github(md: &str) -> String {
     let mut from = 0;
     while let Some(at) = out[from..].find("![") {
         let start = from + at;
-        let Some(close) = out[start + 2..].find("](").map(|n| start + 2 + n) else { break };
+        let eol = out[start..].find('\n').map_or(out.len(), |n| start + n);
+        // Nothing to close it before the line ends: nothing later on the line closes either.
+        let Some(close) = out[start + 2..eol].find("](").map(|n| start + 2 + n) else {
+            from = eol;
+            continue;
+        };
         let alt = out[start + 2..close].to_string();
         let url_at = close + 2;
-        let Some(end) = out[url_at..].find(')').map(|n| url_at + n) else { break };
-        if alt.contains('\n') || !out[url_at..end].trim_start().starts_with("/api/blobs/") {
+        let Some(end) = out[url_at..eol].find(')').map(|n| url_at + n) else {
+            from = eol;
+            continue;
+        };
+        if !out[url_at..end].trim_start().starts_with("/api/blobs/") {
             from = start + 2;
             continue;
         }
@@ -1102,6 +1117,15 @@ mod tests {
         assert_eq!(prune(&mut core).unwrap().1, 0, "handed out again just now");
         assert!(p.exists());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_long_run_of_image_openers_is_read_in_one_pass() {
+        let md = "![".repeat(256 << 10);
+        let t = std::time::Instant::now();
+        assert!(in_markdown(&md).is_empty());
+        assert_eq!(for_github(&md), md);
+        assert!(t.elapsed() < std::time::Duration::from_millis(500), "{:?}", t.elapsed());
     }
 
     #[test]
