@@ -55,7 +55,9 @@ can't have it write out anything else.
 On a shared docket where you keep your prompts private (`wh team trust
 ACME-1 --private-prompts on`), the images you send with an `@agent` prompt
 or a `/task` stay as private as the prompt: written out for the agent on
-your Mac, and off the shared record.
+your Mac, and off the shared record. Since no entry keeps them, the hub lets
+go of their bytes after three days, like any unsent image; the file written
+out for the agent stays until it's gone two weeks unopened.
 
 ## In the intent
 

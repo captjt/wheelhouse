@@ -139,7 +139,8 @@ struct IntentSection: View {
     }
 
     private func save() {
-        guard !busy else { return }
+        // ⌘↩ while a pasted image is still being added: wait for it, as Save does.
+        guard !busy, adding == 0 else { return }
         busy = true
         Task {
             if await store.setIntent(d.id, text, versions: d.intentVersions) { editing = false }

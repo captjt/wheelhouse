@@ -1168,7 +1168,14 @@ async fn call_proposal(State(shared): State<Shared>, Path((id, n)): Path<(String
             if now.as_deref().map(str::trim) == Some(body.trim()) {
                 return Err(fail(StatusCode::CONFLICT, "that's the intent already"));
             }
-            let s = core.append(&d, "intent", &Who::Owner, Some(body), json!({ "source": "person", "call": call, "proposal": n })).map_err(internal)?;
+            if !crate::team::member::may(&core, &d, "intent") {
+                return Err(fail(StatusCode::FORBIDDEN, format!("only an owner (or their agents) changes {d}'s intent")));
+            }
+            // As `set_intent` saves one: its images pinned by its entry, then kept.
+            let body = crate::images::without_files(&body, &core.images_dir);
+            let found = crate::images::intent_images(&core, &body).map_err(bad)?;
+            let s = core.append_with(&d, "intent", &Who::Owner, Some(body), json!({ "source": "person", "call": call, "proposal": n }), found.digests()).map_err(internal)?;
+            crate::images::keep_intent(&mut core, &d, &Who::Owner, found).map_err(internal)?;
             json!({ "docket": d, "did": "intent", "seq": s.seq })
         }
         "decide" => {
@@ -2596,9 +2603,21 @@ mod tests {
         core.mirror.panes.get_mut("b1").unwrap().label = "builder".into();
         agents::reconcile(&mut core, ["b1".to_string()]);
         let d = agents::docket_of(&core, "b1").unwrap();
-        core.append(&d, "intent", &Who::Owner, Some("Retry failed webhooks.\n\n## Acceptance\n- [ ] 5xx are retried".into()), json!({ "source": "person" })).unwrap();
+        // Its intent has a mockup, pinned by its entry.
+        let mock = crate::images::stage(&mut core, "flow.png", &png(20, 10)).unwrap().digest;
+        let img = format!("![The retry flow](/api/blobs/{mock}?name=flow.png)");
+        core.append_with(
+            &d,
+            "intent",
+            &Who::Owner,
+            Some(format!("Retry failed webhooks.\n\n{img}\n\n## Acceptance\n- [ ] 5xx are retried")),
+            json!({ "source": "person" }),
+            vec![mock.clone()],
+        )
+        .unwrap();
         // A stand-in Listener: it reads the prompt, and answers with what a call settled.
-        let revised = "Retry failed webhooks.\n\n## Acceptance\n- [ ] 5xx are retried\n- [ ] Each attempt is logged";
+        let revised = format!("Retry failed webhooks.\n\n{img}\n\n## Acceptance\n- [ ] 5xx are retried\n- [ ] Each attempt is logged");
+        let revised = revised.as_str();
         let out = json!({ "type": "result", "is_error": false, "session_id": "s-listen", "usage": { "input_tokens": 9, "output_tokens": 3 }, "structured_output": { "proposals": [
             { "kind": "decide", "subject": "Retries", "choice": "5xx and timeouts only", "quote": "let's do 5xx and timeouts only" },
             { "kind": "intent", "subject": "Log each attempt", "intent": revised, "quote": "log each attempt, add that to the spec", "base": 99 },
@@ -2680,7 +2699,11 @@ mod tests {
         let (st, r) = act(2, json!({ "action": "apply" })).await;
         assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("intent")), "{r}");
         let ns = shared.lock().store.state(&d).unwrap().unwrap();
+        let seq = ns.intent.as_ref().unwrap().seq;
         assert_eq!((ns.intent_versions, ns.intent.unwrap().body.as_str()), (2, revised));
+        // Its mockup still pinned, so the brief still gives agents the file.
+        assert_eq!(crate::brief::intent_pins(&shared.lock(), &d, seq), vec![mock.clone()]);
+        assert!(crate::brief::brief(&shared.lock(), &d, None).unwrap().contains("flow.png) (file: "));
         // Work for its agents, as @all sends it.
         let (st, r) = act(3, json!({ "action": "apply" })).await;
         assert_eq!((st, r["result"]["did"].as_str()), (StatusCode::OK, Some("instructed")), "{r}");

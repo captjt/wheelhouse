@@ -304,6 +304,11 @@ impl Store {
         Ok(())
     }
 
+    /// The bytes of the images staged and not sent.
+    pub fn staged_bytes(&self) -> Result<u64> {
+        Ok(self.conn.query_row("SELECT COALESCE(SUM(b.size), 0) FROM staged_images s JOIN blobs b ON b.digest = s.digest", [], |r| r.get::<_, i64>(0))?.max(0) as u64)
+    }
+
     pub fn staged_before(&self, at: &str) -> Result<Vec<String>> {
         let mut st = self.conn.prepare("SELECT digest FROM staged_images WHERE at < ?1")?;
         let rows = st.query_map(params![at], |r| r.get::<_, String>(0))?;

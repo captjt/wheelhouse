@@ -27,6 +27,8 @@ use crate::record::hex;
 
 /// The largest image: 15 MB. A screenshot at 2x is a few.
 pub const MAX: usize = 15 << 20;
+/// The most bytes of images staged and not sent, in all.
+pub const MAX_STAGED: u64 = 1 << 30;
 /// The most images sent at once.
 pub const MAX_PER: usize = 10;
 /// The most pixels on a side, and in all: a header claiming more is refused
@@ -195,6 +197,10 @@ pub struct Staged {
 pub fn stage(core: &mut Core, name: &str, bytes: &[u8]) -> Result<Staged> {
     if bytes.len() > MAX {
         bail!("that image is {} MB; an image is at most {} MB", bytes.len() >> 20, MAX >> 20);
+    }
+    // Staged and not yet sent, in all: a loop can't fill the disk before the prune.
+    if core.store.staged_bytes()? + bytes.len() as u64 > MAX_STAGED {
+        bail!("{} MB of images are waiting to be sent: send or drop some, or they go after three days", MAX_STAGED >> 20);
     }
     let k = sniff(bytes)?;
     let hex = hex::encode(&sha2::Sha256::digest(bytes));
@@ -415,6 +421,10 @@ pub fn materialize_in(core: &Core, base: &Path, docket: &str, digest: &str, name
     let path = path_in(base, docket, digest, &name_for(name, &k))?;
     let size = core.store.blob_size(&hex)?.ok_or_else(|| anyhow!("this hub doesn't have the image {}", &hex[..12]))?;
     if std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() == size) {
+        // Handed out again: two weeks count from now, so it isn't pruned under an agent.
+        if let Ok(f) = std::fs::File::options().write(true).open(&path) {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
         return Ok(path);
     }
     let bytes = core.store.blob(&hex)?.ok_or_else(|| anyhow!("this hub doesn't have the image {}", &hex[..12]))?;
@@ -610,6 +620,29 @@ pub fn intent_for_agent(core: &Core, base: &Path, docket: &str, md: &str, pinned
             out.insert_str(end, &note);
             i = end + note.len();
         }
+    }
+    out
+}
+
+/// Markdown for somewhere the hub doesn't serve (a PR description on
+/// GitHub): each image the hub keeps becomes its alt text, said to be on
+/// the docket, rather than a broken image.
+pub fn for_github(md: &str) -> String {
+    let mut out = md.to_string();
+    let mut from = 0;
+    while let Some(at) = out[from..].find("![") {
+        let start = from + at;
+        let Some(close) = out[start + 2..].find("](").map(|n| start + 2 + n) else { break };
+        let alt = out[start + 2..close].to_string();
+        let url_at = close + 2;
+        let Some(end) = out[url_at..].find(')').map(|n| url_at + n) else { break };
+        if alt.contains('\n') || !out[url_at..end].trim_start().starts_with("/api/blobs/") {
+            from = start + 2;
+            continue;
+        }
+        let said = if alt.trim().is_empty() { "*(an image, on the docket)*".to_string() } else { format!("*(image on the docket: {})*", line(&alt, MAX_CAPTION)) };
+        out.replace_range(start..=end, &said);
+        from = start + said.len();
     }
     out
 }
@@ -1044,6 +1077,39 @@ mod tests {
         assert!(fits(&k).is_err());
         assert!(sniff(&png_bytes(1440, 24_000)).is_err());
         assert!(fits(&read(&png_bytes(1440, 9_000)).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn an_intent_for_github_names_its_images_rather_than_breaking_them() {
+        let md =
+            "The page:\n\n![The settings page](/api/blobs/sha256:ab?name=a.png)\n\n![](/api/blobs/sha256:cd)\n\n![elsewhere](https://example.com/a.png) [a link](/api/blobs/x)";
+        assert_eq!(
+            for_github(md),
+            "The page:\n\n*(image on the docket: The settings page)*\n\n*(an image, on the docket)*\n\n![elsewhere](https://example.com/a.png) [a link](/api/blobs/x)"
+        );
+    }
+
+    #[test]
+    fn a_file_handed_out_again_isnt_pruned_under_its_agent() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Settings page", json!({})).unwrap();
+        let s = stage(&mut core, "mock.png", &png_bytes(14, 14)).unwrap();
+        let base = core.images_dir.clone();
+        let p = materialize_in(&core, &base, &d, &s.digest, "mock.png").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(15 * 24 * 3600);
+        std::fs::File::options().write(true).open(&p).unwrap().set_modified(old).unwrap();
+        assert_eq!(materialize_in(&core, &base, &d, &s.digest, "mock.png").unwrap(), p);
+        assert_eq!(prune(&mut core).unwrap().1, 0, "handed out again just now");
+        assert!(p.exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn staging_has_a_ceiling() {
+        let mut core = test_core();
+        core.store.conn_for_tests().execute("INSERT INTO blobs (digest, size, bytes, added_at) VALUES ('big', ?1, x'00', 'x')", [MAX_STAGED as i64]).unwrap();
+        core.store.stage("big", &crate::time::now_ms()).unwrap();
+        assert!(stage(&mut core, "one.png", &png_bytes(3, 3)).is_err());
     }
 
     #[test]

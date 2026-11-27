@@ -1318,7 +1318,8 @@ pub async fn open_pr(shared: &Shared, cfg: &Config, t: &mut Task) -> Result<()> 
             })
             .collect();
         full.push_str("\n\n");
-        full.push_str(&plan::block(&t.key, &intent, p.get("Notes"), &decided, &format!("@{login}"), &mode));
+        // On GitHub, an image only the hub serves would show broken: named instead.
+        full.push_str(&plan::block(&t.key, &crate::images::for_github(&intent), p.get("Notes"), &decided, &format!("@{login}"), &mode));
     }
     let record = { shared.lock().store.state(&t.docket)?.map(|s| s.head.chars().take(8).collect::<String>()).unwrap_or_default() };
     full.push_str(&format!(
