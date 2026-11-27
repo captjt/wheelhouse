@@ -59,6 +59,25 @@ wh attach https://claude.ai/artifact/… --title "Retry design"   # a link
 A Claude artifact you link in your reply is kept as a link on its own.
 Don't attach secrets, `.env` files, or anything with credentials in it.
 
+## Images the user shares
+
+The user can send you images: what something should look like, an
+inspiration, a screenshot they marked up with numbered pins. They come
+with a prompt or a message as file paths ("Images come with this…"),
+with their captions and what each pin says. **Open each one** (Read in
+Claude Code, view_image in Codex) before you work from it: the words
+alone aren't the request. Pin numbers match the numbers drawn on the image.
+
+Your brief's **Images** section lists the docket's references (the intent's
+mockups too); `wh images` writes them all out and prints their paths. When
+you've built what one shows, screenshot yours and attach it against it, so
+the user can compare the two side by side:
+
+```sh
+wh images                                  # the references, as files
+wh attach shot.png --against 12            # yours, beside image #12
+```
+
 ## Reaching the user
 
 A decision only the user can make, or something they should know while

@@ -5,6 +5,7 @@ import { agoLong, stamp, useHub } from "./live";
 import { Kbd, Modal, Prose, useToast } from "./ui";
 import { MarkdownEditor, type EditorHandle } from "./Editor";
 import { renderMarkdown, toggleTask } from "./markdown";
+import { stillAdding } from "./images";
 import { lineDiff } from "./diff";
 
 /** Who wrote an intent version, in words. */
@@ -56,7 +57,8 @@ export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: Ent
     [d.id, d.intent?.body, d.intent_versions, onSaved, toast],
   );
   const save = () => {
-    if (busy) return;
+    // ⌘↩ while an image is still going up: wait for it.
+    if (busy || stillAdding(text)) return;
     setBusy(true);
     post(`/api/dockets/${d.id}/intent`, { body: text }).then(
       () => {
@@ -118,15 +120,16 @@ export function IntentSection({ d, entries, onSaved }: { d: Docket; entries: Ent
             onChange={setText}
             onSubmit={save}
             onCancel={() => setEditing(false)}
+            images
             placeholder={"What must be true when this is done?\n\n## Acceptance\n- [ ] …\n\n## Out of scope\n- …"}
             footer={
               <div className="intent-bar">
-                <span className="muted small">Each save is a new version on the record, signed as you.</span>
+                <span className="muted small">{stillAdding(text) ? "Adding images…" : "Each save is a new version on the record, signed as you. Paste or drop a mockup to put it in."}</span>
                 <span className="spacer" />
                 <button className="btn btn-small" onClick={() => setEditing(false)}>
                   Cancel
                 </button>
-                <button className="btn btn-primary btn-small" disabled={busy || text.trim() === (intent?.body ?? "").trim()} onClick={save}>
+                <button className="btn btn-primary btn-small" disabled={busy || stillAdding(text) || text.trim() === (intent?.body ?? "").trim()} onClick={save}>
                   Save <Kbd>⌘↩</Kbd>
                 </button>
               </div>

@@ -1,6 +1,33 @@
 import { forwardRef, useImperativeHandle, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { IconBold, IconCode, IconCodeBlock, IconHeading, IconItalic, IconLink, IconListBullet, IconListNumber, IconListTask, IconQuote, IconStrike, IconTable } from "./icons";
-import { Prose } from "./ui";
+import { IconBold, IconCode, IconCodeBlock, IconHeading, IconImage, IconItalic, IconLink, IconListBullet, IconListNumber, IconListTask, IconQuote, IconStrike, IconTable } from "./icons";
+import { imageFiles, markdownImage, pastedName, sendable, stage } from "./images";
+import { Prose, useToast } from "./ui";
+
+let adding = 0;
+
+/** Put images in Markdown: a placeholder at the cursor at once, then the
+ * image's link when the hub has it (src/images.rs keeps it with the docket). */
+function insertImages(ta: HTMLTextAreaElement, files: File[], onError: (msg: string) => void) {
+  for (const f of files) {
+    const tag = `![Adding ${f.name || "image"} (${++adding})…]()`;
+    const at = ta.selectionStart;
+    put(ta, at, ta.selectionEnd, tag + "\n", [at + tag.length + 1, at + tag.length + 1]);
+    const name = f.name && f.name !== "image.png" ? f.name : pastedName();
+    const alt = name.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ");
+    const swap = (text: string) => {
+      const i = ta.value.indexOf(tag);
+      if (i < 0) return;
+      const caret = ta.selectionStart;
+      put(ta, i, i + tag.length, text, caret > i ? [caret + text.length - tag.length, caret + text.length - tag.length] : [caret, caret]);
+    };
+    sendable(f)
+      .then((b) => stage(b, name))
+      .then(
+        (s) => swap(markdownImage(s, alt)),
+        (e: Error) => (swap(""), onError(e.message)),
+      );
+  }
+}
 
 /**
  * Writing Markdown: a toolbar, Write and Preview, the usual shortcuts
@@ -192,9 +219,12 @@ export type EditorHandle = { focus: () => void };
 /** A Markdown editor: Write and Preview, a toolbar, and the keys above. */
 export const MarkdownEditor = forwardRef<
   EditorHandle,
-  { value: string; onChange: (v: string) => void; onSubmit?: () => void; onCancel?: () => void; placeholder?: string; minRows?: number; maxRows?: number; footer?: ReactNode }
->(function MarkdownEditor({ value, onChange, onSubmit, onCancel, placeholder, minRows = 6, maxRows = 24, footer }, ref) {
+  { value: string; onChange: (v: string) => void; onSubmit?: () => void; onCancel?: () => void; placeholder?: string; minRows?: number; maxRows?: number; footer?: ReactNode; images?: boolean }
+>(function MarkdownEditor({ value, onChange, onSubmit, onCancel, placeholder, minRows = 6, maxRows = 24, footer, images = false }, ref) {
   const ta = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const toast = useToast();
+  const addImages = (files: File[]) => ta.current && files.length && insertImages(ta.current, files, (m) => toast(m, "error"));
   const [tab, setTab] = useState<"write" | "preview">("write");
   useImperativeHandle(ref, () => ({ focus: () => (setTab("write"), window.setTimeout(() => ta.current?.focus(), 0)) }), []);
   const run = (t: Tool) => {
@@ -231,6 +261,24 @@ export const MarkdownEditor = forwardRef<
               </button>
             </span>
           ))}
+          {images && (
+            <span className="md-tool-wrap gap">
+              <button className="md-tool" title="Image: or paste or drop one" aria-label="Image" onMouseDown={(e) => e.preventDefault()} onClick={() => picker.current?.click()} disabled={tab !== "write"}>
+                <IconImage size={15} />
+              </button>
+              <input
+                ref={picker}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(e) => {
+                  addImages(Array.from(e.target.files ?? []));
+                  e.target.value = "";
+                }}
+              />
+            </span>
+          )}
         </div>
       </div>
       {tab === "write" ? (
@@ -238,7 +286,18 @@ export const MarkdownEditor = forwardRef<
           ref={ta}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onPaste={pasteLink}
+          onPaste={(e) => {
+            const files = images ? imageFiles(e.clipboardData) : [];
+            if (files.length) return (e.preventDefault(), addImages(files));
+            pasteLink(e);
+          }}
+          onDragOver={(e) => images && Array.from(e.dataTransfer.items).some((i) => i.kind === "file") && e.preventDefault()}
+          onDrop={(e) => {
+            const files = images ? imageFiles(e.dataTransfer) : [];
+            if (!files.length) return;
+            e.preventDefault();
+            addImages(files);
+          }}
           rows={Math.min(maxRows, Math.max(minRows, value.split("\n").length + 1))}
           placeholder={placeholder}
           spellCheck

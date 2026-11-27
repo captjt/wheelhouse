@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { actorName, appName, get, getText, mateOf, type Docket, type EntryView, type RecordEntry, type RecordView } from "./api";
 import { AppAvatar, HubAvatar, IconBraces, IconDownload, IconExternal, IconFile, IconGlobe, IconImage, IconLinkOut, IconShield, PersonAvatar } from "./icons";
 import { agoLong, stamp, useHub } from "./live";
+import { ImageView } from "./Compare";
 import { InlineMd, Modal, Prose } from "./ui";
 
 /**
@@ -65,9 +66,13 @@ export function ArtifactsSection({ entries, onOpen }: { entries: EntryView[]; on
           <div className="art-grid">
             {list.map((e) => (
               <button key={e.seq} className="art-card" onClick={() => onOpen(e)} title={`${e.body || e.data?.name}\n#${e.seq} · ${e.data?.digest || e.data?.url || ""}`}>
-                <span className={`art-icon k-${kindOf(e)}`}>
-                  <ArtifactIcon e={e} />
-                </span>
+                {kindOf(e) === "image" && e.data?.media_type !== "image/svg+xml" ? (
+                  <img className="art-thumb" src={blobUrl(e)} alt="" loading="lazy" />
+                ) : (
+                  <span className={`art-icon k-${kindOf(e)}`}>
+                    <ArtifactIcon e={e} />
+                  </span>
+                )}
                 <span className="art-main">
                   <span className="art-title">{e.body || e.data?.name}</span>
                   <span className="art-meta">
@@ -98,7 +103,7 @@ async function sha256(buf: ArrayBuffer): Promise<string | null> {
 type Loaded = { text?: string; json?: unknown; match: boolean | null; error?: string };
 
 /** One artifact: shown as what it is, with its place in the record. */
-export function ArtifactViewer({ e, docket, onClose }: { e: EntryView; docket: string; onClose: () => void }) {
+export function ArtifactViewer({ e, docket, entries, onOpen, onClose }: { e: EntryView; docket: string; entries?: EntryView[]; onOpen?: (e: EntryView) => void; onClose: () => void }) {
   const me = useHub().state?.team?.workspace?.you;
   const k = kindOf(e);
   const [got, setGot] = useState<Loaded | null>(null);
@@ -146,7 +151,7 @@ export function ArtifactViewer({ e, docket, onClose }: { e: EntryView; docket: s
   else if (k === "markdown") body = <Prose text={got.text ?? ""} />;
   else if (k === "json") body = <JsonView value={got.json} text={got.text ?? ""} role={e.data?.role} />;
   else if (k === "text") body = <pre className="art-pre">{got.text}</pre>;
-  else if (k === "image") body = <img className="art-img" src={blobUrl(e)} alt={e.body || e.data?.name} />;
+  else if (k === "image") body = entries && /^image\/(png|jpeg|gif|webp)$/.test(String(e.data?.media_type)) ? <ImageView e={e} entries={entries} onOpen={onOpen} /> : <img className="art-img" src={blobUrl(e)} alt={e.body || e.data?.name} />;
   else if (k === "html" || k === "pdf") body = <iframe className="art-frame" src={blobUrl(e)} title={e.body || e.data?.name} sandbox={k === "html" ? "allow-scripts allow-popups" : undefined} />;
   else body = <div className="art-loading muted">No preview for this kind of file. Download it to open it.</div>;
 

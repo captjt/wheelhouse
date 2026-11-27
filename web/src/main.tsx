@@ -21,6 +21,7 @@ import { post } from "./api";
 import { AgentsView, DocketListView } from "./views";
 import { SettingsView } from "./Settings";
 import { HoldDialog, RefusedDialog } from "./Verify";
+import { ShareView } from "./Share";
 import "./styles.css";
 
 // A docket's code changes: its own chunk, with the highlighter, loaded on first open.
@@ -106,6 +107,7 @@ function RouteView({ route }: { route: string[] }) {
   if (page === "builds") return <BuildsView />;
   if (page === "team") return <TeamView />;
   if (page === "settings") return <SettingsView section={route[1]} />;
+  if (page === "share") return <ShareView staged={route[1]} />;
   if (page === "session" && route[1]) {
     const s = route[1];
     return (
@@ -188,7 +190,7 @@ function App() {
   useEffect(() => {
     if (page === "d") return;
     const path = `/${route.map(encodeURIComponent).join("/")}` || "/view/active";
-    const titles: Record<string, string> = { inbox: "Inbox", reviews: "Reviews", builds: "Builds", recap: "Recap", agents: "Agents", team: "Team", settings: "Settings" };
+    const titles: Record<string, string> = { share: "Share", inbox: "Inbox", reviews: "Reviews", builds: "Builds", recap: "Recap", agents: "Agents", team: "Team", settings: "Settings" };
     const views: Record<string, string> = { active: "Active", all: "All dockets", done: "Done" };
     const title = page === "session" ? route[1] : page === "view" ? views[route[1] || "active"] : titles[page];
     if (!title) return;
