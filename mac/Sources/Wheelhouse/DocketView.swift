@@ -235,6 +235,7 @@ struct DocketBody: View {
             Composer(d: d)
         }
         .environment(\.docketImages, DocketImage.all(page.entries))
+        .environment(\.carriedImages, DocketImage.carried(page.entries))
     }
 }
 
@@ -933,7 +934,7 @@ struct Composer: View {
             tray[i] = t
             return
         }
-        guard let png = ImageMarks.render(base, marks: marks) else {
+        guard let (png, ext) = ImageMarks.flatten(base, marks: marks) else {
             store.toast("Couldn't draw the marks into \(t.name)", error: true)
             return
         }
@@ -945,7 +946,7 @@ struct Composer: View {
         t.pins = ImageMarks.pins(marks)
         t.data = png
         let stem = (t.name as NSString).deletingPathExtension
-        t.name = stem.hasSuffix("-marked") ? "\(stem).png" : "\(stem)-marked.png"
+        t.name = stem.hasSuffix("-marked") ? "\(stem).\(ext)" : "\(stem)-marked.\(ext)"
         t.stage = png.count > Images.maxBytes ? .failed("Marked up, it's over \(Images.maxBytes >> 20) MB") : .staging
         tray[i] = t
         if t.failure == nil { stage(id, data: png, name: t.name) }

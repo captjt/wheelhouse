@@ -193,13 +193,13 @@ struct ArtifactCard: View {
             } else {
                 if let image {
                     Button("View") { viewing = image }
-                    let others = docketImages.filter { $0.seq != image.seq && $0.role != "original" }
-                    if let a = image.against, let ref = docketImages.first(where: { $0.seq == a }) {
+                    let others = docketImages.filter { $0.id != image.id && $0.role != "original" }
+                    if let a = image.against, let ref = docketImages.first(where: { $0.seq == a && a > 0 }) {
                         Button("Compare With Its Reference (#\(a))") { comparing = (image, ref) }
                     }
                     if !others.isEmpty {
                         Menu("Compare With") {
-                            ForEach(others) { o in Button("#\(o.seq) · \(o.label)") { comparing = (image, o) } }
+                            ForEach(others) { o in Button("\(o.ref) · \(o.label)") { comparing = (image, o) } }
                         }
                     }
                     Divider()

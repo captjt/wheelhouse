@@ -156,6 +156,16 @@ enum ImageMarks {
         guard let out = r.cgImage else { return nil }
         return NSBitmapImageRep(cgImage: out).representation(using: .png, properties: [:])
     }
+
+    /// The marked-up image to send: a PNG, or a JPEG (quality 0.9) when the
+    /// PNG is over `limit` (a full-resolution phone photo), as the web app
+    /// does. Its bytes and the extension its name takes.
+    @MainActor static func flatten(_ data: Data, marks: [MarkupMark], limit: Int = Images.maxBytes) -> (data: Data, ext: String)? {
+        guard let png = render(data, marks: marks) else { return nil }
+        if png.count <= limit { return (png, "png") }
+        guard let rep = NSBitmapImageRep(data: png), let jpg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return (png, "png") }
+        return (jpg, "jpg")
+    }
 }
 
 /// The markup editor, as a sheet: tools across the top, the image in the

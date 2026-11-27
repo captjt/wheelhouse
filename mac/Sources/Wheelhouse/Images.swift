@@ -253,8 +253,11 @@ actor ImageCache {
 }
 
 /// An image on a docket, as the viewer and Compare show it: from its
-/// artifact entry, or from an entry's `data.images`.
+/// artifact entry, or from an entry's `data.images`. Images are matched by
+/// their digest: a shared docket's entries have no number until its
+/// workspace orders them.
 struct DocketImage: Identifiable, Hashable {
+    /// Its artifact's entry; 0 when it isn't known (yet).
     let seq: Int
     let digest: String
     let name: String
@@ -265,10 +268,12 @@ struct DocketImage: Identifiable, Hashable {
     let height: Int
     /// "reference", "original", "intent", "attached".
     let role: String
+    /// The entry of the reference a screenshot is compared with.
     let against: Int?
-    let original: Int?
+    /// The digest of the image before it was marked up.
+    let original: String?
     let byAgent: Bool
-    var id: Int { seq }
+    var id: String { "\(seq)|\(digest)|\(role)|\(caption)" }
 
     init?(artifact e: Entry) {
         guard e.kind == "artifact", let t = e.data["media_type"].str, t.hasPrefix("image/"), t != "image/svg+xml", let d = e.data["digest"].str else { return nil }
@@ -282,37 +287,32 @@ struct DocketImage: Identifiable, Hashable {
         height = e.data["height"].int ?? 0
         role = e.data["image"].str ?? "attached"
         against = e.data["against"].int
-        original = e.data["original"].int
+        original = e.data["original"].str.flatMap { $0.hasPrefix("sha256:") ? $0 : nil }
         byAgent = e.actorType == "agent"
     }
 
-    /// One of an entry's `data.images`, filled in from its artifact when
-    /// the docket's images have it. What the entry says (its caption, its
-    /// pins) stands: the same image sent twice is one artifact, kept with
-    /// what was said the first time.
+    /// One of an entry's `data.images` (`{digest, name, caption, width,
+    /// height, pins, original}`): the reference artifact kept with the same
+    /// digest and caption when it's there, else the image as the entry
+    /// names it (the artifact comes after the entry, or hasn't arrived).
     init?(_ j: JSON, known: [DocketImage]) {
-        guard let seq = j["seq"].int, let d = j["digest"].str else { return nil }
-        if var k = known.first(where: { $0.seq == seq }) {
-            if let c = j["caption"].text {
-                k.caption = c
-                k.title = c
-            }
-            let pins = DocketImage.pins(j["pins"])
-            if !pins.isEmpty { k.pins = pins }
+        guard let d = j["digest"].str, d.hasPrefix("sha256:") else { return nil }
+        let caption = j["caption"].str ?? ""
+        if let k = known.first(where: { $0.digest == d && $0.role == "reference" && $0.caption == caption }) {
             self = k
             return
         }
-        self.seq = seq
+        seq = 0
         digest = d
         name = j["name"].str ?? "image"
-        caption = j["caption"].str ?? ""
+        self.caption = caption
         title = caption.isEmpty ? name : caption
         pins = DocketImage.pins(j["pins"])
         width = j["width"].int ?? 0
         height = j["height"].int ?? 0
         role = "reference"
         against = nil
-        original = nil
+        original = j["original"].str.flatMap { $0.hasPrefix("sha256:") ? $0 : nil }
         byAgent = false
     }
 
@@ -325,6 +325,42 @@ struct DocketImage: Identifiable, Hashable {
         entries.compactMap(DocketImage.init(artifact:)).reversed()
     }
 
+    /// The digests the docket's entries carry with what was said (each
+    /// `data.images[]`'s, and its original's): their artifacts aren't
+    /// shown again in the Activity.
+    static func carried(_ entries: [Entry]) -> Set<String> {
+        var out = Set<String>()
+        for e in entries where e.kind != "artifact" {
+            for i in e.data["images"].array {
+                if let d = i["digest"].str { out.insert(d) }
+                if let o = i["original"].str { out.insert(o) }
+            }
+        }
+        return out
+    }
+
+    /// Whether an artifact's row is left out of the Activity: a reference
+    /// or its original that an entry already shows. A screenshot attached
+    /// against one still shows.
+    static func hiddenInActivity(_ e: Entry, carried: Set<String>) -> Bool {
+        guard e.kind == "artifact", ["reference", "original"].contains(e.data["image"].str ?? ""), let d = e.data["digest"].str else { return false }
+        return carried.contains(d)
+    }
+
+    /// Before markup: the original kept for this one.
+    func originalImage(in all: [DocketImage]) -> DocketImage? {
+        guard let o = original else { return nil }
+        return all.first { $0.digest == o && $0.role == "original" } ?? all.first { $0.digest == o }
+    }
+
+    /// Marked up: the reference drawn from this original.
+    func markedUp(in all: [DocketImage]) -> DocketImage? {
+        guard role == "original" else { return nil }
+        return all.first { $0.role == "reference" && $0.original == digest }
+    }
+
+    /// How it's named: its entry's number, or its name until it has one.
+    var ref: String { seq > 0 ? "#\(seq)" : name }
     var label: String { caption.isEmpty ? title : caption }
     var roleWords: String {
         switch role {
@@ -342,10 +378,20 @@ private struct DocketImagesKey: EnvironmentKey {
     static let defaultValue: [DocketImage] = []
 }
 
+/// The digests the docket's entries carry (`DocketImage.carried`).
+private struct CarriedImagesKey: EnvironmentKey {
+    static let defaultValue: Set<String> = []
+}
+
 extension EnvironmentValues {
     var docketImages: [DocketImage] {
         get { self[DocketImagesKey.self] }
         set { self[DocketImagesKey.self] = newValue }
+    }
+
+    var carriedImages: Set<String> {
+        get { self[CarriedImagesKey.self] }
+        set { self[CarriedImagesKey.self] = newValue }
     }
 }
 
@@ -422,10 +468,12 @@ struct ImageViewer: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Text(im.label).font(.system(size: 14, weight: .semibold)).foregroundStyle(K.text).lineLimit(2)
-                Text("#\(im.seq) · \(im.roleWords)\(im.width > 0 ? " · \(im.width)×\(im.height)" : "")").font(.system(size: 12)).foregroundStyle(K.muted)
+                Text("\(im.ref) · \(im.roleWords)\(im.width > 0 ? " · \(im.width)×\(im.height)" : "")").font(.system(size: 12)).foregroundStyle(K.muted)
                 Spacer()
-                if let o = im.original, let orig = all.first(where: { $0.seq == o }) {
-                    Button(shown?.seq == o ? "Show Marked Up" : "Show Original") { shown = shown?.seq == o ? nil : orig }.controlSize(.small)
+                if let orig = image.originalImage(in: all) {
+                    Button(shown == nil ? "Show Original" : "Show Marked Up") { shown = shown == nil ? orig : nil }.controlSize(.small)
+                } else if let marked = image.markedUp(in: all) {
+                    Button(shown == nil ? "Show Marked Up" : "Show Original") { shown = shown == nil ? marked : nil }.controlSize(.small)
                 }
                 compareMenu(im)
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).controlSize(.small)
@@ -469,14 +517,14 @@ struct ImageViewer: View {
     }
 
     @ViewBuilder private func compareMenu(_ im: DocketImage) -> some View {
-        let others = all.filter { $0.seq != im.seq && $0.role != "original" }
+        let others = all.filter { $0.id != im.id && $0.role != "original" }
         if !others.isEmpty {
             Menu("Compare") {
-                if let a = im.against, let ref = all.first(where: { $0.seq == a }) {
+                if let a = im.against, let ref = all.first(where: { $0.seq == a && a > 0 }) {
                     Button("With Its Reference (#\(a))") { comparing = ref }
                     Divider()
                 }
-                ForEach(others) { o in Button("#\(o.seq) · \(o.label)") { comparing = o } }
+                ForEach(others) { o in Button("\(o.ref) · \(o.label)") { comparing = o } }
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -501,7 +549,7 @@ struct CompareView: View {
 
     /// The reference on the left, what was built on the right.
     private var pair: (DocketImage, DocketImage) {
-        if left.against == right.seq || (right.role == "reference" && left.role != "reference") { return (right, left) }
+        if (right.seq > 0 && left.against == right.seq) || (right.role == "reference" && left.role != "reference") { return (right, left) }
         return (left, right)
     }
 
@@ -513,15 +561,15 @@ struct CompareView: View {
                 Picker("", selection: $mode) { ForEach(Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                 if mode == .onion {
-                    Slider(value: $opacity, in: 0 ... 1).frame(width: 160).help("How much of #\(r.seq) shows over #\(l.seq)")
+                    Slider(value: $opacity, in: 0 ... 1).frame(width: 160).help("How much of \(r.ref) shows over \(l.ref)")
                 }
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction).controlSize(.small)
             }
             HStack {
-                Text("#\(l.seq) · \(l.label)").lineLimit(1)
+                Text("\(l.ref) · \(l.label)").lineLimit(1)
                 Spacer()
-                Text("#\(r.seq) · \(r.label)").lineLimit(1)
+                Text("\(r.ref) · \(r.label)").lineLimit(1)
             }
             .font(.system(size: 12)).foregroundStyle(K.muted)
             ZStack {

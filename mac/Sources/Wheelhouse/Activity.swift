@@ -56,6 +56,7 @@ struct ActivityRow: View {
     let owner: String
     @Environment(Nav.self) private var nav
     @Environment(\.docketImages) private var docketImages
+    @Environment(\.carriedImages) private var carriedImages
 
     /// The images an entry carries (`data.images`: a note, a decision, a
     /// question you sent with them).
@@ -304,6 +305,8 @@ struct ActivityRow: View {
             let ok = data["decision"].str == "approve"
             return sys(you, [.b(youName), .t(" \(ok ? "approved" : "denied") \(agent)'s \(data["kind"].str ?? "prompt")"), e.body.map { .mono(": \($0)") } ?? .t("")], ok ? "approved" : "denied")
         case "artifact":
+            // Shown already, with what was said, by the entry that carried it.
+            if DocketImage.hiddenInActivity(e, carried: carriedImages) { return .none }
             return .file(writerAvatar, writer, e.body ?? data["name"].str ?? "a file", data["group"].str)
         case "release":
             return sys(.hub, [.b("Wheelhouse"), .t(" saw the session end: \(data["reason"].str ?? "released")")])

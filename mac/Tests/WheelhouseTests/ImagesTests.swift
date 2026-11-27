@@ -67,25 +67,49 @@ private func staged(_ digest: String, _ name: String = "shot.png") -> TrayImage.
 }
 
 @Test func aDocketsImagesComeFromItsArtifactsAndEntries() {
+    let d0 = "sha256:" + String(repeating: "c", count: 64)
     let art = Entry(j: JSON(any: ["seq": 7, "kind": "artifact", "body": "The header", "actor": ["type": "person", "id": "you"], "data": [
         "name": "shot.png", "media_type": "image/png", "digest": d1, "image": "reference", "caption": "The header", "width": 1440, "height": 900,
-        "pins": [["n": 1, "note": "Bigger"]], "original": 6,
+        "pins": [["n": 1, "note": "Bigger"]], "original": d0,
     ]]))
+    let before = Entry(j: JSON(any: ["seq": 6, "kind": "artifact", "data": ["name": "original-shot.png", "media_type": "image/png", "digest": d0, "image": "original"]]))
     let shot = Entry(j: JSON(any: ["seq": 9, "kind": "artifact", "actor": ["type": "agent", "id": "claude-code@b1"], "data": ["name": "built.png", "media_type": "image/png", "digest": d2, "image": "attached", "against": 7]]))
     let svg = Entry(j: JSON(any: ["seq": 10, "kind": "artifact", "data": ["name": "x.svg", "media_type": "image/svg+xml", "digest": d2]]))
-    let all = DocketImage.all([art, shot, svg])
-    #expect(all.map(\.seq) == [9, 7], "newest first, never SVG")
-    #expect(all[1].pins == [ImagePin(n: 1, note: "Bigger")] && all[1].original == 6 && all[1].roleWords == "Reference")
+    let all = DocketImage.all([before, art, shot, svg])
+    #expect(all.map(\.seq) == [9, 7, 6], "newest first, never SVG")
+    let ref = all[1]
+    #expect(ref.pins == [ImagePin(n: 1, note: "Bigger")] && ref.original == d0 && ref.roleWords == "Reference")
     #expect(all[0].against == 7 && all[0].roleWords == "An agent's")
-    // A note's `data.images`, filled in from its artifact when it's known.
-    let carried = DocketImage(JSON(any: ["seq": 7, "digest": d1, "name": "shot.png"]), known: all)
-    #expect(carried?.caption == "The header" && carried?.width == 1440)
-    // Sent again with other words: the entry's stand, the artifact fills in the rest.
-    let again = DocketImage(JSON(any: ["seq": 7, "digest": d1, "name": "shot.png", "caption": "Like this", "pins": [["n": 1, "note": "Primary"]]]), known: all)
-    #expect(again?.caption == "Like this" && again?.pins == [ImagePin(n: 1, note: "Primary")] && again?.width == 1440 && again?.original == 6)
-    let unknown = DocketImage(JSON(any: ["seq": 3, "digest": d2, "name": "y.png", "caption": "Inspiration"]), known: all)
-    #expect(unknown?.label == "Inspiration")
+    // Before markup and marked up find each other by digest.
+    #expect(ref.originalImage(in: all)?.seq == 6)
+    #expect(all[2].markedUp(in: all)?.seq == 7)
+    #expect(all[0].originalImage(in: all) == nil && ref.markedUp(in: all) == nil)
+    // A note's `data.images`: the reference with the same digest and caption.
+    let carried = DocketImage(JSON(any: ["digest": d1, "name": "shot.png", "caption": "The header"]), known: all)
+    #expect(carried?.seq == 7 && carried?.width == 1440)
+    // Sent again with other words, or its artifact not here yet: as the entry names it.
+    let again = DocketImage(JSON(any: ["digest": d1, "name": "shot.png", "caption": "Like this", "pins": [["n": 1, "note": "Primary"]], "width": 10, "height": 5, "original": d0]), known: all)
+    #expect(again?.seq == 0 && again?.ref == "shot.png" && again?.caption == "Like this" && again?.pins == [ImagePin(n: 1, note: "Primary")] && again?.original == d0)
+    #expect(again?.originalImage(in: all)?.seq == 6)
     #expect(DocketImage(JSON(any: ["name": "z.png"]), known: all) == nil)
+    #expect(DocketImage(JSON(any: ["digest": "md5:x", "name": "z.png"]), known: all) == nil)
+}
+
+@Test func theActivityShowsAnImageOnceWithWhatWasSaid() {
+    let d0 = "sha256:" + String(repeating: "c", count: 64)
+    let note = Entry(j: JSON(any: ["seq": 4, "kind": "note", "data": ["images": [["digest": d1, "name": "a.png", "original": d0]]]]))
+    let answer = Entry(j: JSON(any: ["seq": 5, "kind": "decision", "data": ["replies_to": 3, "images": [["digest": d2, "name": "b.png"]]]]))
+    let carried = DocketImage.carried([note, answer])
+    #expect(carried == [d1, d0, d2])
+    let ref = Entry(j: JSON(any: ["seq": 6, "kind": "artifact", "data": ["digest": d1, "image": "reference", "media_type": "image/png"]]))
+    let orig = Entry(j: JSON(any: ["seq": 7, "kind": "artifact", "data": ["digest": d0, "image": "original", "media_type": "image/png"]]))
+    let shot = Entry(j: JSON(any: ["seq": 8, "kind": "artifact", "data": ["digest": d1, "image": "attached", "against": 6, "media_type": "image/png"]]))
+    let alone = Entry(j: JSON(any: ["seq": 9, "kind": "artifact", "data": ["digest": "sha256:" + String(repeating: "e", count: 64), "image": "reference", "media_type": "image/png"]]))
+    #expect(DocketImage.hiddenInActivity(ref, carried: carried))
+    #expect(DocketImage.hiddenInActivity(orig, carried: carried))
+    #expect(!DocketImage.hiddenInActivity(shot, carried: carried), "a screenshot against one still shows")
+    #expect(!DocketImage.hiddenInActivity(alone, carried: carried))
+    #expect(!DocketImage.hiddenInActivity(note, carried: carried))
 }
 
 @Test func pinsAreNumberedAndGoToTheAgentsInOrder() {
@@ -118,6 +142,11 @@ private func staged(_ digest: String, _ name: String = "shot.png") -> TrayImage.
     #expect(Images.pixelSize(out!) == CGSize(width: 640, height: 400), "the image's own pixels, not the screen's")
     #expect(out!.starts(with: [0x89, 0x50, 0x4E, 0x47]), "a PNG")
     #expect(ImageMarks.render(Data("not an image".utf8), marks: marks) == nil)
+    // Over the limit as a PNG (a phone photo at full size): a JPEG.
+    #expect(ImageMarks.flatten(base, marks: marks)?.ext == "png")
+    let big = ImageMarks.flatten(base, marks: marks, limit: 100)
+    #expect(big?.ext == "jpg" && big?.data.starts(with: [0xFF, 0xD8, 0xFF]) == true)
+    #expect(big.flatMap { Images.pixelSize($0.data) } == CGSize(width: 640, height: 400))
 }
 
 @Test func picturesAgentsCantOpenGoAsPNG() {
