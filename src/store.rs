@@ -141,6 +141,10 @@ CREATE TABLE IF NOT EXISTS team_outbox (  -- entries signed for a workspace, sen
   why TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS staged_images (  -- images the app put up and hasn't sent yet: let go of after a few days (images.rs)
+  digest TEXT PRIMARY KEY,
+  at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS blobs (  -- files entries name, by the sha256 of their bytes; never changed
   digest TEXT PRIMARY KEY,
   size INTEGER NOT NULL,
@@ -271,6 +275,34 @@ impl Store {
 
     pub fn blob(&self, digest: &str) -> Result<Option<Vec<u8>>> {
         Ok(self.conn.query_row("SELECT bytes FROM blobs WHERE digest = ?1", params![digest], |r| r.get::<_, Vec<u8>>(0)).optional()?)
+    }
+
+    pub fn blob_size(&self, digest: &str) -> Result<Option<u64>> {
+        Ok(self.conn.query_row("SELECT size FROM blobs WHERE digest = ?1", params![digest], |r| r.get::<_, i64>(0)).optional()?.map(|n| n.max(0) as u64))
+    }
+
+    /// Only for a staged image nothing pins (`images::prune`).
+    pub fn delete_blob(&mut self, digest: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM blobs WHERE digest = ?1", params![digest])?;
+        Ok(())
+    }
+
+    /// An image staged by the app, not sent yet.
+    pub fn stage(&mut self, digest: &str, at: &str) -> Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO staged_images (digest, at) VALUES (?1, ?2)", params![digest, at])?;
+        Ok(())
+    }
+
+    /// Sent (or let go of): no longer waiting.
+    pub fn unstage(&mut self, digest: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM staged_images WHERE digest = ?1", params![digest])?;
+        Ok(())
+    }
+
+    pub fn staged_before(&self, at: &str) -> Result<Vec<String>> {
+        let mut st = self.conn.prepare("SELECT digest FROM staged_images WHERE at < ?1")?;
+        let rows = st.query_map(params![at], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn has_blob(&self, digest: &str) -> Result<bool> {
@@ -457,6 +489,26 @@ impl Store {
         let mut st = self.conn.prepare("SELECT docket, seq, id, chain, envelope FROM entries WHERE docket = ?1 ORDER BY seq")?;
         let rows = st.query_map(params![docket], |r| Ok(Stored { docket: r.get(0)?, seq: r.get(1)?, id: r.get(2)?, chain: r.get(3)?, envelope: r.get(4)? }))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A docket's entry by its id: on the record, or (on a shared docket)
+    /// signed here and waiting for the workspace to order it.
+    pub fn entry_by_id(&self, docket: &str, id: &str) -> Result<Option<Stored>> {
+        let ordered = self
+            .conn
+            .query_row("SELECT docket, seq, id, chain, envelope FROM entries WHERE docket = ?1 AND id = ?2", params![docket, id], |r| {
+                Ok(Stored { docket: r.get(0)?, seq: r.get(1)?, id: r.get(2)?, chain: r.get(3)?, envelope: r.get(4)? })
+            })
+            .optional()?;
+        if ordered.is_some() {
+            return Ok(ordered);
+        }
+        Ok(self
+            .conn
+            .query_row("SELECT docket, id, envelope FROM team_outbox WHERE docket = ?1 AND id = ?2 ORDER BY n DESC LIMIT 1", params![docket, id], |r| {
+                Ok(Stored { docket: r.get(0)?, seq: 0, id: r.get(1)?, chain: String::new(), envelope: r.get(2)? })
+            })
+            .optional()?)
     }
 
     /// Whether a docket has an entry with this id.

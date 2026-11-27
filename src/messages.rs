@@ -283,12 +283,14 @@ fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<Str
     if !remote.is_empty() {
         data["team_to"] = Value::Array(remote);
     }
+    // Images it carries: pinned by its entry, so each hub writes them out.
+    let pins = images_pinned(&extra);
     if let Some(m) = extra.as_object() {
         for (k, v) in m {
             data[k] = v.clone();
         }
     }
-    let s = core.append(docket, kind, &from.who, Some(body), data)?;
+    let s = core.append_with(docket, kind, &from.who, Some(body), data, pins)?;
     for m in &mut sent {
         m.docket = Some(docket.to_string());
         m.seq = Some(s.seq);
@@ -419,7 +421,18 @@ pub fn answer_to(core: &Core, id: i64) -> Option<Message> {
 
 /// Answer a message: with words, an option, or both. Your answer to an
 /// agent goes to its pane; an agent's answer to you is open in your inbox.
+/// The digests an entry pins for the images in `extra` (`crate::images`).
+fn images_pinned(extra: &Value) -> Vec<String> {
+    extra.get("images").and_then(|v| serde_json::from_value::<Vec<crate::images::Shared>>(v.clone()).ok()).map(|i| crate::images::digests(&i)).unwrap_or_default()
+}
+
 pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option<&str>) -> Result<Message> {
+    reply_with(core, from, id, body, choice, Value::Null)
+}
+
+/// `reply`, with more on its entry: `images`, written out by the hub that
+/// delivers it.
+pub fn reply_with(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option<&str>, extra: Value) -> Result<Message> {
     let orig = core.store.message(id)?.ok_or_else(|| anyhow!("no message #{id}"))?;
     let mine = |addr: &str| addr == from.addr || (from.addr == ME && addr == ME);
     if !mine(&orig.to_addr) && !mine(&orig.from_addr) {
@@ -480,7 +493,13 @@ pub fn reply(core: &mut Core, from: &Caller, id: i64, body: &str, choice: Option
         if let Some((member, block)) = &remote {
             data["team_to"] = json!([{ "member": member, "block": block }]);
         }
-        let s = core.append(&d, kind, &from.who, Some(m.body.clone()), data)?;
+        let pins = images_pinned(&extra);
+        if let Some(x) = extra.as_object() {
+            for (k, v) in x {
+                data[k] = v.clone();
+            }
+        }
+        let s = core.append_with(&d, kind, &from.who, Some(m.body.clone()), data, pins)?;
         m.docket = Some(d.clone());
         m.seq = Some(s.seq);
         core.store.set_message_place(m.id, &d, s.seq)?;
@@ -547,9 +566,15 @@ fn with_images(core: &Core, m: &Message, text: String) -> String {
 /// The images a message's entry carries, written out on this hub, as the
 /// text that names them: none when it has none.
 pub fn images_of(core: &Core, m: &Message) -> Option<String> {
-    let (Some(docket), Some(seq)) = (m.docket.as_deref(), m.seq) else { return None };
-    let e = core.store.entries(docket).ok()?.into_iter().find(|s| s.seq == seq)?.entry().ok()?;
-    let images = crate::images::of_entry(&e.data);
+    let docket = m.docket.as_deref()?;
+    // By its entry's id: the same on every hub, and there before the
+    // workspace orders a shared docket's entries. Else by its number.
+    let stored = match (&m.entry, m.seq) {
+        (Some(id), _) => core.store.entry_by_id(docket, id).ok()??,
+        (None, Some(seq)) if seq > 0 => core.store.entries_after(docket, seq - 1, 1).ok()?.into_iter().next().filter(|s| s.seq == seq)?,
+        _ => return None,
+    };
+    let images = crate::images::of_entry(&stored.entry().ok()?);
     (!images.is_empty()).then(|| crate::images::block(core, docket, &images))
 }
 
@@ -586,6 +611,13 @@ pub async fn deliver_loop(shared: Shared) {
         if swept.elapsed() > Duration::from_secs(600) {
             swept = Instant::now();
             expire(&shared);
+            // What images leave behind: staged ones never sent, and old files written out for agents.
+            let pruned = crate::images::prune(&mut shared.lock());
+            match pruned {
+                Ok((0, 0)) => {}
+                Ok((b, f)) => say!("images: let go of {b} unsent and {f} old files"),
+                Err(e) => say!("images: couldn't tidy up: {e:#}"),
+            }
         }
         let due = {
             let core = shared.lock();

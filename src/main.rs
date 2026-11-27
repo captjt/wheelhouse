@@ -1438,10 +1438,13 @@ fn images(docket: Option<String>, as_json: bool) -> Result<()> {
         };
         let at = a["path"].as_str().map(str::to_string).unwrap_or_else(|| format!("(not here: {})", a["missing"].as_str().unwrap_or("missing")));
         let against = a["against"].as_i64().map(|n| format!(", against #{n}")).unwrap_or_default();
-        println!("#{:<4} {kind}{against}: {}", a["seq"], a["caption"].as_str().or(a["title"].as_str()).unwrap_or(""));
+        // A teammate's words, one line each: never a heading or a command.
+        let said = |v: &Value| crate::images::line(v.as_str().unwrap_or(""), crate::images::MAX_CAPTION);
+        let caption = if a["caption"].is_string() { said(&a["caption"]) } else { said(&a["title"]) };
+        println!("#{:<4} {kind}{against}: {caption}", a["seq"]);
         println!("      {at}");
-        for p in a["pins"].as_array().into_iter().flatten() {
-            println!("      pin {}: {}", p["n"], p["note"].as_str().unwrap_or(""));
+        for p in a["pins"].as_array().into_iter().flatten().take(crate::images::MAX_PINS) {
+            println!("      pin {}: {}", p["n"].as_u64().unwrap_or(0), said(&p["note"]));
         }
     }
     Ok(())

@@ -34,7 +34,7 @@ import { composeButton, composeHint, composeKind, composeToast, composeWarning, 
 import { addFiles, imageFiles, refsOf, release, takeHanded, trayState, type TrayItem } from "./images";
 import { ImageTray } from "./ImageTray";
 import { Thumbs } from "./Compare";
-import { entryImages, imagesOf, splitImageBlock } from "./images";
+import { carriedBy, entryImages, imagesOf, splitImageBlock } from "./images";
 import { IconPaperclip } from "./icons";
 
 export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean }) {
@@ -871,6 +871,8 @@ function Activity({ e, d, entries, owner, me, onOpen, onCheck }: { e: EntryView;
     case "artifact": {
       const by = e.actor.type === "person" ? you : e.actor.type === "agent" ? <AppAvatar app={String(e.actor.id).split("@")[0]} size={18} /> : hubA;
       const name = e.actor.type === "person" ? youName : e.actor.type === "agent" ? actorApp : "Wheelhouse";
+      // Shown already, under the message it went with.
+      if (carriedBy(e, entries)) return null;
       // An image: shown, not only named. An original before markup stays a line.
       if (imagesOf([e]).length && data.image !== "original") {
         const against = data.against != null ? entries.find((x) => x.seq === data.against) : undefined;
@@ -1016,8 +1018,13 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
   const [dragging, setDragging] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const trayOk = trayState(tray);
+  // The tray as it is now, for handlers made on an earlier render.
+  const trayNow = useRef(tray);
+  trayNow.current = tray;
   const add = (files: File[]) => {
-    const said = addFiles(files, setTray, tray.length);
+    // While sending: the tray goes with the send, so nothing's added to it.
+    if (busy) return toast("Sending: add images after it's gone", "error");
+    const said = addFiles(files, setTray, trayNow.current.length);
     if (said) toast(said, "error");
   };
   // Images from the Share page (#/share): handed on before this page opened, or while it's open.
@@ -1046,12 +1053,14 @@ const Composer = forwardRef<HTMLTextAreaElement, { d: Docket; onDone: () => void
     const t = text.trim();
     if ((!t && !tray.length) || busy || !trayOk.ok) return;
     setBusy(true);
-    post<ComposeResult>(`/api/dockets/${encodeURIComponent(d.id)}/compose`, { text: t, images: refsOf(tray) }).then(
+    const sending = tray;
+    post<ComposeResult>(`/api/dockets/${encodeURIComponent(d.id)}/compose`, { text: t, images: refsOf(sending) }).then(
       (r) => {
         setBusy(false);
-        // Kept on the docket now: the tray empties whatever the command was.
-        release(tray);
-        setTray([]);
+        // Kept on the docket now: the images that went leave the tray, whatever the command was.
+        const went = new Set(sending.map((x) => x.id));
+        release(sending);
+        setTray((now) => now.filter((x) => !went.has(x.id)));
         // A task's text stays until its dialog starts the agent: cancelling it loses nothing.
         if (r.did === "task") hub.setDialog({ kind: "agent", id: d.id, prompt: r.prompt });
         else setText("");

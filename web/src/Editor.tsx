@@ -9,7 +9,8 @@ let adding = 0;
  * image's link when the hub has it (src/images.rs keeps it with the docket). */
 function insertImages(ta: HTMLTextAreaElement, files: File[], onError: (msg: string) => void) {
   for (const f of files) {
-    const tag = `![Adding ${f.name || "image"} (${++adding})…]()`;
+    // No brackets in it, so the editor can always tell it's still going up.
+    const tag = `![Adding ${(f.name || "image").replace(/[[\]()\n]/g, "")} (${++adding})…]()`;
     const at = ta.selectionStart;
     put(ta, at, ta.selectionEnd, tag + "\n", [at + tag.length + 1, at + tag.length + 1]);
     const name = f.name && f.name !== "image.png" ? f.name : pastedName();

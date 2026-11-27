@@ -24,8 +24,10 @@ In a docket's composer, in the web app or Wheelhouse.app:
   agent with it, and plain text (or no text at all) keeps it on the docket
   as a note.
 
-Every image is an artifact on the docket's record, under **References**,
-pinned by its hash like any other kept file.
+Once it's sent, every image is an artifact on the docket's record, under
+**References**, pinned by its hash like any other kept file. The entry it
+went with (the note, the question, the decision) pins it too. A command the
+hub refuses (an `/ask` with no agent on the docket, say) keeps nothing.
 
 ## What agents get
 
@@ -103,7 +105,11 @@ then.
   never taken as an image, because it can run scripts.
 - At most 15 MB per image, 20,000 pixels on a side, and 100 megapixels in
   all. At most 10 images per message, and 40 pins per image.
-- Captions and pin notes are one line each, at most 500 characters.
+- Captions and pin notes are one line each, at most 500 characters, and at
+  most 4,000 characters in all for one message's images.
+- An image staged and never sent is let go of after three days. A file
+  written out for agents that hasn't changed in two weeks is removed, and
+  written again when an agent next needs it.
 
 The API is `POST /api/images` (the bytes as the body; it answers
 `{digest, name, media_type, width, height, size}`), then

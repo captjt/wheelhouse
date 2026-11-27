@@ -3,6 +3,7 @@
 // image's own pixels, so the image that goes out is full size, and the
 // pins' notes go with it as words (src/images.rs).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { COLORS, type Mark, type Tool, renumber, strokeFor, toBlob } from "./images.ts";
 import { IconArrow, IconBox, IconPen, IconPin, IconRedo, IconText, IconUndo, IconX } from "./icons.tsx";
 import { Kbd } from "./ui.tsx";
@@ -55,8 +56,8 @@ export function drawMarks(ctx: CanvasRenderingContext2D, marks: Mark[], w: numbe
         ctx.font = `600 ${s * 7}px Inter, system-ui, sans-serif`;
         ctx.textBaseline = "top";
         // An outline in the opposite tone, so it reads on any background.
-        ctx.lineWidth = s * 1.6;
-        ctx.strokeStyle = m.color === "#111113" ? "#ffffff" : "rgba(0,0,0,0.75)";
+        ctx.lineWidth = s * 0.9;
+        ctx.strokeStyle = m.color === "#111113" || m.color === "#0090ff" ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.6)";
         ctx.strokeText(m.text, m.x, m.y);
         ctx.fillText(m.text, m.x, m.y);
         break;
@@ -219,8 +220,10 @@ export function Markup({ src, marks: initial, onDone, onClose }: { src: string; 
   const setNote = (i: number, note: string) => setMarks(marks.map((m, j) => (j === i && m.kind === "pin" ? { ...m, note: note.slice(0, 500) } : m)));
   const removeAt = (i: number) => commit(marks.filter((_, j) => j !== i));
 
-  return (
-    // Its own layer, not a sheet: on a phone, drawing mustn't drag it closed.
+  // Its own layer, on the body: not a sheet (drawing on a phone mustn't drag
+  // it closed), and not inside the phone's composer, whose backdrop blur
+  // would hold a fixed layer to the composer's own box.
+  return createPortal(
     <div className="modal-backdrop markup-backdrop">
       <div className="modal markup-modal markup" role="dialog" aria-modal="true" aria-label="Mark up the image">
         <div className="markup-bar">
@@ -299,6 +302,7 @@ export function Markup({ src, marks: initial, onDone, onClose }: { src: string; 
           </aside>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

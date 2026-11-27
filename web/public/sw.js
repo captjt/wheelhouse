@@ -48,8 +48,13 @@ const SENDABLE = /^image\/(png|jpeg|gif|webp|heic|heif|avif)$/;
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "POST" || url.origin !== self.location.origin || url.pathname !== "/share-target") return;
+  // From the share sheet (the browser's own, "none") or this app; never a
+  // form another site posts here.
+  const from = e.request.headers.get("Sec-Fetch-Site");
+  const ok = !from || from === "none" || from === "same-origin";
   e.respondWith(
     (async () => {
+      if (!ok) return Response.redirect("/#/share", 303);
       try {
         const form = await e.request.formData();
         const c = await caches.open(SHARE_CACHE);

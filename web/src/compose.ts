@@ -14,7 +14,7 @@ export type ComposeResult = (
   | { did: "answered"; key: string; message: number; choice?: string | null }
   | { did: "decided"; key: string; seq: number; told: string[] }
   | { did: "task"; prompt: string }
-) & { images?: { seq: number; name: string }[] };
+) & { images?: { digest: string; name: string }[] };
 
 export const COMMANDS: { word: string; kind: ComposeKind; what: string }[] = [
   { word: "ask", kind: "ask", what: "Ask the agents here: Which store? | Postgres | SQLite" },

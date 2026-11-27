@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   MAX_PER,
+  carriedBy,
   compareFor,
   entryImages,
   fitWithin,
@@ -97,10 +98,20 @@ test("a screenshot opens against the reference it was kept against, and the othe
   const ref = art(3, { image: "reference" });
   const shot = art(7, { image: "attached", against: 3 });
   const svg = art(8, { media_type: "image/svg+xml" });
-  const note = { seq: 4, kind: "note", data: { images: [{ seq: 3 }] } } as unknown as EntryView;
+  const note = { seq: 4, kind: "note", data: { images: [{ digest: "sha256:x", name: "x.png" }, { digest: "sha256:y", name: "y.png", caption: "Not kept yet" }] } } as unknown as EntryView;
   const all = imagesOf([ref, shot, svg, note]);
   assert.deepEqual(all.map((e) => e.seq), [7, 3], "newest first, never SVG");
   assert.equal(compareFor(shot, all)?.seq, 3);
   assert.equal(compareFor(ref, all)?.seq, 7);
-  assert.deepEqual(entryImages(note, [ref, shot, note]).map((e) => e.seq), [3]);
+  // By digest: the kept reference, or the image as it was sent until it's kept (a shared docket's).
+  const carried = entryImages(note, [ref, shot, note]);
+  assert.equal(carried[0].seq, 3);
+  assert.equal(carried[1].data.digest, "sha256:y");
+  assert.ok(carried[1].seq < 0);
+  // A reference a message shows already isn't shown again; a screenshot is.
+  assert.equal(carriedBy(ref, [ref, shot, note]), true);
+  assert.equal(carriedBy(shot, [ref, shot, note]), false);
+  const orig = art(2, { image: "original", digest: "sha256:o" });
+  const marked = art(5, { image: "reference", digest: "sha256:m", original: "sha256:o" });
+  assert.equal(carriedBy(orig, [orig, marked]), true, "opened from its marked-up image");
 });

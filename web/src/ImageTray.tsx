@@ -2,7 +2,7 @@
 // Share page. Each one is staged as it's added; you can caption it, mark it
 // up, or take it out.
 import { useState } from "react";
-import { type Mark, type TrayItem, stage } from "./images.ts";
+import { type Mark, type TrayItem, sendable, stage } from "./images.ts";
 import { IconEdit, IconX } from "./icons.tsx";
 import { Markup } from "./Markup.tsx";
 
@@ -19,7 +19,10 @@ export function applyMarkup(item: TrayItem, marks: Mark[], flat: Blob, set: Set)
   }
   const url = URL.createObjectURL(flat);
   set((t) => t.map((x) => (x.id === item.id ? { ...x, url, staged: undefined, state: "staging", error: undefined, original: { ...original, marks } } : x)));
-  stage(flat, `marked-${item.name.replace(/\.[a-z0-9]+$/i, "")}.png`).then(
+  // A marked-up photo is big as a PNG: redrawn within the hub's limits first.
+  sendable(flat)
+    .then((b) => stage(b, `marked-${item.name.replace(/\.[a-z0-9]+$/i, "")}.${b.type === "image/jpeg" ? "jpg" : "png"}`))
+    .then(
     (staged) => set((t) => t.map((x) => (x.id === item.id && x.url === url ? { ...x, staged, state: "ready" } : x))),
     (e: Error) => set((t) => t.map((x) => (x.id === item.id && x.url === url ? { ...x, state: "failed", error: e.message } : x))),
   );

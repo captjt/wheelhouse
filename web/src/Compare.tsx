@@ -16,8 +16,9 @@ export function ImageView({ e, entries, onOpen }: { e: EntryView; entries: Entry
   const [cut, setCut] = useState(50);
   const [fade, setFade] = useState(50);
   const pins: { n: number; note: string }[] = Array.isArray(e.data?.pins) ? e.data.pins : [];
-  const original = e.data?.original != null ? images.find((x) => x.seq === e.data.original) : undefined;
-  const marked = images.find((x) => x.data?.original === e.seq);
+  // By digest: a shared docket's entries have no number until they're ordered.
+  const original = e.data?.original ? images.find((x) => x.data?.digest === e.data.original && x.data?.image === "original") : undefined;
+  const marked = e.data?.image === "original" ? images.find((x) => x.data?.original === e.data?.digest) : undefined;
   const that = other != null ? images.find((x) => x.seq === other) : undefined;
   // The reference on the left, what was built on the right.
   const [left, right] = that ? (e.data?.against === that.seq || (e.data?.image === "attached" && that.data?.image !== "attached") ? [that, e] : [e, that]) : [e, e];

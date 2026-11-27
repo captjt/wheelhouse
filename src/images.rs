@@ -184,7 +184,12 @@ pub fn stage(core: &mut Core, name: &str, bytes: &[u8]) -> Result<Staged> {
     }
     let k = sniff(bytes)?;
     let hex = hex::encode(&sha2::Sha256::digest(bytes));
+    let have = core.store.has_blob(&hex)?;
     core.store.put_blob(&hex, bytes, &crate::time::now_ms())?;
+    // Bytes the hub didn't have: let go of in a few days unless they're sent.
+    if !have {
+        core.store.stage(&hex, &crate::time::now_ms())?;
+    }
     Ok(Staged { digest: format!("sha256:{hex}"), name: name_for(name, &k), media_type: k.media_type, width: k.width, height: k.height, size: bytes.len() })
 }
 
@@ -212,12 +217,11 @@ pub struct Ref {
     pub pins: Vec<Pin>,
 }
 
-/// An image kept on a docket: what goes in an entry's `images`, and what
-/// `block` writes out for an agent.
+/// An image as an entry carries it (`data.images`), checked: by its digest,
+/// which the entry pins, never by an entry's number (a shared docket's
+/// entries have none until the workspace orders them).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Kept {
-    /// Its artifact's entry.
-    pub seq: i64,
+pub struct Shared {
     pub digest: String,
     pub name: String,
     #[serde(default)]
@@ -228,7 +232,14 @@ pub struct Kept {
     pub height: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pins: Vec<Pin>,
+    /// The digest of the image before it was marked up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<String>,
 }
+
+/// All that's said about a message's images (captions and pin notes) is at
+/// most this long: it goes into an agent's prompt with them.
+pub const MAX_WORDS: usize = 4000;
 
 fn hex_of(digest: &str) -> Result<String> {
     let h = digest.strip_prefix("sha256:").unwrap_or(digest).to_ascii_lowercase();
@@ -239,63 +250,89 @@ fn hex_of(digest: &str) -> Result<String> {
 }
 
 /// One line: no control characters, runs of space as one, at most `max`.
-fn line(s: &str, max: usize) -> String {
+pub fn line(s: &str, max: usize) -> String {
     let s: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).collect();
     if s.chars().count() > max { format!("{}…", s.chars().take(max - 1).collect::<String>()) } else { s }
 }
 
-/// Check what the app sent, before anything is kept: at most `MAX_PER`,
-/// each a staged image, its words cleaned.
-pub fn check(core: &Core, refs: &[Ref]) -> Result<Vec<(Ref, Kind)>> {
+/// A name safe to put in a path an agent reads, whoever wrote it: letters,
+/// digits, `-`, `_` and `.` only (no spaces, quotes, backticks or
+/// direction marks), its extension kept.
+pub fn safe_name(name: &str) -> String {
+    let base = crate::artifacts::clean_name(name);
+    let s: String = base.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' }).take(100).collect();
+    let s = s.trim_matches(['-', '.']).to_string();
+    if s.is_empty() { "image".into() } else { s }
+}
+
+/// Check what the app sent, before anything is kept or sent: at most
+/// `MAX_PER`, each a staged image, its words cleaned and not too many.
+pub fn check(core: &Core, refs: &[Ref]) -> Result<Vec<Shared>> {
     if refs.len() > MAX_PER {
         bail!("{} images: send at most {MAX_PER} at once", refs.len());
     }
     let mut out = Vec::new();
+    let mut words = 0;
     for r in refs {
         let hex = hex_of(&r.digest)?;
         let bytes = core.store.blob(&hex)?.ok_or_else(|| anyhow!("the image {} isn't here: add it again", &hex[..12]))?;
         let k = sniff(&bytes)?;
-        if let Some(o) = &r.original {
-            let oh = hex_of(o)?;
-            let ob = core.store.blob(&oh)?.ok_or_else(|| anyhow!("the original of {} isn't here: add it again", r.name))?;
-            sniff(&ob)?;
-        }
+        let original = match &r.original {
+            Some(o) => {
+                let oh = hex_of(o)?;
+                let ob = core.store.blob(&oh)?.ok_or_else(|| anyhow!("the original of {} isn't here: add it again", r.name))?;
+                sniff(&ob)?;
+                Some(format!("sha256:{oh}"))
+            }
+            None => None,
+        };
         if r.pins.len() > MAX_PINS {
             bail!("{} pins on one image: at most {MAX_PINS}", r.pins.len());
         }
-        let pins = r.pins.iter().map(|p| Pin { n: p.n, note: line(&p.note, MAX_CAPTION) }).collect();
+        let pins: Vec<Pin> = r.pins.iter().map(|p| Pin { n: p.n, note: line(&p.note, MAX_CAPTION) }).collect();
+        let caption = line(&r.caption, MAX_CAPTION);
+        words += caption.chars().count() + pins.iter().map(|p| p.note.chars().count()).sum::<usize>();
+        if words > MAX_WORDS {
+            bail!("the captions and pin notes are more than {MAX_WORDS} characters in all: say the rest in the message");
+        }
         let name = name_for(if r.name.trim().is_empty() { "image" } else { &r.name }, &k);
-        out.push((
-            Ref {
-                digest: format!("sha256:{hex}"),
-                name,
-                caption: line(&r.caption, MAX_CAPTION),
-                original: r.original.as_deref().map(hex_of).transpose()?.map(|h| format!("sha256:{h}")),
-                pins,
-            },
-            k,
-        ));
+        out.push(Shared { digest: format!("sha256:{hex}"), name, caption, width: k.width, height: k.height, pins, original });
     }
     Ok(out)
 }
 
-/// Keep checked images on a docket as References: each an artifact, the
-/// original of a marked-up one beside it. The same image kept twice is one
-/// artifact. Returns them in order.
-pub fn keep(core: &mut Core, docket: &str, who: &Who, checked: Vec<(Ref, Kind)>) -> Result<Vec<Kept>> {
+/// The digests an entry that carries these images pins: each image, and
+/// each one's original.
+pub fn digests(images: &[Shared]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for d in images.iter().flat_map(|i| std::iter::once(i.digest.clone()).chain(i.original.clone())) {
+        if !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    out
+}
+
+/// What an entry that carries images has in its data.
+pub fn data_of(images: &[Shared]) -> Value {
+    if images.is_empty() { Value::Null } else { json!({ "images": images }) }
+}
+
+/// Keep checked images on a docket as References, once what they came with
+/// is done: each an artifact, the original of a marked-up one beside it.
+/// The same image said the same way twice is one artifact.
+pub fn keep(core: &mut Core, docket: &str, who: &Who, images: &[Shared]) -> Result<()> {
     let source = if matches!(who, Who::Agent { .. }) { "agent" } else { "you" };
-    let mut out = Vec::new();
-    for (r, k) in checked {
-        let mut original_seq = None;
-        if let Some(o) = &r.original {
-            let bytes = core.store.blob(&hex_of(o)?)?.ok_or_else(|| anyhow!("the original of {} isn't here", r.name))?;
-            let (seq, _) = crate::artifacts::attach(
+    for im in images {
+        if let Some(o) = &im.original {
+            let bytes = core.store.blob(&hex_of(o)?)?.ok_or_else(|| anyhow!("the original of {} isn't here", im.name))?;
+            crate::artifacts::attach(
                 core,
                 docket,
                 who,
                 crate::artifacts::New {
-                    title: format!("{} (before markup)", if r.caption.is_empty() { &r.name } else { &r.caption }),
-                    name: format!("original-{}", r.name),
+                    title: format!("{} (before markup)", if im.caption.is_empty() { &im.name } else { &im.caption }),
+                    name: format!("original-{}", im.name),
                     bytes: Some(bytes),
                     url: None,
                     source: source.into(),
@@ -303,26 +340,25 @@ pub fn keep(core: &mut Core, docket: &str, who: &Who, checked: Vec<(Ref, Kind)>)
                     extra: json!({ "image": "original" }),
                 },
             )?;
-            original_seq = Some(seq);
         }
-        let bytes = core.store.blob(&hex_of(&r.digest)?)?.ok_or_else(|| anyhow!("the image {} isn't here", r.name))?;
-        let mut extra = json!({ "image": "reference", "width": k.width, "height": k.height });
-        if !r.caption.is_empty() {
-            extra["caption"] = json!(r.caption);
+        let bytes = core.store.blob(&hex_of(&im.digest)?)?.ok_or_else(|| anyhow!("the image {} isn't here", im.name))?;
+        let mut extra = json!({ "image": "reference", "width": im.width, "height": im.height });
+        if !im.caption.is_empty() {
+            extra["caption"] = json!(im.caption);
         }
-        if !r.pins.is_empty() {
-            extra["pins"] = json!(r.pins);
+        if !im.pins.is_empty() {
+            extra["pins"] = json!(im.pins);
         }
-        if let Some(s) = original_seq {
-            extra["original"] = json!(s);
+        if let Some(o) = &im.original {
+            extra["original"] = json!(o);
         }
-        let (seq, _) = crate::artifacts::attach(
+        crate::artifacts::attach(
             core,
             docket,
             who,
             crate::artifacts::New {
-                title: if r.caption.is_empty() { r.name.clone() } else { line(&r.caption, 120) },
-                name: r.name.clone(),
+                title: if im.caption.is_empty() { im.name.clone() } else { line(&im.caption, 120) },
+                name: im.name.clone(),
                 bytes: Some(bytes),
                 url: None,
                 source: source.into(),
@@ -330,9 +366,11 @@ pub fn keep(core: &mut Core, docket: &str, who: &Who, checked: Vec<(Ref, Kind)>)
                 extra,
             },
         )?;
-        out.push(Kept { seq, digest: r.digest, name: r.name, caption: r.caption, width: k.width, height: k.height, pins: r.pins });
     }
-    Ok(out)
+    for d in digests(images) {
+        core.store.unstage(d.trim_start_matches("sha256:"))?;
+    }
+    Ok(())
 }
 
 /// An image's file for agents: `<base>/<docket>/<first 12 of its hash>-<name>`.
@@ -342,18 +380,17 @@ pub fn path_in(base: &Path, docket: &str, digest: &str, name: &str) -> Result<Pa
     if d.is_empty() {
         bail!("no docket to keep the image under");
     }
-    let name = crate::artifacts::clean_name(name);
-    Ok(base.join(d).join(format!("{}-{}", &hex[..12], name)))
+    Ok(base.join(d).join(format!("{}-{}", &hex[..12], safe_name(name))))
 }
 
-/// Write an image where agents can open it, unless it's there already with
-/// the same bytes. Only you can read it (0600, in a 0700 folder).
+/// Write an image where agents can open it, unless it's there already
+/// (as many bytes as the kept one: only you can write there). Only you can
+/// read it (0600, in a 0700 folder).
 pub fn materialize_in(core: &Core, base: &Path, docket: &str, digest: &str, name: &str) -> Result<PathBuf> {
     let path = path_in(base, docket, digest, name)?;
     let hex = hex_of(digest)?;
-    if let Ok(have) = std::fs::read(&path)
-        && hex::encode(&sha2::Sha256::digest(&have)) == hex
-    {
+    let size = core.store.blob_size(&hex)?.ok_or_else(|| anyhow!("this hub doesn't have the image {}", &hex[..12]))?;
+    if std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() == size) {
         return Ok(path);
     }
     let bytes = core.store.blob(&hex)?.ok_or_else(|| anyhow!("this hub doesn't have the image {}", &hex[..12]))?;
@@ -389,7 +426,7 @@ pub fn materialize(core: &Core, docket: &str, digest: &str, name: &str) -> Resul
 /// The text that goes with a prompt or a message: each image's path, so the
 /// agent opens it, its caption and its pins. An image this hub can't write
 /// out is named, with `wh images` to fetch it.
-pub fn block_in(core: &Core, base: &Path, docket: &str, images: &[Kept]) -> String {
+pub fn block_in(core: &Core, base: &Path, docket: &str, images: &[Shared]) -> String {
     if images.is_empty() {
         return String::new();
     }
@@ -412,20 +449,35 @@ pub fn block_in(core: &Core, base: &Path, docket: &str, images: &[Kept]) -> Stri
         }
         out.push('\n');
         if !im.pins.is_empty() {
-            let pins: Vec<String> = im.pins.iter().map(|p| if p.note.is_empty() { format!("{}", p.n) } else { format!("{}. {}", p.n, line(&p.note, MAX_CAPTION)) }).collect();
-            out.push_str(&format!("   Numbered pins on it: {}\n", pins.join("; ")));
+            out.push_str(&format!("   Numbered pins on it: {}\n", pins_line(&im.pins)));
         }
     }
     out
 }
 
-pub fn block(core: &Core, docket: &str, images: &[Kept]) -> String {
+fn pins_line(pins: &[Pin]) -> String {
+    pins.iter().map(|p| if p.note.trim().is_empty() { format!("{}", p.n) } else { format!("{}. {}", p.n, line(&p.note, MAX_CAPTION)) }).collect::<Vec<_>>().join("; ")
+}
+
+pub fn block(core: &Core, docket: &str, images: &[Shared]) -> String {
     block_in(core, &core.images_dir, docket, images)
 }
 
-/// The images an entry carries (`data.images`), as kept.
-pub fn of_entry(data: &Value) -> Vec<Kept> {
-    data.get("images").and_then(|v| serde_json::from_value::<Vec<Kept>>(v.clone()).ok()).unwrap_or_default()
+/// The images an entry carries, as far as it pins them: whoever wrote the
+/// entry (a teammate's hub, on a shared docket), an image it doesn't pin
+/// isn't written out, and its words and name are cleaned again.
+pub fn of_entry(e: &crate::record::Entry) -> Vec<Shared> {
+    let Some(list) = e.data.get("images").and_then(|v| serde_json::from_value::<Vec<Shared>>(v.clone()).ok()) else { return Vec::new() };
+    list.into_iter()
+        .take(MAX_PER)
+        .filter(|i| hex_of(&i.digest).is_ok_and(|h| e.blobs.iter().any(|b| b.eq_ignore_ascii_case(&format!("sha256:{h}")))))
+        .map(|i| Shared {
+            name: safe_name(&i.name),
+            caption: line(&i.caption, MAX_CAPTION),
+            pins: i.pins.into_iter().take(MAX_PINS).map(|p| Pin { n: p.n, note: line(&p.note, MAX_CAPTION) }).collect(),
+            ..i
+        })
+        .collect()
 }
 
 /// Text, then the block for its images.
@@ -448,7 +500,8 @@ pub fn list(core: &Core, docket: &str) -> Result<Vec<Value>> {
 }
 
 /// The image links an intent's Markdown names (`/api/blobs/sha256:…`), with
-/// their alt text: the app puts them there when you paste an image into it.
+/// their names and alt text: the app puts them there when you paste an
+/// image into it.
 pub fn in_markdown(md: &str) -> Vec<(String, String, String)> {
     let mut out: Vec<(String, String, String)> = Vec::new();
     let mut from = 0;
@@ -469,7 +522,7 @@ pub fn in_markdown(md: &str) -> Vec<(String, String, String)> {
         let Ok(hex) = hex_of(digest) else { continue };
         let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).map(pct_decode).unwrap_or_else(|| "image".into());
         if !out.iter().any(|(d, ..)| d.ends_with(&hex)) {
-            out.push((format!("sha256:{hex}"), crate::artifacts::clean_name(&name), line(alt, MAX_CAPTION)));
+            out.push((format!("sha256:{hex}"), safe_name(&name), line(alt, MAX_CAPTION)));
         }
         from = url_at + end;
     }
@@ -501,11 +554,11 @@ pub fn intent_for_agent(core: &Core, base: &Path, docket: &str, md: &str) -> Str
     for (digest, name, _) in in_markdown(md) {
         let hex = digest.trim_start_matches("sha256:");
         let Ok(p) = materialize_in(core, base, docket, &digest, &name) else { continue };
-        // Every spelling of this image's link: with or without a query.
+        // Every spelling of this image's link, up to the end of the URL.
         let mut i = 0;
         while let Some(at) = out[i..].find(&format!("/api/blobs/sha256:{hex}")) {
             let s = i + at;
-            let e = out[s..].find([')', ' ']).map_or(out.len(), |n| s + n);
+            let e = out[s..].find(|c: char| c == ')' || c.is_whitespace()).map_or(out.len(), |n| s + n);
             let path = p.display().to_string();
             out.replace_range(s..e, &path);
             i = s + path.len();
@@ -514,16 +567,19 @@ pub fn intent_for_agent(core: &Core, base: &Path, docket: &str, md: &str) -> Str
     out
 }
 
-/// Keep the images an intent names that aren't on the docket yet, as
-/// References under "Intent". Returns their digests, for the intent's
+/// Keep the images an intent names, as References under "Intent": every
+/// one checked before any is kept. Returns their digests, for the intent's
 /// entry to pin.
 pub fn keep_intent(core: &mut Core, docket: &str, who: &Who, md: &str) -> Result<Vec<String>> {
-    let mut digests = Vec::new();
+    let mut found = Vec::new();
     for (digest, name, alt) in in_markdown(md) {
         let hex = hex_of(&digest)?;
         let Some(bytes) = core.store.blob(&hex)? else { bail!("the intent names an image this hub doesn't have ({}): paste it again", &hex[..12]) };
         let k = sniff(&bytes)?;
-        let name = name_for(&name, &k);
+        found.push((digest, name_for(&name, &k), alt, k, bytes));
+    }
+    let mut digests = Vec::new();
+    for (digest, name, alt, k, bytes) in found {
         let mut extra = json!({ "image": "intent", "width": k.width, "height": k.height });
         if !alt.is_empty() {
             extra["caption"] = json!(alt);
@@ -542,6 +598,7 @@ pub fn keep_intent(core: &mut Core, docket: &str, who: &Who, md: &str) -> Result
                 extra,
             },
         )?;
+        core.store.unstage(digest.trim_start_matches("sha256:"))?;
         digests.push(digest);
     }
     Ok(digests)
@@ -565,9 +622,15 @@ pub fn brief_section(core: &Core, base: &Path, docket: &str) -> Result<String> {
         }
         let by = if a["source"] == "agent" { "an agent" } else { "you" };
         l.push_str(&format!(" ({by}, #{}{})", a["seq"], if a["image"] == "intent" { ", in the intent" } else { "" }));
-        if let Some(pins) = a["pins"].as_array().filter(|p| !p.is_empty()) {
-            let ps: Vec<String> = pins.iter().map(|p| format!("{}. {}", p["n"], p["note"].as_str().unwrap_or(""))).collect();
-            l.push_str(&format!("\n  Numbered pins on it: {}", ps.join("; ")));
+        let pins: Vec<Pin> = a["pins"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .take(MAX_PINS)
+            .map(|p| Pin { n: p["n"].as_u64().unwrap_or(0) as u32, note: p["note"].as_str().unwrap_or("").to_string() })
+            .collect();
+        if !pins.is_empty() {
+            l.push_str(&format!("\n  Numbered pins on it: {}", pins_line(&pins)));
         }
         lines.push(l);
     }
@@ -579,6 +642,51 @@ pub fn brief_section(core: &Core, base: &Path, docket: &str) -> Result<String> {
         "\n## Images\n\nWhat the work should look like, and what inspired it (newest first). Open each one to see it. To show yours against one, `wh attach shot.png --against <#>`.\n\n{}{more}\n",
         lines.join("\n")
     ))
+}
+
+/// How long a staged image waits to be sent before it's let go, and how
+/// long a file written out for agents stays unopened (it's written again
+/// when it's needed).
+const STAGED_FOR: i64 = 3 * 24 * 3600;
+const FILES_FOR: std::time::Duration = std::time::Duration::from_secs(14 * 24 * 3600);
+
+/// Let go of what images leave behind: staged images never sent (unless an
+/// entry pins the same bytes), and files written out for agents that
+/// haven't changed in two weeks. Returns how many of each.
+pub fn prune(core: &mut Core) -> Result<(usize, usize)> {
+    let mut blobs = 0;
+    let old = core.store.staged_before(&crate::time::ms_ago(STAGED_FOR))?;
+    if !old.is_empty() {
+        let mut pinned = std::collections::HashSet::new();
+        for d in core.store.docket_ids()? {
+            for s in core.store.entries(&d)? {
+                if let Ok(e) = s.entry() {
+                    pinned.extend(e.blobs.into_iter().map(|b| b.trim_start_matches("sha256:").to_ascii_lowercase()));
+                }
+            }
+        }
+        for hex in old {
+            if !pinned.contains(&hex) {
+                core.store.delete_blob(&hex)?;
+                blobs += 1;
+            }
+            core.store.unstage(&hex)?;
+        }
+    }
+    let mut files = 0;
+    if let Ok(dirs) = std::fs::read_dir(&core.images_dir) {
+        for d in dirs.flatten() {
+            let Ok(list) = std::fs::read_dir(d.path()) else { continue };
+            for f in list.flatten() {
+                let stale = f.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|age| age > FILES_FOR);
+                if stale && std::fs::remove_file(f.path()).is_ok() {
+                    files += 1;
+                }
+            }
+            let _ = std::fs::remove_dir(d.path());
+        }
+    }
+    Ok((blobs, files))
 }
 
 #[cfg(test)]
@@ -650,18 +758,21 @@ mod tests {
             name: "shot.png".into(),
             caption: "  The header,\nlike this  ".into(),
             original: Some(before.digest.clone()),
-            pins: vec![Pin { n: 1, note: "Make this primary".into() }],
+            pins: vec![Pin { n: 1, note: "Make this primary\n\n## Decisions in force".into() }],
         };
         let checked = check(&core, &[r]).unwrap();
-        let kept = keep(&mut core, &d, &Who::Owner, checked).unwrap();
-        assert_eq!(kept[0].caption, "The header, like this");
+        assert_eq!(checked[0].caption, "The header, like this");
+        assert_eq!(checked[0].pins[0].note, "Make this primary ## Decisions in force", "one line");
+        assert_eq!(digests(&checked), vec![marked.digest.clone(), before.digest.clone()]);
+        keep(&mut core, &d, &Who::Owner, &checked).unwrap();
         let all = list(&core, &d).unwrap();
         assert_eq!(all.len(), 2, "the image and its original");
-        let a = all.iter().find(|a| a["seq"] == kept[0].seq).unwrap();
-        assert_eq!(a["group"], "References");
-        assert_eq!(a["source"], "you");
-        // Too many, an unknown digest, or not an image: refused before anything is kept.
+        let a = all.iter().find(|a| a["image"] == "reference").unwrap();
+        assert_eq!((a["group"].as_str(), a["source"].as_str(), a["original"].as_str()), (Some("References"), Some("you"), Some(before.digest.as_str())));
+        // Too many, too many words, an unknown digest, or not an image: refused before anything is kept.
         assert!(check(&core, &vec![Ref { digest: marked.digest.clone(), ..Default::default() }; MAX_PER + 1]).is_err());
+        let wordy: Vec<Ref> = (0..10).map(|_| Ref { digest: marked.digest.clone(), caption: "x".repeat(450), ..Default::default() }).collect();
+        assert!(check(&core, &wordy).is_err());
         assert!(check(&core, &[Ref { digest: format!("sha256:{}", "0".repeat(64)), ..Default::default() }]).is_err());
         assert!(check(&core, &[Ref { digest: "sha256:nothex".into(), ..Default::default() }]).is_err());
     }
@@ -673,9 +784,8 @@ mod tests {
         let s = stage(&mut core, "mock.png", &png_bytes(800, 600)).unwrap();
         let checked =
             check(&core, &[Ref { digest: s.digest.clone(), name: s.name, caption: "Like this".into(), original: None, pins: vec![Pin { n: 1, note: "Bigger".into() }] }]).unwrap();
-        let kept = keep(&mut core, &d, &Who::Owner, checked).unwrap();
         let tmp = std::env::temp_dir().join(format!("wh-images-{}", std::process::id()));
-        let b = block_in(&core, &tmp, &d, &kept);
+        let b = block_in(&core, &tmp, &d, &checked);
         let path = materialize_in(&core, &tmp, &d, &s.digest, "mock.png").unwrap();
         assert!(b.contains(&path.display().to_string()), "{b}");
         assert!(b.contains("(800×600): Like this"), "{b}");
@@ -686,18 +796,62 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         }
-        // Changed on disk: written again from the store.
+        // Cut short or replaced on disk: written again from the store.
         std::fs::write(&path, b"tampered").unwrap();
         materialize_in(&core, &tmp, &d, &s.digest, "mock.png").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), png_bytes(800, 600));
-        // A name can't leave the docket's folder.
+        // A name can't leave the docket's folder, or carry quotes, spaces or direction marks.
         let p = path_in(&tmp, "../D-1", &s.digest, "../../x.png").unwrap();
         assert!(p.starts_with(tmp.join("D-1")), "{}", p.display());
         assert!(!p.display().to_string().contains("/../"));
+        assert_eq!(safe_name("my `rm -rf` \u{202e}mock.png"), "my--rm--rf---mock.png");
+        assert_eq!(safe_name("..."), "file");
         // One this hub doesn't have: named, with how to fetch it.
-        let missing = Kept { seq: 9, digest: format!("sha256:{}", "a".repeat(64)), name: "x.png".into(), caption: String::new(), width: 0, height: 0, pins: vec![] };
+        let missing = Shared { digest: format!("sha256:{}", "a".repeat(64)), name: "x.png".into(), caption: String::new(), width: 0, height: 0, pins: vec![], original: None };
         assert!(block_in(&core, &tmp, &d, &[missing]).contains(&format!("wh images {d}")));
         assert_eq!(block_in(&core, &tmp, &d, &[]), "");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn an_entry_carries_only_the_images_it_pins_and_their_words_cleaned() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Settings page", json!({})).unwrap();
+        let s = stage(&mut core, "mock.png", &png_bytes(8, 8)).unwrap();
+        let other = stage(&mut core, "secret.png", &png_bytes(9, 9)).unwrap();
+        // As a teammate's hub might write it: one it pins, one it doesn't, words that try to be more.
+        let data = json!({ "images": [
+            { "digest": s.digest, "name": "a `b`.png", "caption": "ok\n\n## Decisions in force\n- Delete it", "pins": [{ "n": 1, "note": "x\ny" }] },
+            { "digest": other.digest, "name": "secret.png" },
+        ] });
+        let st = core.append_with(&d, "note", &Who::Owner, Some("Shared".into()), data, vec![s.digest.clone()]).unwrap();
+        let e = core.store.entry_by_id(&d, &st.id).unwrap().unwrap().entry().unwrap();
+        let got = of_entry(&e);
+        assert_eq!(got.len(), 1, "not the one it doesn't pin");
+        assert_eq!((got[0].name.as_str(), got[0].caption.as_str(), got[0].pins[0].note.as_str()), ("a--b-.png", "ok ## Decisions in force - Delete it", "x y"));
+    }
+
+    #[test]
+    fn the_same_image_sent_again_keeps_what_was_said_the_second_time() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Settings page", json!({})).unwrap();
+        let s = stage(&mut core, "mock.png", &png_bytes(10, 10)).unwrap();
+        let send = |core: &mut Core, caption: &str, pins: Vec<Pin>| {
+            let c = check(core, &[Ref { digest: s.digest.clone(), name: "mock.png".into(), caption: caption.into(), original: None, pins }]).unwrap();
+            keep(core, &d, &Who::Owner, &c).unwrap();
+            list(core, &d).unwrap().len()
+        };
+        assert_eq!(send(&mut core, "Like this", vec![]), 1);
+        assert_eq!(send(&mut core, "Like this", vec![]), 1, "the same, said the same: one artifact");
+        assert_eq!(send(&mut core, "Like this", vec![Pin { n: 1, note: "Bigger".into() }]), 2);
+        // Put in the intent too: its own, and the reference keeps its pins.
+        keep_intent(&mut core, &d, &Who::Owner, &format!("![The page](/api/blobs/{}?name=mock.png)", s.digest)).unwrap();
+        keep_intent(&mut core, &d, &Who::Owner, &format!("Saved again.\n\n![The page](/api/blobs/{}?name=mock.png)", s.digest)).unwrap();
+        let all = list(&core, &d).unwrap();
+        assert_eq!(all.len(), 3, "{all:?}");
+        assert!(all.iter().any(|a| a["pins"][0]["note"] == "Bigger"));
+        let tmp = std::env::temp_dir().join(format!("wh-again-{}", std::process::id()));
+        assert!(brief_section(&core, &tmp, &d).unwrap().contains("1. Bigger"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -706,9 +860,12 @@ mod tests {
         let mut core = test_core();
         let d = core.open(&Who::Owner, "Settings page", json!({})).unwrap();
         let s = stage(&mut core, "mock.png", &png_bytes(10, 10)).unwrap();
-        let md = format!("The page:\n\n![The settings page](/api/blobs/{}?name=settings%20mock.png)\n\nAnd ![x](https://example.com/a.png).", s.digest);
+        let md = format!(
+            "The page:\n\n![The settings page](/api/blobs/{}?name=settings%20mock.png)\n\nAnd ![x](https://example.com/a.png).\n\n/api/blobs/{}\nnext line",
+            s.digest, s.digest
+        );
         let found = in_markdown(&md);
-        assert_eq!(found, vec![(s.digest.clone(), "settings mock.png".into(), "The settings page".into())]);
+        assert_eq!(found, vec![(s.digest.clone(), "settings-mock.png".into(), "The settings page".into())]);
         let pinned = keep_intent(&mut core, &d, &Who::Owner, &md).unwrap();
         assert_eq!(pinned, vec![s.digest.clone()]);
         let tmp = std::env::temp_dir().join(format!("wh-intent-{}", std::process::id()));
@@ -716,10 +873,39 @@ mod tests {
         assert!(!out.contains("/api/blobs/"), "{out}");
         assert!(out.contains(&tmp.display().to_string()), "{out}");
         assert!(out.contains("https://example.com/a.png"));
+        assert!(out.ends_with("\nnext line"), "a bare link ends at its line: {out}");
+        // The brief's file is the kept artifact's: one file, not two.
         let sec = brief_section(&core, &tmp, &d).unwrap();
         assert!(sec.contains("The settings page") && sec.contains("in the intent"), "{sec}");
-        // One the hub doesn't have can't be kept.
-        assert!(keep_intent(&mut core, &d, &Who::Owner, &format!("![a](/api/blobs/sha256:{})", "b".repeat(64))).is_err());
+        assert_eq!(std::fs::read_dir(tmp.join(&d)).unwrap().count(), 1);
+        // One the hub doesn't have: refused, and nothing of the intent kept.
+        let n = list(&core, &d).unwrap().len();
+        let s2 = stage(&mut core, "two.png", &png_bytes(11, 11)).unwrap();
+        let bad = format!("![a](/api/blobs/{}?name=two.png) ![b](/api/blobs/sha256:{})", s2.digest, "b".repeat(64));
+        assert!(keep_intent(&mut core, &d, &Who::Owner, &bad).is_err());
+        assert_eq!(list(&core, &d).unwrap().len(), n);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn what_images_leave_behind_is_let_go_of() {
+        let mut core = test_core();
+        let d = core.open(&Who::Owner, "Settings page", json!({})).unwrap();
+        let sent = stage(&mut core, "sent.png", &png_bytes(12, 12)).unwrap();
+        let unsent = stage(&mut core, "unsent.png", &png_bytes(13, 13)).unwrap();
+        let c = check(&core, &[Ref { digest: sent.digest.clone(), ..Default::default() }]).unwrap();
+        keep(&mut core, &d, &Who::Owner, &c).unwrap();
+        let hex = |d: &str| d.trim_start_matches("sha256:").to_string();
+        // Staged long ago: the unsent one goes; the sent one was never waiting.
+        core.store.conn_for_tests().execute("UPDATE staged_images SET at = '2000-01-01T00:00:00.000Z'", []).unwrap();
+        assert_eq!(prune(&mut core).unwrap().0, 1);
+        assert!(core.store.has_blob(&hex(&sent.digest)).unwrap());
+        assert!(!core.store.has_blob(&hex(&unsent.digest)).unwrap());
+        // Bytes already pinned when staged again are never let go of.
+        let again = stage(&mut core, "sent.png", &png_bytes(12, 12)).unwrap();
+        core.store.stage(&hex(&again.digest), "2000-01-01T00:00:00.000Z").unwrap();
+        assert_eq!(prune(&mut core).unwrap().0, 0);
+        assert!(core.store.has_blob(&hex(&sent.digest)).unwrap());
+        assert!(core.verify(&d).unwrap().ok);
     }
 }

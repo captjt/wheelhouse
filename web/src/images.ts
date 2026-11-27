@@ -215,6 +215,7 @@ export function imagesOf(entries: EntryView[]): EntryView[] {
 /** What an image compares with at first: the reference it was kept
  * against, else the newest screenshot kept against it. */
 export function compareFor(e: EntryView, images: EntryView[]): EntryView | undefined {
+  // The newest image kept against this one, or the one it was kept against.
   if (e.data?.against != null) return images.find((x) => x.seq === e.data.against);
   return images.find((x) => x.data?.against === e.seq);
 }
@@ -229,10 +230,26 @@ export function splitImageBlock(text: string): { text: string; images: number } 
   return { text: text.slice(0, at).trimEnd(), images: n };
 }
 
-/** The image artifacts an entry carries (`data.images`, by their #). */
+type Carried = { digest: string; name: string; caption?: string; width?: number; height?: number; pins?: Pin[]; original?: string };
+
+/** The images an entry carries (`data.images`, by digest: a shared
+ * docket's entries have no number until they're ordered), each as the
+ * artifact it was kept as, or as it was sent while that isn't here yet. */
 export function entryImages(e: EntryView, entries: EntryView[]): EntryView[] {
-  const seqs: number[] = Array.isArray(e.data?.images) ? e.data.images.map((i: { seq: number }) => i.seq) : [];
-  return seqs.flatMap((s) => entries.filter((x) => x.seq === s && x.kind === "artifact"));
+  const list: Carried[] = Array.isArray(e.data?.images) ? e.data.images.filter((i: Carried) => typeof i?.digest === "string") : [];
+  return list.map((i, n) => {
+    const kept = entries.find((x) => x.kind === "artifact" && x.data?.digest === i.digest && x.data?.image === "reference" && (x.data?.caption ?? "") === (i.caption ?? ""));
+    return kept ?? ({ seq: -(e.seq * 100 + n + 1), kind: "artifact", at: e.at, actor: e.actor, body: i.caption || i.name, data: { ...i, image: "reference", media_type: "image/png" } } as unknown as EntryView);
+  });
+}
+
+/** Whether an image artifact is shown already, under the entry that carried it. */
+export function carriedBy(e: EntryView, entries: EntryView[]): boolean {
+  const d = e.data?.digest;
+  if (e.kind !== "artifact" || !d || !["reference", "original"].includes(e.data?.image)) return false;
+  // An original is opened from its marked-up image.
+  if (e.data?.image === "original" && entries.some((x) => x.kind === "artifact" && x.data?.original === d)) return true;
+  return entries.some((x) => x.kind !== "artifact" && Array.isArray(x.data?.images) && x.data.images.some((i: Carried) => i?.digest === d || i?.original === d));
 }
 
 /** Whether Markdown still has an image going up in it (the editor's placeholder). */

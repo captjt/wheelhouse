@@ -846,43 +846,45 @@ async fn run_command(shared: &Shared, id: String, cmd: crate::compose::Command) 
     run_command_with(shared, id, cmd, Vec::new()).await
 }
 
-/// Keep a command's images on the docket, as References. They're kept
-/// before the command is carried out, so an agent never gets a path to an
-/// image that isn't on the record.
-fn keep_images(shared: &Shared, id: &str, checked: Vec<(crate::images::Ref, crate::images::Kind)>) -> Result<Vec<crate::images::Kept>, (StatusCode, Json<Value>)> {
-    if checked.is_empty() {
-        return Ok(Vec::new());
+/// Keep a command's images on the docket, as References, once the command
+/// went through: one that's refused keeps nothing on the record.
+fn keep_images(core: &mut crate::hub::Core, id: &str, images: &[crate::images::Shared]) -> Result<(), (StatusCode, Json<Value>)> {
+    if images.is_empty() {
+        return Ok(());
     }
-    crate::images::keep(&mut shared.lock(), id, &Who::Owner, checked).map_err(internal)
+    crate::images::keep(core, id, &Who::Owner, images).map_err(internal)
 }
 
 /// What's typed to an agent, with its images' paths.
-fn with_images(shared: &Shared, id: &str, text: &str, kept: &[crate::images::Kept]) -> String {
-    if kept.is_empty() {
+fn with_images(shared: &Shared, id: &str, text: &str, images: &[crate::images::Shared]) -> String {
+    if images.is_empty() {
         return text.to_string();
     }
-    crate::images::with_block(text, &crate::images::block(&shared.lock(), id, kept))
+    crate::images::with_block(text, &crate::images::block(&shared.lock(), id, images))
 }
 
-async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Command, images: Vec<(crate::images::Ref, crate::images::Kind)>) -> ApiResult {
+async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Command, images: Vec<crate::images::Shared>) -> ApiResult {
     use crate::compose::Command;
     if shared.lock().store.state(&id).map_err(internal)?.is_none() {
         return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
     }
-    let shown_of = |kept: &[crate::images::Kept]| -> Vec<Value> { kept.iter().map(|k| json!({ "seq": k.seq, "name": k.name })).collect() };
-    // An instruction's images are kept once its @name is found: none for one that isn't there.
-    let mut pending = Some(images);
-    let kept = if matches!(&cmd, Command::Instruct { .. }) { Vec::new() } else { keep_images(shared, &id, pending.take().unwrap_or_default())? };
-    let shown = shown_of(&kept);
+    let shown: Vec<Value> = images.iter().map(|k| json!({ "digest": k.digest, "name": k.name })).collect();
+    let pinned = crate::images::digests(&images);
     let conflict = |e: anyhow::Error| fail(StatusCode::CONFLICT, format!("{e:#}"));
     match cmd {
         Command::Note(text) => {
-            let data = if kept.is_empty() { Value::Null } else { json!({ "images": kept }) };
-            let body = if text.trim().is_empty() { format!("Shared {}", if kept.len() == 1 { "an image".to_string() } else { format!("{} images", kept.len()) }) } else { text };
-            let s = shared.lock().append(&id, "note", &Who::Owner, Some(body), data).map_err(internal)?;
+            let body =
+                if text.trim().is_empty() { format!("Shared {}", if images.len() == 1 { "an image".to_string() } else { format!("{} images", images.len()) }) } else { text };
+            let mut core = shared.lock();
+            let s = core.append_with(&id, "note", &Who::Owner, Some(body), crate::images::data_of(&images), pinned).map_err(internal)?;
+            keep_images(&mut core, &id, &images)?;
             Ok(Json(json!({ "did": "note", "seq": s.seq, "images": shown })))
         }
-        Command::Task { prompt } => Ok(Json(json!({ "did": "task", "prompt": with_images(shared, &id, &prompt, &kept), "images": shown }))),
+        Command::Task { prompt } => {
+            let prompt = with_images(shared, &id, &prompt, &images);
+            keep_images(&mut shared.lock(), &id, &images)?;
+            Ok(Json(json!({ "did": "task", "prompt": prompt, "images": shown })))
+        }
         Command::Instruct { to, text } => {
             let targets: Vec<(String, String)> = {
                 let core = shared.lock();
@@ -900,9 +902,8 @@ async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Comm
                     .collect();
                 crate::compose::targets(&to, &here).map_err(conflict)?.into_iter().map(|(b, _, shown)| (b.clone(), shown.clone())).collect()
             };
-            let kept = keep_images(shared, &id, pending.take().unwrap_or_default())?;
-            let shown = shown_of(&kept);
-            let text = with_images(shared, &id, &text, &kept);
+            // Over the limit with its images' paths: refused below, before anything is kept.
+            let text = with_images(shared, &id, &text, &images);
             let mut sent = Vec::new();
             for (block, shown) in targets {
                 let r = send_to(shared, id.clone(), SendReq { text: text.clone(), queue: true, block: Some(block), steer: false }).await;
@@ -915,6 +916,7 @@ async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Comm
                 let why: Vec<String> = sent.iter().map(|x| format!("{}: {}", x["to"].as_str().unwrap_or(""), x["error"].as_str().unwrap_or(""))).collect();
                 return Err(fail(StatusCode::CONFLICT, why.join("; ")));
             }
+            keep_images(&mut shared.lock(), &id, &images)?;
             Ok(Json(json!({ "did": "instructed", "sent": sent, "images": shown })))
         }
         Command::Ask { question, options } => {
@@ -922,8 +924,8 @@ async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Comm
             let me = crate::messages::caller(&core, None);
             // A short question is its own subject line.
             let subject = (!question.contains('\n') && question.len() <= crate::compose::MAX_SUBJECT).then(|| question.clone());
-            let extra = if kept.is_empty() { Value::Null } else { json!({ "images": kept }) };
-            let m = crate::messages::send_with(&mut core, &me, &format!("@{id}"), subject, &question, options, extra).map_err(conflict)?;
+            let m = crate::messages::send_with(&mut core, &me, &format!("@{id}"), subject, &question, options, crate::images::data_of(&images)).map_err(conflict)?;
+            keep_images(&mut core, &id, &images)?;
             Ok(Json(json!({ "did": "asked", "message": m.id, "options": m.options, "images": shown })))
         }
         Command::Decide { key, subject, choice, text } => {
@@ -937,10 +939,11 @@ async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Comm
                     // Your answer to it: by its key, the words after the key.
                     let by_key = key.as_deref() == Some(q.key.as_str());
                     let answer = if by_key { text.strip_prefix(q.key.as_str()).unwrap_or(&text).trim().to_string() } else { choice.clone() };
-                    let answer = if kept.is_empty() { answer } else { crate::images::with_block(&answer, &crate::images::block(&core, &id, &kept)) };
                     let qkey = q.key.clone();
                     let me = crate::messages::caller(&core, None);
-                    let r = crate::messages::reply(&mut core, &me, m.id, &answer, None).map_err(conflict)?;
+                    // Its images on the answer's entry: each hub writes them out as it delivers it.
+                    let r = crate::messages::reply_with(&mut core, &me, m.id, &answer, None, crate::images::data_of(&images)).map_err(conflict)?;
+                    keep_images(&mut core, &id, &images)?;
                     // A question you put to several agents: the others hear the answer too.
                     let mut told = Vec::new();
                     if m.from_addr == crate::messages::ME
@@ -967,10 +970,11 @@ async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Comm
                 // Decided again: a rule that stood for it in a repo's notes is replaced.
                 let restand = ds.iter().find(|x| x.key == okey).filter(|x| x.answer.as_deref() != Some(choice.as_str())).and_then(|x| x.standing.clone()).is_some();
                 let mut data = json!({ "via": "composer", "subject": subject, "choice": choice });
-                if !kept.is_empty() {
-                    data["images"] = json!(kept);
+                if !images.is_empty() {
+                    data["images"] = json!(images);
                 }
-                let s = core.append(&id, "decision", &Who::Owner, Some(text), data).map_err(internal)?;
+                let s = core.append_with(&id, "decision", &Who::Owner, Some(text), data, pinned).map_err(internal)?;
+                keep_images(&mut core, &id, &images)?;
                 let line = match &subject {
                     Some(sub) => format!("Decided on {id}: {sub}: {choice}"),
                     None => format!("Decided on {id}: {choice}"),
@@ -2464,6 +2468,12 @@ mod tests {
         let (st, _) = post_json(&app, &uri, json!({ "text": "@nobody look", "images": [{ "digest": other["digest"] }] })).await;
         assert_eq!(st, StatusCode::CONFLICT);
         assert_eq!(crate::images::list(&shared.lock(), &d).unwrap().len(), n);
+        // A question with no agent to ask, or an answer to no question: refused, and nothing kept.
+        let lone = shared.lock().open(&Who::Owner, "Alone", json!({})).unwrap();
+        let lone_uri = format!("/api/dockets/{lone}/compose");
+        assert_eq!(post_json(&app, &lone_uri, json!({ "text": "/ask Which? | A | B", "images": [{ "digest": other["digest"] }] })).await.0, StatusCode::CONFLICT);
+        assert_eq!(post_json(&app, &lone_uri, json!({ "text": "/decide D9 yes", "images": [{ "digest": other["digest"] }] })).await.0, StatusCode::BAD_REQUEST);
+        assert!(crate::images::list(&shared.lock(), &lone).unwrap().is_empty());
         // One that was never staged, or eleven: refused before anything happens.
         let (st, _) = post_json(&app, &uri, json!({ "text": "hm", "images": [{ "digest": format!("sha256:{}", "c".repeat(64)) }] })).await;
         assert_eq!(st, StatusCode::BAD_REQUEST);

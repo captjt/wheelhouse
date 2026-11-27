@@ -7614,9 +7614,27 @@ code {
   .imgv-side {
     grid-template-columns: 1fr;
   }
-  .img-tray {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+}
+/* On a phone the composer is one line, as in Messages: the images go on a
+   row of their own above it, scrolling sideways. */
+.phone .composer {
+  flex-wrap: wrap;
+}
+.phone .composer .img-tray {
+  order: -1;
+  flex: 1 0 100%;
+  display: flex;
+  overflow-x: auto;
+  margin: 0 0 6px;
+  padding-bottom: 2px;
+  scroll-snap-type: x proximity;
+}
+.phone .composer .img-tile {
+  flex: 0 0 148px;
+  scroll-snap-align: start;
+}
+.phone .composer .img-thumb {
+  height: 88px;
 }
 .modal-backdrop.markup-backdrop {
   z-index: 60;
@@ -7633,6 +7651,12 @@ code {
   }
   .markup-bar {
     flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .markup-tools {
+    flex: 1 0 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
   }
 }
 
@@ -7691,4 +7715,8 @@ code {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+.share-row .row-id {
+  min-width: 3.4em;
+  color: var(--muted);
 }

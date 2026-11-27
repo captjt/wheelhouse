@@ -8,6 +8,11 @@ pub fn now_ms() -> String {
     at_ms(OffsetDateTime::now_utc())
 }
 
+/// `secs` seconds ago, as `now_ms` writes it (so they compare as text).
+pub fn ms_ago(secs: i64) -> String {
+    at_ms(OffsetDateTime::now_utc() - time::Duration::seconds(secs))
+}
+
 /// A Unix time in milliseconds, as `now_ms` writes one.
 pub fn from_unix_ms(ms: i64) -> Option<String> {
     OffsetDateTime::from_unix_timestamp_nanos(ms as i128 * 1_000_000).ok().map(at_ms)
