@@ -7,7 +7,7 @@ default:
 deps:
     cd ./web && npm ci --no-audit --no-fund
 
-# The docs site (site/, wheelhouse.0utlaw.xyz): its packages on a Node
+# The docs site (site/, getwheelhouse.dev): its packages on a Node
 # they support, its types (a warning fails), the CSP's tests, a build that
 # fails on any warning, and every built page's CSP checked against it.
 check-site:

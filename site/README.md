@@ -1,6 +1,6 @@
 # Wheelhouse's docs site
 
-The product docs at [wheelhouse.0utlaw.xyz](https://wheelhouse.0utlaw.xyz):
+The product docs at [getwheelhouse.dev](https://getwheelhouse.dev):
 [Astro](https://astro.build) with [Starlight](https://starlight.astro.build),
 themed like the app (Cloudflare's Kumo colors, Inter, System/Light/Dark).
 Static files, served by a Cloudflare Worker.
@@ -49,7 +49,7 @@ server rendering, and the build fails.
 | Build command | `npm run build` (dependencies install from the lockfile first) |
 | Deploy command | `npx wrangler deploy` (the `wrangler` pinned in `package.json`) |
 | Node | `site/.nvmrc`, 24.22.1 (Astro 7 needs 22.23.4 or later) |
-| Custom domain | `wheelhouse.0utlaw.xyz`, under the Worker's **Domains & Routes** |
+| Custom domain | `getwheelhouse.dev`, under the Worker's **Domains & Routes** |
 
 The build clones the whole repo, so `../docs/images` is there at build time.
 Under **Build watch paths**, include `site/*` and `docs/images/*`, so a

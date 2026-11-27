@@ -7,7 +7,7 @@ rust-version = "1.88"
 description = "Wheelhouse: every piece of agent work as a docket, on a record you can check"
 license = "MIT"
 repository = "https://github.com/captjt/wheelhouse"
-homepage = "https://wheelhouse.0utlaw.xyz"
+homepage = "https://getwheelhouse.dev"
 publish = false
 
 [[bin]]

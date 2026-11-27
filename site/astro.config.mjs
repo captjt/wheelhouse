@@ -10,7 +10,7 @@ import prune from "./src/integrations/prune.mjs";
 const repo = fileURLToPath(new URL("..", import.meta.url));
 
 export default defineConfig({
-  site: "https://wheelhouse.0utlaw.xyz",
+  site: "https://getwheelhouse.dev",
   trailingSlash: "ignore",
   // Starlight highlights code with Expressive Code, not Astro's Shiki.
   markdown: { syntaxHighlight: false },
@@ -47,7 +47,7 @@ export default defineConfig({
         },
       },
       head: [
-        { tag: "meta", attrs: { property: "og:image", content: "https://wheelhouse.0utlaw.xyz/social-preview.png" } },
+        { tag: "meta", attrs: { property: "og:image", content: "https://getwheelhouse.dev/social-preview.png" } },
         { tag: "meta", attrs: { name: "twitter:card", content: "summary_large_image" } },
       ],
       sidebar: [
