@@ -275,6 +275,7 @@ struct ActivityRow: View {
                 let posted = data["decision"].str == "post"
                 return sys(you, [.b(youName), .t(posted ? " posted the review" : " dismissed the review"), .t(e.body.map { ": \($0)" } ?? ""), data["url"].str.map { .link(" · on GitHub", URL(string: $0)) } ?? .t("")], posted ? "approved" : "denied")
             }
+            if data["decision"].str == "answer" { return sys(you, [.b(youName), .t(" answered \(agent)'s question"), .t(e.body.map { ": \($0)" } ?? "")], "approved") }
             let ok = data["decision"].str == "approve"
             return sys(you, [.b(youName), .t(" \(ok ? "approved" : "denied") \(agent)'s \(data["kind"].str ?? "prompt")"), e.body.map { .mono(": \($0)") } ?? .t("")], ok ? "approved" : "denied")
         case "artifact":

@@ -298,6 +298,8 @@ pub fn gather(core: &Core, since: &str, until: &str) -> Result<(Value, Vec<Work>
                     decisions
                         .push(json!({ "docket": st.id, "title": st.title, "choice": e.data["choice"], "subject": e.data["subject"], "message": e.data["replies_to"], "at": e.at }));
                 }
+                // A key into a question picker: an answer, not an approval.
+                "approval" if you && e.data["decision"] == "answer" => {}
                 "approval" if you => {
                     if e.data["decision"] == "deny" || e.data["decision"] == "dismiss" {
                         denied += 1;

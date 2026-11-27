@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { agentLabel, agentsOn, appName, get, paneRuntime, post, runtimeOf, runtimeTitle, type Live } from "./api";
 import { AppAvatar, IconEye, IconTerminal, IconX, LiveIcon, TitleText, liveWord } from "./icons";
 import { useHub } from "./live";
+import { QuestionPicker } from "./Picker";
 import { Kbd, Modal, useToast } from "./ui";
 
 /** Whether this page is open on the Mac the hub (and Rex or Herdr) runs on.
@@ -193,7 +194,14 @@ function PaneSheet({ id, block, onClose }: { id: string; block?: string; onClose
       >
         {screen ? screen.text || " " : error ? error : "Loading the pane…"}
       </pre>
-      {d && dLive?.answerable && state === "blocked" ? (
+      {d && dLive?.pickable && state === "blocked" ? (
+        <div className="ps-answer ps-question">
+          <div className="ps-answer-text">
+            <div className="ps-answer-title">{app} is asking</div>
+            <QuestionPicker d={d} live={dLive} fallback={dLive.msg && <div className="ps-answer-msg">{dLive.msg}</div>} />
+          </div>
+        </div>
+      ) : d && dLive?.answerable && state === "blocked" ? (
         <div className="ps-answer">
           <LiveIcon state="blocked" size={14} />
           <div className="ps-answer-text">
