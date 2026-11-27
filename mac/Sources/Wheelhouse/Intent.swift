@@ -21,6 +21,8 @@ struct IntentSection: View {
     @State private var preview = false
     @State private var busy = false
     @State private var history = false
+    /// Images on their way into the text.
+    @State private var adding = 0
 
     var body: some View {
         let versions = entries.filter { $0.kind == "intent" }
@@ -63,18 +65,18 @@ struct IntentSection: View {
                         if preview {
                             MarkdownView(text: text.isEmpty ? "_Nothing yet._" : text).frame(minHeight: 120, alignment: .topLeading)
                         } else {
-                            Editor(text: $text, placeholder: "What must be true when this is done?\n\n## Acceptance\n- [ ] …\n\n## Out of scope\n- …", minHeight: 160, maxHeight: 520, font: .monospacedSystemFont(ofSize: 12.5, weight: .regular), focus: true, onSubmit: save, onCancel: { editing = false })
+                            Editor(text: $text, placeholder: "What must be true when this is done?\n\n## Acceptance\n- [ ] …\n\n## Out of scope\n- …", minHeight: 160, maxHeight: 520, font: .monospacedSystemFont(ofSize: 12.5, weight: .regular), focus: true, onSubmit: save, onCancel: { editing = false }, onImages: { images, insert in addImages(images, insert) })
                         }
                     }
                     .padding(12)
                     Divider()
                     HStack {
-                        Text("Each save is a new version on the record, signed as you.").font(.system(size: 11.5)).foregroundStyle(K.faint)
+                        Text(adding > 0 ? "Adding \(adding == 1 ? "an image" : "\(adding) images")…" : "Each save is a new version on the record, signed as you. Paste or drop a mockup to put it in.").font(.system(size: 11.5)).foregroundStyle(K.faint)
                         Spacer()
                         Button("Cancel") { editing = false }
                         Button("Save  ⌘↩") { save() }
                             .buttonStyle(.borderedProminent).tint(K.accent)
-                            .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines) == (intent?.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+                            .disabled(busy || adding > 0 || text.trimmingCharacters(in: .whitespacesAndNewlines) == (intent?.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
                     }
                     .controlSize(.small)
                     .padding(10)
@@ -100,6 +102,29 @@ struct IntentSection: View {
             }
         }
         .sheet(isPresented: $history) { IntentHistory(d: d, versions: versions) }
+    }
+
+    /// A mockup pasted or dropped in: staged, then its Markdown where the
+    /// cursor was. The hub keeps it with the docket when you save.
+    private func addImages(_ images: [(name: String, data: Data)], _ insert: @escaping (String) -> Void) {
+        for (name, raw) in images {
+            let (n, data) = Images.normalized(name: name, data: raw)
+            guard data.count <= Images.maxBytes else {
+                store.toast("\(n) is \(data.count >> 20) MB; an image is at most \(Images.maxBytes >> 20) MB", error: true)
+                continue
+            }
+            adding += 1
+            Task {
+                do {
+                    let s = try await store.stage(name: n, data: data)
+                    let alt = (n as NSString).deletingPathExtension.replacingOccurrences(of: "-", with: " ")
+                    insert("\n\n" + Images.markdown(s, alt: alt) + "\n\n")
+                } catch {
+                    store.toast("Couldn't add \(n): \(Store.words(error))", error: true)
+                }
+                adding -= 1
+            }
+        }
     }
 
     private func edit() {

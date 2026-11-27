@@ -231,8 +231,10 @@ struct DocketBody: View {
                     ForEach(shown) { e in ActivityRow(e: e, d: d, owner: store.state?.owner ?? "you") }
                 }
             }
+            .id("activity")
             Composer(d: d)
         }
+        .environment(\.docketImages, DocketImage.all(page.entries))
     }
 }
 
@@ -792,12 +794,18 @@ struct Composer: View {
     @Environment(Nav.self) private var nav
     @State private var text = ""
     @State private var busy = false
+    /// Images to send with it: staged as they're added.
+    @State private var tray: [TrayImage] = []
+    @State private var marking: UUID?
+    @State private var dropping = false
 
     var body: some View {
         let kind = Compose.kind(text)
         let agents = d.onAgents.filter { $0.live != nil }.map { (pane: $0.pane, role: $0.role, app: $0.app) }
         let sugg = Compose.suggestions(text, agents: agents, docket: d.id)
         let warn = Compose.warning(text, agents: agents)
+        let blank = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let trayWarn = tray.contains { $0.failure != nil } ? "Remove the image that couldn't be added" : !Images.ready(tray) ? "Adding the images…" : nil
         VStack(alignment: .leading, spacing: 8) {
             if !sugg.isEmpty {
                 VStack(alignment: .leading, spacing: 1) {
@@ -816,40 +824,204 @@ struct Composer: View {
                 }
                 Divider()
             }
-            Editor(text: $text, placeholder: "Leave a note… (Markdown) · @agent, /ask, /decide, /task", minHeight: 40, maxHeight: 240, onSubmit: send)
+            if !tray.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach($tray) { $t in TrayTile(t: $t, onMarkUp: { marking = t.id }, onRemove: { tray.removeAll { $0.id == t.id } }) }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            Editor(text: $text, placeholder: tray.isEmpty ? "Leave a note… (Markdown) · @agent, /ask, /decide, /task · paste or drop images" : "Say what they show, or @agent what to do with them", minHeight: 40, maxHeight: 240, onSubmit: send, onImages: { images, _ in add(images) })
             HStack {
-                Text(warn?.text ?? Compose.hint(kind, d.id)).font(.system(size: 11.5)).foregroundStyle(warn == nil ? K.faint : K.blocked)
+                Button { add(Images.pick()) } label: { Image(systemName: "paperclip") }
+                    .buttonStyle(.borderless)
+                    .help("Add images: what it should look like, an inspiration, a screenshot to mark up. Or paste (⌘V) or drop them here.")
+                    .disabled(tray.count >= Images.maxPer)
+                Text(trayWarn ?? warn?.text ?? (blank && !tray.isEmpty ? "A note of \(tray.count == 1 ? "this image" : "these images"); the agents find them in their brief" : Compose.hint(kind, d.id)))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(warn == nil && trayWarn == nil ? K.faint : K.blocked)
+                    .lineLimit(1)
                 Spacer()
                 Button(action: send) { Text("\(Compose.button(kind))  ⌘↩") }
                     .buttonStyle(.borderedProminent)
                     .tint(K.accent)
                     .controlSize(.small)
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy || warn?.blocked == true)
+                    .disabled((blank && tray.isEmpty) || busy || warn?.blocked == true || trayWarn != nil)
             }
         }
         .padding(12)
         .background(K.elev, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(K.line))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(dropping ? K.accent : K.line, lineWidth: dropping ? 2 : 1))
+        .onDrop(of: [.fileURL, .image], isTargeted: $dropping) { providers in
+            Task { add(await Self.load(providers)) }
+            return true
+        }
         .onReceive(NotificationCenter.default.publisher(for: .taskStarted)) { n in
-            if n.object as? String == d.id, Compose.kind(text) == .task { text = "" }
+            if n.object as? String == d.id, Compose.kind(text) == .task {
+                text = ""
+                tray = []
+            }
+        }
+        .sheet(item: Binding(get: { marking.flatMap { id in tray.first { $0.id == id } } }, set: { if $0 == nil { marking = nil } })) { t in
+            MarkupSheet(data: t.base ?? t.data, name: t.name, initial: t.marks) { marks in
+                marking = nil
+                if let marks { markedUp(t.id, marks) }
+            }
+        }
+    }
+
+    /// Images dropped from elsewhere (Finder, a browser): their bytes.
+    private static func load(_ providers: [NSItemProvider]) async -> [(name: String, data: Data)] {
+        var out: [(String, Data)] = []
+        for p in providers {
+            if p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
+               let url = await withCheckedContinuation({ (c: CheckedContinuation<URL?, Never>) in _ = p.loadObject(ofClass: URL.self) { u, _ in c.resume(returning: u) } }),
+               let t = UTType(filenameExtension: url.pathExtension), t.conforms(to: .image), !t.conforms(to: .svg),
+               let data = try? Data(contentsOf: url) {
+                out.append((url.lastPathComponent, data))
+            } else if p.hasItemConformingToTypeIdentifier(UTType.image.identifier),
+                      let data = await withCheckedContinuation({ (c: CheckedContinuation<Data?, Never>) in _ = p.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { d, _ in c.resume(returning: d) } }) {
+                out.append(((p.suggestedName ?? "image") + ".png", data))
+            }
+        }
+        return out
+    }
+
+    /// Add images to the tray, and stage each one.
+    private func add(_ images: [(name: String, data: Data)]) {
+        for (name, raw) in images {
+            guard tray.count < Images.maxPer else {
+                store.toast("At most \(Images.maxPer) images go at once", error: true)
+                return
+            }
+            let (n, data) = Images.normalized(name: name, data: raw)
+            var t = TrayImage(name: n, data: data)
+            if data.count > Images.maxBytes { t.stage = .failed("It's \(data.count >> 20) MB; an image is at most \(Images.maxBytes >> 20) MB") }
+            tray.append(t)
+            if t.failure == nil { stage(t.id, data: data, name: n) }
+        }
+    }
+
+    private func stage(_ id: UUID, data: Data, name: String) {
+        Task {
+            let stage: TrayImage.Stage
+            do { stage = .staged(try await store.stage(name: name, data: data)) } catch { stage = .failed(Store.words(error)) }
+            if let i = tray.firstIndex(where: { $0.id == id }) { tray[i].stage = stage }
+        }
+    }
+
+    /// Marked up: what's sent is drawn from the original, which is kept beside it.
+    private func markedUp(_ id: UUID, _ marks: [MarkupMark]) {
+        guard let i = tray.firstIndex(where: { $0.id == id }) else { return }
+        var t = tray[i]
+        let base = t.base ?? t.data
+        if marks.isEmpty {
+            // No marks: back to the image as it was.
+            guard t.base != nil else { return }
+            t.data = base
+            t.base = nil
+            t.marks = []
+            t.pins = []
+            if let o = t.baseDigest, let size = Images.pixelSize(base) {
+                t.stage = .staged(StagedImage(digest: o, name: t.name, width: Int(size.width), height: Int(size.height)))
+            } else {
+                t.stage = .staging
+                stage(id, data: base, name: t.name)
+            }
+            t.baseDigest = nil
+            tray[i] = t
+            return
+        }
+        guard let png = ImageMarks.render(base, marks: marks) else {
+            store.toast("Couldn't draw the marks into \(t.name)", error: true)
+            return
+        }
+        if t.base == nil {
+            t.base = base
+            t.baseDigest = t.staged?.digest
+        }
+        t.marks = marks
+        t.pins = ImageMarks.pins(marks)
+        t.data = png
+        let stem = (t.name as NSString).deletingPathExtension
+        t.name = stem.hasSuffix("-marked") ? "\(stem).png" : "\(stem)-marked.png"
+        t.stage = png.count > Images.maxBytes ? .failed("Marked up, it's over \(Images.maxBytes >> 20) MB") : .staging
+        tray[i] = t
+        if t.failure == nil { stage(id, data: png, name: t.name) }
+        // The original was still on its way: stage it again, for its digest.
+        if t.baseDigest == nil {
+            Task {
+                if let s = try? await store.stage(name: t.name, data: base), let j = tray.firstIndex(where: { $0.id == id }) { tray[j].baseDigest = s.digest }
+            }
         }
     }
 
     private func send() {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, !busy else { return }
+        guard !t.isEmpty || !tray.isEmpty, !busy, Images.ready(tray) else { return }
         busy = true
+        let images = tray
         Task {
-            if let r = await store.compose(d.id, t) {
+            if let r = await store.compose(d.id, t, images: images) {
                 // A task's text stays until its sheet starts the agent: cancelling it loses nothing.
                 if r["did"].str == "task" {
                     nav.startingPrompt = r["prompt"].str
                     nav.starting = d.id
                 } else {
                     text = ""
+                    tray = []
                 }
             }
             busy = false
+        }
+    }
+}
+
+/// An image in the composer's tray: its thumbnail, how its staging went,
+/// its caption, and Mark Up.
+struct TrayTile: View {
+    @Binding var t: TrayImage
+    let onMarkUp: () -> Void
+    let onRemove: () -> Void
+    @State private var thumb: NSImage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ZStack(alignment: .topTrailing) {
+                ZStack {
+                    K.recessed
+                    if let thumb { Image(nsImage: thumb).resizable().scaledToFill() }
+                    if t.stage == .staging { ProgressView().controlSize(.small) }
+                    if t.failure != nil {
+                        K.dangerTint.opacity(0.85)
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(K.error)
+                    }
+                }
+                .frame(width: 132, height: 88)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(t.failure != nil ? K.error : K.line))
+                .onTapGesture(count: 2) { if t.staged != nil { onMarkUp() } }
+                Button(action: onRemove) {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 15)).symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .padding(4)
+                .help("Don't send it")
+            }
+            if let why = t.failure {
+                Text(why).font(.system(size: 11)).foregroundStyle(K.error).lineLimit(3).frame(width: 132, alignment: .leading).help(why)
+            } else {
+                TextField("Caption", text: $t.caption).textFieldStyle(.roundedBorder).font(.system(size: 11.5)).frame(width: 132)
+                HStack(spacing: 6) {
+                    Button(t.marks.isEmpty ? "Mark Up" : "Edit Marks", action: onMarkUp).buttonStyle(.link).font(.system(size: 11.5)).disabled(t.staged == nil)
+                    if !t.pins.isEmpty { Text("\(t.pins.count) pin\(t.pins.count == 1 ? "" : "s")").font(.system(size: 11)).foregroundStyle(K.muted) }
+                }
+            }
+        }
+        .task(id: t.data) {
+            let d = t.data
+            thumb = await Task.detached(priority: .userInitiated) { Images.thumbnail(d, max: 300).flatMap { Images.pngData($0) } }.value.flatMap(NSImage.init(data:))
         }
     }
 }

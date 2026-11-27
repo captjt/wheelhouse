@@ -396,10 +396,15 @@ final class Store {
     /// What you typed in a docket's composer: a note, `@agent`, `/ask`,
     /// `/decide` or `/task` (src/compose.rs). The hub's answer, or nil when
     /// it refused (and said why in a toast).
-    func compose(_ id: String, _ text: String) async -> JSON? {
-        guard let r = await act("/api/dockets/\(id)/compose", ["text": text]) else { return nil }
+    func compose(_ id: String, _ text: String, images: [TrayImage] = []) async -> JSON? {
+        guard let r = await act("/api/dockets/\(id)/compose", Images.composeBody(text: text, tray: images)) else { return nil }
         if let t = Compose.toast(r) { toast(t.text, error: t.error) }
         return r
+    }
+
+    /// Stage an image for the composer or the intent (`POST /api/images`).
+    nonisolated func stage(name: String, data: Data) async throws -> StagedImage {
+        try await hub.stage(name: name, data: data)
     }
 
     func note(_ id: String, _ body: String) async -> Bool {

@@ -94,8 +94,10 @@ private struct Converter {
         switch m {
         case let p as Paragraph:
             let kids = Array(p.children)
-            if images, kids.count == 1, let img = kids[0] as? Markdown.Image, let src = img.source, let url = URL(string: src), url.scheme == "https" || url.scheme == "data" {
-                return .image(url, alt: img.plainText)
+            if images, kids.count == 1, let img = kids[0] as? Markdown.Image, let src = img.source {
+                // An image kept on the hub (the intent's mockups): from the hub, by its hash.
+                if let url = Images.blobURL(src) { return .image(url, alt: img.plainText) }
+                if let url = URL(string: src), url.scheme == "https" || url.scheme == "data" { return .image(url, alt: img.plainText) }
             }
             return .paragraph(inline(kids, Style(), size))
         case let h as Heading:
@@ -320,7 +322,9 @@ private struct BlockView: View {
             Divider().padding(.vertical, 2)
         case let .image(url, alt):
             AsyncImage(url: url) { img in
+                // A hairline, so a white mockup doesn't melt into the page.
                 img.resizable().scaledToFit().frame(maxWidth: 560).clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(K.line))
             } placeholder: {
                 Text(alt.isEmpty ? "Image" : alt).foregroundStyle(K.muted)
             }

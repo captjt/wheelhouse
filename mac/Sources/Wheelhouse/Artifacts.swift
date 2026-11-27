@@ -150,16 +150,24 @@ struct ArtifactsSection: View {
 struct ArtifactCard: View {
     let e: Entry
     @State private var hover = false
+    @State private var viewing: DocketImage?
+    @State private var comparing: (DocketImage, DocketImage)?
+    @Environment(\.docketImages) private var docketImages
 
     var body: some View {
         let k = Artifacts.kind(e)
-        Button { Artifacts.open(e) } label: {
+        let image = DocketImage(artifact: e)
+        Button { if let image { viewing = image } else { Artifacts.open(e) } } label: {
             HStack(spacing: 10) {
-                Image(systemName: Artifacts.symbol(e))
-                    .font(.system(size: 14))
-                    .foregroundStyle(k == "link" ? K.accent : k == "json" ? K.progress : k == "html" ? K.working : K.muted)
-                    .frame(width: 30, height: 30)
-                    .background(K.recessed, in: RoundedRectangle(cornerRadius: 7))
+                if let image {
+                    ImageThumb(digest: image.digest, side: 44, height: 30)
+                } else {
+                    Image(systemName: Artifacts.symbol(e))
+                        .font(.system(size: 14))
+                        .foregroundStyle(k == "link" ? K.accent : k == "json" ? K.progress : k == "html" ? K.working : K.muted)
+                        .frame(width: 30, height: 30)
+                        .background(K.recessed, in: RoundedRectangle(cornerRadius: 7))
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(e.body ?? e.data["name"].str ?? "File").font(.system(size: 12.5, weight: .medium)).foregroundStyle(K.text).lineLimit(1)
                     Text(meta).font(.system(size: 11.5)).foregroundStyle(K.muted).lineLimit(1)
@@ -174,11 +182,28 @@ struct ArtifactCard: View {
         .buttonStyle(.plain)
         .onHover { hover = $0 }
         .help("\(e.body ?? e.data["name"].str ?? "")\n#\(e.seq) · \(e.data["digest"].str ?? e.data["url"].str ?? "")")
+        .sheet(item: $viewing) { im in ImageViewer(image: im).environment(\.docketImages, docketImages) }
+        .sheet(isPresented: Binding(get: { comparing != nil }, set: { if !$0 { comparing = nil } })) {
+            if let (a, b) = comparing { CompareView(left: a, right: b) }
+        }
         .contextMenu {
             if k == "link" {
                 Button("Open Link") { Artifacts.open(e) }
                 Button("Copy Link") { copy(e.data["url"].str ?? "") }
             } else {
+                if let image {
+                    Button("View") { viewing = image }
+                    let others = docketImages.filter { $0.seq != image.seq && $0.role != "original" }
+                    if let a = image.against, let ref = docketImages.first(where: { $0.seq == a }) {
+                        Button("Compare With Its Reference (#\(a))") { comparing = (image, ref) }
+                    }
+                    if !others.isEmpty {
+                        Menu("Compare With") {
+                            ForEach(others) { o in Button("#\(o.seq) · \(o.label)") { comparing = (image, o) } }
+                        }
+                    }
+                    Divider()
+                }
                 Button("Quick Look") { Artifacts.open(e) }
                 Button("Open With Default App") { Artifacts.openWithApp(e) }
                 Button("Show in Finder") { Artifacts.reveal(e) }
@@ -190,6 +215,9 @@ struct ArtifactCard: View {
     }
 
     private var meta: String {
+        if let im = DocketImage(artifact: e) {
+            return [im.roleWords, im.against.map { "against #\($0)" }, im.width > 0 ? "\(im.width)×\(im.height)" : nil, e.data["size"].int.map(Artifacts.size)].compactMap { $0 }.joined(separator: " · ")
+        }
         if let u = e.data["url"].str {
             return e.data["provider"].str == "claude" ? "Claude artifact" : URL(string: u)?.host ?? u
         }

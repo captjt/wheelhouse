@@ -20,7 +20,7 @@ enum Snapshot {
         return Set(a[i + 1].split(separator: ",").map(String.init))
     }
 
-    enum Target { case main, sheet, docketWindow, changesWindow, menuBar, quick, settings, settingsSheet, fixture }
+    enum Target { case main, sheet, docketWindow, changesWindow, menuBar, quick, settings, settingsSheet, fixture, markup, compare }
 
     struct Shot {
         let name: String
@@ -98,6 +98,10 @@ enum Snapshot {
             }
         },
         Shot(name: "verify-fixture", place: .inbox, target: .fixture),
+        // Images shared with the agents: in the Activity, marked up, and compared.
+        Shot(name: "images", place: .active, select: "D-6") { _ in scroll("activity") },
+        Shot(name: "markup", place: .inbox, target: .markup),
+        Shot(name: "compare", place: .inbox, target: .compare),
         // Settings: each tab of what Wheelhouse does on its own.
         Shot(name: "settings-orders", place: .inbox, target: .settings, tab: "orders"),
         Shot(name: "settings-agents", place: .inbox, target: .settings, tab: "agents"),
@@ -203,6 +207,40 @@ enum Snapshot {
         return w
     }
 
+    /// D-6's images, in a window of their own: the markup editor on the
+    /// newest reference with a few marks, or Compare on the newest pair.
+    static func imagesFixture(_ t: Target) async -> NSWindow? {
+        guard let page = try? await Store.shared.page("D-6") else { return nil }
+        let all = DocketImage.all(page.entries)
+        let view: AnyView
+        let size: NSSize
+        switch t {
+        case .compare:
+            guard let shot = all.first(where: { $0.against != nil }), let ref = all.first(where: { $0.seq == shot.against }) else { return nil }
+            view = AnyView(CompareView(left: shot, right: ref))
+            size = NSSize(width: 1200, height: 760)
+        default:
+            guard let ref = all.first(where: { $0.role != "attached" }), let data = try? await ImageCache.shared.data(ref.digest) else { return nil }
+            let c = ImageMarks.defaultColor
+            let marks = [
+                MarkupMark(tool: .box, color: c, points: [MarkupPoint(CGPoint(x: 280, y: 95)), MarkupPoint(CGPoint(x: 720, y: 185))]),
+                MarkupMark(tool: .arrow, color: ImageMarks.colors[4], points: [MarkupPoint(CGPoint(x: 160, y: 520)), MarkupPoint(CGPoint(x: 150, y: 390))]),
+                MarkupMark(tool: .text, color: c, points: [MarkupPoint(CGPoint(x: 300, y: 300))], text: "Too much space"),
+                MarkupMark(tool: .pin, color: c, points: [MarkupPoint(CGPoint(x: 720, y: 95))], text: "Make this the primary action", n: 1),
+                MarkupMark(tool: .pin, color: c, points: [MarkupPoint(CGPoint(x: 260, y: 210))], text: "Less padding here", n: 2),
+            ]
+            view = AnyView(MarkupSheet(data: data, name: ref.name, initial: marks) { _ in })
+            size = NSSize(width: 1180, height: 780)
+        }
+        let w = NSWindow(contentRect: NSRect(origin: CGPoint(x: 80, y: 80), size: size), styleMask: [.titled], backing: .buffered, defer: false)
+        w.title = t == .compare ? "Compare" : "Mark Up"
+        w.isReleasedWhenClosed = false
+        w.contentView = NSHostingView(rootView: view.environment(Store.shared).environment(Nav()).environment(\.docketImages, all))
+        w.orderBack(nil)
+        try? await Task.sleep(for: .seconds(1.5))
+        return w
+    }
+
     static func run(into dir: URL) {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         Task {
@@ -228,6 +266,7 @@ enum Snapshot {
                     }
                     var fixtureWindow: NSWindow?
                     if shot.target == .fixture { fixtureWindow = await fixture() }
+                    if shot.target == .markup || shot.target == .compare { fixtureWindow = await imagesFixture(shot.target) }
                     shot.setup(nav)
                     try? await Task.sleep(for: .seconds(1.8))
                     guard let main = mainWindow else {
@@ -252,7 +291,7 @@ enum Snapshot {
                     case .quick: w = QuickPanel.window
                     case .settings: w = settingsWindow
                     case .settingsSheet: w = settingsWindow?.attachedSheet
-                    case .fixture: w = fixtureWindow
+                    case .fixture, .markup, .compare: w = fixtureWindow
                     }
                     if let w {
                         if shot.target != .menuBar && shot.target != .quick { w.orderBack(nil) }

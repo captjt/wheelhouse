@@ -55,6 +55,13 @@ struct ActivityRow: View {
     let d: Docket
     let owner: String
     @Environment(Nav.self) private var nav
+    @Environment(\.docketImages) private var docketImages
+
+    /// The images an entry carries (`data.images`: a note, a decision, a
+    /// question you sent with them).
+    private var carried: [DocketImage] {
+        e.data["images"].array.compactMap { DocketImage($0, known: docketImages) }
+    }
 
     var body: some View {
         switch shape {
@@ -82,19 +89,26 @@ struct ActivityRow: View {
                 }
                 // The Listener's words, from a call: no image of theirs loads.
                 Clamp { MarkdownView(text: body, images: e.kind != "proposal") }
+                if !carried.isEmpty { ImageStrip(images: carried) }
             }
             .padding(12)
             .background(tone == "you" ? K.accentSoft.opacity(0.5) : K.elev, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(tone == "ask" ? K.blocked.opacity(0.35) : K.line))
         case let .file(avatar, name, title, group):
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                avatar.view(16).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
-                (Text(name).bold() + Text(e.data["url"].exists ? " linked " : " kept ") + Text(title).foregroundColor(K.link) + Text(group.map { " · \($0)" } ?? "").foregroundColor(K.muted) + Text("  ·  \(agoLong(e.at))").foregroundColor(K.faint))
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(K.text2)
-                    .onTapGesture { Artifacts.open(e) }
-                Spacer(minLength: 6)
-                Mark(mark: e.mark)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    avatar.view(16).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+                    (Text(name).bold() + Text(e.data["url"].exists ? " linked " : " kept ") + Text(title).foregroundColor(K.link) + Text(group.map { " · \($0)" } ?? "").foregroundColor(K.muted) + Text("  ·  \(agoLong(e.at))").foregroundColor(K.faint))
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(K.text2)
+                        .onTapGesture { Artifacts.open(e) }
+                    Spacer(minLength: 6)
+                    Mark(mark: e.mark)
+                }
+                // An image shows as itself; the original of a marked-up one is beside it already.
+                if let im = DocketImage(artifact: e), im.role != "original" {
+                    ImageStrip(images: [im], side: 96).padding(.leading, 24)
+                }
             }
             .padding(.leading, 4)
         case .none:
