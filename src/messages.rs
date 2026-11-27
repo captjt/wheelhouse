@@ -556,6 +556,8 @@ fn with_images(core: &Core, m: &Message, text: String) -> String {
         return text;
     }
     let Some(block) = images_of(core, m) else { return text };
+    // Too long to paste with its images: named, for `wh read` to show.
+    let block = if text.len() + block.len() > MAX_PASTE { format!("Images come with this: `wh read {}` lists them, with their paths.", m.id) } else { block };
     // Before the line on how to reply, so that stays last.
     match text.rfind("\n\nReply with `wh reply") {
         Some(at) => format!("{}\n\n{}{}", &text[..at], block.trim_end(), &text[at..]),

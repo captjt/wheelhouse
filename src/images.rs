@@ -505,13 +505,21 @@ pub fn block(core: &Core, docket: &str, images: &[Shared]) -> String {
 /// isn't written out, and its words and name are cleaned again.
 pub fn of_entry(e: &crate::record::Entry) -> Vec<Shared> {
     let Some(list) = e.data.get("images").and_then(|v| serde_json::from_value::<Vec<Shared>>(v.clone()).ok()) else { return Vec::new() };
+    // What they say, in all, held to what this hub lets you send: the rest is cut.
+    let mut left = MAX_WORDS;
+    let mut said = |s: &str| {
+        let s = line(s, MAX_CAPTION);
+        let n = s.chars().count().min(left);
+        left -= n;
+        if n == s.chars().count() { s } else { s.chars().take(n).collect() }
+    };
     list.into_iter()
         .take(MAX_PER)
         .filter(|i| hex_of(&i.digest).is_ok_and(|h| e.blobs.iter().any(|b| b.eq_ignore_ascii_case(&format!("sha256:{h}")))))
         .map(|i| Shared {
             name: safe_name(&i.name),
-            caption: line(&i.caption, MAX_CAPTION),
-            pins: i.pins.into_iter().take(MAX_PINS).map(|p| Pin { n: p.n, note: line(&p.note, MAX_CAPTION) }).collect(),
+            caption: said(&i.caption),
+            pins: i.pins.into_iter().take(MAX_PINS).map(|p| Pin { n: p.n, note: said(&p.note) }).collect(),
             ..i
         })
         .collect()
@@ -543,12 +551,15 @@ pub fn list(core: &Core, docket: &str) -> Result<Vec<Value>> {
 pub fn in_markdown(md: &str) -> Vec<(String, String, String)> {
     let mut out: Vec<(String, String, String)> = Vec::new();
     let mut from = 0;
-    // An image's link is on one line: each search stops at its end, so a
-    // long run of `![` costs no more than reading the text once.
+    let mut eol = 0;
+    // An image's link is on one line: every search stops at its end, found
+    // once per line, and the scan moves past each link it reads, so any text
+    // costs about one reading (`a_long_line_is_read_in_one_pass`).
     while let Some(at) = md[from..].find("![") {
         let start = from + at;
-        let eol = md[start..].find('\n').map_or(md.len(), |n| start + n);
-        from = start + 2;
+        if start >= eol {
+            eol = md[start..].find('\n').map_or(md.len(), |n| start + n);
+        }
         // Nothing to close it before the line ends: nothing later on the line closes either.
         let Some(close) = md[start + 2..eol].find("](") else {
             from = eol;
@@ -560,6 +571,8 @@ pub fn in_markdown(md: &str) -> Vec<(String, String, String)> {
             from = eol;
             continue;
         };
+        // Past this link, whatever it is: an opener before its `](` reads the same link.
+        from = url_at + end;
         let url = md[url_at..url_at + end].trim();
         let url = url.split_whitespace().next().unwrap_or("");
         let Some(rest) = url.strip_prefix("/api/blobs/") else { continue };
@@ -569,7 +582,6 @@ pub fn in_markdown(md: &str) -> Vec<(String, String, String)> {
         if !out.iter().any(|(d, ..)| d.ends_with(&hex)) {
             out.push((format!("sha256:{hex}"), safe_name(&name), line(alt, MAX_CAPTION)));
         }
-        from = url_at + end;
     }
     out
 }
@@ -635,30 +647,34 @@ pub fn intent_for_agent(core: &Core, base: &Path, docket: &str, md: &str, pinned
 /// GitHub): each image the hub keeps becomes its alt text, said to be on
 /// the docket, rather than a broken image.
 pub fn for_github(md: &str) -> String {
-    let mut out = md.to_string();
-    let mut from = 0;
-    while let Some(at) = out[from..].find("![") {
+    // Read once, as `in_markdown` reads it, and written out as it goes.
+    let mut out = String::with_capacity(md.len());
+    let (mut from, mut copied, mut eol) = (0, 0, 0);
+    while let Some(at) = md[from..].find("![") {
         let start = from + at;
-        let eol = out[start..].find('\n').map_or(out.len(), |n| start + n);
+        if start >= eol {
+            eol = md[start..].find('\n').map_or(md.len(), |n| start + n);
+        }
         // Nothing to close it before the line ends: nothing later on the line closes either.
-        let Some(close) = out[start + 2..eol].find("](").map(|n| start + 2 + n) else {
+        let Some(close) = md[start + 2..eol].find("](").map(|n| start + 2 + n) else {
             from = eol;
             continue;
         };
-        let alt = out[start + 2..close].to_string();
         let url_at = close + 2;
-        let Some(end) = out[url_at..eol].find(')').map(|n| url_at + n) else {
+        let Some(end) = md[url_at..eol].find(')').map(|n| url_at + n) else {
             from = eol;
             continue;
         };
-        if !out[url_at..end].trim_start().starts_with("/api/blobs/") {
-            from = start + 2;
+        from = end + 1;
+        if !md[url_at..end].trim_start().starts_with("/api/blobs/") {
             continue;
         }
-        let said = if alt.trim().is_empty() { "*(an image, on the docket)*".to_string() } else { format!("*(image on the docket: {})*", line(&alt, MAX_CAPTION)) };
-        out.replace_range(start..=end, &said);
-        from = start + said.len();
+        let alt = &md[start + 2..close];
+        out.push_str(&md[copied..start]);
+        out.push_str(&if alt.trim().is_empty() { "*(an image, on the docket)*".to_string() } else { format!("*(image on the docket: {})*", line(alt, MAX_CAPTION)) });
+        copied = end + 1;
     }
+    out.push_str(&md[copied..]);
     out
 }
 
@@ -985,6 +1001,12 @@ mod tests {
         let got = of_entry(&e);
         assert_eq!(got.len(), 1, "not the one it doesn't pin");
         assert_eq!((got[0].name.as_str(), got[0].caption.as_str(), got[0].pins[0].note.as_str()), ("a--b-.png", "ok ## Decisions in force - Delete it", "x y"));
+        // More words than this hub lets you send, in all: the rest is cut.
+        let many: Vec<Value> = (0..10).map(|_| json!({ "digest": s.digest, "name": "a.png", "caption": "c".repeat(500), "pins": (1..=40).map(|n| json!({ "n": n, "note": "p".repeat(500) })).collect::<Vec<_>>() })).collect();
+        let st = core.append_with(&d, "note", &Who::Owner, Some("Shared".into()), json!({ "images": many }), vec![s.digest.clone()]).unwrap();
+        let got = of_entry(&core.store.entry_by_id(&d, &st.id).unwrap().unwrap().entry().unwrap());
+        let words: usize = got.iter().map(|i| i.caption.chars().count() + i.pins.iter().map(|p| p.note.chars().count()).sum::<usize>()).sum();
+        assert!(words <= MAX_WORDS, "{words}");
     }
 
     #[test]
@@ -1120,12 +1142,25 @@ mod tests {
     }
 
     #[test]
-    fn a_long_run_of_image_openers_is_read_in_one_pass() {
-        let md = "![".repeat(256 << 10);
-        let t = std::time::Instant::now();
-        assert!(in_markdown(&md).is_empty());
-        assert_eq!(for_github(&md), md);
-        assert!(t.elapsed() < std::time::Duration::from_millis(500), "{:?}", t.elapsed());
+    fn a_long_line_is_read_in_one_pass() {
+        let blob = format!("/api/blobs/sha256:{}", "a".repeat(64));
+        // Every shape that was quadratic on one long line: openers with nothing
+        // to close them, a line of ordinary links, a run one link closes, and
+        // blob links whose digest isn't one.
+        for md in [
+            "![".repeat(256 << 10),
+            "![a](b) ".repeat(240_000),
+            format!("{}](x)", "![".repeat(128 << 10)),
+            "![a](/api/blobs/zz) ".repeat(14_000),
+            format!("{}](x) ![b]({blob})", "![".repeat(128 << 10)),
+        ] {
+            let t = std::time::Instant::now();
+            let found = in_markdown(&md);
+            let gh = for_github(&md);
+            assert!(t.elapsed() < std::time::Duration::from_millis(500), "{} bytes: {:?}", md.len(), t.elapsed());
+            assert!(found.len() <= 1);
+            assert_eq!(found.len() == 1, gh.contains("*(image on the docket: b)*"), "the same links, read either way");
+        }
     }
 
     #[test]
