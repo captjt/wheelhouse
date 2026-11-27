@@ -224,7 +224,7 @@ fn docket_addr(to: &str) -> Option<String> {
 
 /// A message to every agent on a docket (`@D-12`) but the sender: one to
 /// each, on one entry of the docket's record, so replies stay on its thread.
-fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<String>, body: String, options: Vec<String>) -> Result<Message> {
+fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<String>, body: String, options: Vec<String>, extra: Value) -> Result<Message> {
     let st = core.store.state(docket)?.ok_or_else(|| anyhow!("no docket {docket}"))?;
     let me = core.team.as_ref().map(|t| t.config.handle.clone());
     let to = own_agents(core, docket, from.block.as_deref())?;
@@ -283,6 +283,11 @@ fn send_docket(core: &mut Core, from: &Caller, docket: &str, subject: Option<Str
     if !remote.is_empty() {
         data["team_to"] = Value::Array(remote);
     }
+    if let Some(m) = extra.as_object() {
+        for (k, v) in m {
+            data[k] = v.clone();
+        }
+    }
     let s = core.append(docket, kind, &from.who, Some(body), data)?;
     for m in &mut sent {
         m.docket = Some(docket.to_string());
@@ -310,6 +315,12 @@ fn waiting_room(core: &Core, from: &Caller, block: &str, addr: &str) -> Result<(
 /// Send a message. Returns its number. `@D-12` sends it to every agent on
 /// that docket.
 pub fn send(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, body: &str, options: Vec<String>) -> Result<Message> {
+    send_with(core, from, to, subject, body, options, Value::Null)
+}
+
+/// `send`, with more on its entry: `images`, which each hub writes out for
+/// its agents as it delivers the message.
+pub fn send_with(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, body: &str, options: Vec<String>, extra: Value) -> Result<Message> {
     let body = body.trim_end().to_string();
     if body.trim().is_empty() {
         bail!("an empty message");
@@ -323,7 +334,7 @@ pub fn send(core: &mut Core, from: &Caller, to: &str, subject: Option<String>, b
     }
     let subject = subject.map(|s| one_line(&s, MAX_SUBJECT, "a subject")).transpose()?;
     if let Some(d) = docket_addr(to) {
-        return send_docket(core, from, &d, subject, body, options);
+        return send_docket(core, from, &d, subject, body, options, extra);
     }
     let (to_addr, to_block) = if to.trim() == ME {
         if from.addr == ME {
@@ -518,6 +529,30 @@ pub fn render(m: &Message, docket: Option<&str>) -> String {
     out
 }
 
+/// A message placed at an entry that carries images (`data.images`: a
+/// question, a decision): their paths, written out on this hub, after it.
+fn with_images(core: &Core, m: &Message, text: String) -> String {
+    // Announced as long: `wh read` shows the images there.
+    if m.body.len() > MAX_PASTE {
+        return text;
+    }
+    let Some(block) = images_of(core, m) else { return text };
+    // Before the line on how to reply, so that stays last.
+    match text.rfind("\n\nReply with `wh reply") {
+        Some(at) => format!("{}\n\n{}{}", &text[..at], block.trim_end(), &text[at..]),
+        None => crate::images::with_block(&text, &block),
+    }
+}
+
+/// The images a message's entry carries, written out on this hub, as the
+/// text that names them: none when it has none.
+pub fn images_of(core: &Core, m: &Message) -> Option<String> {
+    let (Some(docket), Some(seq)) = (m.docket.as_deref(), m.seq) else { return None };
+    let e = core.store.entries(docket).ok()?.into_iter().find(|s| s.seq == seq)?.entry().ok()?;
+    let images = crate::images::of_entry(&e.data);
+    (!images.is_empty()).then(|| crate::images::block(core, docket, &images))
+}
+
 /// Messages to a pane (or to you) not yet delivered or read.
 pub fn inbox(core: &Core, who: &Caller) -> Result<Vec<Message>> {
     match &who.block {
@@ -557,7 +592,10 @@ pub async fn deliver_loop(shared: Shared) {
             plan(&core, &last)
         };
         for (m, session, block, root, docket) in due {
-            let text = render(&m, docket.as_deref());
+            let text = {
+                let core = shared.lock();
+                with_images(&core, &m, render(&m, docket.as_deref()))
+            };
             let ok = crate::runtime::for_id(&block).submit(&session, &block, &text).await;
             let mut core = shared.lock();
             // Tried this turn, whatever happened: a paste that went in but

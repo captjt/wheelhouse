@@ -45,6 +45,8 @@ pub struct Core {
     verified: std::collections::HashMap<String, (String, verify::Report)>,
     /// The workspace this hub is a member of, if any (docs/teams.md).
     pub team: Option<crate::team::member::Team>,
+    /// Where images are written out for agents to open (`crate::images`).
+    pub images_dir: std::path::PathBuf,
 }
 
 #[derive(Clone)]
@@ -92,6 +94,7 @@ impl Core {
             mac_apps: Default::default(),
             verified: Default::default(),
             team: None,
+            images_dir: crate::paths::state_dir().join("images"),
         };
         for name in ["owner", "hub"] {
             core.keys.get_or_create(name)?;
@@ -299,7 +302,12 @@ pub async fn run_live(shared: Shared) {
 
 #[cfg(test)]
 pub fn test_core() -> Core {
-    Core::new(Store::in_memory().unwrap(), Keyring::in_memory(), "you").unwrap()
+    let mut core = Core::new(Store::in_memory().unwrap(), Keyring::in_memory(), "you").unwrap();
+    // Never the real state's: each test core its own.
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    core.images_dir = std::env::temp_dir().join(format!("wh-test-images-{}-{n}", std::process::id()));
+    core
 }
 
 #[cfg(test)]

@@ -25,11 +25,13 @@ pub fn brief(core: &Core, id: &str, me: Option<&str>) -> Result<String> {
     out.push_str("\n\n## Intent\n\n");
     match &st.intent {
         Some(t) => {
-            out.push_str(t.body.trim());
+            // Its images as files an agent can open.
+            out.push_str(crate::images::intent_for_agent(core, &core.images_dir, id, t.body.trim()).trim());
             out.push_str(&format!("\n\n(version {}, from {})\n", st.intent_versions, t.source));
         }
         None => out.push_str("None yet. If the work's goal is clear, write it: what must be true when it's done, and what's out of scope.\n"),
     }
+    out.push_str(&crate::images::brief_section(core, &core.images_dir, id).unwrap_or_default());
     out.push_str(&agents_on(core, &st, me));
     let entries = core.store.entries(id)?;
     let ds = crate::decisions::of_stored(&entries);

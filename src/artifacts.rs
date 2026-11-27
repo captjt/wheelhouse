@@ -163,6 +163,8 @@ pub fn list(core: &Core, docket: &str) -> Result<Vec<Value>> {
             "title": e.body, "name": e.data["name"], "media_type": e.data["media_type"], "size": e.data["size"],
             "digest": e.data["digest"], "url": e.data["url"], "provider": e.data["provider"], "source": e.data["source"],
             "group": e.data["group"], "round": e.data["round"], "role": e.data["role"], "reviewer": e.data["reviewer"],
+            "image": e.data["image"], "caption": e.data["caption"], "width": e.data["width"], "height": e.data["height"],
+            "pins": e.data["pins"], "original": e.data["original"], "against": e.data["against"],
         }));
     }
     out.reverse();

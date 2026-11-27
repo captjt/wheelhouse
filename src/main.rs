@@ -27,6 +27,7 @@ mod comments;
 mod compose;
 mod hooks;
 mod hub;
+mod images;
 mod linear;
 mod messages;
 mod mirror;
@@ -283,6 +284,18 @@ enum Cmd {
         title: Option<String>,
         #[arg(long, add = complete::dockets())]
         docket: Option<String>,
+        /// A screenshot of what you built, to compare with the image #N
+        /// on the docket (`wh images` lists them).
+        #[arg(long, value_name = "N")]
+        against: Option<String>,
+    },
+    /// A docket's images: what you were shown it should look like, and
+    /// screenshots, each written out as a file you can open.
+    Images {
+        #[arg(add = complete::dockets())]
+        docket: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Rename a docket, or set its status (todo, in_progress, done, dropped).
     /// A docket with acceptance items closes on evidence (a passing check,
@@ -602,7 +615,8 @@ fn main() {
             let d = normalize(&docket);
             client::json("POST", &format!("/api/dockets/{d}/note"), Some(&json!({ "body": text, "block": block }))).map(|v| println!("{}", placed(&d, &v)))
         }
-        Some(Cmd::Attach { what, title, docket }) => attach(&what, title, docket),
+        Some(Cmd::Attach { what, title, docket, against }) => attach(&what, title, docket, against),
+        Some(Cmd::Images { docket, json }) => images(docket, json),
         Some(Cmd::Call { file, docket, title, again }) => call(file, docket, title, again),
         Some(Cmd::Set { docket, title, status, anyway, reason }) => {
             let d = normalize(&docket);
@@ -1305,6 +1319,9 @@ fn print_msg(v: &Value, as_json: bool) -> Result<()> {
 {}",
         v["body"].as_str().unwrap_or_default()
     );
+    if let Some(b) = v["images"].as_str() {
+        println!("\n{}", b.trim_end());
+    }
     let opts: Vec<&str> = v["options"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     if !opts.is_empty() {
         println!(
@@ -1379,19 +1396,62 @@ fn intent(d: &str, text: Option<String>) -> Result<()> {
     }
 }
 
-fn attach(what: &str, title: Option<String>, docket: Option<String>) -> Result<()> {
-    use base64::Engine;
-    let block = crate::runtime::pane_from_env();
-    let d = match docket {
-        Some(d) => normalize(&d),
+/// The docket named, or this pane's.
+fn docket_or_pane(docket: Option<String>, block: Option<&str>) -> Result<String> {
+    match docket {
+        Some(d) => Ok(normalize(&d)),
         None => {
-            let b = block.clone().ok_or_else(|| anyhow::anyhow!("name a docket (--docket D-12), or run this from an agent's pane"))?;
-            client::json("GET", &format!("/api/whoami?block={}", enc(&b)), None)?["docket"]
+            let b = block.ok_or_else(|| anyhow::anyhow!("name a docket (--docket D-12), or run this from an agent's pane"))?;
+            client::json("GET", &format!("/api/whoami?block={}", enc(b)), None)?["docket"]
                 .as_str()
                 .map(str::to_string)
-                .ok_or_else(|| anyhow::anyhow!("this pane has no docket; name one with --docket"))?
+                .ok_or_else(|| anyhow::anyhow!("this pane has no docket; name one with --docket"))
         }
-    };
+    }
+}
+
+fn images(docket: Option<String>, as_json: bool) -> Result<()> {
+    let block = crate::runtime::pane_from_env();
+    let d = docket_or_pane(docket, block.as_deref())?;
+    let v = client::json("GET", &format!("/api/dockets/{d}/images"), None)?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&v["images"])?);
+        return Ok(());
+    }
+    let all = v["images"].as_array().cloned().unwrap_or_default();
+    if all.is_empty() {
+        println!("{d} has no images.");
+        return Ok(());
+    }
+    for a in all {
+        let kind = match a["image"].as_str() {
+            Some("reference") => "reference",
+            Some("intent") => "in the intent",
+            Some("original") => "before markup",
+            _ => {
+                if a["source"] == "agent" {
+                    "an agent's"
+                } else {
+                    "attached"
+                }
+            }
+        };
+        let at = a["path"].as_str().map(str::to_string).unwrap_or_else(|| format!("(not here: {})", a["missing"].as_str().unwrap_or("missing")));
+        let against = a["against"].as_i64().map(|n| format!(", against #{n}")).unwrap_or_default();
+        println!("#{:<4} {kind}{against}: {}", a["seq"], a["caption"].as_str().or(a["title"].as_str()).unwrap_or(""));
+        println!("      {at}");
+        for p in a["pins"].as_array().into_iter().flatten() {
+            println!("      pin {}: {}", p["n"], p["note"].as_str().unwrap_or(""));
+        }
+    }
+    Ok(())
+}
+
+fn attach(what: &str, title: Option<String>, docket: Option<String>, against: Option<String>) -> Result<()> {
+    use base64::Engine;
+    let block = crate::runtime::pane_from_env();
+    let d = docket_or_pane(docket, block.as_deref())?;
+    let against = against.map(|a| a.trim_start_matches('#').parse::<i64>().map_err(|_| anyhow::anyhow!("--against takes an image's number, like 12"))).transpose()?;
     let body = if what.starts_with("https://") {
         json!({ "url": what, "title": title, "block": block })
     } else {
@@ -1399,7 +1459,7 @@ fn attach(what: &str, title: Option<String>, docket: Option<String>) -> Result<(
         let bytes = std::fs::read(path).with_context(|| format!("reading {what}"))?;
         anyhow::ensure!(bytes.len() <= artifacts::MAX, "{what} is {} MB; artifacts are at most {} MB", bytes.len() >> 20, artifacts::MAX >> 20);
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
-        json!({ "name": name, "content": base64::engine::general_purpose::STANDARD.encode(&bytes), "title": title, "block": block })
+        json!({ "name": name, "content": base64::engine::general_purpose::STANDARD.encode(&bytes), "title": title, "block": block, "against": against })
     };
     let (status, out) = client::call("POST", &format!("/api/dockets/{d}/artifacts"), Some(&body), std::time::Duration::from_secs(120))?;
     let v: Value = serde_json::from_slice(&out).unwrap_or_default();

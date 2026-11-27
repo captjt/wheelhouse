@@ -64,6 +64,8 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/verify", get(verify_one))
         .route("/api/dockets/{id}/artifacts", get(artifacts_list).post(artifacts_attach).layer(axum::extract::DefaultBodyLimit::max(crate::artifacts::MAX * 4 / 3 + (1 << 20))))
         .route("/api/blobs/{digest}", get(blob))
+        .route("/api/images", post(image_stage).layer(axum::extract::DefaultBodyLimit::max(crate::images::MAX + (64 << 10))))
+        .route("/api/dockets/{id}/images", get(images_list))
         .route("/api/verify", get(verify_all))
         .route("/api/dockets/{id}/intent", post(set_intent))
         .route("/api/dockets/{id}/linear", post(link_linear))
@@ -820,31 +822,67 @@ async fn send_to(shared: &Shared, id: String, req: SendReq) -> ApiResult {
 
 #[derive(Deserialize)]
 struct ComposeReq {
+    #[serde(default)]
     text: String,
+    /// Images staged with `POST /api/images`, sent with what you typed.
+    #[serde(default)]
+    images: Vec<crate::images::Ref>,
 }
 
 /// What you typed in a docket's composer (`crate::compose`): a note, an
 /// instruction to its agents, a question for them, a decision, or the
 /// prompt for another agent (the app opens Add an agent with it).
 async fn compose(State(shared): State<Shared>, Path(id): Path<String>, Json(req): Json<ComposeReq>) -> ApiResult {
-    let cmd = crate::compose::parse(&req.text).map_err(bad)?;
-    run_command(&shared, id, cmd).await
+    // Images alone are a note of them.
+    let cmd = if req.text.trim().is_empty() && !req.images.is_empty() { crate::compose::Command::Note(String::new()) } else { crate::compose::parse(&req.text).map_err(bad)? };
+    // Every image checked before anything is kept or sent.
+    let checked = crate::images::check(&shared.lock(), &req.images).map_err(bad)?;
+    run_command_with(&shared, id, cmd, checked).await
 }
 
 /// Carry out a composer command on a docket: what you typed, or a call's
 /// proposal you applied (`crate::calls`).
 async fn run_command(shared: &Shared, id: String, cmd: crate::compose::Command) -> ApiResult {
+    run_command_with(shared, id, cmd, Vec::new()).await
+}
+
+/// Keep a command's images on the docket, as References. They're kept
+/// before the command is carried out, so an agent never gets a path to an
+/// image that isn't on the record.
+fn keep_images(shared: &Shared, id: &str, checked: Vec<(crate::images::Ref, crate::images::Kind)>) -> Result<Vec<crate::images::Kept>, (StatusCode, Json<Value>)> {
+    if checked.is_empty() {
+        return Ok(Vec::new());
+    }
+    crate::images::keep(&mut shared.lock(), id, &Who::Owner, checked).map_err(internal)
+}
+
+/// What's typed to an agent, with its images' paths.
+fn with_images(shared: &Shared, id: &str, text: &str, kept: &[crate::images::Kept]) -> String {
+    if kept.is_empty() {
+        return text.to_string();
+    }
+    crate::images::with_block(text, &crate::images::block(&shared.lock(), id, kept))
+}
+
+async fn run_command_with(shared: &Shared, id: String, cmd: crate::compose::Command, images: Vec<(crate::images::Ref, crate::images::Kind)>) -> ApiResult {
     use crate::compose::Command;
     if shared.lock().store.state(&id).map_err(internal)?.is_none() {
         return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
     }
+    let shown_of = |kept: &[crate::images::Kept]| -> Vec<Value> { kept.iter().map(|k| json!({ "seq": k.seq, "name": k.name })).collect() };
+    // An instruction's images are kept once its @name is found: none for one that isn't there.
+    let mut pending = Some(images);
+    let kept = if matches!(&cmd, Command::Instruct { .. }) { Vec::new() } else { keep_images(shared, &id, pending.take().unwrap_or_default())? };
+    let shown = shown_of(&kept);
     let conflict = |e: anyhow::Error| fail(StatusCode::CONFLICT, format!("{e:#}"));
     match cmd {
         Command::Note(text) => {
-            let s = shared.lock().append(&id, "note", &Who::Owner, Some(text), Value::Null).map_err(internal)?;
-            Ok(Json(json!({ "did": "note", "seq": s.seq })))
+            let data = if kept.is_empty() { Value::Null } else { json!({ "images": kept }) };
+            let body = if text.trim().is_empty() { format!("Shared {}", if kept.len() == 1 { "an image".to_string() } else { format!("{} images", kept.len()) }) } else { text };
+            let s = shared.lock().append(&id, "note", &Who::Owner, Some(body), data).map_err(internal)?;
+            Ok(Json(json!({ "did": "note", "seq": s.seq, "images": shown })))
         }
-        Command::Task { prompt } => Ok(Json(json!({ "did": "task", "prompt": prompt }))),
+        Command::Task { prompt } => Ok(Json(json!({ "did": "task", "prompt": with_images(shared, &id, &prompt, &kept), "images": shown }))),
         Command::Instruct { to, text } => {
             let targets: Vec<(String, String)> = {
                 let core = shared.lock();
@@ -862,6 +900,9 @@ async fn run_command(shared: &Shared, id: String, cmd: crate::compose::Command) 
                     .collect();
                 crate::compose::targets(&to, &here).map_err(conflict)?.into_iter().map(|(b, _, shown)| (b.clone(), shown.clone())).collect()
             };
+            let kept = keep_images(shared, &id, pending.take().unwrap_or_default())?;
+            let shown = shown_of(&kept);
+            let text = with_images(shared, &id, &text, &kept);
             let mut sent = Vec::new();
             for (block, shown) in targets {
                 let r = send_to(shared, id.clone(), SendReq { text: text.clone(), queue: true, block: Some(block), steer: false }).await;
@@ -874,15 +915,16 @@ async fn run_command(shared: &Shared, id: String, cmd: crate::compose::Command) 
                 let why: Vec<String> = sent.iter().map(|x| format!("{}: {}", x["to"].as_str().unwrap_or(""), x["error"].as_str().unwrap_or(""))).collect();
                 return Err(fail(StatusCode::CONFLICT, why.join("; ")));
             }
-            Ok(Json(json!({ "did": "instructed", "sent": sent })))
+            Ok(Json(json!({ "did": "instructed", "sent": sent, "images": shown })))
         }
         Command::Ask { question, options } => {
             let mut core = shared.lock();
             let me = crate::messages::caller(&core, None);
             // A short question is its own subject line.
             let subject = (!question.contains('\n') && question.len() <= crate::compose::MAX_SUBJECT).then(|| question.clone());
-            let m = crate::messages::send(&mut core, &me, &format!("@{id}"), subject, &question, options).map_err(conflict)?;
-            Ok(Json(json!({ "did": "asked", "message": m.id, "options": m.options })))
+            let extra = if kept.is_empty() { Value::Null } else { json!({ "images": kept }) };
+            let m = crate::messages::send_with(&mut core, &me, &format!("@{id}"), subject, &question, options, extra).map_err(conflict)?;
+            Ok(Json(json!({ "did": "asked", "message": m.id, "options": m.options, "images": shown })))
         }
         Command::Decide { key, subject, choice, text } => {
             let (out, restand) = {
@@ -895,6 +937,7 @@ async fn run_command(shared: &Shared, id: String, cmd: crate::compose::Command) 
                     // Your answer to it: by its key, the words after the key.
                     let by_key = key.as_deref() == Some(q.key.as_str());
                     let answer = if by_key { text.strip_prefix(q.key.as_str()).unwrap_or(&text).trim().to_string() } else { choice.clone() };
+                    let answer = if kept.is_empty() { answer } else { crate::images::with_block(&answer, &crate::images::block(&core, &id, &kept)) };
                     let qkey = q.key.clone();
                     let me = crate::messages::caller(&core, None);
                     let r = crate::messages::reply(&mut core, &me, m.id, &answer, None).map_err(conflict)?;
@@ -923,7 +966,11 @@ async fn run_command(shared: &Shared, id: String, cmd: crate::compose::Command) 
                 let okey = crate::decisions::own_key(subject.as_deref().unwrap_or(&choice));
                 // Decided again: a rule that stood for it in a repo's notes is replaced.
                 let restand = ds.iter().find(|x| x.key == okey).filter(|x| x.answer.as_deref() != Some(choice.as_str())).and_then(|x| x.standing.clone()).is_some();
-                let s = core.append(&id, "decision", &Who::Owner, Some(text), json!({ "via": "composer", "subject": subject, "choice": choice })).map_err(internal)?;
+                let mut data = json!({ "via": "composer", "subject": subject, "choice": choice });
+                if !kept.is_empty() {
+                    data["images"] = json!(kept);
+                }
+                let s = core.append(&id, "decision", &Who::Owner, Some(text), data).map_err(internal)?;
                 let line = match &subject {
                     Some(sub) => format!("Decided on {id}: {sub}: {choice}"),
                     None => format!("Decided on {id}: {choice}"),
@@ -1217,7 +1264,9 @@ async fn set_intent(State(shared): State<Shared>, Path(id): Path<String>, Json(r
         ),
         None => (Who::Owner, "person"),
     };
-    let s = core.append(&id, "intent", &who, Some(body), json!({ "source": source })).map_err(internal)?;
+    // Its images: kept on the docket, and pinned by the intent's entry.
+    let pinned = crate::images::keep_intent(&mut core, &id, &who, &body).map_err(bad)?;
+    let s = core.append_with(&id, "intent", &who, Some(body), json!({ "source": source }), pinned).map_err(internal)?;
     Ok(Json(json!({ "seq": s.seq })))
 }
 
@@ -1351,7 +1400,11 @@ async fn messages_read(State(shared): State<Shared>, Path(n): Path<i64>, axum::e
     let mut core = shared.lock();
     let who = crate::messages::caller(&core, q.block.as_deref());
     let m = crate::messages::read(&mut core, &who, n).map_err(bad)?;
-    Ok(Json(crate::messages::view(&core, &m)))
+    let mut v = crate::messages::view(&core, &m);
+    if let Some(b) = crate::messages::images_of(&core, &m) {
+        v["images"] = json!(b);
+    }
+    Ok(Json(v))
 }
 
 async fn messages_done(State(shared): State<Shared>, Path(n): Path<i64>) -> ApiResult {
@@ -1986,6 +2039,10 @@ struct Attach {
     url: Option<String>,
     #[serde(default)]
     block: Option<String>,
+    /// An image kept to compare with one already on the docket (its #):
+    /// a screenshot of what was built, against the reference it follows.
+    #[serde(default)]
+    against: Option<i64>,
 }
 
 /// Keep a file or a link on a docket: `wh attach`, or the app.
@@ -2003,9 +2060,66 @@ async fn artifacts_attach(State(shared): State<Shared>, Path(id): Path<String>, 
     let name = req.name.clone().or_else(|| req.url.as_ref().map(|u| u.rsplit('/').find(|p| !p.is_empty()).unwrap_or("link").to_string())).unwrap_or_else(|| "file".into());
     let source = if matches!(from.who, Who::Agent { .. }) { "agent" } else { "you" };
     let title = req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| crate::artifacts::clean_name(&name));
-    let a = crate::artifacts::New { title, name, bytes, url: req.url.clone(), source: source.into(), group: Some("Attached".into()), extra: json!({}) };
+    let mut extra = json!({});
+    // An image is checked by its bytes, and named the way they say.
+    let (name, image) = match &bytes {
+        Some(b) if crate::artifacts::media_type(&name).starts_with("image/") && crate::artifacts::media_type(&name) != "image/svg+xml" => {
+            let k = crate::images::sniff(b).map_err(bad)?;
+            extra = json!({ "image": "attached", "width": k.width, "height": k.height });
+            (crate::images::name_for(&name, &k), true)
+        }
+        _ => (name, false),
+    };
+    if let Some(n) = req.against {
+        if !image {
+            return Err(fail(StatusCode::BAD_REQUEST, "--against compares an image with an image: attach a PNG, JPEG, GIF or WebP"));
+        }
+        let found = crate::images::list(&core, &id).map_err(internal)?.into_iter().any(|a| a["seq"] == n);
+        if !found {
+            return Err(fail(StatusCode::BAD_REQUEST, format!("#{n} isn't an image on {id}: `wh images {id}` lists them")));
+        }
+        extra["against"] = json!(n);
+    }
+    let a = crate::artifacts::New { title, name, bytes, url: req.url.clone(), source: source.into(), group: Some("Attached".into()), extra };
     let (seq, new) = crate::artifacts::attach(&mut core, &id, &from.who, a).map_err(bad)?;
     Ok(Json(json!({ "seq": seq, "new": new })))
+}
+
+#[derive(Deserialize)]
+struct StageQ {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Stage an image for the composer, the intent or the share sheet: its
+/// bytes as the body. Checked to be a PNG, JPEG, GIF or WebP; put in the
+/// blob store, on no record until it's sent (`crate::images`).
+async fn image_stage(State(shared): State<Shared>, axum::extract::Query(q): axum::extract::Query<StageQ>, body: axum::body::Bytes) -> ApiResult {
+    if body.is_empty() {
+        return Err(fail(StatusCode::BAD_REQUEST, "no image in the request"));
+    }
+    let staged = crate::images::stage(&mut shared.lock(), q.name.as_deref().unwrap_or("image"), &body).map_err(bad)?;
+    Ok(Json(json!(staged)))
+}
+
+/// A docket's images, each written out where an agent on this Mac can open
+/// it: `wh images`.
+async fn images_list(State(shared): State<Shared>, Path(id): Path<String>) -> ApiResult {
+    let core = shared.lock();
+    if core.store.state(&id).map_err(internal)?.is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, format!("no docket {id}")));
+    }
+    let mut out = Vec::new();
+    for mut a in crate::images::list(&core, &id).map_err(internal)? {
+        if let (Some(d), Some(n)) = (a["digest"].as_str(), a["name"].as_str()) {
+            match crate::images::materialize(&core, &id, d, n) {
+                Ok(p) => a["path"] = json!(p.display().to_string()),
+                Err(e) => a["missing"] = json!(format!("{e:#}")),
+            }
+        }
+        out.push(a);
+    }
+    Ok(Json(json!({ "images": out })))
 }
 
 #[derive(Deserialize)]
@@ -2291,6 +2405,103 @@ mod tests {
         assert_eq!(compose("  ").await.0, StatusCode::BAD_REQUEST);
         assert_eq!(post_json(&app, "/api/dockets/D-999/compose", json!({ "text": "hi" })).await.0, StatusCode::NOT_FOUND);
         assert!(shared.lock().verify(&d).unwrap().ok);
+    }
+
+    async fn post_bytes(app: &Router, uri: &str, body: Vec<u8>) -> (StatusCode, Value) {
+        let req = HttpRequest::builder().method("POST").uri(uri).header("host", "127.0.0.1:7500").header("x-wheelhouse", "1").header("content-type", "application/octet-stream");
+        let res = app.clone().oneshot(req.body(Body::from(body)).unwrap()).await.unwrap();
+        let status = res.status();
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        b.extend(w.to_be_bytes());
+        b.extend(h.to_be_bytes());
+        b.extend([8, 6, 0, 0, 0, 0, 0, 0, 0]);
+        b
+    }
+
+    #[tokio::test]
+    async fn images_you_share_reach_the_agents_as_files_they_can_open() {
+        let mut core = crate::hub::test_core();
+        let fg = json!({ "foreground": { "name": "claude", "cwd": "/w" } });
+        let rec = crate::mirror::Record { state: "working".into(), app: Some("claude-code".into()), ..Default::default() };
+        core.mirror.apply_pane_status("s1", "b1", vec![rec], Some(&fg), None);
+        core.mirror.panes.get_mut("b1").unwrap().label = "builder".into();
+        agents::reconcile(&mut core, ["b1".to_string()]);
+        let d = agents::docket_of(&core, "b1").unwrap();
+        let dir = core.images_dir.clone();
+        let shared = Shared::new(core);
+        let app = router(shared.clone());
+
+        // Staged: checked by its bytes. SVG, HTML, nothing, and a cross-site post are refused.
+        let (st, mock) = post_bytes(&app, "/api/images?name=Settings%20mock.jpg", png(1440, 900)).await;
+        assert_eq!(st, StatusCode::OK, "{mock}");
+        assert_eq!((mock["name"].as_str(), mock["width"].as_u64(), mock["media_type"].as_str()), (Some("Settings-mock.png"), Some(1440), Some("image/png")));
+        assert_eq!(post_bytes(&app, "/api/images?name=x.svg", b"<svg onload=alert(1)/>".to_vec()).await.0, StatusCode::BAD_REQUEST);
+        assert_eq!(post_bytes(&app, "/api/images", Vec::new()).await.0, StatusCode::BAD_REQUEST);
+        let req = HttpRequest::builder().method("POST").uri("/api/images").header("host", "127.0.0.1:7500").header("origin", "https://evil.example");
+        assert_eq!(app.clone().oneshot(req.body(Body::from(png(2, 2))).unwrap()).await.unwrap().status(), StatusCode::FORBIDDEN);
+        let (_, before) = post_bytes(&app, "/api/images?name=before.png", png(1440, 899)).await;
+
+        // Sent to the builder with a pin: kept first, then its path goes with the prompt.
+        let uri = format!("/api/dockets/{d}/compose");
+        let one = json!([{ "digest": mock["digest"], "name": mock["name"], "caption": "The header, like this", "original": before["digest"], "pins": [{ "n": 1, "note": "Make this primary" }] }]);
+        let (st, v) = post_json(&app, &uri, json!({ "text": "@builder match this", "images": one })).await;
+        assert_eq!((st, v["did"].as_str()), (StatusCode::OK, Some("instructed")), "{v}");
+        let queued = shared.lock().store.queued_prompts(Some(&d)).unwrap();
+        let prompt = &queued[0].3;
+        let path = dir.join(&d).join(format!("{}-Settings-mock.png", &mock["digest"].as_str().unwrap()[7..19]));
+        assert!(prompt.starts_with("match this\n\nAn image comes with this"), "{prompt}");
+        assert!(prompt.contains(&path.display().to_string()) && prompt.contains("Make this primary"), "{prompt}");
+        assert_eq!(std::fs::read(&path).unwrap(), png(1440, 900));
+
+        // To an @name that isn't there: refused, and nothing kept.
+        let n = crate::images::list(&shared.lock(), &d).unwrap().len();
+        let (_, other) = post_bytes(&app, "/api/images?name=o.png", png(3, 3)).await;
+        let (st, _) = post_json(&app, &uri, json!({ "text": "@nobody look", "images": [{ "digest": other["digest"] }] })).await;
+        assert_eq!(st, StatusCode::CONFLICT);
+        assert_eq!(crate::images::list(&shared.lock(), &d).unwrap().len(), n);
+        // One that was never staged, or eleven: refused before anything happens.
+        let (st, _) = post_json(&app, &uri, json!({ "text": "hm", "images": [{ "digest": format!("sha256:{}", "c".repeat(64)) }] })).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        let many: Vec<Value> = (0..11).map(|_| json!({ "digest": mock["digest"] })).collect();
+        assert_eq!(post_json(&app, &uri, json!({ "text": "hm", "images": many })).await.0, StatusCode::BAD_REQUEST);
+
+        // Images alone are a note; a question carries them, and its delivery names the files.
+        let (st, v) = post_json(&app, &uri, json!({ "images": [{ "digest": other["digest"], "caption": "An inspiration" }] })).await;
+        assert_eq!((st, v["did"].as_str()), (StatusCode::OK, Some("note")), "{v}");
+        let (st, v) = post_json(&app, &uri, json!({ "text": "/ask Which of these? | A | B", "images": [{ "digest": other["digest"] }] })).await;
+        assert_eq!((st, v["did"].as_str()), (StatusCode::OK, Some("asked")), "{v}");
+        let m = shared.lock().store.message(v["message"].as_i64().unwrap()).unwrap().unwrap();
+        let said = crate::messages::images_of(&shared.lock(), &m).unwrap();
+        assert!(said.contains(&dir.join(&d).display().to_string()), "{said}");
+
+        // A screenshot against the reference; not against something that isn't an image.
+        let reference = crate::images::list(&shared.lock(), &d).unwrap().into_iter().find(|a| a["image"] == "reference" && a["caption"] == "The header, like this").unwrap();
+        use base64::Engine;
+        let shot = base64::engine::general_purpose::STANDARD.encode(png(1440, 900 + 7));
+        let art = format!("/api/dockets/{d}/artifacts");
+        let (st, v) = post_json(&app, &art, json!({ "name": "built.png", "content": shot, "against": reference["seq"] })).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        let listed = crate::images::list(&shared.lock(), &d).unwrap();
+        assert_eq!(listed.iter().find(|a| a["seq"] == v["seq"]).unwrap()["against"], reference["seq"]);
+        assert_eq!(post_json(&app, &art, json!({ "name": "built.png", "content": shot, "against": 9999 })).await.0, StatusCode::BAD_REQUEST);
+        let html = base64::engine::general_purpose::STANDARD.encode(b"<html></html>");
+        assert_eq!(post_json(&app, &art, json!({ "name": "fake.png", "content": html })).await.0, StatusCode::BAD_REQUEST);
+
+        // In the intent: kept, pinned by the intent's entry, and a path in the brief.
+        let body = format!("The page.\n\n![The whole page](/api/blobs/{}?name=page.png)", mock["digest"].as_str().unwrap());
+        let (st, _) = post_json(&app, &format!("/api/dockets/{d}/intent"), json!({ "body": body })).await;
+        assert_eq!(st, StatusCode::OK);
+        let last = shared.lock().store.entries(&d).unwrap().last().unwrap().entry().unwrap();
+        assert_eq!((last.kind.as_str(), last.blobs.clone()), ("intent", vec![mock["digest"].as_str().unwrap().to_string()]));
+        let brief = crate::brief::brief(&shared.lock(), &d, None).unwrap();
+        assert!(!brief.contains("/api/blobs/") && brief.contains("## Images") && brief.contains("Make this primary"), "{brief}");
+        assert!(shared.lock().verify(&d).unwrap().ok);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
