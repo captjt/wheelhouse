@@ -739,6 +739,9 @@ pub struct Live {
     /// Whether it can be answered where it's shown cut short (a banner, a
     /// menu): `approve::short`.
     pub short: bool,
+    /// Whether it's a question picker Wheelhouse reads and answers
+    /// (`crate::picker`): the apps ask the hub for it.
+    pub pickable: bool,
     /// Whether it takes a message mid-turn (steering): Claude Code, Codex.
     pub steer: bool,
     pub app: String,
@@ -759,12 +762,14 @@ pub fn live(core: &Core, block: &str) -> Option<Live> {
     let answerable = h.is_some_and(|r| r.state == "blocked" && r.kind.as_deref() == Some("permission") && crate::approve::plain(r.msg.as_deref()))
         && p.app().and_then(crate::approve::prompt_keys).is_some();
     let short = answerable && h.is_some_and(|r| crate::approve::short(r.msg.as_deref()));
+    let pickable = h.is_some_and(|r| r.state == "blocked" && r.kind.as_deref() == Some("question")) && p.app().is_some_and(crate::picker::answers);
     Some(Live {
         block: block.to_string(),
         runtime: p.runtime,
         record: h.map(|r| r.id.clone()),
         answerable,
         short,
+        pickable,
         steer: p.app().is_some_and(crate::runtime::steers),
         app: p.app().unwrap_or("agent").to_string(),
         state: h.map_or("starting".into(), |r| r.state.clone()),

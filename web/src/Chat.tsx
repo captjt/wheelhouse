@@ -5,6 +5,7 @@ import { agoLong, stamp, useHub } from "./live";
 import { MessageCard } from "./Messages";
 import { commentPlace } from "./diffview";
 import { AnswerButtons, usePane } from "./Pane";
+import { QuestionPicker } from "./Picker";
 import { Prose, isPhone, useToast } from "./ui";
 
 /**
@@ -67,6 +68,10 @@ function itemsOf(entries: EntryView[], dk: Docket): Item[] {
         break;
       case "approval":
         if (!d.what && !d.kind) break;
+        if (d.decision === "answer") {
+          out.push({ t: "sys", seq: e.seq, at: e.at, text: `You answered${e.body ? `: ${e.body}` : ""}` });
+          break;
+        }
         out.push({ t: "sys", seq: e.seq, at: e.at, text: `You ${d.decision === "approve" ? "approved" : "denied"} ${d.kind || "a prompt"}${e.body ? `: ${e.body}` : ""}` });
         break;
       case "artifact":
@@ -151,7 +156,7 @@ function NowLine({ d, a, several, onTerminal }: { d: Docket; a?: DocketAgent; se
             <strong>
               {app} is asking{l.kind ? ` (${l.kind})` : ""}
             </strong>
-            {l.msg && <div className="chat-now-msg">{l.msg}</div>}
+            <QuestionPicker d={d} live={l} fallback={l.msg && <div className="chat-now-msg">{l.msg}</div>} />
           </div>
         </div>
         <div className="chat-now-actions">

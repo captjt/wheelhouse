@@ -1,0 +1,15 @@
+  "Which tools?", options Vim, Emacs; (2) header "OS", question "Which OS?", options Mac, Linux.
+  Then reply with my answers.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☒ Tools  ☒ OS  ✔ Submit  →
+
+Review your answers
+
+ ● Which tools?
+   → Vim
+ ● Which OS?
+   → Linux
+
+❯ 1. Submit answers
+  2. Cancel

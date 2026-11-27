@@ -173,6 +173,19 @@ impl Runtime {
         self.submit_checked(session, block, text, true).await
     }
 
+    /// Type `text` into a dialog the agent is waiting on (its question's
+    /// box for your own words), then press Enter: the agent is blocked, by
+    /// design, so nothing checks that it isn't. Only `crate::picker` calls
+    /// this, after its own guard.
+    pub async fn type_into_dialog(&self, session: &str, block: &str, text: &str) -> Result<()> {
+        let _typing = Typing::wait(block).await?;
+        let text = plain(text);
+        match self {
+            Runtime::Rex(r) => r.submit(session, block, &text).await,
+            Runtime::Herdr(h) => h.submit_into_dialog(block, &text).await,
+        }
+    }
+
     /// Type `text` into an agent at work, for it to read at its next step:
     /// read from its runtime first, one text at a time, never into a prompt
     /// it's waiting on.

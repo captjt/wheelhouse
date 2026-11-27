@@ -136,6 +136,12 @@ impl Herdr {
         self.hc(&["send", address(block), "--json", "--", text]).await.map(|_| ())
     }
 
+    /// Paste and press Enter into the program's own dialog: `hc send
+    /// --force`, which types even though it's blocked.
+    pub async fn submit_into_dialog(&self, block: &str, text: &str) -> Result<()> {
+        self.hc(&["send", address(block), "--force", "--json", "--", text]).await.map(|_| ())
+    }
+
     pub async fn keys(&self, block: &str, keys: &[&str]) -> Result<()> {
         let mut args = vec!["keys", address(block)];
         args.extend(keys.iter().map(|k| hc_key(k)));

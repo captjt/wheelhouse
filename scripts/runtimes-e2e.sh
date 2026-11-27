@@ -190,6 +190,45 @@ until_ "the new prompt isn't seen" has ".dockets[] | select(.id == \"$D_HERDR\")
 set_herdr t2 '.status = {state: "idle", app: "claude-code"} | .status_ms = $ms'
 ok "approved with 1 in both, each read again from its runtime first; a stale one refused"
 
+step "a question picker, answered from Wheelhouse, in each runtime"
+# Claude Code's AskUserQuestion: blocked on "question", the picker on the screen.
+boxed=$(cat "$here/../tests/fixtures/picker/rex-boxed.txt")
+one=$(cat "$here/../tests/fixtures/picker/tabs.txt")
+until mkdir "$t/rex.json.lock" 2>/dev/null; do sleep 0.05; done
+jq --arg s "$boxed" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '(.sessions[].windows[].blocks[] | select(.block_id == "block:builder-2")) |= (.screen = $s
+  | .records = [{state: "blocked", kind: "question", app: "claude-code", msg: "answer: For annotated images: …", updated_at: $at}])' "$t/rex.json" >"$t/rex.tmp" && mv "$t/rex.tmp" "$t/rex.json"
+rmdir "$t/rex.json.lock"
+until_ "Rex's question isn't pickable" has ".dockets[] | select(.id == \"$D_REX\") | .live.pickable"
+api "$base/api/dockets/$D_REX/picker" | jq -e '.picker.question | startswith("For annotated images")' >/dev/null || fail "the picker wasn't read: $(api "$base/api/dockets/$D_REX/picker")"
+api "$base/api/dockets/$D_REX/picker" | jq -e '[.picker.options[] | .kind] == ["choice", "choice", "other", "chat"] and .typed' >/dev/null || fail "its options: $(api "$base/api/dockets/$D_REX/picker" | jq -c .picker.options)"
+# A question you didn't see, or an option that isn't what you saw: nothing goes in.
+keys_before=$(jq '.keys | length' "$t/rex.json")
+seen=$(api "$base/api/dockets/$D_REX/picker")
+[ "$(jq -r .since <<<"$seen")" != null ] || fail "the picker came without when it was asked"
+pick() { jq -c --arg q "$1" --argjson n "$2" --arg l "$3" --arg since "$4" '{question: $q, action: "pick", n: $n, label: $l, since: $since}' <<<'{}'; }
+question=$(jq -r .picker.question <<<"$seen") since=$(jq -r .since <<<"$seen")
+[ "$(code -X POST "$base/api/dockets/$D_REX/pick" -d "$(pick "Deploy now?" 1 "Built-in markup (Recommended)" "$since")")" = 409 ] || fail "another question was answered"
+[ "$(code -X POST "$base/api/dockets/$D_REX/pick" -d "$(pick "$question" 1 "Bring your own" "$since")")" = 409 ] || fail "a moved option was picked"
+[ "$(code -X POST "$base/api/dockets/$D_REX/pick" -d "$(pick "$question" 1 "Built-in markup (Recommended)" "2020-01-01T00:00:00Z")")" = 409 ] || fail "a question asked again since was answered"
+[ "$(jq '.keys | length' "$t/rex.json")" = "$keys_before" ] || fail "a refused answer pressed a key"
+q=$(pick "$question" 1 "$(jq -r '.picker.options[0].label' <<<"$seen")" "$since")
+api -X POST "$base/api/dockets/$D_REX/pick" -d "$q" | jq -e '.cleared' >/dev/null || fail "Rex's pick didn't clear"
+jq -e '[.keys[] | select(.block == "block:builder-2" and .keys == ["1"])] | length == 2' "$t/rex.json" >/dev/null || fail "no 1 for the pick in Rex"
+api "$base/api/dockets/$D_REX" | jq -e '[.entries[] | select(.kind == "approval" and .data.decision == "answer" and (.body | endswith("→ Built-in markup (Recommended)")))] | length == 1' >/dev/null || fail "the answer isn't on the record"
+# Your own words, in Herdr: the digit opens "Type something", then the text and Enter.
+until mkdir "$t/hc.json.lock" 2>/dev/null; do sleep 0.05; done
+jq --arg s "$one" --argjson ms "$(python3 -c 'import time; print(int(time.time() * 1000))')" '(.terminals[] | select(.address == "t2")) |= (.screen = $s
+  | .status = {state: "blocked", kind: "question", app: "claude-code", msg: "answer: Which OS?"} | .status_ms = $ms)' "$t/hc.json" >"$t/hc.tmp" && mv "$t/hc.tmp" "$t/hc.json"
+rmdir "$t/hc.json.lock"
+until_ "Herdr's question isn't pickable" has ".dockets[] | select(.id == \"$D_HERDR\") | .live.pickable"
+since=$(api "$base/api/dockets/$D_HERDR/picker" | jq -r .since)
+[ "$(code -X POST "$base/api/dockets/$D_HERDR/pick" -d "$(jq -nc --arg s "$since" '{question: "Which OS?", action: "pick", n: 3, text: "a\nb", since: $s}')")" = 409 ] || fail "two lines went in"
+api -X POST "$base/api/dockets/$D_HERDR/pick" -d "$(jq -nc --arg s "$since" '{question: "Which OS?", action: "pick", n: 3, text: "FreeBSD, please", since: $s}')" >/dev/null || fail "Herdr's typed answer"
+jq -e '[.keys[] | select(.terminal == "t2")] | .[-2:] | map(.keys) == [["3"], ["ctrl+e"]]' "$t/hc.json" >/dev/null || fail "not 3 then ctrl+e in Herdr: $(jq -c '[.keys[] | select(.terminal == "t2")]' "$t/hc.json")"
+herdr_got t2 "FreeBSD, please" >/dev/null || fail "the words didn't go into Herdr (hc send --force)"
+set_herdr t2 '.status = {state: "idle", app: "claude-code"} | .status_ms = $ms | .screen = "the reviewer'"'"'s screen"'
+ok "read off each pane's screen, picked with its digit (1 in Rex; 3, ctrl+e and the words in Herdr, forced into its dialog), on the record; another question, a moved option, one asked again since and two lines refused"
+
 step "a queued prompt, in each runtime"
 set_herdr t2 '.status = {state: "working", app: "claude-code"} | .status_ms = $ms'
 until_ "Herdr's agent isn't working" has ".dockets[] | select(.id == \"$D_HERDR\") | .live.state == \"working\""

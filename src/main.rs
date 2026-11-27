@@ -31,6 +31,7 @@ mod messages;
 mod mirror;
 mod notify;
 mod paths;
+mod picker;
 mod preview;
 mod pricing;
 mod push;

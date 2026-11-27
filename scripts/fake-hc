@@ -75,14 +75,23 @@ case $cmd in
     term "$1" '.'
     ;;
   send)
-    # send TERMINAL [--json] [--] TEXT: after `--`, the text is text even
-    # when it starts with `-`, as in the real hc.
+    # send TERMINAL [--json] [--force] [--] TEXT: after `--`, the text is
+    # text even when it starts with `-`, as in the real hc. Like the real
+    # one, it won't type into a program that's blocked without --force.
     t=$1
     shift
-    while [ $# -gt 1 ] && [ "$1" = --json ]; do shift; done
+    force=0
+    while [ $# -gt 1 ] && { [ "$1" = --json ] || [ "$1" = --force ]; }; do
+      [ "$1" = --force ] && force=1
+      shift
+    done
     [ "${1:-}" = -- ] && shift
     x=${1:-}
     term "$t" '.address' >/dev/null
+    if [ "$force" = 0 ] && [ "$(term "$t" '.status.state // ""' | jq -r .)" = blocked ]; then
+      echo '{"error":{"kind":"blocked","message":"the program is blocked; --force types anyway"}}'
+      exit 1
+    fi
     # The agent takes a quick turn: its status is reported again, now.
     edit '.sent += [{terminal: $t, text: $x}] | (.terminals[] | select(.address == $t) | .status_ms) = $ms' --arg t "$t" --arg x "$x" --argjson ms "$(now_ms)"
     echo '{"sent": true}'

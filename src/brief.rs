@@ -97,6 +97,7 @@ Its intent has acceptance items, so it closes on evidence (passing checks, a mer
             ("turn", _, _) if e.body.is_some() => format!("{}: {}", who(&st, &e), e.data["summary"].as_str().map(str::to_string).unwrap_or_else(|| one_line(e.body.as_deref()))),
             ("observed", _, Some("linear-comment")) => format!("{} in Linear: {}", e.data["author"].as_str().unwrap_or("someone"), one_line(e.body.as_deref())),
             ("observed", _, Some("github-feedback")) => format!("{} on GitHub: {}", e.data["summary"].as_str().unwrap_or("someone"), one_line(e.body.as_deref())),
+            ("approval", _, _) if e.data["decision"] == "answer" => format!("You answered: {}", one_line(e.body.as_deref())),
             ("approval", _, _) => format!("You {}: {}", if e.data["decision"] == "approve" { "approved" } else { "denied" }, one_line(e.body.as_deref())),
             _ => continue,
         };
