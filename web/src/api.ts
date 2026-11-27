@@ -63,6 +63,8 @@ export type Live = {
   answerable?: boolean;
   /** It can also be answered where it's shown cut short (a menu, a row, the palette): one short line. */
   short?: boolean;
+  /** It's a question picker the hub reads and answers (Claude Code's): GET /api/dockets/{id}/picker. */
+  pickable?: boolean;
   /** It takes a message mid-turn (steering): Claude Code, Codex. */
   steer?: boolean;
   app: string;

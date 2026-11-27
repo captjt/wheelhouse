@@ -457,6 +457,16 @@ final class Store {
         }
     }
 
+    /// The question picker on a docket's agent, read off its pane now.
+    func picker(_ id: String, block: String?) async -> JSON? {
+        try? await hub.get("/api/dockets/\(id)/picker\(Self.blockQuery(block))")
+    }
+
+    /// Answer it: the hub checks the pane still shows what you saw.
+    func pick(_ id: String, _ body: [String: Any]) async -> JSON? {
+        await act("/api/dockets/\(id)/pick", body)
+    }
+
     /// Message an agent on the docket: that block's, or the lead.
     /// `steer`: while it works, send it now, for it to read at its next
     /// step, instead of queuing it for the turn's end.

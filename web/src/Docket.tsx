@@ -7,6 +7,7 @@ import { Kbd, Prose, Sheet, useKeys, useMenu, usePhone } from "./ui";
 import { nav } from "./mobile";
 import { IconBack, IconBuild, IconInfo } from "./icons";
 import { AnswerButtons, PaneButton, onThisMac, usePane } from "./Pane";
+import { QuestionPicker } from "./Picker";
 import { DecisionsSection, IntentSection } from "./Intent";
 import { ArtifactViewer, ArtifactsSection, RecordViewer } from "./Artifacts";
 import { ChatView } from "./Chat";
@@ -406,7 +407,7 @@ export function DocketScreen({ id, embedded }: { id: string; embedded?: boolean 
                     <strong>
                       {who} is waiting on you{l.kind ? ` · ${l.kind}` : ""}
                     </strong>
-                    {l.msg && <div className="callout-msg">{l.msg}</div>}
+                    <QuestionPicker d={d} live={l} fallback={l.msg && <div className="callout-msg">{l.msg}</div>} />
                   </div>
                   <span className="spacer" />
                   {l.answerable ? (
@@ -829,6 +830,8 @@ function Activity({ e, d, owner, me, onOpen, onCheck }: { e: EntryView; d: Docke
       if (data.what === "post-review") return sys(you, <><b>{youName}</b> approved posting round {data.round}'s review</>, "approved");
       if (data.kind === "review")
         return sys(you, <><b>{youName}</b> {data.decision === "post" ? "posted" : "dismissed"} the review{e.body ? <>: {e.body}</> : null}{data.url ? <> · <a className="act-link" href={data.url} target="_blank" rel="noreferrer">on GitHub</a></> : null}</>, data.decision === "post" ? "approved" : "denied");
+      if (data.decision === "answer")
+        return sys(you, <><b>{youName}</b> answered {agent}'s question{e.body ? <>: {e.body}</> : null}</>, "approved");
       const ok = data.decision === "approve";
       return sys(
         you,

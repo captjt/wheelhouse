@@ -177,7 +177,9 @@ struct DocketBody: View {
                     Callout(tone: .blocked) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(name) is waiting on you\(l.kind.map { " · \($0)" } ?? "")").font(.system(size: 13, weight: .semibold))
-                            if let m = l.msg { Text(m).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(K.text2).textSelection(.enabled) }
+                            QuestionPicker(id: d.id, block: block, live: l) {
+                                if let m = l.msg { Text(m).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(K.text2).textSelection(.enabled) }
+                            }
                         }
                         Spacer(minLength: 8)
                         if l.answerable { AnswerButtons(d: d, block: block, live: l) } else { Button("Answer in \(runtime)") { store.openInRex(d.id, block: block) } }

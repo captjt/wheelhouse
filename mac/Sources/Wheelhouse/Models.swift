@@ -86,6 +86,8 @@ struct Live: Hashable {
     var block: String { j["block"].str ?? "" }
     var record: String? { j["record"].str }
     var answerable: Bool { j["answerable"].bool }
+    /// A question picker the hub reads and answers (Claude Code's): `QuestionPicker`.
+    var pickable: Bool { j["pickable"].bool }
     /// It takes a message mid-turn (steering): Claude Code, Codex.
     var steer: Bool { j["steer"].bool }
     /// Answerable where it's shown cut short (a banner, a menu, a row): its

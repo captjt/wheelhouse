@@ -78,7 +78,9 @@ struct ChatView: View {
                 if x["what"].str == "blocked" { put(.sys(e.seq, "\(who.map { "\($0) waited" } ?? "Waited") on you\(x["kind"].str.map { " (\($0))" } ?? "")\(e.body.map { ": \($0)" } ?? "")", .blocked), by) }
                 else if x["what"].str == "error" { put(.sys(e.seq, "\(who.map { "\($0) failed" } ?? "Failed")\(e.body.map { ": \($0)" } ?? "")", .error), by) }
             case "approval":
-                if x["what"].exists || x["kind"].exists, x["kind"].str != "review" {
+                if x["decision"].str == "answer" {
+                    put(.sys(e.seq, "You answered\(e.body.map { ": \($0)" } ?? "")", nil), by)
+                } else if x["what"].exists || x["kind"].exists, x["kind"].str != "review" {
                     put(.sys(e.seq, "You \(x["decision"].str == "approve" ? "approved" : "denied") \(who.map { "\($0)'s " } ?? "")\(x["kind"].str ?? "a prompt")\(e.body.map { ": \($0)" } ?? "")", nil), by)
                 }
             case "artifact":
@@ -355,7 +357,9 @@ struct NowLine: View {
                 Callout(tone: .blocked) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("\(app) is asking\(l.kind.map { " (\($0))" } ?? "")").font(.system(size: 13, weight: .semibold))
-                        if let m = l.msg { Text(m).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(K.text2) }
+                        QuestionPicker(id: d.id, block: block, live: l) {
+                            if let m = l.msg { Text(m).font(.system(size: 12.5, design: .monospaced)).foregroundStyle(K.text2) }
+                        }
                     }
                     Spacer(minLength: 8)
                     if l.answerable { AnswerButtons(d: d, block: block, live: l, small: true) }
@@ -511,7 +515,22 @@ struct PaneSheet: View {
                 .onChange(of: screen) { proxy.scrollTo("end", anchor: .bottom) }
             }
             Divider()
-            if let d, let live, live.answerable, state == .blocked {
+            if let d, let live, live.pickable, state == .blocked {
+                HStack(alignment: .top, spacing: 10) {
+                    LiveIcon(state: .blocked, size: 15).padding(.top, 1)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(app) is asking").font(.system(size: 12.5, weight: .semibold))
+                        ScrollView {
+                            QuestionPicker(id: d.id, block: act, live: live) {
+                                if let m = live.msg { Text(m).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary).lineLimit(4) }
+                            }
+                        }
+                        .frame(maxHeight: 360)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(14)
+            } else if let d, let live, live.answerable, state == .blocked {
                 HStack(spacing: 10) {
                     LiveIcon(state: .blocked, size: 15)
                     VStack(alignment: .leading, spacing: 2) {

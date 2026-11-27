@@ -1,0 +1,18 @@
+❯ Now call AskUserQuestion once with two questions: (1) multiSelect true, header "Tools", question
+  "Which tools?", options Vim, Emacs; (2) header "OS", question "Which OS?", options Mac, Linux.
+  Then reply with my answers.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Tools  ☐ OS  ✔ Submit  →
+
+Which tools?
+
+❯ 1. [ ] Vim
+         Vim
+  2. [ ] Emacs
+         Emacs
+  3. [✔] Type something
+     Next
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

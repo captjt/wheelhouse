@@ -1,0 +1,22 @@
+  getting them from you into the composer and handing them to agents as local
+  file paths. I'll also need you to pick between the two choices at the end of
+  my plan. · summary
+────────────────────────────────────────────────────────────────────────────────
+←  ☐ Annotate  ☐ Scope  ✔ Submit  →
+
+│ For annotated images: should Wheelhouse have its own markup tool (boxes,
+│ arrows, pen, text on an image before you send it), or do you annotate
+│ elsewhere (CleanShot, Preview, Markup on iPhone) and just paste the result?
+
+❯ 1. Built-in markup (Recommended)
+     A small editor in the composer: box, arrow, pen, text, numbered pins. The
+     flattened PNG goes to agents and the original is kept beside it. Adds a lot
+     of work on web and in SwiftUI.
+  2. Bring your own
+     Paste or drop images that are already annotated. Ships much sooner; a
+     markup tool can come later.
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel

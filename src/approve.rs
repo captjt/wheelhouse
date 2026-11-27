@@ -94,10 +94,10 @@ pub const SHORT: usize = 120;
 /// to whatever prompt comes next.
 static ANSWERING: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
-struct Answering(String);
+pub(crate) struct Answering(String);
 
 impl Answering {
-    fn take(block: &str) -> Option<Self> {
+    pub(crate) fn take(block: &str) -> Option<Self> {
         let mut busy = ANSWERING.lock().unwrap_or_else(|e| e.into_inner());
         busy.insert(block.to_string()).then(|| Answering(block.to_string()))
     }

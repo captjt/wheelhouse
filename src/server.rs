@@ -55,6 +55,8 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/dockets/{id}/queue/{q}/cancel", post(unqueue))
         .route("/api/dockets/{id}/approve", post(approve))
         .route("/api/dockets/{id}/deny", post(deny))
+        .route("/api/dockets/{id}/picker", get(picker_now))
+        .route("/api/dockets/{id}/pick", post(pick))
         .route("/api/dockets/{id}/export", get(export))
         .route("/api/dockets/{id}/record", get(record_view))
         .route("/api/dockets/{id}/record/{seq}", get(record_entry))
@@ -937,6 +939,16 @@ async fn approve(State(shared): State<Shared>, Path(id): Path<String>, Json(seen
 
 async fn deny(State(shared): State<Shared>, Path(id): Path<String>, Json(seen): Json<crate::approve::Seen>) -> ApiResult {
     crate::approve::answer(&shared, &id, false, &seen).await.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
+}
+
+/// The question picker on a docket's agent, read off its screen now.
+async fn picker_now(State(shared): State<Shared>, Path(id): Path<String>, axum::extract::Query(q): axum::extract::Query<PaneQuery>) -> ApiResult {
+    crate::picker::current(&shared, &id, q.block.as_deref()).await.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
+}
+
+/// Answer it: an option, Next, or Back, checked against the pane now.
+async fn pick(State(shared): State<Shared>, Path(id): Path<String>, Json(act): Json<crate::picker::Act>) -> ApiResult {
+    crate::picker::answer(&shared, &id, &act).await.map(Json).map_err(|e| fail(StatusCode::CONFLICT, format!("{e:#}")))
 }
 
 async fn export(State(shared): State<Shared>, Path(id): Path<String>) -> Response {
